@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: streammq-sample-quickstart
+
+streammq:
+  enabled: true
+  namespace: streammq
+  redisson:
+    config: classpath:redisson.yaml
+  # 完整配置请参考 docs/03-functional-design.md 第 9 章
+
+# Redisson 配置（示例用单机），生产环境请使用集群配置
+redisson:
+  singleServerConfig:
+    address: "redis://127.0.0.1:6379"
+    database: 0

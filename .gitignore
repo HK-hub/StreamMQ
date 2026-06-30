@@ -1,0 +1,55 @@
+# IDE
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.project
+.classpath
+.settings/
+.factorypath
+
+# 构建产物
+target/
+build/
+bin/
+out/
+dist/
+
+# 日志
+*.log
+logs/
+
+# Maven
+.mvn/wrapper/maven-wrapper.jar
+dependency-reduced-pom.xml
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+release-pom.xml
+
+# 测试报告
+**/surefire-reports/
+**/failsafe-reports/
+**/site/
+**/jacoco.exec
+**/jacoco-aggregate.exec
+
+# 操作系统
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 临时文件
+*.tmp
+*.bak
+*.swp
+*~
+
+# 文档辅助
+docs/test-encoding.txt
+
+# 环境变量
+app.env
