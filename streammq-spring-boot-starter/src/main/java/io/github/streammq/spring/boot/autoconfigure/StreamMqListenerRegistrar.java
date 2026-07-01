@@ -13,6 +13,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
+import org.springframework.core.annotation.AnnotationUtils;
 
 import java.util.Map;
 
@@ -91,7 +92,7 @@ public class StreamMqListenerRegistrar implements SmartInitializingSingleton, Ap
         for (Map.Entry<String, Object> entry : beans.entrySet()) {
             String beanName = entry.getKey();
             Object bean = entry.getValue();
-            StreamMqListener annotation = bean.getClass().getAnnotation(StreamMqListener.class);
+            StreamMqListener annotation = AnnotationUtils.findAnnotation(bean.getClass(), StreamMqListener.class);
             if (annotation == null) {
                 continue;
             }
@@ -126,7 +127,7 @@ public class StreamMqListenerRegistrar implements SmartInitializingSingleton, Ap
         for (Map.Entry<String, Object> entry : beans.entrySet()) {
             String beanName = entry.getKey();
             Object bean = entry.getValue();
-            StreamMqOrderlyListener annotation = bean.getClass().getAnnotation(StreamMqOrderlyListener.class);
+            StreamMqOrderlyListener annotation = AnnotationUtils.findAnnotation(bean.getClass(), StreamMqOrderlyListener.class);
             if (annotation == null) {
                 continue;
             }
@@ -168,8 +169,8 @@ public class StreamMqListenerRegistrar implements SmartInitializingSingleton, Ap
         for (Map.Entry<String, Object> entry : beans.entrySet()) {
             String beanName = entry.getKey();
             Object bean = entry.getValue();
-            StreamMqTransactionListener annotation = bean.getClass()
-                .getAnnotation(StreamMqTransactionListener.class);
+            StreamMqTransactionListener annotation = AnnotationUtils.findAnnotation(bean.getClass(),
+                StreamMqTransactionListener.class);
             if (annotation == null) {
                 continue;
             }

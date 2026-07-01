@@ -43,11 +43,11 @@ public @interface StreamMqTransactionListener {
     String transactionGroup();
 
     /**
-     * 单次回查超时（秒），默认 60。
+     * 单次回查超时（毫秒），默认 60000（60 秒）。
      *
-     * @return 超时秒数
+     * @return 超时毫秒数
      */
-    int checkTimeout() default 60;
+    long checkTimeout() default 60000L;
 
     /**
      * 命名空间，默认使用全局配置。

@@ -3,6 +3,7 @@ package io.github.streammq.core.annotation;
 import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
+import io.github.streammq.core.spi.MessageSerializer;
 
 import java.lang.annotation.Documented;
 import java.lang.annotation.ElementType;
@@ -95,11 +96,11 @@ public @interface StreamMqListener {
     int maxReconsumeTimes() default 16;
 
     /**
-     * 单条消息消费超时（分钟），默认 15。
+     * 单条消息消费超时（毫秒），默认 30000（30 秒）。
      *
-     * @return 超时分钟数
+     * @return 超时毫秒数
      */
-    int consumeTimeout() default 15;
+    long consumeTimeout() default 30000L;
 
     /**
      * Tag 过滤表达式（SQL92 风格子集），默认 "*" 表示全部接收。
@@ -114,7 +115,7 @@ public @interface StreamMqListener {
      *
      * @return 序列化器类
      */
-    Class<?> serializer() default Object.class;
+    Class<? extends MessageSerializer<?>> serializer() default MessageSerializer.class;
 
     /**
      * 命名空间，默认使用全局配置。

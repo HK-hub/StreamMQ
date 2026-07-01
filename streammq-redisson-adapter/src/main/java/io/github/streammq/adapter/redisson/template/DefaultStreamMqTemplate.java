@@ -146,10 +146,14 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
     @Override
     public CompletableFuture<SendResult> asyncSend(Message<T> message) {
         Objects.requireNonNull(message, "message");
+        // 先执行 before 拦截器，被中止时返回 failedFuture
+        if (!applyInterceptorsBefore(message)) {
+            return CompletableFuture.failedFuture(
+                new StreamMqException("Aborted by interceptor"));
+        }
         StreamMqProducer producer = resolveProducer(message);
         return producer.asyncSend(message).whenComplete((result, ex) -> {
             if (ex == null) {
-                applyInterceptorsBefore(message);
                 applyInterceptorsAfter(message, result);
             }
         });

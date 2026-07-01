@@ -45,13 +45,20 @@ public class StreamMqSchedulerLifecycle implements SmartLifecycle {
             return;
         }
         LOG.info("Starting StreamMQ schedulers (phase={}, count={})", PHASE, schedulers.size());
+        int failedCount = 0;
         for (Object scheduler : schedulers) {
             try {
                 invokeStart(scheduler);
             } catch (RuntimeException ex) {
+                failedCount++;
                 LOG.error("Failed to start scheduler {}: {}", scheduler.getClass().getSimpleName(), ex.getMessage(), ex);
             }
         }
+        if (failedCount > 0) {
+            LOG.warn("StreamMQ schedulers started with {} failure(s) out of {}, some features may not work",
+                failedCount, schedulers.size());
+        }
+        // 即使部分调度器启动失败也设为 running，但记录警告
         running = true;
     }
 

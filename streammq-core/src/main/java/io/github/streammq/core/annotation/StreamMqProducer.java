@@ -1,5 +1,7 @@
 package io.github.streammq.core.annotation;
 
+import io.github.streammq.core.spi.MessageSerializer;
+
 import java.lang.annotation.Documented;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -57,7 +59,7 @@ public @interface StreamMqProducer {
      *
      * @return 序列化器类
      */
-    Class<?> serializer() default Object.class;
+    Class<? extends MessageSerializer<?>> serializer() default MessageSerializer.class;
 
     /**
      * 发送超时（毫秒），0 表示使用全局默认。

@@ -18,7 +18,9 @@ import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.RetryPolicy;
 import org.redisson.api.RMap;
 import org.redisson.api.RScoredSortedSet;
+import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
+import org.redisson.api.stream.StreamAddArgs;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -188,8 +190,10 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
             throw new IllegalStateException("Container already started or in invalid state: " + state.get());
         }
         LOG.info("Starting ListenerContainer with {} registration(s)", registrations.size());
-        doStartListeners();
+        // 先设置 RUNNING 状态，再启动消费循环，避免虚拟线程在 state 仍为 STARTING 时
+        // 检查 while(state==RUNNING) 为 false 导致消费循环立即退出（竞态条件）
         state.set(ContainerState.RUNNING);
+        doStartListeners();
         LOG.info("ListenerContainer started, state=RUNNING");
     }
 
@@ -259,7 +263,14 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void consumeLoop(ListenerRegistration reg) {
-        StreamMqConsumer consumer = createConsumerFor(reg);
+        StreamMqConsumer consumer;
+        try {
+            consumer = createConsumerFor(reg);
+        } catch (RuntimeException ex) {
+            LOG.error("Failed to create consumer for listener (topic={}, group={}): {}, listener will not consume",
+                reg.topic, reg.group, ex.getMessage(), ex);
+            return;
+        }
         LOG.info("Consume loop started: topic={}, group={}, listener={}",
             reg.topic, reg.group, reg.listener.getClass().getSimpleName());
         try {
@@ -388,11 +399,17 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
             // 3. 计算下一次重试延迟
             Duration delay = retryPolicy.nextRetryDelay(retryCount, message);
             if (delay == null) {
-                // 不再重试，直接 ACK（消息丢失，但符合策略要求）
-                LOG.warn("RetryPolicy returned null delay, message will be dropped after ACK " +
+                // 不再重试，路由到 DLQ 而非直接丢弃
+                LOG.warn("RetryPolicy returned null delay, routing to DLQ " +
                         "(topic={}, group={}, messageId={}, retryCount={})",
                     reg.topic, reg.group, messageId, retryCount);
-                consumer.ack(messageId);
+                // DLQ 路由成功才 ACK；失败则保留 PEL 等待下次 XAUTOCLAIM 重新投递
+                if (routeToDlq(message, reg, messageId, "maxRetry")) {
+                    consumer.ack(messageId);
+                } else {
+                    LOG.error("DLQ routing failed, message kept in PEL for re-delivery " +
+                        "(topic={}, group={}, messageId={})", reg.topic, reg.group, messageId);
+                }
                 return;
             }
             long nextRetryAt = System.currentTimeMillis() + delay.toMillis();
@@ -424,6 +441,34 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
             LOG.error("Failed to schedule retry for message (topic={}, group={}, messageId={}): {}",
                 reg.topic, reg.group, messageId, ex.getMessage(), ex);
             // 失败时不 ACK，消息留在 PEL 中等待下次 XAUTOCLAIM 重新投递
+        }
+    }
+
+    /**
+     * 将消息路由到 DLQ Stream。
+     *
+     * @param message 原始消息
+     * @param reg Listener 注册信息
+     * @param messageId 消息 ID
+     * @param reason 进入 DLQ 的原因
+     * @return true 表示 DLQ 写入成功；false 表示失败，调用方不应 ACK
+     */
+    private boolean routeToDlq(Message<?> message, ListenerRegistration<?> reg,
+                             MessageId messageId, String reason) {
+        try {
+            Map<String, String> fields = messageConverter.toStreamFields(message);
+            fields.put("dlqReason", reason);
+            fields.put("originalMessageId", messageId.getStreamEntryId());
+            String dlqKey = StreamMqKeys.dlqStream(reg.namespace, reg.topic, reg.group);
+            RStream<String, String> dlqStream = redisson.getStream(dlqKey);
+            dlqStream.add(StreamAddArgs.entries(fields));
+            LOG.info("Message routed to DLQ: topic={}, group={}, messageId={}, reason={}",
+                reg.topic, reg.group, messageId, reason);
+            return true;
+        } catch (RuntimeException ex) {
+            LOG.error("Failed to route message to DLQ (topic={}, group={}, messageId={}): {}",
+                reg.topic, reg.group, messageId, ex.getMessage(), ex);
+            return false;
         }
     }
 

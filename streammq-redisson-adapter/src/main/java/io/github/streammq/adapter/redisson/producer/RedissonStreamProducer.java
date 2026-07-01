@@ -188,12 +188,13 @@ public class RedissonStreamProducer implements StreamMqProducer {
                 "syncSendBatch failed for topic " + firstTopic, null, ex);
         }
 
-        // 由于 RBatch 不返回每条 ID，构造合成 SendResult
+        // 由于 RBatch 不返回每条 ID，为每条消息生成唯一占位 ID（基于 UUID 哈希）
+        // 真实 Stream Entry ID 由消费端从 Stream Entry 获取
         List<SendResult> results = new ArrayList<>(messageList.size());
-        long now = System.currentTimeMillis();
         for (Message<?> message : messageList) {
-            // 使用占位 ID；真实 ID 由消费端从 Stream Entry ID 获取
-            MessageId placeholder = new MessageId(now + "-0");
+            // 为每条消息生成唯一 ID，避免批量消息 ID 相同导致幂等失效
+            String uniqueId = System.currentTimeMillis() + "-" + Math.abs(UUID.randomUUID().hashCode());
+            MessageId placeholder = new MessageId(uniqueId);
             message.setMessageId(placeholder);
             results.add(new SendResult(placeholder, message.getTopic(), message.getTag(), message.getBornTimestamp()));
         }

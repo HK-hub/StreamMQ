@@ -102,6 +102,11 @@ public final class MessageBuilder<T> {
         return this;
     }
 
+    /** with* 别名，委托到 {@link #tag(String)}。 */
+    public MessageBuilder<T> withTag(String tag) {
+        return tag(tag);
+    }
+
     /**
      * 设置业务键。
      *
@@ -111,6 +116,11 @@ public final class MessageBuilder<T> {
     public MessageBuilder<T> keys(String keys) {
         this.keys = keys;
         return this;
+    }
+
+    /** with* 别名，委托到 {@link #keys(String)}。 */
+    public MessageBuilder<T> withKeys(String keys) {
+        return keys(keys);
     }
 
     /**
@@ -124,6 +134,11 @@ public final class MessageBuilder<T> {
         return this;
     }
 
+    /** with* 别名，委托到 {@link #shardingKey(String)}。 */
+    public MessageBuilder<T> withShardingKey(String shardingKey) {
+        return shardingKey(shardingKey);
+    }
+
     /**
      * 设置消息体（必填）。
      *
@@ -133,6 +148,11 @@ public final class MessageBuilder<T> {
     public MessageBuilder<T> body(T body) {
         this.body = body;
         return this;
+    }
+
+    /** with* 别名，委托到 {@link #body(Object)}。 */
+    public MessageBuilder<T> withBody(T body) {
+        return body(body);
     }
 
     /**
@@ -149,6 +169,11 @@ public final class MessageBuilder<T> {
         return this;
     }
 
+    /** with* 别名，委托到 {@link #property(String, String)}。 */
+    public MessageBuilder<T> withProperty(String key, String value) {
+        return property(key, value);
+    }
+
     /**
      * 批量设置系统属性。
      *
@@ -160,6 +185,11 @@ public final class MessageBuilder<T> {
             this.properties.putAll(properties);
         }
         return this;
+    }
+
+    /** with* 别名，委托到 {@link #properties(Map)}。 */
+    public MessageBuilder<T> withProperties(Map<String, String> properties) {
+        return properties(properties);
     }
 
     /**
@@ -176,6 +206,11 @@ public final class MessageBuilder<T> {
         return this;
     }
 
+    /** with* 别名，委托到 {@link #userProperty(String, String)}。 */
+    public MessageBuilder<T> withUserProperty(String key, String value) {
+        return userProperty(key, value);
+    }
+
     /**
      * 设置延时级别（固定延时）。
      *
@@ -185,6 +220,11 @@ public final class MessageBuilder<T> {
     public MessageBuilder<T> delayLevel(DelayLevel delayLevel) {
         this.delayLevel = delayLevel;
         return this;
+    }
+
+    /** with* 别名，委托到 {@link #delayLevel(DelayLevel)}。 */
+    public MessageBuilder<T> withDelayLevel(DelayLevel delayLevel) {
+        return delayLevel(delayLevel);
     }
 
     /**
@@ -199,6 +239,11 @@ public final class MessageBuilder<T> {
         }
         this.delayTimeMillis = delayTimeMillis;
         return this;
+    }
+
+    /** with* 别名，委托到 {@link #delayTimeMillis(long)}。 */
+    public MessageBuilder<T> withDelayTimeMillis(long delayTimeMillis) {
+        return delayTimeMillis(delayTimeMillis);
     }
 
     /**

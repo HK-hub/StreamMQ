@@ -181,6 +181,15 @@ public class DelayMessageScheduler {
                 }
             } catch (RuntimeException ex) {
                 LOG.error("Failed to transfer delay message msgId={}: {}", msgId, ex.getMessage(), ex);
+                // 处理失败时将 msgId 重新写回 ZSet（score=当前时间，立即重试），
+                // 避免消息因 ZREM 后处理失败而永久丢失
+                try {
+                    zset.add(System.currentTimeMillis(), msgId);
+                    LOG.warn("Re-added msgId={} to delay ZSet for retry", msgId);
+                } catch (RuntimeException reAddEx) {
+                    LOG.error("CRITICAL: Failed to re-add msgId={} to delay ZSet, message may be lost: {}",
+                        msgId, reAddEx.getMessage(), reAddEx);
+                }
             }
         }
         if (batch != null) {

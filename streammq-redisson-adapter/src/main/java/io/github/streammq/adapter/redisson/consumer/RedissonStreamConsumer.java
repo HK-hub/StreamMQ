@@ -189,6 +189,10 @@ public class RedissonStreamConsumer implements StreamMqConsumer {
                 messages.add(message);
             }
             return messages;
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new StreamMqBrokerException(
+                "readGroup interrupted for topic " + topic, null, ex);
         } catch (Exception ex) {
             throw new StreamMqBrokerException(
                 "readGroup failed for topic " + topic, null, ex);

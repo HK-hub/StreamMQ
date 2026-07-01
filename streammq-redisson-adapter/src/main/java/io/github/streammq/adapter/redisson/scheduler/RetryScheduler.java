@@ -174,11 +174,12 @@ public class RetryScheduler {
             if (!acquired) {
                 continue;
             }
-            transferOne(msgId, target, targetStreamKey, dlqStreamKey);
+            transferOne(msgId, target, targetStreamKey, dlqStreamKey, zset);
         }
     }
 
-    private void transferOne(String msgId, RetryTarget target, String targetStreamKey, String dlqStreamKey) {
+    private void transferOne(String msgId, RetryTarget target, String targetStreamKey, String dlqStreamKey,
+                              RScoredSortedSet<String> zset) {
         String payloadKey = StreamMqKeys.delayPayloadHash(namespace, msgId);
         try {
             RMap<String, String> payloadMap = redisson.getMap(payloadKey);
@@ -227,6 +228,15 @@ public class RetryScheduler {
             payloadMap.delete();
         } catch (RuntimeException ex) {
             LOG.error("Failed to transfer retry message msgId={}: {}", msgId, ex.getMessage(), ex);
+            // 处理失败时将 msgId 重新写回 ZSet（score=当前时间，立即重试），
+            // 避免消息因 ZREM 后处理失败而永久丢失
+            try {
+                zset.add(System.currentTimeMillis(), msgId);
+                LOG.warn("Re-added msgId={} to retry ZSet for retry", msgId);
+            } catch (RuntimeException reAddEx) {
+                LOG.error("CRITICAL: Failed to re-add msgId={} to retry ZSet, message may be lost: {}",
+                    msgId, reAddEx.getMessage(), reAddEx);
+            }
         }
     }
 
