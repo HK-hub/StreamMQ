@@ -135,7 +135,7 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
             } catch (StreamMqException ex) {
                 lastError = ex;
                 LOG.warn("syncSend attempt {}/{} failed for topic {}: {}",
-                    attempt + 1, retryTimes + 1, message.getTopic(), ex.getMessage());
+                    attempt + 1, retryTimes + 1, message.getTopic(), ex.getMessage(), ex);
             }
         }
         applyInterceptorsAfter(message, buildFailedResult(message, lastError));
@@ -248,7 +248,7 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
             state = callback.execute(message, ctx);
         } catch (Exception ex) {
             // 本地事务异常：视为 ROLLBACK
-            LOG.warn("Local transaction failed, txId={}: {}", transactionId, ex.getMessage());
+            LOG.warn("Local transaction failed, txId={}: {}", transactionId, ex.getMessage(), ex);
             // 注意：此处仅记录，不删除已发送的消息（简化实现）
             // 完整实现需通过 TransactionScanner 进行回查
             throw new TransactionException("Local transaction execute failed",
@@ -336,7 +336,7 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
                 }
             } catch (RuntimeException ex) {
                 LOG.warn("Interceptor {} beforeSend threw exception: {}",
-                    interceptor.name(), ex.getMessage());
+                    interceptor.name(), ex.getMessage(), ex);
                 return false;
             }
         }
@@ -355,7 +355,7 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
                 interceptor.afterSend(message, result);
             } catch (RuntimeException ex) {
                 LOG.warn("Interceptor {} afterSend threw exception: {}",
-                    interceptor.name(), ex.getMessage());
+                    interceptor.name(), ex.getMessage(), ex);
             }
         }
     }
@@ -365,7 +365,7 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
      * 当前实现：所有消息使用同一个 defaultGroup Producer。
      * 未来可扩展：按 message.properties 中的 group 字段路由。
      *
-     * @param topic 当前消息（用于未来扩展路由）
+     * @param topic 当前主题（用于未来扩展路由）
      * @return Producer 实例
      */
     private StreamMqProducer resolveProducer(String topic) {

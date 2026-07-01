@@ -59,6 +59,18 @@ public class RetryScheduler {
     public static final String FIELD_RETRY_COUNT = "retryCount";
     /** payload Hash 中的目标 Topic 字段名 */
     public static final String FIELD_TARGET_TOPIC = "targetTopic";
+    /** DLQ Stream Entry 字段：进入 DLQ 的原因 */
+    public static final String FIELD_DLQ_REASON = "dlqReason";
+    /** DLQ Stream Entry 字段：原始重试次数 */
+    public static final String FIELD_ORIGINAL_RETRY_COUNT = "originalRetryCount";
+    /** DLQ 原因：达到最大重试次数 */
+    public static final String DLQ_REASON_MAX_RETRY = "maxRetry";
+    /** 默认扫描间隔（毫秒） */
+    private static final long DEFAULT_SCAN_INTERVAL_MS = 1000L;
+    /** 默认单次扫描批量 */
+    private static final int DEFAULT_BATCH_SIZE = 100;
+    /** 关闭调度线程池时的等待超时（秒） */
+    private static final long AWAIT_TERMINATION_SECONDS = 5L;
 
     private final RedissonClient redisson;
     private final String namespace;
@@ -80,8 +92,8 @@ public class RetryScheduler {
                           long scanIntervalMs, int batchSize) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
         this.namespace = namespace == null ? "" : namespace;
-        this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : 1000L;
-        this.batchSize = batchSize > 0 ? batchSize : 100;
+        this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
+        this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
         this.scanExecutor = new ScheduledThreadPoolExecutor(1, r -> {
             Thread t = new Thread(r, "streammq-retry-scheduler");
             t.setDaemon(true);
@@ -127,7 +139,7 @@ public class RetryScheduler {
         }
         scanExecutor.shutdown();
         try {
-            if (!scanExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+            if (!scanExecutor.awaitTermination(AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
                 scanExecutor.shutdownNow();
             }
         } catch (InterruptedException e) {
@@ -208,8 +220,8 @@ public class RetryScheduler {
 
             if (retryCount >= target.maxReconsumeTimes) {
                 // 进入 DLQ
-                fields.put("dlqReason", "maxRetry");
-                fields.put("originalRetryCount", Integer.toString(retryCount));
+                fields.put(FIELD_DLQ_REASON, DLQ_REASON_MAX_RETRY);
+                fields.put(FIELD_ORIGINAL_RETRY_COUNT, Integer.toString(retryCount));
                 RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
                 dlqStream.add(StreamAddArgs.entries(fields));
                 LOG.info("Message entered DLQ: msgId={}, topic={}, group={}, retryCount={}",

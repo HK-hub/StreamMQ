@@ -137,10 +137,16 @@ public class StreamMqCoreAutoConfiguration {
                                                  StreamMqProperties properties) {
         String defaultGroup = properties.getProducer().getGroup();
         String txGroup = properties.getTransaction().getDefaultGroup();
-        LOG.info("Creating DefaultStreamMqTemplate: defaultGroup={}, transactionGroup={}",
-            defaultGroup, txGroup);
+        // 注入 namespace / send-message-timeout / stream.max-len 到 defaultProperties,
+        // 保证 Producer 与 ListenerContainer 使用相同的 namespace,避免消息写入与读取 Key 不一致。
+        java.util.Map<String, Object> defaultProps = new java.util.HashMap<>(4);
+        defaultProps.put("namespace", properties.getNamespace());
+        defaultProps.put("send-message-timeout", properties.getProducer().getSendMessageTimeout());
+        defaultProps.put("stream.max-len", properties.getProducer().getStreamMaxLen());
+        LOG.info("Creating DefaultStreamMqTemplate: defaultGroup={}, transactionGroup={}, namespace={}",
+            defaultGroup, txGroup, properties.getNamespace());
         return new DefaultStreamMqTemplate<>(
-            producerFactory, defaultGroup, converter, java.util.Collections.emptyMap(), txGroup);
+            producerFactory, defaultGroup, converter, defaultProps, txGroup);
     }
 
     /**

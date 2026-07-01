@@ -168,12 +168,20 @@ public class DefaultMessageConverter implements MessageConverter {
 
         String bornTs = fields.get(FIELD_BORN_TS);
         if (bornTs != null && !bornTs.isEmpty()) {
-            message.setBornTimestamp(Long.parseLong(bornTs));
+            try {
+                message.setBornTimestamp(Long.parseLong(bornTs));
+            } catch (NumberFormatException ex) {
+                throw new SerializationException("Failed to parse bornTs: " + bornTs, ex);
+            }
         }
 
         String retryTimesStr = fields.get(FIELD_RETRY_TIMES);
         if (retryTimesStr != null && !retryTimesStr.isEmpty()) {
-            message.setReconsumeTimes(Integer.parseInt(retryTimesStr));
+            try {
+                message.setReconsumeTimes(Integer.parseInt(retryTimesStr));
+            } catch (NumberFormatException ex) {
+                throw new SerializationException("Failed to parse retryTimes: " + retryTimesStr, ex);
+            }
         }
 
         return message;

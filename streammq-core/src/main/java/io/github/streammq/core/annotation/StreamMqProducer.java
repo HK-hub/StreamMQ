@@ -59,7 +59,7 @@ public @interface StreamMqProducer {
      *
      * @return 序列化器类
      */
-    Class<? extends MessageSerializer<?>> serializer() default MessageSerializer.class;
+    Class<? extends MessageSerializer> serializer() default MessageSerializer.class;
 
     /**
      * 发送超时（毫秒），0 表示使用全局默认。

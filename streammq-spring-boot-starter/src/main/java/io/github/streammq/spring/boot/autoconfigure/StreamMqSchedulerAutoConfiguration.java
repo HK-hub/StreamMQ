@@ -93,7 +93,7 @@ public class StreamMqSchedulerAutoConfiguration {
         int maxCheck = properties.getTransaction().getMaxCheckTimes();
         LOG.info("Creating TransactionScanner: checkInterval={}, maxCheckTimes={}", interval, maxCheck);
         return new TransactionScanner(redisson, properties.getNamespace(), messageConverter,
-            interval.toMillis(), maxCheck, 100);
+            interval.toMillis(), maxCheck, TransactionScanner.DEFAULT_BATCH_SIZE);
     }
 
     /**

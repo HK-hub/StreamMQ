@@ -80,6 +80,8 @@ public class TransactionScanner {
     private static final String FIELD_TARGET_SUFFIX = ".target";
     /** txstate Hash 中半消息 Stream Entry ID 字段后缀 */
     private static final String FIELD_HALF_ID_SUFFIX = ".halfId";
+    /** 关闭调度线程池时的等待超时（秒） */
+    private static final long AWAIT_TERMINATION_SECONDS = 5L;
 
     private final RedissonClient redisson;
     private final String namespace;
@@ -210,7 +212,7 @@ public class TransactionScanner {
         }
         scanExecutor.shutdown();
         try {
-            if (!scanExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+            if (!scanExecutor.awaitTermination(AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
                 scanExecutor.shutdownNow();
             }
         } catch (InterruptedException e) {
@@ -298,7 +300,8 @@ public class TransactionScanner {
             try {
                 halfStream.remove(parseStreamId(halfIdStr));
             } catch (RuntimeException ex) {
-                LOG.warn("XDEL half message failed: txId={}, halfId={}: {}", txId, halfIdStr, ex.getMessage());
+                LOG.warn("XDEL half message failed: txId={}, halfId={}: {}",
+                    txId, halfIdStr, ex.getMessage(), ex);
             }
         }
 
@@ -395,7 +398,8 @@ public class TransactionScanner {
             LocalTransactionState s = ((TransactionChecker) checker).check(halfMessage, ctx);
             state = s;
         } catch (Exception ex) {
-            LOG.warn("TransactionChecker threw exception, treated as UNKNOW: txId={}: {}", txId, ex.getMessage());
+            LOG.warn("TransactionChecker threw exception, treated as UNKNOW: txId={}: {}",
+                txId, ex.getMessage(), ex);
             state = LocalTransactionState.UNKNOW;
         }
 
@@ -454,7 +458,7 @@ public class TransactionScanner {
         try {
             halfStream.remove(halfId);
         } catch (RuntimeException ex) {
-            LOG.warn("XDEL half message after publish failed: halfId={}: {}", halfIdStr, ex.getMessage());
+            LOG.warn("XDEL half message after publish failed: halfId={}: {}", halfIdStr, ex.getMessage(), ex);
         }
     }
 
@@ -483,6 +487,7 @@ public class TransactionScanner {
             try {
                 bodyType = Class.forName(bodyTypeName, false, Thread.currentThread().getContextClassLoader());
             } catch (ClassNotFoundException ex) {
+                LOG.warn("Body type class not found in transaction scanner, fallback to Object: {}", bodyTypeName);
                 bodyType = Object.class;
             }
         }
@@ -529,17 +534,23 @@ public class TransactionScanner {
 
     /**
      * 递增 txId 的回查次数。
+     *
+     * <p>使用 get-put 而非 {@code merge} 以确保在 Redisson RMap 实现下行为一致。
+     * 单线程扫描场景下无需加锁。
      */
     private void incrementCheckCount(String txId, String txGroup) {
         String counterKey = StreamMqKeys.transactionCheckCounter(namespace, txGroup);
         RMap<String, String> counterMap = redisson.getMap(counterKey);
-        counterMap.merge(txId, "1", (oldVal, newVal) -> {
+        String current = counterMap.get(txId);
+        int newVal = 1;
+        if (current != null && !current.isEmpty()) {
             try {
-                return Integer.toString(Integer.parseInt(oldVal) + 1);
+                newVal = Integer.parseInt(current) + 1;
             } catch (NumberFormatException ex) {
-                return "1";
+                LOG.warn("Invalid check count value '{}', resetting to 1: txId={}", current, txId);
             }
-        });
+        }
+        counterMap.put(txId, Integer.toString(newVal));
     }
 
     /**

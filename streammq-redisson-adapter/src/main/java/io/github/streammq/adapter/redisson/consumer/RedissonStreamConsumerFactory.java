@@ -91,15 +91,16 @@ public class RedissonStreamConsumerFactory implements StreamMqConsumerFactory {
             return;
         }
         closed = true;
+        int total = consumers.size();
         for (RedissonStreamConsumer consumer : consumers.keySet()) {
             try {
                 consumer.close();
             } catch (RuntimeException ex) {
-                LOG.warn("Failed to close consumer: {}", ex.getMessage());
+                LOG.warn("Failed to close consumer: {}", ex.getMessage(), ex);
             }
         }
         consumers.clear();
-        LOG.info("RedissonStreamConsumerFactory closed, total consumers: {}", consumers.size());
+        LOG.info("RedissonStreamConsumerFactory closed, total consumers: {}", total);
     }
 
     @Override

@@ -115,7 +115,7 @@ public @interface StreamMqOrderlyListener {
      *
      * @return 序列化器类
      */
-    Class<? extends MessageSerializer<?>> serializer() default MessageSerializer.class;
+    Class<? extends MessageSerializer> serializer() default MessageSerializer.class;
 
     /**
      * 命名空间，默认使用全局配置。

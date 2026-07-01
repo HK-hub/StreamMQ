@@ -76,7 +76,7 @@ public class StreamMqListenerRegistrar implements SmartInitializingSingleton, Ap
             io.github.streammq.adapter.redisson.scheduler.RetryScheduler retryScheduler =
                 applicationContext.getBean(
                     io.github.streammq.adapter.redisson.scheduler.RetryScheduler.class);
-            ((DefaultStreamMqListenerContainer) listenerContainer).registerRetryTargets(retryScheduler);
+            listenerContainer.registerRetryTargets(retryScheduler);
             LOG.info("Registered retry targets to RetryScheduler");
         } catch (org.springframework.beans.factory.NoSuchBeanDefinitionException ex) {
             LOG.debug("RetryScheduler not present, skip retry target registration");

@@ -54,6 +54,11 @@ public class RedissonStreamConsumer implements StreamMqConsumer {
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean groupCreated = new AtomicBoolean(false);
 
+    /** batchSize 校验上界，对应 Redis Stream 单次 XREADGROUP 的合理上限 */
+    private static final int MAX_BATCH_SIZE = 1000;
+    /** BUSYGROUP 错误标识，用于判断消费者组已存在 */
+    private static final String BUSYGROUP_MARKER = "BUSYGROUP";
+
     /**
      * 构造 Consumer。
      *
@@ -98,7 +103,7 @@ public class RedissonStreamConsumer implements StreamMqConsumer {
         RStream<String, String> stream = getStream();
         try {
             stream.ack(group, toStreamId(messageId));
-        } catch (Exception ex) {
+        } catch (RuntimeException ex) {
             throw new StreamMqBrokerException(
                 "ack failed for topic " + topic + ", messageId=" + messageId, null, ex);
         }
@@ -118,7 +123,7 @@ public class RedissonStreamConsumer implements StreamMqConsumer {
         }
         try {
             stream.ack(group, streamIds);
-        } catch (Exception ex) {
+        } catch (RuntimeException ex) {
             throw new StreamMqBrokerException(
                 "ackBatch failed for topic " + topic + ", size=" + messageIds.size(), null, ex);
         }
@@ -189,11 +194,7 @@ public class RedissonStreamConsumer implements StreamMqConsumer {
                 messages.add(message);
             }
             return messages;
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            throw new StreamMqBrokerException(
-                "readGroup interrupted for topic " + topic, null, ex);
-        } catch (Exception ex) {
+        } catch (RuntimeException ex) {
             throw new StreamMqBrokerException(
                 "readGroup failed for topic " + topic, null, ex);
         }
@@ -226,13 +227,13 @@ public class RedissonStreamConsumer implements StreamMqConsumer {
             RStream<String, String> stream = getStream();
             try {
                 // makeStream：如果 Stream 不存在则创建
-                // id(MIN)：从头开始消费
-                stream.createGroup(StreamCreateGroupArgs.name(group).makeStream().id(StreamMessageId.MIN));
+                // id(0-0)：从头开始消费
+                stream.createGroup(StreamCreateGroupArgs.name(group).makeStream().id(new StreamMessageId(0, 0)));
                 LOG.info("Consumer group created: topic={}, group={}", topic, group);
-            } catch (Exception ex) {
+            } catch (RuntimeException ex) {
                 // BUSYGROUP 表示 group 已存在，属于正常情况
                 String msg = ex.getMessage();
-                if (msg != null && msg.contains("BUSYGROUP")) {
+                if (msg != null && msg.contains(BUSYGROUP_MARKER)) {
                     LOG.debug("Consumer group already exists: topic={}, group={}", topic, group);
                 } else {
                     // 其他错误重置标志位，允许下次重试
@@ -260,8 +261,9 @@ public class RedissonStreamConsumer implements StreamMqConsumer {
     }
 
     private static void validateBatchSize(int batchSize) {
-        if (batchSize <= 0 || batchSize > 1000) {
-            throw new IllegalArgumentException("batchSize must be between 1 and 1000, got " + batchSize);
+        if (batchSize <= 0 || batchSize > MAX_BATCH_SIZE) {
+            throw new IllegalArgumentException(
+                "batchSize must be between 1 and " + MAX_BATCH_SIZE + ", got " + batchSize);
         }
     }
 }

@@ -64,6 +64,13 @@ public class RedissonStreamProducer implements StreamMqProducer {
     private final ExecutorService asyncExecutor;
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
+    /** 关闭异步执行线程池时的等待超时（秒） */
+    private static final long ASYNC_AWAIT_TERMINATION_SECONDS = 5L;
+    /** 延时消息 payload Hash 字段：目标 Topic */
+    private static final String FIELD_TARGET_TOPIC = "targetTopic";
+    /** 延时消息 payload Hash 字段：投递时间 */
+    private static final String FIELD_DELIVER_AT = "deliverAt";
+
     /**
      * 构造 Producer。
      *
@@ -118,7 +125,7 @@ public class RedissonStreamProducer implements StreamMqProducer {
             throw ex;
         } catch (StreamMqException ex) {
             throw ex;
-        } catch (Exception ex) {
+        } catch (RuntimeException ex) {
             throw new StreamMqBrokerException(
                 "syncSend failed for topic " + message.getTopic(), null, ex);
         }
@@ -183,7 +190,7 @@ public class RedissonStreamProducer implements StreamMqProducer {
 
         try {
             batch.execute();
-        } catch (Exception ex) {
+        } catch (RuntimeException ex) {
             throw new StreamMqBrokerException(
                 "syncSendBatch failed for topic " + firstTopic, null, ex);
         }
@@ -224,8 +231,8 @@ public class RedissonStreamProducer implements StreamMqProducer {
         String payloadHashKey = StreamMqKeys.delayPayloadHash(namespace, msgId);
 
         Map<String, String> fields = converter.toStreamFields(message);
-        fields.put("targetTopic", message.getTopic());
-        fields.put("deliverAt", Long.toString(deliverAt));
+        fields.put(FIELD_TARGET_TOPIC, message.getTopic());
+        fields.put(FIELD_DELIVER_AT, Long.toString(deliverAt));
 
         try {
             RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
@@ -240,7 +247,7 @@ public class RedissonStreamProducer implements StreamMqProducer {
             MessageId messageId = new MessageId(now + "-" + Math.abs(msgId.hashCode()));
             message.setMessageId(messageId);
             return new SendResult(messageId, message.getTopic(), message.getTag(), message.getBornTimestamp());
-        } catch (Exception ex) {
+        } catch (RuntimeException ex) {
             throw new StreamMqBrokerException(
                 "sendDelayMessage failed for topic " + message.getTopic(), null, ex);
         }
@@ -286,7 +293,7 @@ public class RedissonStreamProducer implements StreamMqProducer {
         if (closed.compareAndSet(false, true)) {
             asyncExecutor.shutdown();
             try {
-                if (!asyncExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                if (!asyncExecutor.awaitTermination(ASYNC_AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
                     asyncExecutor.shutdownNow();
                 }
             } catch (InterruptedException e) {

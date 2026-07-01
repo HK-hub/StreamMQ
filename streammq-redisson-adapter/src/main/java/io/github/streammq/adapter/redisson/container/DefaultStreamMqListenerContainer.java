@@ -75,6 +75,18 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
     private static final int DEFAULT_BATCH_SIZE = 32;
     /** pullBlock 超时（秒），控制消费循环响应停止信号的延迟 */
     private static final Duration PULL_BLOCK_TIMEOUT = Duration.ofSeconds(1);
+    /** 暂停状态下消费循环的休眠间隔（毫秒） */
+    private static final long PAUSED_SLEEP_MILLIS = 100L;
+    /** Broker 异常后消费循环的退避休眠间隔（毫秒） */
+    private static final long BROKER_ERROR_BACKOFF_MILLIS = 500L;
+    /** 关闭消费线程池时的等待超时（秒） */
+    private static final long AWAIT_TERMINATION_SECONDS = 5L;
+    /** DLQ Stream Entry 字段：进入 DLQ 的原因 */
+    private static final String FIELD_DLQ_REASON = "dlqReason";
+    /** DLQ Stream Entry 字段：原始消息 ID */
+    private static final String FIELD_ORIGINAL_MESSAGE_ID = "originalMessageId";
+    /** 默认消费者实例名后缀 */
+    private static final String DEFAULT_CONSUMER_NAME_SUFFIX = "-consumer";
 
     private final RedissonClient redisson;
     private final StreamMqConsumerFactory consumerFactory;
@@ -215,7 +227,7 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
         // 关闭消费线程池
         consumeExecutor.shutdown();
         try {
-            if (!consumeExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+            if (!consumeExecutor.awaitTermination(AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
                 consumeExecutor.shutdownNow();
             }
         } catch (InterruptedException e) {
@@ -276,7 +288,7 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
         try {
             while (state.get() == ContainerState.RUNNING) {
                 if (paused) {
-                    sleepQuietly(100);
+                    sleepQuietly(PAUSED_SLEEP_MILLIS);
                     continue;
                 }
                 try {
@@ -293,11 +305,11 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
                 } catch (StreamMqBrokerException ex) {
                     LOG.warn("Broker error in consume loop (topic={}, group={}): {}",
                         reg.topic, reg.group, ex.getMessage());
-                    sleepQuietly(500);
+                    sleepQuietly(BROKER_ERROR_BACKOFF_MILLIS);
                 } catch (RuntimeException ex) {
                     LOG.warn("Unexpected error in consume loop (topic={}, group={}): {}",
                         reg.topic, reg.group, ex.getMessage(), ex);
-                    sleepQuietly(500);
+                    sleepQuietly(BROKER_ERROR_BACKOFF_MILLIS);
                 }
             }
         } finally {
@@ -356,7 +368,7 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
                 try {
                     consumer.ack(messageId);
                 } catch (RuntimeException ex) {
-                    LOG.warn("ACK failed (messageId={}): {}", messageId, ex.getMessage());
+                    LOG.warn("ACK failed (messageId={}): {}", messageId, ex.getMessage(), ex);
                 }
             }
             case RECONSUME_LATER, ROLLBACK -> handleReconsumeLater(message, reg, consumer, messageId);
@@ -404,7 +416,7 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
                         "(topic={}, group={}, messageId={}, retryCount={})",
                     reg.topic, reg.group, messageId, retryCount);
                 // DLQ 路由成功才 ACK；失败则保留 PEL 等待下次 XAUTOCLAIM 重新投递
-                if (routeToDlq(message, reg, messageId, "maxRetry")) {
+                if (routeToDlq(message, reg, messageId, RetryScheduler.DLQ_REASON_MAX_RETRY)) {
                     consumer.ack(messageId);
                 } else {
                     LOG.error("DLQ routing failed, message kept in PEL for re-delivery " +
@@ -457,8 +469,8 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
                              MessageId messageId, String reason) {
         try {
             Map<String, String> fields = messageConverter.toStreamFields(message);
-            fields.put("dlqReason", reason);
-            fields.put("originalMessageId", messageId.getStreamEntryId());
+            fields.put(FIELD_DLQ_REASON, reason);
+            fields.put(FIELD_ORIGINAL_MESSAGE_ID, messageId.getStreamEntryId());
             String dlqKey = StreamMqKeys.dlqStream(reg.namespace, reg.topic, reg.group);
             RStream<String, String> dlqStream = redisson.getStream(dlqKey);
             dlqStream.add(StreamAddArgs.entries(fields));
@@ -565,7 +577,7 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
 
         @Override
         public String consumerName() {
-            return reg.group + "-consumer";
+            return reg.group + DEFAULT_CONSUMER_NAME_SUFFIX;
         }
 
         @Override

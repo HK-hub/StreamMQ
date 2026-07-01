@@ -12,10 +12,21 @@ public class SerializationException extends StreamMqException {
 
     private static final long serialVersionUID = 1L;
 
+    /**
+     * 构造异常。
+     *
+     * @param message 错误信息
+     */
     public SerializationException(String message) {
         super(message);
     }
 
+    /**
+     * 构造异常。
+     *
+     * @param message 错误信息
+     * @param cause 原始异常
+     */
     public SerializationException(String message, Throwable cause) {
         super(message, cause);
     }

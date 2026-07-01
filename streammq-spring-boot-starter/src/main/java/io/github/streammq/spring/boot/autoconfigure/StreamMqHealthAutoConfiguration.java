@@ -35,6 +35,9 @@ public class StreamMqHealthAutoConfiguration {
 
     private static final Logger LOG = LoggerFactory.getLogger(StreamMqHealthAutoConfiguration.class);
 
+    /** Redis 健康探测使用的 AtomicLong Key */
+    private static final String HEALTH_CHECK_KEY = "streammq:health-check";
+
     /**
      * StreamMQ 健康检查器：综合检查 Redis 连通性 + Listener 容器状态。
      *
@@ -58,6 +61,12 @@ public class StreamMqHealthAutoConfiguration {
         private final RedissonClient redisson;
         private final DefaultStreamMqListenerContainer listenerContainer;
 
+        /**
+         * 构造健康检查器。
+         *
+         * @param redisson Redisson 客户端
+         * @param listenerContainer Listener 容器（可为 null，表示未装配）
+         */
         public StreamMqHealthIndicator(RedissonClient redisson,
                                        DefaultStreamMqListenerContainer listenerContainer) {
             this.redisson = redisson;
@@ -70,11 +79,11 @@ public class StreamMqHealthAutoConfiguration {
             try {
                 // Redis 连通性检查（通过读取一个不存在的 key 来触发网络请求）
                 long start = System.currentTimeMillis();
-                long val = redisson.getAtomicLong("streammq:health-check").get();
+                long val = redisson.getAtomicLong(HEALTH_CHECK_KEY).get();
                 long elapsed = System.currentTimeMillis() - start;
                 builder.withDetail("redis.ping.latencyMs", elapsed);
                 builder.withDetail("redis.health.value", val);
-            } catch (Exception ex) {
+            } catch (RuntimeException ex) {
                 return Health.down(ex)
                     .withDetail("error", "Redis ping failed: " + ex.getMessage())
                     .build();
