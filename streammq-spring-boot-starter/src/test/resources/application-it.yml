@@ -1,0 +1,34 @@
+# StreamMQ Spring Boot Starter 集成测试配置
+# 实际连接本地 Redis (localhost:6379),验证自动装配全流程
+
+spring:
+  main:
+    lazy-initialization: false
+
+streammq:
+  enabled: true
+  namespace: it-starter
+  producer:
+    group: starter-producer
+    send-message-timeout: 3000
+    retry-times: 1
+    stream-max-len: 0
+    serializer: io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer
+  consumer:
+    poll-timeout: 1s
+    batch-size: 32
+  retry:
+    policy: io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy
+    max-reconsume-times: 3
+    scan-interval: 500ms
+    batch-size: 100
+  delay:
+    enabled: true
+    scan-interval: 500ms
+    batch-size: 100
+  transaction:
+    default-group: starter-tx-group
+    check-interval: 500ms
+    max-check-times: 3
+  health:
+    enabled: true
