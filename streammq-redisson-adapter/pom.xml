@@ -35,6 +35,13 @@
             <artifactId>slf4j-api</artifactId>
         </dependency>
 
+        <!-- Micrometer（optional：仅当用户引入 Actuator 时启用指标收集） -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-core</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- 默认序列化（Jackson） -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
@@ -46,6 +53,11 @@
         </dependency>
 
         <!-- 测试 -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

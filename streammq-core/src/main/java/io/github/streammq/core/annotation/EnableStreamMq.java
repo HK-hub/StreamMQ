@@ -1,5 +1,7 @@
 package io.github.streammq.core.annotation;
 
+import io.github.streammq.core.StreamMqConstants;
+
 import java.lang.annotation.Documented;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -32,12 +34,20 @@ import java.lang.annotation.Target;
 public @interface EnableStreamMq {
 
     /**
-     * 启用模式，默认 {@code STANDARD}。
-     * v1.0+ 支持 {@code LITE}（轻量模式，不启用 Actuator 指标）。
+     * 启用模式，默认 {@link StreamMqConstants#MODE_STANDARD}。
+     * v1.0+ 支持 {@link StreamMqConstants#MODE_LITE}（轻量模式，不启用 Actuator 指标）。
      *
      * @return 模式字符串
      */
-    String mode() default "STANDARD";
+    String mode() default StreamMqConstants.MODE_STANDARD;
+
+    /**
+     * 全局追踪开关，默认 false。
+     * 设置为 true 时启用全局消息追踪（注册 Slf4jTraceCollector 与追踪拦截器）。
+     *
+     * @return true 启用追踪
+     */
+    boolean tracingEnabled() default false;
 
     /**
      * 自定义扫描包路径（默认使用 Spring Boot 启动类所在包）。

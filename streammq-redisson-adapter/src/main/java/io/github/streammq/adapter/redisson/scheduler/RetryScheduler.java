@@ -2,6 +2,7 @@ package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.core.StreamMqConstants;
 import org.redisson.api.RMap;
 import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RStream;
@@ -66,11 +67,11 @@ public class RetryScheduler {
     /** DLQ 原因：达到最大重试次数 */
     public static final String DLQ_REASON_MAX_RETRY = "maxRetry";
     /** 默认扫描间隔（毫秒） */
-    private static final long DEFAULT_SCAN_INTERVAL_MS = 1000L;
+    private static final long DEFAULT_SCAN_INTERVAL_MS = StreamMqConstants.DEFAULT_SCAN_INTERVAL_MS;
     /** 默认单次扫描批量 */
-    private static final int DEFAULT_BATCH_SIZE = 100;
+    private static final int DEFAULT_BATCH_SIZE = StreamMqConstants.DEFAULT_BATCH_SIZE;
     /** 关闭调度线程池时的等待超时（秒） */
-    private static final long AWAIT_TERMINATION_SECONDS = 5L;
+    private static final long AWAIT_TERMINATION_SECONDS = StreamMqConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
 
     private final RedissonClient redisson;
     private final String namespace;

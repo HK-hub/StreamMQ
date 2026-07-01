@@ -2,6 +2,7 @@ package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.core.StreamMqConstants;
 import io.github.streammq.core.enums.LocalTransactionState;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.spi.MessageConverter;
@@ -70,18 +71,18 @@ public class TransactionScanner {
     public static final String STATE_UNKNOWN = "UNKNOWN";
 
     /** 默认扫描间隔 60s */
-    public static final long DEFAULT_CHECK_INTERVAL_MS = 60_000L;
+    public static final long DEFAULT_CHECK_INTERVAL_MS = StreamMqConstants.DEFAULT_CHECK_INTERVAL_MS;
     /** 默认最大回查次数 15 次 */
-    public static final int DEFAULT_MAX_CHECK_TIMES = 15;
+    public static final int DEFAULT_MAX_CHECK_TIMES = StreamMqConstants.DEFAULT_MAX_CHECK_TIMES;
     /** 默认单次扫描批量 */
-    public static final int DEFAULT_BATCH_SIZE = 100;
+    public static final int DEFAULT_BATCH_SIZE = StreamMqConstants.DEFAULT_BATCH_SIZE;
 
     /** txstate Hash 中目标 Topic 字段后缀 */
     private static final String FIELD_TARGET_SUFFIX = ".target";
     /** txstate Hash 中半消息 Stream Entry ID 字段后缀 */
     private static final String FIELD_HALF_ID_SUFFIX = ".halfId";
     /** 关闭调度线程池时的等待超时（秒） */
-    private static final long AWAIT_TERMINATION_SECONDS = 5L;
+    private static final long AWAIT_TERMINATION_SECONDS = StreamMqConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
 
     private final RedissonClient redisson;
     private final String namespace;

@@ -2,14 +2,21 @@ package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.consumer.RedissonStreamConsumerFactory;
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
+import io.github.streammq.adapter.redisson.interceptor.TraceContextConsumerInterceptor;
+import io.github.streammq.adapter.redisson.interceptor.TraceContextProducerInterceptor;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducerFactory;
+import io.github.streammq.adapter.redisson.security.DenyAllAuthenticator;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.adapter.redisson.template.DefaultStreamMqTemplate;
+import io.github.streammq.adapter.redisson.trace.NoopTraceCollector;
+import io.github.streammq.adapter.redisson.trace.Slf4jTraceCollector;
 import io.github.streammq.core.producer.StreamMqProducerFactory;
 import io.github.streammq.core.consumer.StreamMqConsumerFactory;
+import io.github.streammq.core.spi.ManagementAuthenticator;
 import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.MessageSerializer;
 import io.github.streammq.core.spi.RetryPolicy;
+import io.github.streammq.core.spi.TraceCollector;
 import io.github.streammq.core.template.StreamMqTemplate;
 import io.github.streammq.spring.boot.properties.StreamMqProperties;
 import org.redisson.api.RedissonClient;
@@ -158,11 +165,89 @@ public class StreamMqCoreAutoConfiguration {
      * @return BeanPostProcessor
      */
     @Bean
+    @ConditionalOnMissingBean(StreamMqProducerBeanPostProcessor.class)
     public StreamMqProducerBeanPostProcessor streamMqProducerBeanPostProcessor(
             StreamMqProducerFactory producerFactory,
             MessageConverter converter,
             StreamMqProperties properties) {
         return new StreamMqProducerBeanPostProcessor(producerFactory, converter, properties);
+    }
+
+    // ===================== 内置策略 Bean =====================
+
+    /**
+     * 默认追踪收集器：{@link NoopTraceCollector}。
+     *
+     * <p>当 {@code streammq.tracing.enabled=false}（默认）或未配置时注册，
+     * 所有追踪方法均为空操作，避免空指针。
+     *
+     * @return NoopTraceCollector 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean(TraceCollector.class)
+    @ConditionalOnProperty(prefix = "streammq.tracing", name = "enabled", havingValue = "false", matchIfMissing = true)
+    public TraceCollector streamMqNoopTraceCollector() {
+        LOG.info("Using NoopTraceCollector (tracing disabled)");
+        return new NoopTraceCollector();
+    }
+
+    /**
+     * SLF4J 追踪收集器：{@link Slf4jTraceCollector}。
+     *
+     * <p>当 {@code streammq.tracing.enabled=true} 时注册，覆盖 NoopTraceCollector，
+     * 通过 SLF4J 输出追踪日志。
+     *
+     * @return Slf4jTraceCollector 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean(TraceCollector.class)
+    @ConditionalOnProperty(prefix = "streammq.tracing", name = "enabled", havingValue = "true")
+    public TraceCollector streamMqSlf4jTraceCollector() {
+        LOG.info("Using Slf4jTraceCollector (tracing enabled)");
+        return new Slf4jTraceCollector();
+    }
+
+    /**
+     * 默认管理鉴权器：{@link DenyAllAuthenticator}。
+     *
+     * <p>始终拒绝所有访问请求，作为安全兜底，避免误开放运维端点。
+     * 用户可注册自定义 {@link ManagementAuthenticator} Bean 覆盖。
+     *
+     * @return DenyAllAuthenticator 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean(ManagementAuthenticator.class)
+    public ManagementAuthenticator streamMqManagementAuthenticator() {
+        LOG.info("Using DenyAllAuthenticator (security fallback)");
+        return new DenyAllAuthenticator();
+    }
+
+    /**
+     * 追踪上下文生产者拦截器：当 {@code streammq.tracing.enabled=true} 时注册。
+     *
+     * @param traceCollector 追踪收集器
+     * @return TraceContextProducerInterceptor 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean(TraceContextProducerInterceptor.class)
+    @ConditionalOnProperty(prefix = "streammq.tracing", name = "enabled", havingValue = "true")
+    public TraceContextProducerInterceptor streamMqTraceContextProducerInterceptor(TraceCollector traceCollector) {
+        LOG.info("Using TraceContextProducerInterceptor (tracing enabled)");
+        return new TraceContextProducerInterceptor(traceCollector);
+    }
+
+    /**
+     * 追踪上下文消费者拦截器：当 {@code streammq.tracing.enabled=true} 时注册。
+     *
+     * @param traceCollector 追踪收集器
+     * @return TraceContextConsumerInterceptor 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean(TraceContextConsumerInterceptor.class)
+    @ConditionalOnProperty(prefix = "streammq.tracing", name = "enabled", havingValue = "true")
+    public TraceContextConsumerInterceptor streamMqTraceContextConsumerInterceptor(TraceCollector traceCollector) {
+        LOG.info("Using TraceContextConsumerInterceptor (tracing enabled)");
+        return new TraceContextConsumerInterceptor(traceCollector);
     }
 
     // ===================== 工具方法 =====================

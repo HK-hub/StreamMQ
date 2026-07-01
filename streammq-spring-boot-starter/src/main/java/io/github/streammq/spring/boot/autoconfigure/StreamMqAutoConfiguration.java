@@ -21,6 +21,7 @@ import org.springframework.context.annotation.Import;
  *   <li>{@link StreamMqSchedulerAutoConfiguration} - 重试 / 延时 / 事务回查 调度器</li>
  *   <li>{@link StreamMqListenerContainerAutoConfiguration} - Listener 容器 + 注解扫描 + SmartLifecycle</li>
  *   <li>{@link StreamMqHealthAutoConfiguration} - Actuator HealthIndicator（可选）</li>
+ *   <li>{@link StreamMqMetricsAutoConfiguration} - Micrometer 指标收集器（可选）</li>
  * </ol>
  *
  * <p>触发方式：
@@ -39,7 +40,8 @@ import org.springframework.context.annotation.Import;
     StreamMqCoreAutoConfiguration.class,
     StreamMqSchedulerAutoConfiguration.class,
     StreamMqListenerContainerAutoConfiguration.class,
-    StreamMqHealthAutoConfiguration.class
+    StreamMqHealthAutoConfiguration.class,
+    StreamMqMetricsAutoConfiguration.class
 })
 public class StreamMqAutoConfiguration {
 

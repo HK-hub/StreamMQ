@@ -1,7 +1,9 @@
 package io.github.streammq.adapter.redisson.container;
 
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
+import io.github.streammq.adapter.redisson.support.MdcKeys;
 import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.core.StreamMqConstants;
 import io.github.streammq.core.annotation.StreamMqListener;
 import io.github.streammq.core.annotation.StreamMqOrderlyListener;
 import io.github.streammq.core.consumer.StreamMqConsumer;
@@ -14,8 +16,10 @@ import io.github.streammq.core.listener.Acknowledgment;
 import io.github.streammq.core.listener.OrderlyContext;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
+import io.github.streammq.core.spi.ConsumerInterceptor;
 import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.RetryPolicy;
+import org.redisson.api.RLock;
 import org.redisson.api.RMap;
 import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RStream;
@@ -23,6 +27,7 @@ import org.redisson.api.RedissonClient;
 import org.redisson.api.stream.StreamAddArgs;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -34,6 +39,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -72,15 +78,15 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
     private static final Logger LOG = LoggerFactory.getLogger(DefaultStreamMqListenerContainer.class);
 
     /** 单次 pull 批量大小 */
-    private static final int DEFAULT_BATCH_SIZE = 32;
+    private static final int DEFAULT_BATCH_SIZE = StreamMqConstants.DEFAULT_CONSUME_BATCH_SIZE;
     /** pullBlock 超时（秒），控制消费循环响应停止信号的延迟 */
     private static final Duration PULL_BLOCK_TIMEOUT = Duration.ofSeconds(1);
     /** 暂停状态下消费循环的休眠间隔（毫秒） */
-    private static final long PAUSED_SLEEP_MILLIS = 100L;
+    private static final long PAUSED_SLEEP_MILLIS = StreamMqConstants.DEFAULT_PAUSED_SLEEP_MS;
     /** Broker 异常后消费循环的退避休眠间隔（毫秒） */
-    private static final long BROKER_ERROR_BACKOFF_MILLIS = 500L;
+    private static final long BROKER_ERROR_BACKOFF_MILLIS = StreamMqConstants.DEFAULT_BROKER_ERROR_BACKOFF_MS;
     /** 关闭消费线程池时的等待超时（秒） */
-    private static final long AWAIT_TERMINATION_SECONDS = 5L;
+    private static final long AWAIT_TERMINATION_SECONDS = StreamMqConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
     /** DLQ Stream Entry 字段：进入 DLQ 的原因 */
     private static final String FIELD_DLQ_REASON = "dlqReason";
     /** DLQ Stream Entry 字段：原始消息 ID */
@@ -98,6 +104,8 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
     private final AtomicReference<ContainerState> state = new AtomicReference<>(ContainerState.INIT);
     private final ConcurrentMap<String, Future<?>> consumeFutures = new ConcurrentHashMap<>();
     private volatile boolean paused = false;
+    /** 全局消费者拦截器列表（按 order() 升序维护，线程安全） */
+    private final List<ConsumerInterceptor> consumerInterceptors = new CopyOnWriteArrayList<>();
 
     /**
      * 构造容器。
@@ -120,6 +128,39 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
         this.defaultNamespace = defaultNamespace == null ? "" : defaultNamespace;
     }
 
+    // ===================== 消费者拦截器 =====================
+
+    /**
+     * 添加单个消费者拦截器（按 {@link ConsumerInterceptor#order()} 升序插入）。
+     *
+     * @param interceptor 拦截器实例
+     */
+    public void addConsumerInterceptor(ConsumerInterceptor interceptor) {
+        Objects.requireNonNull(interceptor, "interceptor");
+        int insertIndex = 0;
+        for (ConsumerInterceptor existing : consumerInterceptors) {
+            if (existing.order() <= interceptor.order()) {
+                insertIndex++;
+            } else {
+                break;
+            }
+        }
+        consumerInterceptors.add(insertIndex, interceptor);
+    }
+
+    /**
+     * 批量添加消费者拦截器。
+     *
+     * @param interceptors 拦截器集合
+     */
+    public void addConsumerInterceptors(Collection<ConsumerInterceptor> interceptors) {
+        if (interceptors != null) {
+            for (ConsumerInterceptor interceptor : interceptors) {
+                addConsumerInterceptor(interceptor);
+            }
+        }
+    }
+
     // ===================== 注册方法 =====================
 
     @Override
@@ -131,7 +172,8 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
         ListenerRegistration<T> reg = new ListenerRegistration<>(
             ListenerType.AUTO_ACK, listener, annotation.topic(), annotation.consumerGroup(),
             annotation.consumeMode(), annotation.acknowledgeMode(),
-            annotation.maxReconsumeTimes(), annotation.namespace());
+            annotation.maxReconsumeTimes(), annotation.namespace(),
+            0, annotation.consumeTimeout(), null);
         reg.resolveNamespace(defaultNamespace);
         registrations.put(reg.key(), reg);
         LOG.info("Registered StreamMqListener: topic={}, group={}, ackMode={}",
@@ -147,7 +189,8 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
         ListenerRegistration<T> reg = new ListenerRegistration<>(
             ListenerType.MANUAL_ACK, listener, annotation.topic(), annotation.consumerGroup(),
             annotation.consumeMode(), annotation.acknowledgeMode(),
-            annotation.maxReconsumeTimes(), annotation.namespace());
+            annotation.maxReconsumeTimes(), annotation.namespace(),
+            0, annotation.consumeTimeout(), null);
         reg.resolveNamespace(defaultNamespace);
         registrations.put(reg.key(), reg);
         LOG.info("Registered StreamMqAckListener: topic={}, group={}, ackMode={}",
@@ -160,10 +203,16 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
         Objects.requireNonNull(listener, "listener");
         Objects.requireNonNull(annotation, "annotation");
         checkBeforeStart();
+        int shardCount = annotation.shardCount();
+        long consumeTimeoutMillis = annotation.consumeTimeout();
+        // 为每个 shard 创建分布式锁，保证同一 shardingKey 的消息顺序消费
+        RLock[] shardLocks = createShardLocks(defaultNamespace, annotation.topic(),
+            annotation.consumerGroup(), annotation.namespace(), shardCount);
         ListenerRegistration<T> reg = new ListenerRegistration<>(
             ListenerType.ORDERLY, listener, annotation.topic(), annotation.consumerGroup(),
             annotation.consumeMode(), annotation.acknowledgeMode(),
-            annotation.maxReconsumeTimes(), annotation.namespace());
+            annotation.maxReconsumeTimes(), annotation.namespace(),
+            shardCount, consumeTimeoutMillis, shardLocks);
         reg.resolveNamespace(defaultNamespace);
         registrations.put(reg.key(), reg);
         LOG.info("Registered StreamMqOrderlyListener: topic={}, group={}, shardCount={}",
@@ -328,32 +377,184 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void handleMessage(Message<?> message, ListenerRegistration reg, StreamMqConsumer consumer) {
         DefaultConsumerContext ctx = new DefaultConsumerContext(message, reg, consumer);
+        // 注入 MDC 结构化日志上下文
+        injectConsumerMdc(message, reg);
+        // 跟踪最终消费动作，用于 afterConsume 拦截器
+        Action finalAction = Action.RECONSUME_LATER;
         try {
-            if (reg.type == ListenerType.ORDERLY) {
-                io.github.streammq.core.listener.StreamMqOrderlyListener orderly =
-                    (io.github.streammq.core.listener.StreamMqOrderlyListener) reg.listener;
-                Action action = orderly.onMessage(message, (OrderlyContext) ctx);
-                handleAction(action, message, reg, consumer);
-            } else if (reg.type == ListenerType.MANUAL_ACK) {
-                io.github.streammq.core.listener.StreamMqAckListener ackListener =
-                    (io.github.streammq.core.listener.StreamMqAckListener) reg.listener;
-                ackListener.onMessage(message, ctx);
-                // 手动 ACK 模式：由 listener 通过 ctx.acknowledge() 控制
-                // 若退出时未 ack，记录日志（消息留在 PEL 中，由后续 XAUTOCLAIM 补偿）
-                if (!ctx.isAcked()) {
-                    LOG.debug("AckListener exited without acknowledge, message stays in PEL: messageId={}",
-                        message.getMessageId());
-                }
-            } else {
-                io.github.streammq.core.listener.StreamMqListener listener =
-                    (io.github.streammq.core.listener.StreamMqListener) reg.listener;
-                Action action = listener.onMessage(message, ctx);
-                handleAction(action, message, reg, consumer);
+            // 执行 beforeConsume 拦截器链
+            if (!applyConsumerInterceptorsBefore(message)) {
+                // 拦截器中止消费，直接 ACK 跳过该消息
+                finalAction = Action.SUCCESS;
+                handleAction(Action.SUCCESS, message, reg, consumer);
+                return;
             }
-        } catch (Exception ex) {
-            LOG.warn("Listener onMessage threw exception (topic={}, group={}, messageId={}): {}",
-                reg.topic, reg.group, message.getMessageId(), ex.getMessage(), ex);
-            handleAction(Action.RECONSUME_LATER, message, reg, consumer);
+            try {
+                if (reg.type == ListenerType.ORDERLY) {
+                    io.github.streammq.core.listener.StreamMqOrderlyListener orderly =
+                        (io.github.streammq.core.listener.StreamMqOrderlyListener) reg.listener;
+                    finalAction = consumeOrderlyWithShardLock(message, reg, ctx, orderly);
+                    handleAction(finalAction, message, reg, consumer);
+                } else if (reg.type == ListenerType.MANUAL_ACK) {
+                    io.github.streammq.core.listener.StreamMqAckListener ackListener =
+                        (io.github.streammq.core.listener.StreamMqAckListener) reg.listener;
+                    ackListener.onMessage(message, ctx);
+                    // 手动 ACK 模式：由 listener 通过 ctx.acknowledge() 控制
+                    // 若退出时未 ack，记录日志（消息留在 PEL 中，由后续 XAUTOCLAIM 补偿）
+                    if (!ctx.isAcked()) {
+                        LOG.debug("AckListener exited without acknowledge, message stays in PEL: messageId={}",
+                            message.getMessageId());
+                    }
+                    finalAction = ctx.isAcked() ? Action.SUCCESS : Action.RECONSUME_LATER;
+                } else {
+                    io.github.streammq.core.listener.StreamMqListener listener =
+                        (io.github.streammq.core.listener.StreamMqListener) reg.listener;
+                    finalAction = listener.onMessage(message, ctx);
+                    handleAction(finalAction, message, reg, consumer);
+                }
+            } catch (Exception ex) {
+                LOG.warn("Listener onMessage threw exception (topic={}, group={}, messageId={}): {}",
+                    reg.topic, reg.group, message.getMessageId(), ex.getMessage(), ex);
+                finalAction = Action.RECONSUME_LATER;
+                handleAction(finalAction, message, reg, consumer);
+            }
+        } finally {
+            // 执行 afterConsume 拦截器链
+            applyConsumerInterceptorsAfter(message, finalAction);
+            // 清理 MDC 结构化日志上下文
+            clearConsumerMdc();
+        }
+    }
+
+    /**
+     * 顺序消费：根据 shardingKey 获取 shard 级 RLock，加锁后执行消费。
+     *
+     * <p>同一 shardingKey 的消息始终路由到同一 shard，由同一把 RLock 串行化，
+     * 保证顺序语义。不同 shard 之间可并行，提升吞吐。
+     *
+     * @param message 待消费消息
+     * @param reg Listener 注册信息
+     * @param ctx 消费上下文
+     * @param orderly 顺序消费 Listener
+     * @return 消费动作
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private Action consumeOrderlyWithShardLock(Message<?> message, ListenerRegistration reg,
+            DefaultConsumerContext ctx, io.github.streammq.core.listener.StreamMqOrderlyListener orderly)
+            throws Exception {
+        // 无分片锁时直接消费
+        if (reg.shardLocks == null || reg.shardCount <= 0) {
+            return orderly.onMessage(message, (OrderlyContext) ctx);
+        }
+        // 根据 shardingKey 计算 shard 索引（null 视为空串，路由到 shard 0）
+        String shardingKey = message.getShardingKey();
+        if (shardingKey == null) {
+            shardingKey = "";
+        }
+        int shardIndex = Math.abs(shardingKey.hashCode()) % reg.shardCount;
+        RLock lock = reg.shardLocks[shardIndex];
+        try {
+            lock.lock(reg.consumeTimeoutMillis, TimeUnit.MILLISECONDS);
+            return orderly.onMessage(message, (OrderlyContext) ctx);
+        } finally {
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
+    }
+
+    /**
+     * 为顺序消费 Listener 创建 shard 级分布式锁数组。
+     *
+     * @param defaultNs 默认命名空间
+     * @param topic 主题
+     * @param group 消费组
+     * @param ns 注解指定的命名空间（可为空）
+     * @param shardCount 分片数
+     * @return RLock 数组，shardCount <= 0 时返回 null
+     */
+    private RLock[] createShardLocks(String defaultNs, String topic, String group, String ns, int shardCount) {
+        if (shardCount <= 0) {
+            return null;
+        }
+        String namespace = (ns == null || ns.isEmpty()) ? defaultNs : ns;
+        RLock[] locks = new RLock[shardCount];
+        for (int i = 0; i < shardCount; i++) {
+            String lockKey = StreamMqKeys.shardLock(namespace, topic, group, i);
+            locks[i] = redisson.getLock(lockKey);
+        }
+        return locks;
+    }
+
+    /**
+     * 注入消费侧 MDC 结构化日志上下文。
+     *
+     * @param message 待消费消息
+     * @param reg Listener 注册信息
+     */
+    private void injectConsumerMdc(Message<?> message, ListenerRegistration<?> reg) {
+        MDC.put(MdcKeys.TOPIC, reg.topic);
+        MDC.put(MdcKeys.CONSUMER_GROUP, reg.group);
+        if (message.getMessageId() != null) {
+            MDC.put(MdcKeys.MSG_ID, String.valueOf(message.getMessageId()));
+        }
+        if (message.getShardingKey() != null) {
+            MDC.put(MdcKeys.SHARDING_KEY, message.getShardingKey());
+        }
+        MDC.put(MdcKeys.RECONSUME_TIMES, String.valueOf(message.getReconsumeTimes()));
+    }
+
+    /**
+     * 清理消费侧 MDC 结构化日志上下文。
+     */
+    private void clearConsumerMdc() {
+        MDC.remove(MdcKeys.TOPIC);
+        MDC.remove(MdcKeys.CONSUMER_GROUP);
+        MDC.remove(MdcKeys.MSG_ID);
+        MDC.remove(MdcKeys.SHARDING_KEY);
+        MDC.remove(MdcKeys.RECONSUME_TIMES);
+    }
+
+    /**
+     * 执行 beforeConsume 拦截器链（按 order() 升序）。
+     *
+     * <p>拦截器异常不中断主流程，仅 LOG.warn 后继续。
+     *
+     * @param message 待消费消息
+     * @return true 全部通过，false 任一拦截器拒绝
+     */
+    private boolean applyConsumerInterceptorsBefore(Message<?> message) {
+        for (ConsumerInterceptor interceptor : consumerInterceptors) {
+            try {
+                if (!interceptor.beforeConsume(message)) {
+                    LOG.debug("ConsumerInterceptor {} aborted consume: topic={}",
+                        interceptor.name(), message.getTopic());
+                    return false;
+                }
+            } catch (RuntimeException ex) {
+                LOG.warn("ConsumerInterceptor {} beforeConsume threw exception: {}",
+                    interceptor.name(), ex.getMessage(), ex);
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 执行 afterConsume 拦截器链（按 order() 升序）。
+     *
+     * <p>拦截器异常不中断主流程，仅 LOG.warn 后继续。
+     *
+     * @param message 已消费消息
+     * @param action 消费动作
+     */
+    private void applyConsumerInterceptorsAfter(Message<?> message, Action action) {
+        for (ConsumerInterceptor interceptor : consumerInterceptors) {
+            try {
+                interceptor.afterConsume(message, action);
+            } catch (RuntimeException ex) {
+                LOG.warn("ConsumerInterceptor {} afterConsume threw exception: {}",
+                    interceptor.name(), ex.getMessage(), ex);
+            }
         }
     }
 
@@ -520,11 +721,18 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
         final io.github.streammq.core.enums.ConsumeMode consumeMode;
         final AcknowledgeMode ackMode;
         final int maxReconsumeTimes;
+        /** 顺序消费分片数（仅 ORDERLY 类型有效，其他类型为 0） */
+        final int shardCount;
+        /** 单条消息消费超时（毫秒），用于 shard 锁租约时间 */
+        final long consumeTimeoutMillis;
+        /** 顺序消费 shard 级分布式锁数组（仅 ORDERLY 类型非 null） */
+        final RLock[] shardLocks;
         String namespace;
 
         ListenerRegistration(ListenerType type, Object listener, String topic, String group,
                              io.github.streammq.core.enums.ConsumeMode consumeMode,
-                             AcknowledgeMode ackMode, int maxReconsumeTimes, String namespace) {
+                             AcknowledgeMode ackMode, int maxReconsumeTimes, String namespace,
+                             int shardCount, long consumeTimeoutMillis, RLock[] shardLocks) {
             this.type = type;
             this.listener = listener;
             this.topic = topic;
@@ -533,6 +741,9 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
             this.ackMode = ackMode;
             this.maxReconsumeTimes = maxReconsumeTimes;
             this.namespace = namespace;
+            this.shardCount = shardCount;
+            this.consumeTimeoutMillis = consumeTimeoutMillis;
+            this.shardLocks = shardLocks;
         }
 
         void resolveNamespace(String defaultNs) {

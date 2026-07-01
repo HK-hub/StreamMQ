@@ -1,6 +1,7 @@
 package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.core.StreamMqConstants;
 import io.github.streammq.core.enums.DelayLevel;
 import org.redisson.api.RBatch;
 import org.redisson.api.RMap;
@@ -49,11 +50,11 @@ public class DelayMessageScheduler {
     /** payload Hash 中的投递时间字段名 */
     public static final String FIELD_DELIVER_AT = "deliverAt";
     /** 默认扫描间隔（毫秒） */
-    private static final long DEFAULT_SCAN_INTERVAL_MS = 1000L;
+    private static final long DEFAULT_SCAN_INTERVAL_MS = StreamMqConstants.DEFAULT_SCAN_INTERVAL_MS;
     /** 默认单次扫描批量 */
-    private static final int DEFAULT_BATCH_SIZE = 100;
+    private static final int DEFAULT_BATCH_SIZE = StreamMqConstants.DEFAULT_BATCH_SIZE;
     /** 关闭调度线程池时的等待超时（秒） */
-    private static final long AWAIT_TERMINATION_SECONDS = 5L;
+    private static final long AWAIT_TERMINATION_SECONDS = StreamMqConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
 
     private final RedissonClient redisson;
     private final String namespace;

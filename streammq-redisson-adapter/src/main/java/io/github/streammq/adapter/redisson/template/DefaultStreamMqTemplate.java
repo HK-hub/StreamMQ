@@ -1,5 +1,6 @@
 package io.github.streammq.adapter.redisson.template;
 
+import io.github.streammq.adapter.redisson.support.MdcKeys;
 import io.github.streammq.core.exception.StreamMqException;
 import io.github.streammq.core.exception.TransactionException;
 import io.github.streammq.core.message.BatchMessage;
@@ -17,6 +18,7 @@ import io.github.streammq.core.transaction.TransactionCallback;
 import io.github.streammq.core.transaction.TransactionContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -113,50 +115,64 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
             retryTimes = 0;
         }
 
-        // 1. 拦截器 before
-        if (!applyInterceptorsBefore(message)) {
-            // 被拦截器中止
-            SendResult aborted = new SendResult(
-                new MessageId(System.currentTimeMillis() + "-0"),
-                message.getTopic(), message.getTag(), SendStatus.SEND_FAILED,
-                message.getBornTimestamp(), null, "Aborted by interceptor");
-            applyInterceptorsAfter(message, aborted);
-            return aborted;
-        }
-
-        // 2. 委派 Producer 发送（含重试）
-        StreamMqProducer producer = resolveProducer(message);
-        StreamMqException lastError = null;
-        for (int attempt = 0; attempt <= retryTimes; attempt++) {
-            try {
-                SendResult result = producer.syncSend(message, timeoutMillis);
-                applyInterceptorsAfter(message, result);
-                return result;
-            } catch (StreamMqException ex) {
-                lastError = ex;
-                LOG.warn("syncSend attempt {}/{} failed for topic {}: {}",
-                    attempt + 1, retryTimes + 1, message.getTopic(), ex.getMessage(), ex);
+        // 注入 MDC 结构化日志上下文
+        injectProducerMdc(message);
+        try {
+            // 1. 拦截器 before
+            if (!applyInterceptorsBefore(message)) {
+                // 被拦截器中止
+                SendResult aborted = new SendResult(
+                    new MessageId(System.currentTimeMillis() + "-0"),
+                    message.getTopic(), message.getTag(), SendStatus.SEND_FAILED,
+                    message.getBornTimestamp(), null, "Aborted by interceptor");
+                applyInterceptorsAfter(message, aborted);
+                return aborted;
             }
+
+            // 2. 委派 Producer 发送（含重试）
+            StreamMqProducer producer = resolveProducer(message);
+            StreamMqException lastError = null;
+            for (int attempt = 0; attempt <= retryTimes; attempt++) {
+                try {
+                    SendResult result = producer.syncSend(message, timeoutMillis);
+                    applyInterceptorsAfter(message, result);
+                    return result;
+                } catch (StreamMqException ex) {
+                    lastError = ex;
+                    LOG.warn("syncSend attempt {}/{} failed for topic {}: {}",
+                        attempt + 1, retryTimes + 1, message.getTopic(), ex.getMessage(), ex);
+                }
+            }
+            applyInterceptorsAfter(message, buildFailedResult(message, lastError));
+            throw lastError != null ? lastError
+                : new StreamMqException("syncSend failed for unknown reason: " + message.getTopic());
+        } finally {
+            // 清理 MDC 结构化日志上下文
+            clearProducerMdc();
         }
-        applyInterceptorsAfter(message, buildFailedResult(message, lastError));
-        throw lastError != null ? lastError
-            : new StreamMqException("syncSend failed for unknown reason: " + message.getTopic());
     }
 
     @Override
     public CompletableFuture<SendResult> asyncSend(Message<T> message) {
         Objects.requireNonNull(message, "message");
-        // 先执行 before 拦截器，被中止时返回 failedFuture
-        if (!applyInterceptorsBefore(message)) {
-            return CompletableFuture.failedFuture(
-                new StreamMqException("Aborted by interceptor"));
-        }
-        StreamMqProducer producer = resolveProducer(message);
-        return producer.asyncSend(message).whenComplete((result, ex) -> {
-            if (ex == null) {
-                applyInterceptorsAfter(message, result);
+        // 注入 MDC 结构化日志上下文
+        injectProducerMdc(message);
+        try {
+            // 先执行 before 拦截器，被中止时返回 failedFuture
+            if (!applyInterceptorsBefore(message)) {
+                return CompletableFuture.failedFuture(
+                    new StreamMqException("Aborted by interceptor"));
             }
-        });
+            StreamMqProducer producer = resolveProducer(message);
+            return producer.asyncSend(message).whenComplete((result, ex) -> {
+                if (ex == null) {
+                    applyInterceptorsAfter(message, result);
+                }
+            });
+        } finally {
+            // 清理 MDC 结构化日志上下文
+            clearProducerMdc();
+        }
     }
 
     @Override
@@ -168,27 +184,41 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
     public void asyncSend(Message<T> message, SendCallback callback, long timeoutMillis) {
         Objects.requireNonNull(message, "message");
         Objects.requireNonNull(callback, "callback");
-        if (!applyInterceptorsBefore(message)) {
-            callback.onException(new StreamMqException("Aborted by interceptor"));
-            return;
-        }
-        StreamMqProducer producer = resolveProducer(message);
-        producer.asyncSend(message).whenComplete((result, ex) -> {
-            if (ex == null) {
-                applyInterceptorsAfter(message, result);
-                callback.onSuccess(result);
-            } else {
-                callback.onException(ex instanceof RuntimeException re ? re : new StreamMqException("async send failed", ex));
+        // 注入 MDC 结构化日志上下文
+        injectProducerMdc(message);
+        try {
+            if (!applyInterceptorsBefore(message)) {
+                callback.onException(new StreamMqException("Aborted by interceptor"));
+                return;
             }
-        });
+            StreamMqProducer producer = resolveProducer(message);
+            producer.asyncSend(message).whenComplete((result, ex) -> {
+                if (ex == null) {
+                    applyInterceptorsAfter(message, result);
+                    callback.onSuccess(result);
+                } else {
+                    callback.onException(ex instanceof RuntimeException re ? re : new StreamMqException("async send failed", ex));
+                }
+            });
+        } finally {
+            // 清理 MDC 结构化日志上下文
+            clearProducerMdc();
+        }
     }
 
     @Override
     public void sendOneway(Message<T> message) {
         Objects.requireNonNull(message, "message");
-        applyInterceptorsBefore(message);
-        StreamMqProducer producer = resolveProducer(message);
-        producer.sendOneway(message);
+        // 注入 MDC 结构化日志上下文
+        injectProducerMdc(message);
+        try {
+            applyInterceptorsBefore(message);
+            StreamMqProducer producer = resolveProducer(message);
+            producer.sendOneway(message);
+        } finally {
+            // 清理 MDC 结构化日志上下文
+            clearProducerMdc();
+        }
     }
 
     @Override
@@ -358,6 +388,32 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
                     interceptor.name(), ex.getMessage(), ex);
             }
         }
+    }
+
+    /**
+     * 注入发送侧 MDC 结构化日志上下文。
+     *
+     * @param message 待发送消息
+     */
+    private void injectProducerMdc(Message<T> message) {
+        MDC.put(MdcKeys.TOPIC, message.getTopic());
+        MDC.put(MdcKeys.PRODUCER_GROUP, defaultGroup);
+        if (message.getMessageId() != null) {
+            MDC.put(MdcKeys.MSG_ID, String.valueOf(message.getMessageId()));
+        }
+        if (message.getShardingKey() != null) {
+            MDC.put(MdcKeys.SHARDING_KEY, message.getShardingKey());
+        }
+    }
+
+    /**
+     * 清理发送侧 MDC 结构化日志上下文。
+     */
+    private void clearProducerMdc() {
+        MDC.remove(MdcKeys.TOPIC);
+        MDC.remove(MdcKeys.PRODUCER_GROUP);
+        MDC.remove(MdcKeys.MSG_ID);
+        MDC.remove(MdcKeys.SHARDING_KEY);
     }
 
     /**

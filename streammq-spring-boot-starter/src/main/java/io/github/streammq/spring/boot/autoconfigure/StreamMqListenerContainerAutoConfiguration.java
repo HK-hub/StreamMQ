@@ -9,6 +9,7 @@ import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -23,6 +24,7 @@ import org.springframework.context.annotation.Configuration;
  * <ul>
  *   <li>{@code streammq.enabled=true}</li>
  *   <li>classpath 存在 {@link DefaultStreamMqListenerContainer} 与 {@link RedissonClient}</li>
+ *   <li>存在已注册的 {@link StreamMqConsumerFactory} Bean</li>
  * </ul>
  *
  * @author StreamMQ Contributors
@@ -31,6 +33,7 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(prefix = "streammq", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass({DefaultStreamMqListenerContainer.class, RedissonClient.class})
+@ConditionalOnBean(StreamMqConsumerFactory.class)
 public class StreamMqListenerContainerAutoConfiguration {
 
     private static final Logger LOG = LoggerFactory.getLogger(StreamMqListenerContainerAutoConfiguration.class);
@@ -65,6 +68,7 @@ public class StreamMqListenerContainerAutoConfiguration {
      * @return 注册器
      */
     @Bean
+    @ConditionalOnMissingBean(StreamMqListenerRegistrar.class)
     public StreamMqListenerRegistrar streamMqListenerRegistrar(DefaultStreamMqListenerContainer listenerContainer) {
         return new StreamMqListenerRegistrar(listenerContainer);
     }
@@ -76,6 +80,7 @@ public class StreamMqListenerContainerAutoConfiguration {
      * @return 生命周期包装
      */
     @Bean
+    @ConditionalOnMissingBean(name = "streamMqListenerContainerLifecycle")
     public StreamMqListenerContainerLifecycle streamMqListenerContainerLifecycle(
             DefaultStreamMqListenerContainer listenerContainer) {
         return new StreamMqListenerContainerLifecycle(listenerContainer);

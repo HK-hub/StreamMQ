@@ -1,5 +1,6 @@
 package io.github.streammq.spring.boot.properties;
 
+import io.github.streammq.core.StreamMqConstants;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.time.Duration;
@@ -68,6 +69,24 @@ public class StreamMqProperties {
 
     /** Redisson 配置（仅用于内部 RedissonClient 创建，默认使用用户已注册的 RedissonClient Bean） */
     private Redisson redisson = new Redisson();
+
+    /** Redis 鉴权 accessKey */
+    private String accessKey = "";
+
+    /** Redis 鉴权 secretKey */
+    private String secretKey = "";
+
+    /** 线程名前缀 */
+    private String threadNamePrefix = StreamMqConstants.THREAD_PREFIX;
+
+    /** 全局追踪开关 */
+    private boolean tracingEnabled = false;
+
+    /** 重平衡策略配置 */
+    private Rebalance rebalance = new Rebalance();
+
+    /** 追踪配置 */
+    private Tracing tracing = new Tracing();
 
     public boolean isEnabled() {
         return enabled;
@@ -141,6 +160,54 @@ public class StreamMqProperties {
         this.redisson = redisson;
     }
 
+    public String getAccessKey() {
+        return accessKey;
+    }
+
+    public void setAccessKey(String accessKey) {
+        this.accessKey = accessKey;
+    }
+
+    public String getSecretKey() {
+        return secretKey;
+    }
+
+    public void setSecretKey(String secretKey) {
+        this.secretKey = secretKey;
+    }
+
+    public String getThreadNamePrefix() {
+        return threadNamePrefix;
+    }
+
+    public void setThreadNamePrefix(String threadNamePrefix) {
+        this.threadNamePrefix = threadNamePrefix;
+    }
+
+    public boolean isTracingEnabled() {
+        return tracingEnabled;
+    }
+
+    public void setTracingEnabled(boolean tracingEnabled) {
+        this.tracingEnabled = tracingEnabled;
+    }
+
+    public Rebalance getRebalance() {
+        return rebalance;
+    }
+
+    public void setRebalance(Rebalance rebalance) {
+        this.rebalance = rebalance;
+    }
+
+    public Tracing getTracing() {
+        return tracing;
+    }
+
+    public void setTracing(Tracing tracing) {
+        this.tracing = tracing;
+    }
+
     // ===================== 子配置 =====================
 
     /**
@@ -148,11 +215,11 @@ public class StreamMqProperties {
      */
     public static class Producer {
         /** 默认生产者组名 */
-        private String group = "default-producer";
+        private String group = StreamMqConstants.DEFAULT_PRODUCER_GROUP;
         /** 默认发送超时（毫秒） */
-        private long sendMessageTimeout = 3000L;
+        private long sendMessageTimeout = StreamMqConstants.DEFAULT_SEND_TIMEOUT_MS;
         /** 默认同步发送重试次数 */
-        private int retryTimes = 2;
+        private int retryTimes = StreamMqConstants.DEFAULT_SYNC_RETRY_TIMES;
         /** Stream 最大长度（0 = 不限制） */
         private int streamMaxLen = 0;
         /** 序列化器实现类全限定名（默认 JacksonJsonSerializer） */
@@ -206,7 +273,15 @@ public class StreamMqProperties {
         /** 单次拉取阻塞超时 */
         private Duration pollTimeout = Duration.ofSeconds(1);
         /** 单次拉取批量大小 */
-        private int batchSize = 32;
+        private int batchSize = StreamMqConstants.DEFAULT_CONSUME_BATCH_SIZE;
+        /** 拉取间隔（毫秒），0=不间隔 */
+        private long pullInterval = 0L;
+        /** 暂停休眠间隔（毫秒） */
+        private long pausedSleepMillis = StreamMqConstants.DEFAULT_PAUSED_SLEEP_MS;
+        /** Broker 异常退避间隔（毫秒） */
+        private long brokerErrorBackoffMillis = StreamMqConstants.DEFAULT_BROKER_ERROR_BACKOFF_MS;
+        /** 最大拉取批量上界 */
+        private int maxBatchSizeLimit = StreamMqConstants.MAX_BATCH_SIZE_LIMIT;
 
         public Duration getPollTimeout() {
             return pollTimeout;
@@ -223,20 +298,64 @@ public class StreamMqProperties {
         public void setBatchSize(int batchSize) {
             this.batchSize = batchSize;
         }
+
+        public long getPullInterval() {
+            return pullInterval;
+        }
+
+        public void setPullInterval(long pullInterval) {
+            this.pullInterval = pullInterval;
+        }
+
+        public long getPausedSleepMillis() {
+            return pausedSleepMillis;
+        }
+
+        public void setPausedSleepMillis(long pausedSleepMillis) {
+            this.pausedSleepMillis = pausedSleepMillis;
+        }
+
+        public long getBrokerErrorBackoffMillis() {
+            return brokerErrorBackoffMillis;
+        }
+
+        public void setBrokerErrorBackoffMillis(long brokerErrorBackoffMillis) {
+            this.brokerErrorBackoffMillis = brokerErrorBackoffMillis;
+        }
+
+        public int getMaxBatchSizeLimit() {
+            return maxBatchSizeLimit;
+        }
+
+        public void setMaxBatchSizeLimit(int maxBatchSizeLimit) {
+            this.maxBatchSizeLimit = maxBatchSizeLimit;
+        }
     }
 
     /**
      * 重试策略配置。
      */
     public static class Retry {
+        /** 重试功能开关 */
+        private boolean enabled = true;
         /** 重试策略实现类全限定名 */
         private String policy = "io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy";
         /** 默认最大重试次数 */
-        private int maxReconsumeTimes = 16;
+        private int maxReconsumeTimes = StreamMqConstants.DEFAULT_MAX_RECONSUME_TIMES;
         /** 重试 ZSet 扫描间隔 */
         private Duration scanInterval = Duration.ofSeconds(1);
         /** 单次扫描批量 */
-        private int batchSize = 100;
+        private int batchSize = StreamMqConstants.DEFAULT_BATCH_SIZE;
+        /** 自定义重试延时数组（逗号分隔的毫秒值，如 1000,5000,10000） */
+        private String delayArray = "";
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
 
         public String getPolicy() {
             return policy;
@@ -269,6 +388,14 @@ public class StreamMqProperties {
         public void setBatchSize(int batchSize) {
             this.batchSize = batchSize;
         }
+
+        public String getDelayArray() {
+            return delayArray;
+        }
+
+        public void setDelayArray(String delayArray) {
+            this.delayArray = delayArray;
+        }
     }
 
     /**
@@ -280,7 +407,7 @@ public class StreamMqProperties {
         /** 扫描间隔 */
         private Duration scanInterval = Duration.ofSeconds(1);
         /** 单次扫描批量 */
-        private int batchSize = 100;
+        private int batchSize = StreamMqConstants.DEFAULT_BATCH_SIZE;
 
         public boolean isEnabled() {
             return enabled;
@@ -311,12 +438,22 @@ public class StreamMqProperties {
      * 事务消息配置。
      */
     public static class Transaction {
+        /** 事务消息功能开关 */
+        private boolean enabled = true;
         /** 默认事务组名 */
-        private String defaultGroup = "default-tx-group";
+        private String defaultGroup = StreamMqConstants.DEFAULT_TX_GROUP;
         /** 事务回查间隔 */
-        private Duration checkInterval = Duration.ofSeconds(60);
+        private Duration checkInterval = Duration.ofMillis(StreamMqConstants.DEFAULT_CHECK_INTERVAL_MS);
         /** 最大回查次数 */
-        private int maxCheckTimes = 15;
+        private int maxCheckTimes = StreamMqConstants.DEFAULT_MAX_CHECK_TIMES;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
 
         public String getDefaultGroup() {
             return defaultGroup;
@@ -375,6 +512,58 @@ public class StreamMqProperties {
 
         public void setConfig(String config) {
             this.config = config;
+        }
+    }
+
+    /**
+     * 重平衡策略配置。
+     */
+    public static class Rebalance {
+        /** 重平衡策略类名 */
+        private String strategy = "io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy";
+        /** 虚拟节点数（仅一致性哈希策略生效） */
+        private int virtualNodes = StreamMqConstants.DEFAULT_VIRTUAL_NODES;
+
+        public String getStrategy() {
+            return strategy;
+        }
+
+        public void setStrategy(String strategy) {
+            this.strategy = strategy;
+        }
+
+        public int getVirtualNodes() {
+            return virtualNodes;
+        }
+
+        public void setVirtualNodes(int virtualNodes) {
+            this.virtualNodes = virtualNodes;
+        }
+    }
+
+    /**
+     * 追踪配置。
+     */
+    public static class Tracing {
+        /** 追踪收集器类名 */
+        private String collector = "io.github.streammq.adapter.redisson.trace.NoopTraceCollector";
+        /** 追踪日志 Topic（仅 Slf4jTraceCollector 生效） */
+        private String traceTopic = "";
+
+        public String getCollector() {
+            return collector;
+        }
+
+        public void setCollector(String collector) {
+            this.collector = collector;
+        }
+
+        public String getTraceTopic() {
+            return traceTopic;
+        }
+
+        public void setTraceTopic(String traceTopic) {
+            this.traceTopic = traceTopic;
         }
     }
 }

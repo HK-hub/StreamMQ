@@ -2,6 +2,7 @@ package io.github.streammq.adapter.redisson.consumer;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.core.StreamMqConstants;
 import io.github.streammq.core.consumer.StreamMqConsumer;
 import io.github.streammq.core.exception.StreamMqBrokerException;
 import io.github.streammq.core.message.Message;
@@ -55,7 +56,7 @@ public class RedissonStreamConsumer implements StreamMqConsumer {
     private final AtomicBoolean groupCreated = new AtomicBoolean(false);
 
     /** batchSize 校验上界，对应 Redis Stream 单次 XREADGROUP 的合理上限 */
-    private static final int MAX_BATCH_SIZE = 1000;
+    private static final int MAX_BATCH_SIZE = StreamMqConstants.MAX_BATCH_SIZE_LIMIT;
     /** BUSYGROUP 错误标识，用于判断消费者组已存在 */
     private static final String BUSYGROUP_MARKER = "BUSYGROUP";
 

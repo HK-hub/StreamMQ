@@ -74,4 +74,19 @@ public @interface StreamMqProducer {
      * @return 重试次数
      */
     int retryTimes() default -1;
+
+    /**
+     * 生产者重试上限，-1 表示使用全局默认。
+     *
+     * @return 重试上限
+     */
+    int maxReconsumeTimes() default -1;
+
+    /**
+     * 是否启用消息追踪，默认 false。
+     * 设置为 true 时将覆盖全局追踪开关，对该生产者单独启用追踪。
+     *
+     * @return true 启用追踪
+     */
+    boolean enableMsgTrace() default false;
 }

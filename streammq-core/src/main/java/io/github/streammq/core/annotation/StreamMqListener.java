@@ -1,9 +1,12 @@
 package io.github.streammq.core.annotation;
 
+import io.github.streammq.core.StreamMqConstants;
 import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
+import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.spi.MessageSerializer;
+import io.github.streammq.core.spi.RetryPolicy;
 
 import java.lang.annotation.Documented;
 import java.lang.annotation.ElementType;
@@ -86,21 +89,21 @@ public @interface StreamMqListener {
      *
      * @return 最大消费线程数
      */
-    int consumeThreadMax() default 64;
+    int consumeThreadMax() default StreamMqConstants.DEFAULT_CONSUME_THREAD_MAX;
 
     /**
      * 最大重试次数，默认 16。
      *
      * @return 最大重试次数
      */
-    int maxReconsumeTimes() default 16;
+    int maxReconsumeTimes() default StreamMqConstants.DEFAULT_MAX_RECONSUME_TIMES;
 
     /**
      * 单条消息消费超时（毫秒），默认 30000（30 秒）。
      *
      * @return 超时毫秒数
      */
-    long consumeTimeout() default 30000L;
+    long consumeTimeout() default StreamMqConstants.DEFAULT_CONSUME_TIMEOUT_MS;
 
     /**
      * Tag 过滤表达式（SQL92 风格子集），默认 "*" 表示全部接收。
@@ -123,6 +126,38 @@ public @interface StreamMqListener {
      * @return 命名空间
      */
     String namespace() default "";
+
+    /**
+     * 消息过滤类型，默认 {@link SelectorType#TAG}。
+     *
+     * @return 过滤类型
+     */
+    SelectorType selectorType() default SelectorType.TAG;
+
+    /**
+     * 单次拉取批量大小，默认 32。
+     *
+     * @return 拉取批量
+     */
+    int pullBatchSize() default StreamMqConstants.DEFAULT_CONSUME_BATCH_SIZE;
+
+    /**
+     * 每个监听器专属重试策略类，默认 {@link RetryPolicy} 表示使用全局策略。
+     *
+     * <p>注：使用 raw type {@code Class<? extends RetryPolicy>}，因为
+     * {@code RetryPolicy.class} 返回的是 raw type，无法直接用于泛型 {@code Class<? extends RetryPolicy<?>>}。
+     *
+     * @return 重试策略类
+     */
+    Class<? extends RetryPolicy> retryPolicy() default RetryPolicy.class;
+
+    /**
+     * 是否启用消息追踪，默认 false。
+     * 设置为 true 时将覆盖全局追踪开关，对该监听器单独启用追踪。
+     *
+     * @return true 启用追踪
+     */
+    boolean enableMsgTrace() default false;
 
     /**
      * 是否启用消费，默认 true。

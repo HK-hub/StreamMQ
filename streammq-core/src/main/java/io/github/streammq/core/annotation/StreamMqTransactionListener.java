@@ -1,5 +1,7 @@
 package io.github.streammq.core.annotation;
 
+import io.github.streammq.core.StreamMqConstants;
+
 import java.lang.annotation.Documented;
 import java.lang.annotation.ElementType;
 import java.lang.annotation.Retention;
@@ -48,6 +50,20 @@ public @interface StreamMqTransactionListener {
      * @return 超时毫秒数
      */
     long checkTimeout() default 60000L;
+
+    /**
+     * 最大回查次数，默认 {@link StreamMqConstants#DEFAULT_MAX_CHECK_TIMES}。
+     *
+     * @return 最大回查次数
+     */
+    int maxCheckTimes() default StreamMqConstants.DEFAULT_MAX_CHECK_TIMES;
+
+    /**
+     * 扫描批量，默认 {@link StreamMqConstants#DEFAULT_BATCH_SIZE}。
+     *
+     * @return 扫描批量
+     */
+    int batchSize() default StreamMqConstants.DEFAULT_BATCH_SIZE;
 
     /**
      * 命名空间，默认使用全局配置。

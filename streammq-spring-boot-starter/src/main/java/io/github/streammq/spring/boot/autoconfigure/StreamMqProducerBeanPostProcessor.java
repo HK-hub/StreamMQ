@@ -83,7 +83,8 @@ public class StreamMqProducerBeanPostProcessor implements BeanPostProcessor, App
     }
 
     private void injectTemplate(Object bean, Field field, StreamMqProducer annotation, String beanName) {
-        String group = annotation.group();
+        // 解析 ${} 占位符与 #{} SpEL 表达式（group / namespace）
+        String group = resolvePlaceholders(annotation.group());
         StreamMqTemplate<?> template = resolveTemplate(group, annotation);
         try {
             field.setAccessible(true);
@@ -94,6 +95,20 @@ public class StreamMqProducerBeanPostProcessor implements BeanPostProcessor, App
             throw new IllegalStateException(
                 "Failed to inject StreamMqTemplate into " + bean.getClass().getName() + "." + field.getName(), ex);
         }
+    }
+
+    /**
+     * 解析字符串中的 ${...} 属性占位符。
+     * 若 ApplicationContext 不可用则返回原值。
+     *
+     * @param value 原始值
+     * @return 解析后的值
+     */
+    private String resolvePlaceholders(String value) {
+        if (value == null || value.isEmpty() || applicationContext == null) {
+            return value;
+        }
+        return applicationContext.getEnvironment().resolvePlaceholders(value);
     }
 
     private StreamMqTemplate<?> resolveTemplate(String group, StreamMqProducer annotation) {

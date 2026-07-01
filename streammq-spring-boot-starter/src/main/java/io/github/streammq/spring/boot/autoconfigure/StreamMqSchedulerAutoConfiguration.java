@@ -41,7 +41,7 @@ public class StreamMqSchedulerAutoConfiguration {
     public static final int PHASE = Integer.MAX_VALUE - 100;
 
     /**
-     * 重试调度器：默认注册。
+     * 重试调度器：当 {@code streammq.retry.enabled=true}（默认）时注册。
      *
      * @param redisson Redisson 客户端
      * @param properties 配置
@@ -49,6 +49,7 @@ public class StreamMqSchedulerAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(RetryScheduler.class)
+    @ConditionalOnProperty(prefix = "streammq.retry", name = "enabled", havingValue = "true", matchIfMissing = true)
     public RetryScheduler streamMqRetryScheduler(RedissonClient redisson, StreamMqProperties properties) {
         Duration interval = properties.getRetry().getScanInterval();
         int batchSize = properties.getRetry().getBatchSize();
@@ -77,7 +78,7 @@ public class StreamMqSchedulerAutoConfiguration {
     }
 
     /**
-     * 事务回查调度器：始终注册（即使无 @StreamMqTransactionListener 也作为占位）。
+     * 事务回查调度器：当 {@code streammq.transaction.enabled=true}（默认）时注册。
      *
      * @param redisson Redisson 客户端
      * @param messageConverter 消息转换器
@@ -86,6 +87,7 @@ public class StreamMqSchedulerAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(TransactionScanner.class)
+    @ConditionalOnProperty(prefix = "streammq.transaction", name = "enabled", havingValue = "true", matchIfMissing = true)
     public TransactionScanner streamMqTransactionScanner(RedissonClient redisson,
                                                           MessageConverter messageConverter,
                                                           StreamMqProperties properties) {
@@ -99,17 +101,25 @@ public class StreamMqSchedulerAutoConfiguration {
     /**
      * 调度器统一生命周期管理：在 Spring 容器启动时按顺序启动调度器。
      *
-     * @param retryScheduler 重试调度器（必需）
+     * <p>所有调度器均为可选，通过 {@code ObjectProvider} 注入，避免单个调度器被条件注解禁用时
+     * 导致 Lifecycle Bean 创建失败。
+     *
+     * @param retrySchedulerProvider 重试调度器（可选）
      * @param delaySchedulerProvider 延时调度器（可选）
      * @param transactionScannerProvider 事务回查调度器（可选）
      * @return SmartLifecycle
      */
     @Bean
-    public SmartLifecycle streamMqSchedulerLifecycle(RetryScheduler retryScheduler,
+    @ConditionalOnMissingBean(name = "streamMqSchedulerLifecycle")
+    public SmartLifecycle streamMqSchedulerLifecycle(
+            org.springframework.beans.factory.ObjectProvider<RetryScheduler> retrySchedulerProvider,
             org.springframework.beans.factory.ObjectProvider<DelayMessageScheduler> delaySchedulerProvider,
             org.springframework.beans.factory.ObjectProvider<TransactionScanner> transactionScannerProvider) {
         List<Object> schedulers = new ArrayList<>(3);
-        schedulers.add(retryScheduler);
+        RetryScheduler retryScheduler = retrySchedulerProvider.getIfAvailable();
+        if (retryScheduler != null) {
+            schedulers.add(retryScheduler);
+        }
         DelayMessageScheduler delay = delaySchedulerProvider.getIfAvailable();
         if (delay != null) {
             schedulers.add(delay);

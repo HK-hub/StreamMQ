@@ -47,6 +47,52 @@ public final class StreamMqKeys {
     /** 顺序消息分片 Stream 前缀（拼接在 topic 之后） */
     public static final String SHARD_PREFIX = ":shard";
 
+    // ==================== Key 类型段（type segment） ====================
+    /** 业务消息类型段 */
+    public static final String TYPE_MSG = "msg";
+    /** 消费组类型段 */
+    public static final String TYPE_CG = "cg";
+    /** 重试队列类型段 */
+    public static final String TYPE_RETRY = "retry";
+    /** 死信队列类型段 */
+    public static final String TYPE_DLQ = "dlq";
+    /** 延时类型段 */
+    public static final String TYPE_DELAY = "delay";
+    /** 半消息暂存类型段 */
+    public static final String TYPE_HALF = "half";
+    /** 事务状态类型段 */
+    public static final String TYPE_TXSTATE = "txstate";
+    /** 事务回查类型段 */
+    public static final String TYPE_TXCHECK = "txcheck";
+    /** 顺序消费分片锁类型段 */
+    public static final String TYPE_SHARDLOCK = "shardlock";
+    /** 元数据类型段 */
+    public static final String TYPE_META = "meta";
+
+    // ==================== Key 后缀段（suffix segment） ====================
+    /** 实例列表后缀 */
+    public static final String SEG_INSTANCES = "instances";
+    /** 信号量后缀 */
+    public static final String SEG_SEMAPHORE = "semaphore";
+    /** 分片分配后缀 */
+    public static final String SEG_ASSIGNMENT = "assignment";
+    /** 通知频道后缀 */
+    public static final String SEG_NOTIFY = "notify";
+    /** 重试转移后缀 */
+    public static final String SEG_TRANSFER = "transfer";
+    /** 锁后缀 */
+    public static final String SEG_LOCK = "lock";
+    /** payload 后缀 */
+    public static final String SEG_PAYLOAD = "payload";
+    /** 已投递计数后缀 */
+    public static final String SEG_DELIVERED = "delivered";
+    /** 计数后缀 */
+    public static final String SEG_COUNTER = "counter";
+    /** 位点后缀 */
+    public static final String SEG_OFFSET = "offset";
+    /** 统计后缀 */
+    public static final String SEG_STATS = "stats";
+
     private StreamMqKeys() {
     }
 
@@ -72,7 +118,7 @@ public final class StreamMqKeys {
      * @return Stream Key
      */
     public static String topicStream(String namespace, String topic) {
-        return prefix(namespace) + SEP + "msg" + SEP + requireNonEmpty(topic, "topic");
+        return prefix(namespace) + SEP + TYPE_MSG + SEP + requireNonEmpty(topic, "topic");
     }
 
     /**
@@ -91,35 +137,35 @@ public final class StreamMqKeys {
      * 消费组实例列表 Hash Key：{@code streammq:{ns}:cg:{group}:instances}。
      */
     public static String consumerGroupInstances(String namespace, String group) {
-        return prefix(namespace) + SEP + "cg" + SEP + requireNonEmpty(group, "group") + SEP + "instances";
+        return prefix(namespace) + SEP + TYPE_CG + SEP + requireNonEmpty(group, "group") + SEP + SEG_INSTANCES;
     }
 
     /**
      * 消费组信号量 Key：{@code streammq:{ns}:cg:{group}:semaphore}。
      */
     public static String consumerGroupSemaphore(String namespace, String group) {
-        return prefix(namespace) + SEP + "cg" + SEP + requireNonEmpty(group, "group") + SEP + "semaphore";
+        return prefix(namespace) + SEP + TYPE_CG + SEP + requireNonEmpty(group, "group") + SEP + SEG_SEMAPHORE;
     }
 
     /**
      * 消费组分片分配 Hash Key：{@code streammq:{ns}:cg:{group}:assignment}。
      */
     public static String consumerGroupAssignment(String namespace, String group) {
-        return prefix(namespace) + SEP + "cg" + SEP + requireNonEmpty(group, "group") + SEP + "assignment";
+        return prefix(namespace) + SEP + TYPE_CG + SEP + requireNonEmpty(group, "group") + SEP + SEG_ASSIGNMENT;
     }
 
     /**
      * 消费组通知频道 Key：{@code streammq:{ns}:cg:{group}:notify}。
      */
     public static String consumerGroupNotify(String namespace, String group) {
-        return prefix(namespace) + SEP + "cg" + SEP + requireNonEmpty(group, "group") + SEP + "notify";
+        return prefix(namespace) + SEP + TYPE_CG + SEP + requireNonEmpty(group, "group") + SEP + SEG_NOTIFY;
     }
 
     /**
      * 重试队列 ZSet Key：{@code streammq:{ns}:retry:{topic}:{group}}。
      */
     public static String retryZSet(String namespace, String topic, String group) {
-        return prefix(namespace) + SEP + "retry" + SEP + requireNonEmpty(topic, "topic")
+        return prefix(namespace) + SEP + TYPE_RETRY + SEP + requireNonEmpty(topic, "topic")
             + SEP + requireNonEmpty(group, "group");
     }
 
@@ -127,7 +173,7 @@ public final class StreamMqKeys {
      * 死信队列 Stream Key：{@code streammq:{ns}:dlq:{topic}:{group}}。
      */
     public static String dlqStream(String namespace, String topic, String group) {
-        return prefix(namespace) + SEP + "dlq" + SEP + requireNonEmpty(topic, "topic")
+        return prefix(namespace) + SEP + TYPE_DLQ + SEP + requireNonEmpty(topic, "topic")
             + SEP + requireNonEmpty(group, "group");
     }
 
@@ -135,7 +181,7 @@ public final class StreamMqKeys {
      * 重试转移降级锁 Key：{@code streammq:{ns}:retry:{topic}:{group}:transfer:lock}。
      */
     public static String retryTransferLock(String namespace, String topic, String group) {
-        return retryZSet(namespace, topic, group) + SEP + "transfer" + SEP + "lock";
+        return retryZSet(namespace, topic, group) + SEP + SEG_TRANSFER + SEP + SEG_LOCK;
     }
 
     /**
@@ -146,7 +192,7 @@ public final class StreamMqKeys {
      * @return ZSet Key
      */
     public static String delayZSet(String namespace, String level) {
-        return prefix(namespace) + SEP + "delay" + SEP + requireNonEmpty(level, "level");
+        return prefix(namespace) + SEP + TYPE_DELAY + SEP + requireNonEmpty(level, "level");
     }
 
     /**
@@ -157,49 +203,49 @@ public final class StreamMqKeys {
      * @return Hash Key
      */
     public static String delayPayloadHash(String namespace, String msgId) {
-        return prefix(namespace) + SEP + "delay" + SEP + "payload" + SEP + requireNonEmpty(msgId, "msgId");
+        return prefix(namespace) + SEP + TYPE_DELAY + SEP + SEG_PAYLOAD + SEP + requireNonEmpty(msgId, "msgId");
     }
 
     /**
      * 延时已投递计数 Hash Key：{@code streammq:{ns}:delay:meta:delivered}。
      */
     public static String delayDeliveredCounter(String namespace) {
-        return prefix(namespace) + SEP + "delay" + SEP + "meta" + SEP + "delivered";
+        return prefix(namespace) + SEP + TYPE_DELAY + SEP + TYPE_META + SEP + SEG_DELIVERED;
     }
 
     /**
      * 半消息暂存 Stream Key：{@code streammq:{ns}:half:{txGroup}}。
      */
     public static String halfStream(String namespace, String txGroup) {
-        return prefix(namespace) + SEP + "half" + SEP + requireNonEmpty(txGroup, "txGroup");
+        return prefix(namespace) + SEP + TYPE_HALF + SEP + requireNonEmpty(txGroup, "txGroup");
     }
 
     /**
      * 事务状态 Hash Key：{@code streammq:{ns}:txstate:{txGroup}}。
      */
     public static String transactionStateHash(String namespace, String txGroup) {
-        return prefix(namespace) + SEP + "txstate" + SEP + requireNonEmpty(txGroup, "txGroup");
+        return prefix(namespace) + SEP + TYPE_TXSTATE + SEP + requireNonEmpty(txGroup, "txGroup");
     }
 
     /**
      * 事务回查 ZSet Key：{@code streammq:{ns}:txcheck:{txGroup}}。
      */
     public static String transactionCheckZSet(String namespace, String txGroup) {
-        return prefix(namespace) + SEP + "txcheck" + SEP + requireNonEmpty(txGroup, "txGroup");
+        return prefix(namespace) + SEP + TYPE_TXCHECK + SEP + requireNonEmpty(txGroup, "txGroup");
     }
 
     /**
      * 事务回查计数 Hash Key：{@code streammq:{ns}:txcheck:{txGroup}:counter}。
      */
     public static String transactionCheckCounter(String namespace, String txGroup) {
-        return transactionCheckZSet(namespace, txGroup) + SEP + "counter";
+        return transactionCheckZSet(namespace, txGroup) + SEP + SEG_COUNTER;
     }
 
     /**
      * 顺序消费分片锁 Key：{@code streammq:{ns}:shardlock:{topic}:{group}:{shardId}}。
      */
     public static String shardLock(String namespace, String topic, String group, int shardId) {
-        return prefix(namespace) + SEP + "shardlock" + SEP + requireNonEmpty(topic, "topic")
+        return prefix(namespace) + SEP + TYPE_SHARDLOCK + SEP + requireNonEmpty(topic, "topic")
             + SEP + requireNonEmpty(group, "group") + SEP + shardId;
     }
 
@@ -207,7 +253,7 @@ public final class StreamMqKeys {
      * 消费位点 String Key：{@code streammq:{ns}:meta:offset:{group}:{topic}}。
      */
     public static String metaOffset(String namespace, String group, String topic) {
-        return prefix(namespace) + SEP + "meta" + SEP + "offset" + SEP
+        return prefix(namespace) + SEP + TYPE_META + SEP + SEG_OFFSET + SEP
             + requireNonEmpty(group, "group") + SEP + requireNonEmpty(topic, "topic");
     }
 
@@ -215,7 +261,7 @@ public final class StreamMqKeys {
      * 消费计数 Hash Key：{@code streammq:{ns}:meta:counter:{group}:{topic}}。
      */
     public static String metaCounter(String namespace, String group, String topic) {
-        return prefix(namespace) + SEP + "meta" + SEP + "counter" + SEP
+        return prefix(namespace) + SEP + TYPE_META + SEP + SEG_COUNTER + SEP
             + requireNonEmpty(group, "group") + SEP + requireNonEmpty(topic, "topic");
     }
 
@@ -223,7 +269,7 @@ public final class StreamMqKeys {
      * 运行时统计 Hash Key：{@code streammq:{ns}:meta:stats:{group}:{topic}}。
      */
     public static String metaStats(String namespace, String group, String topic) {
-        return prefix(namespace) + SEP + "meta" + SEP + "stats" + SEP
+        return prefix(namespace) + SEP + TYPE_META + SEP + SEG_STATS + SEP
             + requireNonEmpty(group, "group") + SEP + requireNonEmpty(topic, "topic");
     }
 

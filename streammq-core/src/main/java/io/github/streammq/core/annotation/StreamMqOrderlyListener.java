@@ -1,8 +1,12 @@
 package io.github.streammq.core.annotation;
 
+import io.github.streammq.core.StreamMqConstants;
 import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.ConsumeMode;
+import io.github.streammq.core.enums.MessageModel;
+import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.spi.MessageSerializer;
+import io.github.streammq.core.spi.RetryPolicy;
 
 import java.lang.annotation.Documented;
 import java.lang.annotation.ElementType;
@@ -60,6 +64,13 @@ public @interface StreamMqOrderlyListener {
     ConsumeMode consumeMode() default ConsumeMode.CLUSTERING;
 
     /**
+     * 消息模型，顺序消费注解默认 {@link MessageModel#ORDERLY}。
+     *
+     * @return 消息模型
+     */
+    MessageModel messageModel() default MessageModel.ORDERLY;
+
+    /**
      * ACK 模式，顺序消费场景下默认 {@link AcknowledgeMode#AUTO}。
      *
      * @return ACK 模式
@@ -94,14 +105,14 @@ public @interface StreamMqOrderlyListener {
      *
      * @return 超时毫秒数
      */
-    long consumeTimeout() default 30000L;
+    long consumeTimeout() default StreamMqConstants.DEFAULT_CONSUME_TIMEOUT_MS;
 
     /**
      * 最大 shard 数（顺序消费分区数），默认 4。
      *
      * @return shard 数
      */
-    int shardCount() default 4;
+    int shardCount() default StreamMqConstants.DEFAULT_SHARD_COUNT;
 
     /**
      * Tag 过滤表达式，默认 {@code "*"} 表示接收所有 Tag。
@@ -123,6 +134,38 @@ public @interface StreamMqOrderlyListener {
      * @return 命名空间
      */
     String namespace() default "";
+
+    /**
+     * 消息过滤类型，默认 {@link SelectorType#TAG}。
+     *
+     * @return 过滤类型
+     */
+    SelectorType selectorType() default SelectorType.TAG;
+
+    /**
+     * 单次拉取批量大小，默认 32。
+     *
+     * @return 拉取批量
+     */
+    int pullBatchSize() default StreamMqConstants.DEFAULT_CONSUME_BATCH_SIZE;
+
+    /**
+     * 每个监听器专属重试策略类，默认 {@link RetryPolicy} 表示使用全局策略。
+     *
+     * <p>注：使用 raw type {@code Class<? extends RetryPolicy>}，因为
+     * {@code RetryPolicy.class} 返回的是 raw type，无法直接用于泛型 {@code Class<? extends RetryPolicy<?>>}。
+     *
+     * @return 重试策略类
+     */
+    Class<? extends RetryPolicy> retryPolicy() default RetryPolicy.class;
+
+    /**
+     * 是否启用消息追踪，默认 false。
+     * 设置为 true 时将覆盖全局追踪开关，对该监听器单独启用追踪。
+     *
+     * @return true 启用追踪
+     */
+    boolean enableMsgTrace() default false;
 
     /**
      * 是否启用消费，默认 true。
