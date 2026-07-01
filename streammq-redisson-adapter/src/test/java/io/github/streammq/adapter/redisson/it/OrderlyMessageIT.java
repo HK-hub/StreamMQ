@@ -1,0 +1,294 @@
+package io.github.streammq.adapter.redisson.it;
+
+import io.github.streammq.adapter.redisson.container.DefaultStreamMqListenerContainer;
+import io.github.streammq.adapter.redisson.consumer.RedissonStreamConsumerFactory;
+import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
+import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.core.enums.AcknowledgeMode;
+import io.github.streammq.core.enums.Action;
+import io.github.streammq.core.enums.ConsumeMode;
+import io.github.streammq.core.listener.StreamMqOrderlyListener;
+import io.github.streammq.core.message.Message;
+import io.github.streammq.core.message.MessageBuilder;
+import io.github.streammq.core.spi.MessageSerializer;
+import io.github.streammq.core.spi.RetryPolicy;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.redisson.api.RScoredSortedSet;
+import org.redisson.api.RStream;
+import org.redisson.api.StreamMessageId;
+
+import java.lang.reflect.Proxy;
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
+
+/**
+ * 顺序消费({@code @StreamMqOrderlyListener})端到端 Redis 联动集成测试。
+ *
+ * <p>覆盖 {@link DefaultStreamMqListenerContainer#registerOrderlyListener} 注册的
+ * {@link StreamMqOrderlyListener} 在真实 Redis 环境下的消息接收、顺序消费、
+ * {@link Action#RECONSUME_LATER} 重试以及容器生命周期管理。
+ */
+@DisplayName("顺序消费集成测试")
+class OrderlyMessageIT extends AbstractRedisIT {
+
+    /**
+     * 测试用快速重试策略,固定延迟与最大重试次数。
+     * 当 {@code reconsumeTimes >= maxRetries} 时返回 {@code null},触发 DLQ 路由。
+     */
+    static class FastRetryPolicy implements RetryPolicy {
+        private final long delayMs;
+        private final int maxRetries;
+
+        FastRetryPolicy(long delayMs, int maxRetries) {
+            this.delayMs = delayMs;
+            this.maxRetries = maxRetries;
+        }
+
+        @Override
+        public Duration nextRetryDelay(int reconsumeTimes, Message<?> message) {
+            if (reconsumeTimes >= maxRetries) {
+                return null;
+            }
+            return Duration.ofMillis(delayMs);
+        }
+
+        @Override
+        public boolean shouldStopRetry(int reconsumeTimes, Message<?> message) {
+            return reconsumeTimes >= maxRetries;
+        }
+    }
+
+    /**
+     * 通过动态代理构造 {@link io.github.streammq.core.annotation.StreamMqOrderlyListener} 注解实例。
+     *
+     * @param topic 主题
+     * @param group 消费者组
+     * @param maxReconsumeTimes 最大重试次数
+     * @return 注解代理实例
+     */
+    @SuppressWarnings("unchecked")
+    private static io.github.streammq.core.annotation.StreamMqOrderlyListener mkOrderlyAnnotation(
+            String topic, String group, int maxReconsumeTime) {
+        return (io.github.streammq.core.annotation.StreamMqOrderlyListener) Proxy.newProxyInstance(
+            io.github.streammq.core.annotation.StreamMqOrderlyListener.class.getClassLoader(),
+            new Class<?>[]{io.github.streammq.core.annotation.StreamMqOrderlyListener.class},
+            (proxy, method, args) -> switch (method.getName()) {
+                case "topic" -> topic;
+                case "consumerGroup" -> group;
+                case "consumeMode" -> ConsumeMode.CLUSTERING;
+                case "acknowledgeMode" -> AcknowledgeMode.AUTO;
+                case "maxReconsumeTimes" -> maxReconsumeTime;
+                case "consumeThreadMin" -> 1;
+                case "consumeThreadMax" -> 1;
+                case "consumeTimeout" -> 30000L;
+                case "shardCount" -> 4;
+                case "selectorExpression" -> "*";
+                case "serializer" -> MessageSerializer.class;
+                case "namespace" -> "";
+                case "enable" -> true;
+                case "annotationType" -> io.github.streammq.core.annotation.StreamMqOrderlyListener.class;
+                case "hashCode" -> (topic + group).hashCode();
+                case "equals" -> args != null && args.length > 0 && proxy == args[0];
+                case "toString" -> "@StreamMqOrderlyListener(topic=" + topic + ", consumerGroup=" + group + ")";
+                default -> throw new UnsupportedOperationException("Unexpected annotation method: " + method.getName());
+            });
+    }
+
+    @Test
+    @DisplayName("单条消息:OrderlyListener 收到消息并返回 SUCCESS 后消息被 ACK")
+    void orderlyListener_receivesMessage() {
+        String topic = "orderly-recv-topic";
+        String group = "orderly-recv-group";
+
+        RetryPolicy retryPolicy = new FastRetryPolicy(100, 3);
+        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
+        DefaultStreamMqListenerContainer container =
+            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, retryPolicy, namespace);
+
+        AtomicReference<Message<?>> receivedRef = new AtomicReference<>();
+        StreamMqOrderlyListener<String> listener = (msg, ctx) -> {
+            receivedRef.set(msg);
+            return Action.SUCCESS;
+        };
+        container.registerOrderlyListener(listener, mkOrderlyAnnotation(topic, group, 3));
+        createConsumerGroup(topic, group);
+        container.start();
+
+        RedissonStreamProducer producer =
+            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
+        try {
+            producer.syncSend(MessageBuilder.<String>withTopic(topic)
+                .tag("t1")
+                .keys("k1")
+                .body("orderly-body")
+                .build());
+
+            await().atMost(10, TimeUnit.SECONDS).untilAsserted(() ->
+                assertThat(receivedRef.get()).isNotNull());
+
+            Message<?> received = receivedRef.get();
+            assertThat(received.getTopic()).isEqualTo(topic);
+            assertThat(received.getTag()).isEqualTo("t1");
+            assertThat(received.getKeys()).isEqualTo("k1");
+            assertThat(received.getBody()).isEqualTo("orderly-body");
+
+            // SUCCESS 后 PEL 应为空
+            await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
+                RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+                assertThat(stream.listPending(group, StreamMessageId.MIN, StreamMessageId.MAX, 100)).isEmpty();
+            });
+        } finally {
+            producer.close();
+            container.stop();
+        }
+    }
+
+    @Test
+    @DisplayName("多条消息:全部被 OrderlyListener 顺序消费,内容与发送顺序一致")
+    void orderlyListener_multipleMessages_allConsumed() {
+        String topic = "orderly-multi-topic";
+        String group = "orderly-multi-group";
+
+        RetryPolicy retryPolicy = new FastRetryPolicy(100, 3);
+        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
+        DefaultStreamMqListenerContainer container =
+            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, retryPolicy, namespace);
+
+        List<String> consumedBodies = new java.util.concurrent.CopyOnWriteArrayList<>();
+        StreamMqOrderlyListener<String> listener = (msg, ctx) -> {
+            consumedBodies.add((String) msg.getBody());
+            return Action.SUCCESS;
+        };
+        container.registerOrderlyListener(listener, mkOrderlyAnnotation(topic, group, 3));
+        createConsumerGroup(topic, group);
+        container.start();
+
+        RedissonStreamProducer producer =
+            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
+        try {
+            // 按顺序发送 5 条消息
+            for (int i = 0; i < 5; i++) {
+                producer.syncSend(MessageBuilder.<String>withTopic(topic)
+                    .body("m-" + i)
+                    .build());
+            }
+
+            await().atMost(10, TimeUnit.SECONDS).untilAsserted(() ->
+                assertThat(consumedBodies).hasSize(5));
+
+            // 验证消费顺序与发送顺序一致
+            assertThat(consumedBodies).containsExactly("m-0", "m-1", "m-2", "m-3", "m-4");
+
+            // 全部 ACK 后 PEL 应为空
+            await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
+                RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+                assertThat(stream.listPending(group, StreamMessageId.MIN, StreamMessageId.MAX, 100)).isEmpty();
+            });
+        } finally {
+            producer.close();
+            container.stop();
+        }
+    }
+
+    @Test
+    @DisplayName("RECONSUME_LATER:OrderlyListener 返回 RECONSUME_LATER 后消息进入 retry ZSet 且原消息 ACK")
+    void orderlyListener_reconsumeLater_retries() {
+        String topic = "orderly-reconsume-topic";
+        String group = "orderly-reconsume-group";
+
+        RetryPolicy retryPolicy = new FastRetryPolicy(100, 100);
+        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
+        DefaultStreamMqListenerContainer container =
+            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, retryPolicy, namespace);
+
+        AtomicInteger attempt = new AtomicInteger(0);
+        StreamMqOrderlyListener<String> listener = (msg, ctx) -> {
+            // 第一次返回 RECONSUME_LATER 触发重试,第二次返回 SUCCESS
+            if (attempt.incrementAndGet() == 1) {
+                return Action.RECONSUME_LATER;
+            }
+            return Action.SUCCESS;
+        };
+        container.registerOrderlyListener(listener, mkOrderlyAnnotation(topic, group, 16));
+        createConsumerGroup(topic, group);
+        container.start();
+
+        RedissonStreamProducer producer =
+            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
+        try {
+            producer.syncSend(MessageBuilder.<String>withTopic(topic)
+                .body("reconsume-body")
+                .build());
+
+            // 等待重试 ZSet 出现消息(第一次返回 RECONSUME_LATER 后写入)
+            String retryKey = StreamMqKeys.retryZSet(namespace, topic, group);
+            await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> {
+                RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
+                assertThat(zset.size()).isEqualTo(1);
+            });
+
+            // 原消息已被 ACK(从 PEL 移除)
+            RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+            assertThat(stream.listPending(group, StreamMessageId.MIN, StreamMessageId.MAX, 100)).isEmpty();
+        } finally {
+            producer.close();
+            container.stop();
+        }
+    }
+
+    @Test
+    @DisplayName("生命周期:start 后容器运行,stop 后容器停止且不再消费消息")
+    void orderlyListener_lifecycle_startStop() {
+        String topic = "orderly-lifecycle-topic";
+        String group = "orderly-lifecycle-group";
+
+        RetryPolicy retryPolicy = new FastRetryPolicy(100, 3);
+        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
+        DefaultStreamMqListenerContainer container =
+            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, retryPolicy, namespace);
+
+        AtomicInteger consumed = new AtomicInteger(0);
+        StreamMqOrderlyListener<String> listener = (msg, ctx) -> {
+            consumed.incrementAndGet();
+            return Action.SUCCESS;
+        };
+        container.registerOrderlyListener(listener, mkOrderlyAnnotation(topic, group, 3));
+        createConsumerGroup(topic, group);
+
+        // 启动前应为 INIT 状态且非运行
+        assertThat(container.isRunning()).isFalse();
+        assertThat(container.getState()).isEqualTo(DefaultStreamMqListenerContainer.ContainerState.INIT);
+
+        container.start();
+        try {
+            // 启动后应为 RUNNING 状态
+            assertThat(container.isRunning()).isTrue();
+            assertThat(container.getState()).isEqualTo(DefaultStreamMqListenerContainer.ContainerState.RUNNING);
+
+            RedissonStreamProducer producer =
+                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
+            try {
+                producer.syncSend(MessageBuilder.<String>withTopic(topic).body("lc-body").build());
+
+                // 等待消费发生
+                await().atMost(10, TimeUnit.SECONDS).untilAsserted(() ->
+                    assertThat(consumed.get()).isGreaterThan(0));
+            } finally {
+                producer.close();
+            }
+        } finally {
+            container.stop();
+        }
+
+        // 停止后应为 STOPPED 状态且非运行
+        assertThat(container.isRunning()).isFalse();
+        assertThat(container.getState()).isEqualTo(DefaultStreamMqListenerContainer.ContainerState.STOPPED);
+    }
+}
