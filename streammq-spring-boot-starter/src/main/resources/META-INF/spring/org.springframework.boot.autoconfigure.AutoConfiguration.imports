@@ -1,1 +1,5 @@
-# StreamMQ AutoConfiguration classes will be registered here.
+io.github.streammq.spring.boot.autoconfigure.StreamMqAutoConfiguration
+io.github.streammq.spring.boot.autoconfigure.StreamMqCoreAutoConfiguration
+io.github.streammq.spring.boot.autoconfigure.StreamMqSchedulerAutoConfiguration
+io.github.streammq.spring.boot.autoconfigure.StreamMqListenerContainerAutoConfiguration
+io.github.streammq.spring.boot.autoconfigure.StreamMqHealthAutoConfiguration

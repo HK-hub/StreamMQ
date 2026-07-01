@@ -28,19 +28,30 @@
             <artifactId>streammq-redisson-adapter</artifactId>
         </dependency>
 
-        <!-- Spring Boot Autoconfigure -->
+        <!-- Spring Boot Autoconfigure（自动装配必需） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-autoconfigure</artifactId>
         </dependency>
+
+        <!-- Spring Boot Starter（provided：用户应用已自带） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- 配置元数据生成 -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-configuration-processor</artifactId>
             <optional>true</optional>
         </dependency>
+
+        <!-- Spring Boot Actuator（optional：仅当用户引入 actuator 时启用健康检查与指标） -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-actuator-autoconfigure</artifactId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
             <optional>true</optional>
         </dependency>
 
@@ -51,10 +62,11 @@
             <optional>true</optional>
         </dependency>
 
-        <!-- Redisson (透传递供用户使用) -->
+        <!-- Redisson Spring Boot Starter（provided：用户自行引入获得 RedissonClient 自动装配） -->
         <dependency>
             <groupId>org.redisson</groupId>
-            <artifactId>redisson</artifactId>
+            <artifactId>redisson-spring-boot-starter</artifactId>
+            <scope>provided</scope>
         </dependency>
 
         <!-- 测试 -->

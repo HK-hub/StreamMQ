@@ -4,21 +4,37 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
+    <!-- BOM 独立，不继承 streammq-parent，避免循环依赖 -->
     <groupId>io.github.streammq</groupId>
     <artifactId>streammq-bom</artifactId>
-    <!-- 和parent版本严格一致 -->
     <version>0.1.0-SNAPSHOT</version>
     <packaging>pom</packaging>
     <name>StreamMQ BOM</name>
-    <description>StreamMQ 物料清单 (Bill of Materials)，统一管理 StreamMQ 各模块与依赖版本。</description>
+    <description>StreamMQ 物料清单 (Bill of Materials)，统一管理 StreamMQ 各模块与第三方依赖版本。本 BOM 独立于 streammq-parent，可被任意项目 import。</description>
 
-    <!-- 这里直接可用 ${project.version} -->
     <properties>
-        <streammq.version>${project.version}</streammq.version>
+        <!-- StreamMQ 自身版本 -->
+        <streammq.version>0.1.0-SNAPSHOT</streammq.version>
+
+        <!-- 第三方依赖版本（与 streammq-parent 保持一致） -->
+        <spring-boot.version>3.3.5</spring-boot.version>
+        <redisson.version>3.34.1</redisson.version>
+        <jackson.version>2.18.1</jackson.version>
+        <slf4j.version>2.0.16</slf4j.version>
+        <micrometer.version>1.13.6</micrometer.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <!-- Spring Boot BOM -->
+            <dependency>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-dependencies</artifactId>
+                <version>${spring-boot.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
             <!-- StreamMQ 自有模块 -->
             <dependency>
                 <groupId>io.github.streammq</groupId>
@@ -56,11 +72,46 @@
                 <version>${streammq.version}</version>
             </dependency>
 
-            <!-- 第三方依赖版本统一管理（覆盖父 BOM 的可选版本） -->
+            <!-- 第三方依赖版本（覆盖 Spring Boot 默认） -->
             <dependency>
                 <groupId>org.redisson</groupId>
                 <artifactId>redisson</artifactId>
                 <version>${redisson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.redisson</groupId>
+                <artifactId>redisson-spring-boot-starter</artifactId>
+                <version>${redisson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-databind</artifactId>
+                <version>${jackson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-core</artifactId>
+                <version>${jackson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-annotations</artifactId>
+                <version>${jackson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.datatype</groupId>
+                <artifactId>jackson-datatype-jsr310</artifactId>
+                <version>${jackson.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.slf4j</groupId>
+                <artifactId>slf4j-api</artifactId>
+                <version>${slf4j.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.micrometer</groupId>
+                <artifactId>micrometer-core</artifactId>
+                <version>${micrometer.version}</version>
             </dependency>
         </dependencies>
     </dependencyManagement>
