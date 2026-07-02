@@ -180,10 +180,11 @@ class DefaultMessageConverterTest {
     }
 
     @Test
-    @DisplayName("fromStreamFields 字段缺失场景（只有必填 body/bornTs）")
+    @DisplayName("fromStreamFields 字段缺失场景（只有必填 body/bodyType/bornTs）")
     void fromStreamFieldsMissingOptional() {
         Map<String, String> fields = new HashMap<>();
         fields.put("body", Base64.getEncoder().encodeToString(serializer.serialize("hi", Object.class)));
+        fields.put("bodyType", String.class.getName());
         fields.put("bornTs", "999");
 
         Message<String> msg = converter.fromStreamFields(fields, String.class);
@@ -203,6 +204,7 @@ class DefaultMessageConverterTest {
     void fromStreamFieldsInvalidBornTs() {
         Map<String, String> fields = new HashMap<>();
         fields.put("body", Base64.getEncoder().encodeToString(serializer.serialize("hi", Object.class)));
+        fields.put("bodyType", String.class.getName());
         fields.put("bornTs", "not-a-number");
 
         assertThatThrownBy(() -> converter.fromStreamFields(fields, String.class))
@@ -215,6 +217,7 @@ class DefaultMessageConverterTest {
     void fromStreamFieldsInvalidRetryTimes() {
         Map<String, String> fields = new HashMap<>();
         fields.put("body", Base64.getEncoder().encodeToString(serializer.serialize("hi", Object.class)));
+        fields.put("bodyType", String.class.getName());
         fields.put("bornTs", "1");
         fields.put("retryTimes", "abc");
 
@@ -260,5 +263,64 @@ class DefaultMessageConverterTest {
         DefaultMessageConverter.applyMessageId(msg, "123-0");
         assertThat(msg.getMessageId()).isNotNull();
         assertThat(msg.getMessageId().getStreamEntryId()).isEqualTo("123-0");
+    }
+
+    // ===================== 跨平台反序列化测试 =====================
+
+    /**
+     * 自定义 POJO，用于验证跨平台 JSON 反序列化。
+     */
+    public static class UserDto {
+        private String name;
+        private int age;
+
+        public String getName() { return name; }
+        public void setName(String name) { this.name = name; }
+        public int getAge() { return age; }
+        public void setAge(int age) { this.age = age; }
+    }
+
+    @Test
+    @DisplayName("跨平台：bodyType 缺失 + targetType=String → 返回原始字符串（Go JSON 场景）")
+    void crossPlatformRawStringBody() {
+        // 模拟 Go 发送的原始 JSON 字符串（未经 Base64 编码，无 bodyType 字段）
+        String rawJson = "{\"name\":\"Alice\",\"age\":30}";
+        Map<String, String> fields = new HashMap<>();
+        fields.put("body", rawJson);
+        fields.put("bornTs", "1");
+
+        Message<String> msg = converter.fromStreamFields(fields, String.class);
+
+        assertThat(msg.getBody()).isEqualTo(rawJson);
+    }
+
+    @Test
+    @DisplayName("跨平台：bodyType 缺失 + targetType=POJO → JSON 反序列化为 POJO")
+    void crossPlatformJsonToPojo() {
+        // 模拟 Go 发送的 JSON 字符串，consumer 声明 POJO 类型
+        String rawJson = "{\"name\":\"Bob\",\"age\":25}";
+        Map<String, String> fields = new HashMap<>();
+        fields.put("body", rawJson);
+        fields.put("bornTs", "1");
+
+        Message<UserDto> msg = converter.fromStreamFields(fields, UserDto.class);
+
+        assertThat(msg.getBody()).isNotNull();
+        assertThat(msg.getBody().getName()).isEqualTo("Bob");
+        assertThat(msg.getBody().getAge()).isEqualTo(25);
+    }
+
+    @Test
+    @DisplayName("跨平台：bodyType 存在 → 走 SDK 路径（Base64 + serializer）")
+    void sdkPathWithBodyType() {
+        // SDK 发送方：body 为 Base64 编码，bodyType 字段存在
+        Map<String, String> fields = new HashMap<>();
+        fields.put("body", Base64.getEncoder().encodeToString(serializer.serialize("hi", Object.class)));
+        fields.put("bodyType", String.class.getName());
+        fields.put("bornTs", "1");
+
+        Message<String> msg = converter.fromStreamFields(fields, String.class);
+
+        assertThat(msg.getBody()).isEqualTo("hi");
     }
 }

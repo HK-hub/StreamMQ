@@ -8,6 +8,7 @@ import io.github.streammq.core.message.BatchMessage;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.message.SendResult;
+import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.SendCallback;
 import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.ProducerInterceptor;
@@ -17,9 +18,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.redisson.api.RStream;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -43,8 +42,10 @@ class TemplateIT extends AbstractRedisIT {
     @BeforeEach
     void setUpTemplate() {
         producerFactory = new RedissonStreamProducerFactory(redisson, converter);
-        Map<String, Object> defaultProps = new HashMap<>();
-        defaultProps.put("namespace", namespace);
+        ProducerConfig defaultProps = ProducerConfig.builder()
+            .group(DEFAULT_GROUP)
+            .namespace(namespace)
+            .build();
         template = new DefaultStreamMqTemplate<>(producerFactory, DEFAULT_GROUP, converter, defaultProps, null);
     }
 

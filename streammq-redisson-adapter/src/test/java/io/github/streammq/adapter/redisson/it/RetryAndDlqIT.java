@@ -9,9 +9,12 @@ import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.Action;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
+import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
+import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.MessageSerializer;
+import io.github.streammq.core.spi.RebalanceStrategy;
 import io.github.streammq.core.spi.RetryPolicy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -91,12 +94,34 @@ class RetryAndDlqIT extends AbstractRedisIT {
                 case "serializer" -> MessageSerializer.class;
                 case "namespace" -> "";
                 case "enable" -> true;
+                case "selectorType" -> SelectorType.TAG;
+                case "pullBatchSize" -> 32;
+                case "retryPolicy" -> RetryPolicy.class;
+                case "enableMsgTrace" -> false;
+                case "streamMaxLen" -> 0;
+                case "messageConverter" -> MessageConverter.class;
+                case "rebalanceStrategy" -> RebalanceStrategy.class;
+                case "pullInterval" -> 0L;
+                case "suspendCurrentQueueTimeMillis" -> 1000L;
                 case "annotationType" -> io.github.streammq.core.annotation.StreamMqListener.class;
                 case "hashCode" -> (topic + group).hashCode();
                 case "equals" -> args != null && args.length > 0 && proxy == args[0];
                 case "toString" -> "@StreamMqListener(topic=" + topic + ", consumerGroup=" + group + ")";
-                default -> throw new UnsupportedOperationException("Unexpected annotation method: " + method.getName());
+                default -> defaultAnnotationValue(method.getReturnType());
             });
+    }
+
+    /**
+     * 根据返回类型返回注解属性的默认值，避免新增注解属性时测试代理崩溃。
+     */
+    private static Object defaultAnnotationValue(Class<?> returnType) {
+        if (returnType == String.class) return "";
+        if (returnType == int.class) return 0;
+        if (returnType == long.class) return 0L;
+        if (returnType == boolean.class) return false;
+        if (returnType == Class.class) return null;
+        if (returnType.isEnum()) return returnType.getEnumConstants()[0];
+        return null;
     }
 
     @Test
