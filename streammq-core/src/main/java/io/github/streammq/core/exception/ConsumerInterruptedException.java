@@ -1,5 +1,7 @@
 package io.github.streammq.core.exception;
 
+import lombok.Getter;
+
 /**
  * 消费中断异常：Listener 容器在消费过程中被强制停止（如 JVM 关闭、超时）。
  *
@@ -8,6 +10,7 @@ package io.github.streammq.core.exception;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
+@Getter
 public class ConsumerInterruptedException extends StreamMqException {
 
     private static final long serialVersionUID = 1L;
@@ -28,13 +31,5 @@ public class ConsumerInterruptedException extends StreamMqException {
         super(message, cause);
         this.topic = topic;
         this.consumerGroup = consumerGroup;
-    }
-
-    public String getConsumerGroup() {
-        return consumerGroup;
-    }
-
-    public String getTopic() {
-        return topic;
     }
 }

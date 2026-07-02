@@ -53,6 +53,9 @@
         <jackson.version>2.18.1</jackson.version>
         <slf4j.version>2.0.16</slf4j.version>
         <micrometer.version>1.13.6</micrometer.version>
+        <lombok.version>1.18.34</lombok.version>
+        <fury.version>0.9.0</fury.version>
+        <protostuff.version>1.8.0</protostuff.version>
 
         <!-- 测试依赖 -->
         <junit.version>5.11.3</junit.version>
@@ -124,6 +127,25 @@
                 <version>${jackson.version}</version>
             </dependency>
 
+            <!-- Apache Fury（高性能序列化） -->
+            <dependency>
+                <groupId>org.apache.fury</groupId>
+                <artifactId>fury-core</artifactId>
+                <version>${fury.version}</version>
+            </dependency>
+
+            <!-- Protostuff（Protocol Buffer 运行时序列化） -->
+            <dependency>
+                <groupId>io.protostuff</groupId>
+                <artifactId>protostuff-core</artifactId>
+                <version>${protostuff.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.protostuff</groupId>
+                <artifactId>protostuff-runtime</artifactId>
+                <version>${protostuff.version}</version>
+            </dependency>
+
             <!-- SLF4J -->
             <dependency>
                 <groupId>org.slf4j</groupId>
@@ -136,6 +158,14 @@
                 <groupId>io.micrometer</groupId>
                 <artifactId>micrometer-core</artifactId>
                 <version>${micrometer.version}</version>
+            </dependency>
+
+            <!-- Lombok -->
+            <dependency>
+                <groupId>org.projectlombok</groupId>
+                <artifactId>lombok</artifactId>
+                <version>${lombok.version}</version>
+                <scope>provided</scope>
             </dependency>
 
             <!-- 测试 -->
@@ -191,6 +221,13 @@
             <groupId>com.google.code.findbugs</groupId>
             <artifactId>jsr305</artifactId>
             <version>3.0.2</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Lombok（编译期注解处理器，不泄漏到运行时）-->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
             <scope>provided</scope>
         </dependency>
     </dependencies>

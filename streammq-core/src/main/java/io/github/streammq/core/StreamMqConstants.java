@@ -43,6 +43,14 @@ public final class StreamMqConstants {
     public static final long DEFAULT_BROKER_ERROR_BACKOFF_MS = 500L;
     /** 消费者最大批量大小上界 */
     public static final int MAX_BATCH_SIZE_LIMIT = 1000;
+    /** 默认拉取阻塞超时（毫秒） */
+    public static final long DEFAULT_PULL_BLOCK_TIMEOUT_MS = 1000L;
+    /** 默认拉取间隔（毫秒） */
+    public static final long DEFAULT_PULL_INTERVAL_MS = 0L;
+    /** 默认顺序消费挂起时长（毫秒） */
+    public static final long DEFAULT_SUSPEND_CURRENT_QUEUE_TIME_MS = 1000L;
+    /** 默认 Stream 最大长度（0=不限制） */
+    public static final int DEFAULT_STREAM_MAX_LEN = 0;
 
     // ==================== 属性 Key 常量 ====================
     /** 属性 key：topic */

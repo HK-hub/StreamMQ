@@ -9,6 +9,7 @@ import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.MessageSerializer;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
@@ -133,8 +134,7 @@ public class DefaultMessageConverter implements MessageConverter {
 
         String bodyStr = fields.get(FIELD_BODY);
         if (bodyStr != null && !bodyStr.isEmpty()) {
-            byte[] bodyBytes = Base64.getDecoder().decode(bodyStr);
-            T body = serializer.deserialize(bodyBytes, targetType);
+            T body = deserializeBody(bodyStr, fields.get(FIELD_BODY_TYPE), targetType);
             message.setBody(body);
         }
 
@@ -185,6 +185,44 @@ public class DefaultMessageConverter implements MessageConverter {
         }
 
         return message;
+    }
+
+    /**
+     * 反序列化 body 字段，支持两种来源：
+     * <ol>
+     *   <li><b>StreamMQ SDK 发送方</b>：{@code bodyTypeField} 非空，body 为 Base64 编码的序列化字节</li>
+     *   <li><b>非 SDK 发送方（跨平台/跨语言）</b>：{@code bodyTypeField} 为空，body 为原始字符串
+     *       （如 Go/Python 直接写 Redis Stream 的 JSON 字符串）</li>
+     * </ol>
+     *
+     * <p>跨平台场景的回退策略：
+     * <ul>
+     *   <li>目标类型为 {@link String}：直接返回原始字符串（推荐用法，消费者自行反序列化）</li>
+     *   <li>目标类型为其他：尝试将原始字符串的 UTF-8 字节交给序列化器反序列化
+     *       （适用于 Jackson + JSON body 的组合；不兼容时抛 {@link SerializationException}）</li>
+     * </ul>
+     *
+     * @param bodyStr body 字段值
+     * @param bodyTypeField bodyType 字段值（可为 null 或空，表示非 SDK 发送方）
+     * @param targetType 目标 body 类型
+     * @param <T> 目标类型
+     * @return 反序列化后的 body
+     */
+    @SuppressWarnings("unchecked")
+    private <T> T deserializeBody(String bodyStr, String bodyTypeField, Class<T> targetType) {
+        // SDK 路径：bodyType 字段存在 → body 为 Base64 编码的序列化字节
+        if (bodyTypeField != null && !bodyTypeField.isEmpty()) {
+            byte[] bodyBytes = Base64.getDecoder().decode(bodyStr);
+            return serializer.deserialize(bodyBytes, targetType);
+        }
+        // 跨平台路径：bodyType 字段缺失 → body 为原始字符串
+        if (targetType == String.class) {
+            return (T) bodyStr;
+        }
+        // 目标类型非 String：尝试将原始字符串 UTF-8 字节交给序列化器反序列化
+        // 适用场景：Jackson 序列化器 + JSON 字符串 body → 反序列化为 POJO
+        byte[] rawBytes = bodyStr.getBytes(StandardCharsets.UTF_8);
+        return serializer.deserialize(rawBytes, targetType);
     }
 
     /**

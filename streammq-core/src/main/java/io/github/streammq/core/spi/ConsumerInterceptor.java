@@ -1,6 +1,7 @@
 package io.github.streammq.core.spi;
 
 import io.github.streammq.core.enums.Action;
+import io.github.streammq.core.enums.InvokeTiming;
 import io.github.streammq.core.message.Message;
 
 /**
@@ -34,6 +35,17 @@ public interface ConsumerInterceptor {
      * @param action 消费动作（SUCCESS / RECONSUME_LATER / SUSPEND / ...）
      */
     void afterConsume(Message<?> message, Action action);
+
+    /**
+     * 消费过程中发生异常时调用。
+     *
+     * @param message 消息
+     * @param exception 异常
+     * @param timing 触发时机（BEFORE/EXECUTING/AFTER）
+     */
+    default void onException(Message<?> message, Exception exception, InvokeTiming timing) {
+        // 默认空实现，子类按需覆盖
+    }
 
     /**
      * 拦截器名称。

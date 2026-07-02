@@ -1,5 +1,7 @@
 package io.github.streammq.core.exception;
 
+import lombok.Getter;
+
 /**
  * Broker 异常：Redis 服务端返回错误。
  *
@@ -9,6 +11,7 @@ package io.github.streammq.core.exception;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
+@Getter
 public class StreamMqBrokerException extends StreamMqException {
 
     private static final long serialVersionUID = 1L;
@@ -45,14 +48,5 @@ public class StreamMqBrokerException extends StreamMqException {
     public StreamMqBrokerException(String message, String errorCode, Throwable cause) {
         super(message, cause);
         this.errorCode = errorCode;
-    }
-
-    /**
-     * 返回 Redis 错误码。
-     *
-     * @return 错误码，可能为 null
-     */
-    public String getErrorCode() {
-        return errorCode;
     }
 }

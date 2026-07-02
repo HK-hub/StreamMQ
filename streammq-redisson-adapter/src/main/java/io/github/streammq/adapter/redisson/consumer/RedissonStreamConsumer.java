@@ -8,6 +8,9 @@ import io.github.streammq.core.exception.StreamMqBrokerException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.spi.MessageConverter;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NonNull;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.StreamMessageId;
@@ -42,16 +45,28 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
+@Getter
 public class RedissonStreamConsumer implements StreamMqConsumer {
 
     private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamConsumer.class);
 
-    private final RedissonClient redisson;
+    private final @NonNull RedissonClient redisson;
     private final String namespace;
-    private final String topic;
-    private final String group;
-    private final String consumerName;
-    private final MessageConverter converter;
+    private final @NonNull String topic;
+    private final @NonNull String group;
+    private final @NonNull String consumerName;
+    private final @NonNull MessageConverter converter;
+    /** DLQ 模式标志：true=从 DLQ Stream 消费死信消息 */
+    private final boolean dlqMode;
+    /** DLQ 原始消费者组（仅 dlqMode=true 时使用，用于构造 DLQ Stream Key） */
+    private final String dlqOriginalGroup;
+    /**
+     * 目标 body 类型（跨平台反序列化回退类型）。
+     *
+     * <p>当 Stream Entry 缺失 {@code bodyType} 字段（发送方非 StreamMQ SDK），
+     * 或 {@code bodyType} 类不可加载时，回退到此类型。若仍为 null，则回退到 {@link String}。
+     */
+    private final Class<?> targetBodyType;
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean groupCreated = new AtomicBoolean(false);
 
@@ -61,23 +76,82 @@ public class RedissonStreamConsumer implements StreamMqConsumer {
     private static final String BUSYGROUP_MARKER = "BUSYGROUP";
 
     /**
-     * 构造 Consumer。
+     * 兼容构造器：不启用 DLQ 模式（等价于 {@code dlqMode=false, dlqOriginalGroup=null, targetBodyType=null}）。
      *
-     * @param redisson Redisson 客户端
-     * @param namespace 命名空间
-     * @param topic 主题
-     * @param group 消费者组名
-     * @param consumerName 消费者实例名
-     * @param converter 消息转换器
+     * @param redisson Redisson 客户端（必填）
+     * @param namespace 命名空间（可为 null，默认空字符串）
+     * @param topic 主题（必填）
+     * @param group 消费者组名（必填）
+     * @param consumerName 消费者实例名（必填）
+     * @param converter 消息转换器（必填）
      */
-    public RedissonStreamConsumer(RedissonClient redisson, String namespace, String topic,
-                                   String group, String consumerName, MessageConverter converter) {
-        this.redisson = Objects.requireNonNull(redisson, "redisson");
+    public RedissonStreamConsumer(@NonNull RedissonClient redisson, String namespace, @NonNull String topic,
+                                   @NonNull String group, @NonNull String consumerName, @NonNull MessageConverter converter) {
+        this(redisson, namespace, topic, group, consumerName, converter, false, null, null);
+    }
+
+    /**
+     * 构造 Consumer，支持 Builder 模式。
+     *
+     * <p>使用示例：
+     * <pre>{@code
+     * RedissonStreamConsumer consumer = RedissonStreamConsumer.builder()
+     *     .redisson(redissonClient)
+     *     .topic("my-topic")
+     *     .group("my-group")
+     *     .consumerName("consumer-1")
+     *     .converter(converter)
+     *     .build();
+     * }</pre>
+     *
+     * <p>DLQ 模式示例：
+     * <pre>{@code
+     * RedissonStreamConsumer dlqConsumer = RedissonStreamConsumer.builder()
+     *     .redisson(redissonClient)
+     *     .topic("my-topic")              // 原始 topic
+     *     .group("dlq-consumer-my-group") // DLQ 消费者组
+     *     .consumerName("dlq-consumer-1")
+     *     .converter(converter)
+     *     .dlqMode(true)
+     *     .dlqOriginalGroup("my-group")   // 原始消费者组
+     *     .build();
+     * }</pre>
+     *
+     * <p>跨平台 body 类型示例：
+     * <pre>{@code
+     * RedissonStreamConsumer consumer = RedissonStreamConsumer.builder()
+     *     .redisson(redissonClient)
+     *     .topic("cross-lang-topic")
+     *     .group("my-group")
+     *     .consumerName("consumer-1")
+     *     .converter(converter)
+     *     .targetBodyType(String.class)   // Go 发送 JSON string，接收为 String 自行解析
+     *     .build();
+     * }</pre>
+     *
+     * @param redisson Redisson 客户端（必填）
+     * @param namespace 命名空间（可为 null，默认空字符串）
+     * @param topic 主题（必填；DLQ 模式下为原始 topic）
+     * @param group 消费者组名（必填；DLQ 模式下为 DLQ 消费者组名）
+     * @param consumerName 消费者实例名（必填）
+     * @param converter 消息转换器（必填）
+     * @param dlqMode DLQ 模式标志（true=从 DLQ Stream 消费）
+     * @param dlqOriginalGroup DLQ 原始消费者组（仅 dlqMode=true 时使用）
+     * @param targetBodyType 目标 body 类型（跨平台回退类型，null=最终回退到 String）
+     */
+    @Builder
+    public RedissonStreamConsumer(@NonNull RedissonClient redisson, String namespace, @NonNull String topic,
+                                   @NonNull String group, @NonNull String consumerName, @NonNull MessageConverter converter,
+                                   boolean dlqMode, String dlqOriginalGroup, Class<?> targetBodyType) {
+        this.redisson = redisson;
         this.namespace = namespace == null ? "" : namespace;
-        this.topic = Objects.requireNonNull(topic, "topic");
-        this.group = Objects.requireNonNull(group, "group");
-        this.consumerName = Objects.requireNonNull(consumerName, "consumerName");
-        this.converter = Objects.requireNonNull(converter, "converter");
+        this.topic = topic;
+        this.group = group;
+        this.consumerName = consumerName;
+        this.converter = converter;
+        this.dlqMode = dlqMode;
+        this.dlqOriginalGroup = dlqOriginalGroup;
+        this.targetBodyType = targetBodyType;
     }
 
     @Override
@@ -147,33 +221,6 @@ public class RedissonStreamConsumer implements StreamMqConsumer {
         return !closed.get();
     }
 
-    /**
-     * 返回 Topic。
-     *
-     * @return Topic
-     */
-    public String getTopic() {
-        return topic;
-    }
-
-    /**
-     * 返回消费者组名。
-     *
-     * @return 消费者组名
-     */
-    public String getGroup() {
-        return group;
-    }
-
-    /**
-     * 返回消费者实例名。
-     *
-     * @return 消费者实例名
-     */
-    public String getConsumerName() {
-        return consumerName;
-    }
-
     // ===================== 内部方法 =====================
 
     private List<Message<?>> doRead(int batchSize, Duration timeout) {
@@ -203,15 +250,22 @@ public class RedissonStreamConsumer implements StreamMqConsumer {
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     private Message<?> toMessage(StreamMessageId streamId, Map<String, String> fields) {
+        // 反序列化目标类型回退链：
+        //   1. Stream Entry 中的 bodyType 字段（StreamMQ SDK 发送方写入）
+        //   2. targetBodyType（容器解析自 Listener 泛型 T，跨平台场景使用）
+        //   3. String.class（最终回退，由消费者自行反序列化）
         String bodyTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE);
-        Class<?> bodyType = Object.class;
+        Class<?> bodyType = null;
         if (bodyTypeName != null && !bodyTypeName.isEmpty()) {
             try {
                 bodyType = Class.forName(bodyTypeName, false, Thread.currentThread().getContextClassLoader());
             } catch (ClassNotFoundException ex) {
-                LOG.warn("Body type class not found, fallback to Object: {}", bodyTypeName);
-                bodyType = Object.class;
+                LOG.warn("Body type class not found, fallback to targetBodyType/String: {}", bodyTypeName);
+                bodyType = null;
             }
+        }
+        if (bodyType == null) {
+            bodyType = targetBodyType != null ? targetBodyType : String.class;
         }
         Message<?> message = converter.fromStreamFields(fields, (Class) bodyType);
         // 回填 topic 与 messageId（Stream Entry 字段中不含 topic）
@@ -247,7 +301,9 @@ public class RedissonStreamConsumer implements StreamMqConsumer {
     }
 
     private RStream<String, String> getStream() {
-        String streamKey = StreamMqKeys.topicStream(namespace, topic);
+        String streamKey = dlqMode
+            ? StreamMqKeys.dlqStream(namespace, topic, dlqOriginalGroup)
+            : StreamMqKeys.topicStream(namespace, topic);
         return redisson.getStream(streamKey);
     }
 

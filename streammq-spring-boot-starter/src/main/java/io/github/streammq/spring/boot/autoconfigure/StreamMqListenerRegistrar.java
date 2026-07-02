@@ -3,6 +3,7 @@ package io.github.streammq.spring.boot.autoconfigure;
 import io.github.streammq.adapter.redisson.container.DefaultStreamMqListenerContainer;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.core.annotation.StreamMqListener;
+import io.github.streammq.core.annotation.StreamMqDlqListener;
 import io.github.streammq.core.annotation.StreamMqOrderlyListener;
 import io.github.streammq.core.annotation.StreamMqTransactionListener;
 import io.github.streammq.core.listener.StreamMqAckListener;
@@ -31,6 +32,8 @@ import java.util.Map;
  *   <li>扫描 {@code @StreamMqListener} 标注的 Bean（实现 {@link io.github.streammq.core.listener.StreamMqListener}
  *       或 {@link StreamMqAckListener}）</li>
  *   <li>扫描 {@code @StreamMqOrderlyListener} 标注的 Bean（实现 {@link StreamMqOrderlyListener}）</li>
+ *   <li>扫描 {@code @StreamMqDlqListener} 标注的 Bean（实现 {@link io.github.streammq.core.listener.StreamMqListener}），
+ *       注册为 DLQ 消费者</li>
  *   <li>扫描 {@code @StreamMqTransactionListener} 标注的 Bean（实现 {@link TransactionChecker}），
  *       注册到 {@link TransactionScanner}</li>
  *   <li>将容器内所有 Listener 的 (topic, group, maxReconsumeTimes) 注册到 RetryScheduler（若存在）</li>
@@ -195,10 +198,51 @@ public class StreamMqListenerRegistrar implements SmartInitializingSingleton, Ap
             handler);
     }
 
+    /**
+     * 创建 {@link StreamMqDlqListener} 注解的动态代理，覆盖 topic/consumerGroup/dlqConsumerGroup/namespace
+     * 为解析后的值，其余方法委托给原注解。
+     *
+     * @param original 原注解
+     * @return 解析后的代理注解
+     */
+    private StreamMqDlqListener resolveStreamMqDlqListener(StreamMqDlqListener original) {
+        String resolvedTopic = resolveAttribute(original.topic());
+        String resolvedGroup = resolveAttribute(original.consumerGroup());
+        String resolvedDlqGroup = resolveAttribute(original.dlqConsumerGroup());
+        String resolvedNamespace = resolveAttribute(original.namespace());
+        if (resolvedTopic.equals(original.topic())
+            && resolvedGroup.equals(original.consumerGroup())
+            && resolvedDlqGroup.equals(original.dlqConsumerGroup())
+            && resolvedNamespace.equals(original.namespace())) {
+            return original;
+        }
+        LOG.info("Resolved @StreamMqDlqListener attributes: topic={} -> {}, consumerGroup={} -> {}, " +
+                "dlqConsumerGroup={} -> {}, namespace={} -> {}",
+            original.topic(), resolvedTopic,
+            original.consumerGroup(), resolvedGroup,
+            original.dlqConsumerGroup(), resolvedDlqGroup,
+            original.namespace(), resolvedNamespace);
+        InvocationHandler handler = (proxy, method, args) -> {
+            String name = method.getName();
+            switch (name) {
+                case "topic": return resolvedTopic;
+                case "consumerGroup": return resolvedGroup;
+                case "dlqConsumerGroup": return resolvedDlqGroup;
+                case "namespace": return resolvedNamespace;
+                default: return method.invoke(original, args);
+            }
+        };
+        return (StreamMqDlqListener) Proxy.newProxyInstance(
+            StreamMqDlqListener.class.getClassLoader(),
+            new Class<?>[] {StreamMqDlqListener.class},
+            handler);
+    }
+
     @Override
     public void afterSingletonsInstantiated() {
         registerStreamMqListeners();
         registerOrderlyListeners();
+        registerDlqListeners();
         registerTransactionListeners();
         registerRetryTargetsIfPossible();
         LOG.info("StreamMq listener registration completed, total registrations={}",
@@ -286,6 +330,39 @@ public class StreamMqListenerRegistrar implements SmartInitializingSingleton, Ap
             } else {
                 LOG.warn("Bean {} annotated with @StreamMqOrderlyListener does not implement " +
                     "StreamMqOrderlyListener, ignored", beanName);
+            }
+        }
+    }
+
+    /**
+     * 扫描 {@code @StreamMqDlqListener} 标注的 Bean，注册为 DLQ 消费者。
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void registerDlqListeners() {
+        Map<String, Object> beans = applicationContext.getBeansWithAnnotation(StreamMqDlqListener.class);
+        for (Map.Entry<String, Object> entry : beans.entrySet()) {
+            String beanName = entry.getKey();
+            Object bean = entry.getValue();
+            StreamMqDlqListener annotation = AnnotationUtils.findAnnotation(bean.getClass(), StreamMqDlqListener.class);
+            if (annotation == null) {
+                continue;
+            }
+            // 解析 ${} 占位符与 #{} SpEL 表达式
+            StreamMqDlqListener resolved = resolveStreamMqDlqListener(annotation);
+            if (!resolved.enable()) {
+                LOG.info("Skip disabled @StreamMqDlqListener: bean={}, topic={}",
+                    beanName, resolved.topic());
+                continue;
+            }
+            if (bean instanceof io.github.streammq.core.listener.StreamMqListener) {
+                io.github.streammq.core.listener.StreamMqListener listener =
+                    (io.github.streammq.core.listener.StreamMqListener) bean;
+                listenerContainer.registerDlqListener(listener, resolved);
+                LOG.info("Registered DlqListener: bean={}, topic={}, originalGroup={}",
+                    beanName, resolved.topic(), resolved.consumerGroup());
+            } else {
+                LOG.warn("Bean {} annotated with @StreamMqDlqListener does not implement " +
+                    "StreamMqListener, ignored", beanName);
             }
         }
     }

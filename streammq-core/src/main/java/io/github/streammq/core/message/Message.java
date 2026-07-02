@@ -1,6 +1,9 @@
 package io.github.streammq.core.message;
 
 import io.github.streammq.core.enums.DelayLevel;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.Setter;
 
 import java.io.Serializable;
 import java.util.Collections;
@@ -22,6 +25,8 @@ import java.util.Objects;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
+@Getter
+@Setter
 public final class Message<T> implements Serializable {
 
     private static final long serialVersionUID = 1L;
@@ -38,10 +43,14 @@ public final class Message<T> implements Serializable {
     /** 分片键（可选），用于分区顺序消息路由 */
     private String shardingKey;
 
-    /** 系统属性（不可变），框架使用，例如 traceId */
+    /** 系统属性（不可变），框架使用，例如 traceId。手写 getter/setter 做防御性拷贝。 */
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
     private Map<String, String> properties;
 
-    /** 用户属性（不可变），用户自定义透传 */
+    /** 用户属性（不可变），用户自定义透传。手写 getter/setter 做防御性拷贝。 */
+    @Getter(AccessLevel.NONE)
+    @Setter(AccessLevel.NONE)
     private Map<String, String> userProperties;
 
     /** 消息体（必填），由序列化器决定如何转 byte[] */
@@ -97,37 +106,7 @@ public final class Message<T> implements Serializable {
         this.transactionId = transactionId;
     }
 
-    public String getTopic() {
-        return topic;
-    }
-
-    public void setTopic(String topic) {
-        this.topic = topic;
-    }
-
-    public String getTag() {
-        return tag;
-    }
-
-    public void setTag(String tag) {
-        this.tag = tag;
-    }
-
-    public String getKeys() {
-        return keys;
-    }
-
-    public void setKeys(String keys) {
-        this.keys = keys;
-    }
-
-    public String getShardingKey() {
-        return shardingKey;
-    }
-
-    public void setShardingKey(String shardingKey) {
-        this.shardingKey = shardingKey;
-    }
+    // ===================== properties / userProperties 手写访问器（含防御性拷贝）=====================
 
     /**
      * 返回系统属性（不可修改视图）。
@@ -167,69 +146,7 @@ public final class Message<T> implements Serializable {
         this.userProperties.put(key, value);
     }
 
-    public T getBody() {
-        return body;
-    }
-
-    public void setBody(T body) {
-        this.body = body;
-    }
-
-    public DelayLevel getDelayLevel() {
-        return delayLevel;
-    }
-
-    public void setDelayLevel(DelayLevel delayLevel) {
-        this.delayLevel = delayLevel;
-    }
-
-    public Long getDelayTimeMillis() {
-        return delayTimeMillis;
-    }
-
-    public void setDelayTimeMillis(Long delayTimeMillis) {
-        this.delayTimeMillis = delayTimeMillis;
-    }
-
-    public MessageId getMessageId() {
-        return messageId;
-    }
-
-    public void setMessageId(MessageId messageId) {
-        this.messageId = messageId;
-    }
-
-    public long getBornTimestamp() {
-        return bornTimestamp;
-    }
-
-    public void setBornTimestamp(long bornTimestamp) {
-        this.bornTimestamp = bornTimestamp;
-    }
-
-    public String getBornHost() {
-        return bornHost;
-    }
-
-    public void setBornHost(String bornHost) {
-        this.bornHost = bornHost;
-    }
-
-    public int getReconsumeTimes() {
-        return reconsumeTimes;
-    }
-
-    public void setReconsumeTimes(int reconsumeTimes) {
-        this.reconsumeTimes = reconsumeTimes;
-    }
-
-    public String getTransactionId() {
-        return transactionId;
-    }
-
-    public void setTransactionId(String transactionId) {
-        this.transactionId = transactionId;
-    }
+    // ===================== 业务方法 =====================
 
     /**
      * 是否为延时消息。

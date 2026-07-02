@@ -10,6 +10,9 @@ import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.producer.StreamMqProducer;
 import io.github.streammq.core.spi.MessageConverter;
+import lombok.Builder;
+import lombok.Getter;
+import lombok.NonNull;
 import org.redisson.api.RBatch;
 import org.redisson.api.RMap;
 import org.redisson.api.RScoredSortedSet;
@@ -26,9 +29,11 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -51,14 +56,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
+@Getter
 public class RedissonStreamProducer implements StreamMqProducer {
 
     private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamProducer.class);
 
-    private final RedissonClient redisson;
+    private final @NonNull RedissonClient redisson;
     private final String namespace;
-    private final String group;
-    private final MessageConverter converter;
+    private final @NonNull String group;
+    private final @NonNull MessageConverter converter;
     private final long defaultTimeoutMillis;
     private final int maxLen;
     private final ExecutorService asyncExecutor;
@@ -72,21 +78,34 @@ public class RedissonStreamProducer implements StreamMqProducer {
     private static final String FIELD_DELIVER_AT = "deliverAt";
 
     /**
-     * 构造 Producer。
+     * 构造 Producer，支持 Builder 模式。
      *
-     * @param redisson Redisson 客户端
-     * @param namespace 命名空间
-     * @param group 生产组名
-     * @param converter 消息转换器
+     * <p>使用示例：
+     * <pre>{@code
+     * RedissonStreamProducer producer = RedissonStreamProducer.builder()
+     *     .redisson(redissonClient)
+     *     .namespace("ns")
+     *     .group("producer-group")
+     *     .converter(converter)
+     *     .defaultTimeoutMillis(3000)
+     *     .maxLen(0)
+     *     .build();
+     * }</pre>
+     *
+     * @param redisson Redisson 客户端（必填）
+     * @param namespace 命名空间（可为 null，默认空字符串）
+     * @param group 生产组名（必填）
+     * @param converter 消息转换器（必填）
      * @param defaultTimeoutMillis 默认发送超时（毫秒）
      * @param maxLen Stream 最大长度（0 表示不限制）
      */
-    public RedissonStreamProducer(RedissonClient redisson, String namespace, String group,
-                                  MessageConverter converter, long defaultTimeoutMillis, int maxLen) {
-        this.redisson = Objects.requireNonNull(redisson, "redisson");
+    @Builder
+    public RedissonStreamProducer(@NonNull RedissonClient redisson, String namespace, @NonNull String group,
+                                  @NonNull MessageConverter converter, long defaultTimeoutMillis, int maxLen) {
+        this.redisson = redisson;
         this.namespace = namespace == null ? "" : namespace;
-        this.group = Objects.requireNonNull(group, "group");
-        this.converter = Objects.requireNonNull(converter, "converter");
+        this.group = group;
+        this.converter = converter;
         this.defaultTimeoutMillis = defaultTimeoutMillis;
         this.maxLen = maxLen;
         this.asyncExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -256,6 +275,8 @@ public class RedissonStreamProducer implements StreamMqProducer {
     /**
      * 调用 RStream.add 写入 Stream Entry（含 MAXLEN 截断）。
      *
+     * <p>使用异步 API + 超时控制，确保 {@code timeoutMillis} 真正生效。
+     *
      * @param streamKey Stream Key
      * @param fields Entry 字段
      * @param timeoutMillis 超时（毫秒）
@@ -264,7 +285,19 @@ public class RedissonStreamProducer implements StreamMqProducer {
     private StreamMessageId appendStream(String streamKey, Map<String, String> fields, long timeoutMillis) {
         RStream<String, String> stream = redisson.getStream(streamKey);
         StreamAddArgs<String, String> args = buildAddArgs(fields);
-        return stream.add(args);
+        try {
+            // 使用异步 API + 超时控制，确保 timeoutMillis 真正生效
+            return stream.addAsync(args).get(timeoutMillis, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException ex) {
+            throw new ProducerTimeoutException(
+                "syncSend timeout after " + timeoutMillis + "ms", streamKey, timeoutMillis);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new StreamMqBrokerException("syncSend interrupted for stream " + streamKey, null, ex);
+        } catch (ExecutionException ex) {
+            Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+            throw new StreamMqBrokerException("syncSend failed for stream " + streamKey, null, cause);
+        }
     }
 
     /**
@@ -302,50 +335,5 @@ public class RedissonStreamProducer implements StreamMqProducer {
             }
             LOG.info("RedissonStreamProducer closed, group={}", group);
         }
-    }
-
-    /**
-     * 返回生产组名。
-     *
-     * @return 生产组名
-     */
-    public String getGroup() {
-        return group;
-    }
-
-    /**
-     * 返回命名空间。
-     *
-     * @return 命名空间
-     */
-    public String getNamespace() {
-        return namespace;
-    }
-
-    /**
-     * 返回消息转换器。
-     *
-     * @return 转换器
-     */
-    public MessageConverter getConverter() {
-        return converter;
-    }
-
-    /**
-     * 返回默认发送超时（毫秒）。
-     *
-     * @return 默认超时
-     */
-    public long getDefaultTimeoutMillis() {
-        return defaultTimeoutMillis;
-    }
-
-    /**
-     * 返回 Stream 最大长度。
-     *
-     * @return 最大长度，0 表示不限制
-     */
-    public int getMaxLen() {
-        return maxLen;
     }
 }

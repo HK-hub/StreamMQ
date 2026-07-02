@@ -5,7 +5,9 @@ import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
 import io.github.streammq.core.enums.SelectorType;
+import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.MessageSerializer;
+import io.github.streammq.core.spi.RebalanceStrategy;
 import io.github.streammq.core.spi.RetryPolicy;
 
 import java.lang.annotation.Documented;
@@ -158,6 +160,45 @@ public @interface StreamMqListener {
      * @return true 启用追踪
      */
     boolean enableMsgTrace() default false;
+
+    /**
+     * Stream 最大长度（0=不限制，per-topic 覆盖全局配置）。
+     *
+     * @return Stream 最大长度
+     */
+    int streamMaxLen() default 0;
+
+    /**
+     * 每个监听器专属消息转换器（默认表示使用全局）。
+     *
+     * <p>注：使用 raw type {@code Class<? extends MessageConverter>}，因为
+     * {@code MessageConverter.class} 返回的是 raw type，无法直接用于泛型
+     * {@code Class<? extends MessageConverter<?>>}。
+     *
+     * @return 消息转换器类
+     */
+    Class<? extends MessageConverter> messageConverter() default MessageConverter.class;
+
+    /**
+     * 每个监听器专属重平衡策略（默认表示使用全局）。
+     *
+     * @return 重平衡策略类
+     */
+    Class<? extends RebalanceStrategy> rebalanceStrategy() default RebalanceStrategy.class;
+
+    /**
+     * 拉取间隔（毫秒，0=不间隔）。
+     *
+     * @return 拉取间隔毫秒
+     */
+    long pullInterval() default 0L;
+
+    /**
+     * 顺序消费挂起时长（毫秒）。
+     *
+     * @return 挂起毫秒数
+     */
+    long suspendCurrentQueueTimeMillis() default StreamMqConstants.DEFAULT_SUSPEND_CURRENT_QUEUE_TIME_MS;
 
     /**
      * 是否启用消费，默认 true。

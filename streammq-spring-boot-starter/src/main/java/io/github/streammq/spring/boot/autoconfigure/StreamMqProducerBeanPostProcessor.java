@@ -2,6 +2,7 @@ package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.template.DefaultStreamMqTemplate;
 import io.github.streammq.core.annotation.StreamMqProducer;
+import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.StreamMqProducerFactory;
 import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.template.StreamMqTemplate;
@@ -131,8 +132,9 @@ public class StreamMqProducerBeanPostProcessor implements BeanPostProcessor, App
             }
             // 创建 DefaultStreamMqTemplate
             String txGroup = properties.getTransaction().getDefaultGroup();
+            ProducerConfig producerConfig = ProducerConfig.builder().group(group).build();
             DefaultStreamMqTemplate<Object> template = new DefaultStreamMqTemplate<>(
-                producerFactory, group, messageConverter, java.util.Collections.emptyMap(), txGroup);
+                producerFactory, group, messageConverter, producerConfig, txGroup);
             templatesByGroup.put(group, template);
             LOG.info("Created StreamMqTemplate for group={}", group);
             return template;

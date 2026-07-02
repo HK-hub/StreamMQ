@@ -10,16 +10,20 @@ import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.adapter.redisson.template.DefaultStreamMqTemplate;
 import io.github.streammq.adapter.redisson.trace.NoopTraceCollector;
 import io.github.streammq.adapter.redisson.trace.Slf4jTraceCollector;
+import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.StreamMqProducerFactory;
 import io.github.streammq.core.consumer.StreamMqConsumerFactory;
 import io.github.streammq.core.spi.ManagementAuthenticator;
 import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.MessageSerializer;
 import io.github.streammq.core.spi.RetryPolicy;
+import io.github.streammq.core.service.StreamMqService;
 import io.github.streammq.core.spi.TraceCollector;
 import io.github.streammq.core.template.StreamMqTemplate;
 import io.github.streammq.spring.boot.properties.StreamMqProperties;
+import org.redisson.Redisson;
 import org.redisson.api.RedissonClient;
+import org.redisson.config.Config;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,7 +42,8 @@ import org.springframework.context.annotation.Configuration;
  * <ul>
  *   <li>{@code streammq.enabled=true}（默认 true）</li>
  *   <li>classpath 存在 {@link RedissonClient} 与 {@link StreamMqTemplate}</li>
- *   <li>存在已注册的 {@link RedissonClient} Bean（通常来自 {@code redisson-spring-boot-starter}）</li>
+ *   <li>存在已注册的 {@link RedissonClient} Bean（通常来自 {@code redisson-spring-boot-starter}）；
+ *       若用户未注册，本类提供指向 {@code localhost:6379} 的兜底实例（仅用于开发环境）</li>
  * </ul>
  *
  * <p>所有核心 Bean 均标注 {@code @ConditionalOnMissingBean}，用户可在自定义配置类中覆盖。
@@ -53,6 +58,25 @@ import org.springframework.context.annotation.Configuration;
 public class StreamMqCoreAutoConfiguration {
 
     private static final Logger LOG = LoggerFactory.getLogger(StreamMqCoreAutoConfiguration.class);
+
+    /**
+     * 开发环境兜底：当用户未注册 RedissonClient Bean 时，
+     * 创建一个指向 localhost:6379 的默认实例。
+     *
+     * <p><b>生产环境强烈建议</b>引入 {@code redisson-spring-boot-starter}
+     * 或手动注册 {@link RedissonClient} Bean 以使用正确的 Redis 集群配置。
+     *
+     * @return RedissonClient 实例
+     */
+    @Bean(destroyMethod = "shutdown")
+    @ConditionalOnMissingBean(RedissonClient.class)
+    public RedissonClient redissonClient() {
+        LOG.warn("No RedissonClient bean found, creating default localhost:6379 instance. " +
+            "For production, please use redisson-spring-boot-starter or register your own RedissonClient bean.");
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://localhost:6379").setDatabase(0);
+        return Redisson.create(config);
+    }
 
     /**
      * 默认序列化器：JacksonJsonSerializer。
@@ -144,16 +168,34 @@ public class StreamMqCoreAutoConfiguration {
                                                  StreamMqProperties properties) {
         String defaultGroup = properties.getProducer().getGroup();
         String txGroup = properties.getTransaction().getDefaultGroup();
-        // 注入 namespace / send-message-timeout / stream.max-len 到 defaultProperties,
+        // 注入 namespace / send-message-timeout / stream.max-len 到 defaultConfig,
         // 保证 Producer 与 ListenerContainer 使用相同的 namespace,避免消息写入与读取 Key 不一致。
-        java.util.Map<String, Object> defaultProps = new java.util.HashMap<>(4);
-        defaultProps.put("namespace", properties.getNamespace());
-        defaultProps.put("send-message-timeout", properties.getProducer().getSendMessageTimeout());
-        defaultProps.put("stream.max-len", properties.getProducer().getStreamMaxLen());
+        ProducerConfig defaultConfig = ProducerConfig.builder()
+            .group(defaultGroup)
+            .namespace(properties.getNamespace())
+            .sendMessageTimeout(properties.getProducer().getSendMessageTimeout())
+            .streamMaxLen(properties.getProducer().getStreamMaxLen())
+            .build();
         LOG.info("Creating DefaultStreamMqTemplate: defaultGroup={}, transactionGroup={}, namespace={}",
             defaultGroup, txGroup, properties.getNamespace());
         return new DefaultStreamMqTemplate<>(
-            producerFactory, defaultGroup, converter, defaultProps, txGroup);
+            producerFactory, defaultGroup, converter, defaultConfig, txGroup);
+    }
+
+    /**
+     * 注册 {@link StreamMqService}，封装 {@link StreamMqTemplate} 提供更简洁的发送 API。
+     *
+     * <p>用户可直接注入 {@link StreamMqService}，仅传入 topic 与 body 即可发送消息，
+     * 无需手动构造 {@code Message} 对象。
+     *
+     * @param template StreamMq 模板
+     * @return StreamMqService 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public StreamMqService streamMqService(StreamMqTemplate<?> template) {
+        LOG.info("Creating StreamMqService wrapping {}", template.getClass().getSimpleName());
+        return new StreamMqService(template);
     }
 
     /**

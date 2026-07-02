@@ -3,6 +3,9 @@ package io.github.streammq.core.message;
 import java.io.Serializable;
 import java.util.Objects;
 
+import lombok.Getter;
+import lombok.NonNull;
+
 /**
  * 发送结果。
  *
@@ -12,20 +15,24 @@ import java.util.Objects;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
+@Getter
 public final class SendResult implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
     /** 消息 ID（对应 Redis Stream Entry ID） */
+    @NonNull
     private final MessageId messageId;
 
     /** Topic */
+    @NonNull
     private final String topic;
 
     /** Tag（可能为 null） */
     private final String tag;
 
     /** 发送状态 */
+    @NonNull
     private final SendStatus sendStatus;
 
     /** 出生时间戳（毫秒） */
@@ -69,34 +76,6 @@ public final class SendResult implements Serializable {
         this.bornTimestamp = bornTimestamp;
         this.regionId = regionId;
         this.errorMessage = errorMessage;
-    }
-
-    public MessageId getMessageId() {
-        return messageId;
-    }
-
-    public String getTopic() {
-        return topic;
-    }
-
-    public String getTag() {
-        return tag;
-    }
-
-    public SendStatus getSendStatus() {
-        return sendStatus;
-    }
-
-    public long getBornTimestamp() {
-        return bornTimestamp;
-    }
-
-    public String getRegionId() {
-        return regionId;
-    }
-
-    public String getErrorMessage() {
-        return errorMessage;
     }
 
     /**

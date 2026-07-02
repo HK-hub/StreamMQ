@@ -1,5 +1,7 @@
 package io.github.streammq.core.exception;
 
+import lombok.Getter;
+
 /**
  * 发送超时异常：syncSend 在指定超时时间内未收到 Redis 响应。
  *
@@ -8,6 +10,7 @@ package io.github.streammq.core.exception;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
+@Getter
 public class ProducerTimeoutException extends StreamMqException {
 
     private static final long serialVersionUID = 1L;
@@ -28,13 +31,5 @@ public class ProducerTimeoutException extends StreamMqException {
         super(message, cause);
         this.topic = topic;
         this.timeoutMillis = timeoutMillis;
-    }
-
-    public long getTimeoutMillis() {
-        return timeoutMillis;
-    }
-
-    public String getTopic() {
-        return topic;
     }
 }

@@ -5,12 +5,15 @@ import io.github.streammq.adapter.redisson.support.MdcKeys;
 import io.github.streammq.adapter.redisson.support.StreamMqKeys;
 import io.github.streammq.core.StreamMqConstants;
 import io.github.streammq.core.annotation.StreamMqListener;
+import io.github.streammq.core.annotation.StreamMqDlqListener;
 import io.github.streammq.core.annotation.StreamMqOrderlyListener;
+import io.github.streammq.core.consumer.ConsumerConfig;
 import io.github.streammq.core.consumer.StreamMqConsumer;
 import io.github.streammq.core.consumer.StreamMqConsumerFactory;
 import io.github.streammq.core.consumer.StreamMqListenerContainer;
 import io.github.streammq.core.enums.Action;
 import io.github.streammq.core.enums.AcknowledgeMode;
+import io.github.streammq.core.enums.InvokeTiming;
 import io.github.streammq.core.exception.StreamMqBrokerException;
 import io.github.streammq.core.listener.Acknowledgment;
 import io.github.streammq.core.listener.OrderlyContext;
@@ -19,6 +22,7 @@ import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.spi.ConsumerInterceptor;
 import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.RetryPolicy;
+import io.github.streammq.core.util.BodyTypeResolver;
 import org.redisson.api.RLock;
 import org.redisson.api.RMap;
 import org.redisson.api.RScoredSortedSet;
@@ -37,6 +41,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -45,6 +50,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+
+import lombok.AccessLevel;
+import lombok.RequiredArgsConstructor;
+import lombok.Setter;
 
 /**
  * {@link StreamMqListenerContainer} 默认实现，管理所有 Listener 的生命周期与消费循环。
@@ -169,15 +178,29 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
         Objects.requireNonNull(listener, "listener");
         Objects.requireNonNull(annotation, "annotation");
         checkBeforeStart();
+        Class<?> bodyType = BodyTypeResolver.resolve(listener);
         ListenerRegistration<T> reg = new ListenerRegistration<>(
             ListenerType.AUTO_ACK, listener, annotation.topic(), annotation.consumerGroup(),
             annotation.consumeMode(), annotation.acknowledgeMode(),
-            annotation.maxReconsumeTimes(), annotation.namespace(),
-            0, annotation.consumeTimeout(), null);
+            annotation.maxReconsumeTimes(),
+            0, annotation.consumeTimeout(), null,
+            annotation.pullBatchSize(),
+            annotation.consumeTimeout(),
+            annotation.pullInterval(),
+            annotation.selectorExpression(),
+            annotation.serializer(),
+            annotation.retryPolicy(),
+            annotation.messageConverter(),
+            annotation.rebalanceStrategy(),
+            annotation.suspendCurrentQueueTimeMillis(),
+            annotation.streamMaxLen(),
+            annotation.enableMsgTrace(),
+            false, null, bodyType);
+        reg.setNamespace(annotation.namespace());
         reg.resolveNamespace(defaultNamespace);
         registrations.put(reg.key(), reg);
-        LOG.info("Registered StreamMqListener: topic={}, group={}, ackMode={}",
-            annotation.topic(), annotation.consumerGroup(), annotation.acknowledgeMode());
+        LOG.info("Registered StreamMqListener: topic={}, group={}, ackMode={}, bodyType={}",
+            annotation.topic(), annotation.consumerGroup(), annotation.acknowledgeMode(), bodyType);
     }
 
     @Override
@@ -186,15 +209,29 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
         Objects.requireNonNull(listener, "listener");
         Objects.requireNonNull(annotation, "annotation");
         checkBeforeStart();
+        Class<?> bodyType = BodyTypeResolver.resolve(listener);
         ListenerRegistration<T> reg = new ListenerRegistration<>(
             ListenerType.MANUAL_ACK, listener, annotation.topic(), annotation.consumerGroup(),
             annotation.consumeMode(), annotation.acknowledgeMode(),
-            annotation.maxReconsumeTimes(), annotation.namespace(),
-            0, annotation.consumeTimeout(), null);
+            annotation.maxReconsumeTimes(),
+            0, annotation.consumeTimeout(), null,
+            annotation.pullBatchSize(),
+            annotation.consumeTimeout(),
+            annotation.pullInterval(),
+            annotation.selectorExpression(),
+            annotation.serializer(),
+            annotation.retryPolicy(),
+            annotation.messageConverter(),
+            annotation.rebalanceStrategy(),
+            annotation.suspendCurrentQueueTimeMillis(),
+            annotation.streamMaxLen(),
+            annotation.enableMsgTrace(),
+            false, null, bodyType);
+        reg.setNamespace(annotation.namespace());
         reg.resolveNamespace(defaultNamespace);
         registrations.put(reg.key(), reg);
-        LOG.info("Registered StreamMqAckListener: topic={}, group={}, ackMode={}",
-            annotation.topic(), annotation.consumerGroup(), annotation.acknowledgeMode());
+        LOG.info("Registered StreamMqAckListener: topic={}, group={}, ackMode={}, bodyType={}",
+            annotation.topic(), annotation.consumerGroup(), annotation.acknowledgeMode(), bodyType);
     }
 
     @Override
@@ -208,24 +245,86 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
         // 为每个 shard 创建分布式锁，保证同一 shardingKey 的消息顺序消费
         RLock[] shardLocks = createShardLocks(defaultNamespace, annotation.topic(),
             annotation.consumerGroup(), annotation.namespace(), shardCount);
+        Class<?> bodyType = BodyTypeResolver.resolve(listener);
         ListenerRegistration<T> reg = new ListenerRegistration<>(
             ListenerType.ORDERLY, listener, annotation.topic(), annotation.consumerGroup(),
             annotation.consumeMode(), annotation.acknowledgeMode(),
-            annotation.maxReconsumeTimes(), annotation.namespace(),
-            shardCount, consumeTimeoutMillis, shardLocks);
+            annotation.maxReconsumeTimes(),
+            shardCount, consumeTimeoutMillis, shardLocks,
+            annotation.pullBatchSize(),
+            annotation.consumeTimeout(),
+            annotation.pullInterval(),
+            annotation.selectorExpression(),
+            annotation.serializer(),
+            annotation.retryPolicy(),
+            annotation.messageConverter(),
+            annotation.rebalanceStrategy(),
+            annotation.suspendCurrentQueueTimeMillis(),
+            annotation.streamMaxLen(),
+            annotation.enableMsgTrace(),
+            false, null, bodyType);
+        reg.setNamespace(annotation.namespace());
         reg.resolveNamespace(defaultNamespace);
         registrations.put(reg.key(), reg);
-        LOG.info("Registered StreamMqOrderlyListener: topic={}, group={}, shardCount={}",
-            annotation.topic(), annotation.consumerGroup(), annotation.shardCount());
+        LOG.info("Registered StreamMqOrderlyListener: topic={}, group={}, shardCount={}, bodyType={}",
+            annotation.topic(), annotation.consumerGroup(), annotation.shardCount(), bodyType);
     }
 
     @Override
     public Collection<ListenerMetadata> getListeners() {
         List<ListenerMetadata> list = new ArrayList<>(registrations.size());
         for (ListenerRegistration<?> reg : registrations.values()) {
-            list.add(new ListenerMetadata(reg.topic, reg.group, reg.listener.getClass(), Object.class));
+            list.add(new ListenerMetadata(reg.topic, reg.group, reg.listener.getClass(),
+                reg.targetBodyType != null ? reg.targetBodyType : Object.class));
         }
         return Collections.unmodifiableList(list);
+    }
+
+    /**
+     * 注册 DLQ 消费者。
+     *
+     * <p>DLQ 消费者从死信队列 Stream（{@code streammq:{ns}:dlq:{topic}:{consumerGroup}}）消费消息，
+     * 使用独立的消费者组名（默认 {@code dlq-consumer-{consumerGroup}}），不影响原消费者。
+     *
+     * <p>DLQ 消费者消费失败后直接 ACK 丢弃消息，不再进入重试/DLQ 循环，避免死信消息无限循环。
+     *
+     * @param listener DLQ 消息处理器（实现 {@link io.github.streammq.core.listener.StreamMqListener}）
+     * @param annotation @StreamMqDlqListener 注解实例
+     * @param <T> body 类型
+     */
+    public <T> void registerDlqListener(io.github.streammq.core.listener.StreamMqListener<T> listener,
+                                         StreamMqDlqListener annotation) {
+        Objects.requireNonNull(listener, "listener");
+        Objects.requireNonNull(annotation, "annotation");
+        checkBeforeStart();
+        String originalTopic = annotation.topic();
+        String originalGroup = annotation.consumerGroup();
+        String dlqConsumerGroup = annotation.dlqConsumerGroup() == null || annotation.dlqConsumerGroup().isEmpty()
+            ? "dlq-consumer-" + originalGroup
+            : annotation.dlqConsumerGroup();
+        Class<?> bodyType = BodyTypeResolver.resolve(listener);
+        ListenerRegistration<T> reg = new ListenerRegistration<>(
+            ListenerType.AUTO_ACK, listener, originalTopic, dlqConsumerGroup,
+            io.github.streammq.core.enums.ConsumeMode.CLUSTERING, annotation.acknowledgeMode(),
+            annotation.maxReconsumeTimes(),
+            0, annotation.consumeTimeout(), null,
+            annotation.pullBatchSize(),
+            annotation.consumeTimeout(),
+            0L,
+            "*",
+            annotation.serializer(),
+            io.github.streammq.core.spi.RetryPolicy.class,
+            annotation.messageConverter(),
+            io.github.streammq.core.spi.RebalanceStrategy.class,
+            StreamMqConstants.DEFAULT_SUSPEND_CURRENT_QUEUE_TIME_MS,
+            0,
+            false,
+            true, originalGroup, bodyType);
+        reg.setNamespace(annotation.namespace());
+        reg.resolveNamespace(defaultNamespace);
+        registrations.put(reg.key(), reg);
+        LOG.info("Registered StreamMqDlqListener: topic={}, originalGroup={}, dlqConsumerGroup={}, bodyType={}",
+            originalTopic, originalGroup, dlqConsumerGroup, bodyType);
     }
 
     /**
@@ -237,10 +336,16 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
      */
     public void registerRetryTargets(RetryScheduler scheduler) {
         Objects.requireNonNull(scheduler, "scheduler");
+        int count = 0;
         for (ListenerRegistration<?> reg : registrations.values()) {
-            scheduler.registerRetryTarget(reg.topic, reg.group, reg.maxReconsumeTimes);
+            // DLQ 消费者不注册重试目标：DLQ 消费失败直接丢弃，不进入重试循环
+            if (!reg.dlqMode) {
+                scheduler.registerRetryTarget(reg.topic, reg.group, reg.maxReconsumeTimes);
+                count++;
+            }
         }
-        LOG.info("Registered {} retry targets to RetryScheduler", registrations.size());
+        LOG.info("Registered {} retry targets to RetryScheduler ({} DLQ listeners skipped)",
+            count, registrations.size() - count);
     }
 
     // ===================== 生命周期方法 =====================
@@ -322,7 +427,7 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
         }
     }
 
-    @SuppressWarnings({"rawtypes", "unchecked"})
+    @SuppressWarnings({"rawtypes"})
     private void consumeLoop(ListenerRegistration reg) {
         StreamMqConsumer consumer;
         try {
@@ -341,8 +446,13 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
                     continue;
                 }
                 try {
-                    List<Message<?>> messages = consumer.pullBlock(DEFAULT_BATCH_SIZE, PULL_BLOCK_TIMEOUT);
+                    List<Message<?>> messages = consumer.pullBlock(reg.pullBatchSize,
+                        Duration.ofMillis(reg.pullBlockTimeoutMillis));
                     if (messages == null || messages.isEmpty()) {
+                        // 拉取间隔（毫秒，0=不间隔）：仅在空批次时休眠，避免空转占用 CPU
+                        if (reg.pullIntervalMillis > 0) {
+                            sleepQuietly(reg.pullIntervalMillis);
+                        }
                         continue;
                     }
                     for (Message<?> message : messages) {
@@ -367,11 +477,16 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
     }
 
     private StreamMqConsumer createConsumerFor(ListenerRegistration<?> reg) {
-        Map<String, Object> props = new HashMap<>(4);
-        props.put("topic", reg.topic);
-        props.put("consumer-group", reg.group);
-        props.put("namespace", reg.namespace);
-        return consumerFactory.createConsumer(props);
+        ConsumerConfig config = ConsumerConfig.builder()
+            .topic(reg.topic)
+            .consumerGroup(reg.group)
+            .consumerName(reg.group + "-" + UUID.randomUUID().toString().substring(0, 8))
+            .namespace(reg.namespace)
+            .dlqMode(reg.dlqMode)
+            .dlqOriginalGroup(reg.dlqOriginalGroup)
+            .targetBodyType(reg.targetBodyType)
+            .build();
+        return consumerFactory.createConsumer(config);
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -415,6 +530,7 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
             } catch (Exception ex) {
                 LOG.warn("Listener onMessage threw exception (topic={}, group={}, messageId={}): {}",
                     reg.topic, reg.group, message.getMessageId(), ex.getMessage(), ex);
+                notifyConsumerException(message, ex, InvokeTiming.EXECUTING);
                 finalAction = Action.RECONSUME_LATER;
                 handleAction(finalAction, message, reg, consumer);
             }
@@ -534,6 +650,7 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
             } catch (RuntimeException ex) {
                 LOG.warn("ConsumerInterceptor {} beforeConsume threw exception: {}",
                     interceptor.name(), ex.getMessage(), ex);
+                notifyConsumerException(message, ex, InvokeTiming.BEFORE);
             }
         }
         return true;
@@ -554,6 +671,26 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
             } catch (RuntimeException ex) {
                 LOG.warn("ConsumerInterceptor {} afterConsume threw exception: {}",
                     interceptor.name(), ex.getMessage(), ex);
+                notifyConsumerException(message, ex, InvokeTiming.AFTER);
+            }
+        }
+    }
+
+    /**
+     * 通知所有消费者拦截器发生异常（按 order() 升序）。
+     *
+     * <p>拦截器自身的 onException 异常被忽略，不影响主流程。
+     *
+     * @param message 消息
+     * @param ex 异常
+     * @param timing 触发时机（BEFORE/EXECUTING/AFTER）
+     */
+    private void notifyConsumerException(Message<?> message, Exception ex, InvokeTiming timing) {
+        for (ConsumerInterceptor interceptor : consumerInterceptors) {
+            try {
+                interceptor.onException(message, ex, timing);
+            } catch (Exception ignored) {
+                // 拦截器异常不应影响主流程
             }
         }
     }
@@ -572,7 +709,20 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
                     LOG.warn("ACK failed (messageId={}): {}", messageId, ex.getMessage(), ex);
                 }
             }
-            case RECONSUME_LATER, ROLLBACK -> handleReconsumeLater(message, reg, consumer, messageId);
+            case RECONSUME_LATER, ROLLBACK -> {
+                if (reg.dlqMode) {
+                    // DLQ 模式：消费失败直接 ACK 丢弃，不再进入重试/DLQ 循环，避免死信消息无限循环
+                    LOG.warn("DLQ message consume failed, dropping (topic={}, group={}, messageId={})",
+                        reg.topic, reg.group, messageId);
+                    try {
+                        consumer.ack(messageId);
+                    } catch (RuntimeException ex) {
+                        LOG.warn("ACK failed for DLQ message (messageId={}): {}", messageId, ex.getMessage(), ex);
+                    }
+                } else {
+                    handleReconsumeLater(message, reg, consumer, messageId);
+                }
+            }
             case SUSPEND_CURRENT_QUEUE_A_MOMENT -> {
                 // 顺序消费暂停：简化为不 ACK，消息留在 PEL 中等待下次 XAUTOCLAIM
                 LOG.debug("Suspend current shard (messageId={}): message stays in PEL", messageId);
@@ -713,6 +863,7 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
     }
 
     /** Listener 注册信息 */
+    @RequiredArgsConstructor
     private static final class ListenerRegistration<T> {
         final ListenerType type;
         final Object listener;
@@ -727,24 +878,36 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
         final long consumeTimeoutMillis;
         /** 顺序消费 shard 级分布式锁数组（仅 ORDERLY 类型非 null） */
         final RLock[] shardLocks;
+        /** 单次拉取批量大小 */
+        final int pullBatchSize;
+        /** 拉取阻塞超时（毫秒） */
+        final long pullBlockTimeoutMillis;
+        /** 拉取间隔（毫秒，0=不间隔） */
+        final long pullIntervalMillis;
+        /** Tag 过滤表达式 */
+        final String selectorExpression;
+        /** 序列化器类（null=使用全局） */
+        final Class<?> serializer;
+        /** 重试策略类（null=使用全局） */
+        final Class<?> retryPolicy;
+        /** 消息转换器类（null=使用全局） */
+        final Class<?> messageConverter;
+        /** 重平衡策略类（null=使用全局） */
+        final Class<?> rebalanceStrategy;
+        /** 顺序消费挂起时长（毫秒） */
+        final long suspendCurrentQueueTimeMillis;
+        /** Stream 最大长度（0=使用全局配置） */
+        final int streamMaxLen;
+        /** 是否启用消息追踪 */
+        final boolean enableMsgTrace;
+        /** DLQ 模式标志：true=从 DLQ Stream 消费死信消息 */
+        final boolean dlqMode;
+        /** DLQ 原始消费者组（仅 dlqMode=true 时使用，用于构造 DLQ Stream Key） */
+        final String dlqOriginalGroup;
+        /** 目标 body 类型（解析自 Listener 泛型 T，跨平台反序列化回退类型） */
+        final Class<?> targetBodyType;
+        @Setter(AccessLevel.PACKAGE)
         String namespace;
-
-        ListenerRegistration(ListenerType type, Object listener, String topic, String group,
-                             io.github.streammq.core.enums.ConsumeMode consumeMode,
-                             AcknowledgeMode ackMode, int maxReconsumeTimes, String namespace,
-                             int shardCount, long consumeTimeoutMillis, RLock[] shardLocks) {
-            this.type = type;
-            this.listener = listener;
-            this.topic = topic;
-            this.group = group;
-            this.consumeMode = consumeMode;
-            this.ackMode = ackMode;
-            this.maxReconsumeTimes = maxReconsumeTimes;
-            this.namespace = namespace;
-            this.shardCount = shardCount;
-            this.consumeTimeoutMillis = consumeTimeoutMillis;
-            this.shardLocks = shardLocks;
-        }
 
         void resolveNamespace(String defaultNs) {
             if (namespace == null || namespace.isEmpty()) {
@@ -753,7 +916,7 @@ public class DefaultStreamMqListenerContainer implements StreamMqListenerContain
         }
 
         String key() {
-            return topic + ":" + group;
+            return (dlqMode ? "dlq:" : "") + topic + ":" + group;
         }
     }
 

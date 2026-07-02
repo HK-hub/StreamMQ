@@ -5,6 +5,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
 
+import lombok.Getter;
+import lombok.NonNull;
+
 /**
  * 事务上下文，封装事务消息执行过程中的运行时信息。
  *
@@ -13,12 +16,15 @@ import java.util.Objects;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
+@Getter
 public final class TransactionContext {
 
     /** 事务 ID（与半消息 ID 关联） */
+    @NonNull
     private final String transactionId;
 
     /** 事务组名 */
+    @NonNull
     private final String transactionGroup;
 
     /** 生产者组名 */
@@ -48,31 +54,6 @@ public final class TransactionContext {
         this.extAttributes = extAttributes == null
             ? Collections.emptyMap()
             : Collections.unmodifiableMap(new HashMap<>(extAttributes));
-    }
-
-    public String getTransactionId() {
-        return transactionId;
-    }
-
-    public String getTransactionGroup() {
-        return transactionGroup;
-    }
-
-    public String getProducerGroup() {
-        return producerGroup;
-    }
-
-    public long getBornTimestamp() {
-        return bornTimestamp;
-    }
-
-    /**
-     * 返回扩展属性（不可修改）。
-     *
-     * @return 扩展属性
-     */
-    public Map<String, String> getExtAttributes() {
-        return extAttributes;
     }
 
     /**

@@ -1,11 +1,14 @@
 package io.github.streammq.core.exception;
 
+import lombok.Getter;
+
 /**
  * 事务消息异常：半消息发送失败、本地事务执行失败、事务回查失败等。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
+@Getter
 public class TransactionException extends StreamMqException {
 
     private static final long serialVersionUID = 1L;
@@ -41,23 +44,5 @@ public class TransactionException extends StreamMqException {
         super(message, cause);
         this.transactionId = transactionId;
         this.transactionGroup = transactionGroup;
-    }
-
-    /**
-     * 返回事务 ID。
-     *
-     * @return 事务 ID
-     */
-    public String getTransactionId() {
-        return transactionId;
-    }
-
-    /**
-     * 返回事务组名。
-     *
-     * @return 事务组名
-     */
-    public String getTransactionGroup() {
-        return transactionGroup;
     }
 }

@@ -1,5 +1,6 @@
 package io.github.streammq.core.annotation;
 
+import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.MessageSerializer;
 
 import java.lang.annotation.Documented;
@@ -89,4 +90,22 @@ public @interface StreamMqProducer {
      * @return true 启用追踪
      */
     boolean enableMsgTrace() default false;
+
+    /**
+     * Stream 最大长度（0=使用全局配置）。
+     *
+     * @return Stream 最大长度
+     */
+    int streamMaxLen() default 0;
+
+    /**
+     * 每个生产者专属消息转换器（默认表示使用全局）。
+     *
+     * <p>注：使用 raw type {@code Class<? extends MessageConverter>}，因为
+     * {@code MessageConverter.class} 返回的是 raw type，无法直接用于泛型
+     * {@code Class<? extends MessageConverter<?>>}。
+     *
+     * @return 消息转换器类
+     */
+    Class<? extends MessageConverter> messageConverter() default MessageConverter.class;
 }

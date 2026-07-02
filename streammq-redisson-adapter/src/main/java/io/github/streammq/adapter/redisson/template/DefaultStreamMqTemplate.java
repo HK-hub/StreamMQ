@@ -1,6 +1,7 @@
 package io.github.streammq.adapter.redisson.template;
 
 import io.github.streammq.adapter.redisson.support.MdcKeys;
+import io.github.streammq.core.enums.InvokeTiming;
 import io.github.streammq.core.exception.StreamMqException;
 import io.github.streammq.core.exception.TransactionException;
 import io.github.streammq.core.message.BatchMessage;
@@ -8,6 +9,7 @@ import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.message.SendStatus;
+import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.SendCallback;
 import io.github.streammq.core.producer.StreamMqProducer;
 import io.github.streammq.core.producer.StreamMqProducerFactory;
@@ -23,7 +25,6 @@ import org.slf4j.MDC;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -57,7 +58,7 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
     private final String defaultGroup;
     private final MessageConverter messageConverter;
     private final List<ProducerInterceptor> interceptors = new CopyOnWriteArrayList<>();
-    private final Map<String, Object> defaultProperties;
+    private final ProducerConfig defaultConfig;
     private final String transactionGroup;
 
     /**
@@ -71,7 +72,7 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
                                    String defaultGroup,
                                    MessageConverter messageConverter) {
         this(producerFactory, defaultGroup, messageConverter,
-            Collections.emptyMap(), null);
+            ProducerConfig.builder().group(defaultGroup).build(), null);
     }
 
     /**
@@ -80,18 +81,18 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
      * @param producerFactory 生产者工厂
      * @param defaultGroup 默认生产组名
      * @param messageConverter 消息转换器
-     * @param defaultProperties 默认属性（用于创建 Producer）
+     * @param defaultConfig 默认生产者配置（用于创建 Producer）
      * @param transactionGroup 事务组名（用于事务消息），可为 null
      */
     public DefaultStreamMqTemplate(StreamMqProducerFactory producerFactory,
                                    String defaultGroup,
                                    MessageConverter messageConverter,
-                                   Map<String, Object> defaultProperties,
+                                   ProducerConfig defaultConfig,
                                    String transactionGroup) {
         this.producerFactory = Objects.requireNonNull(producerFactory, "producerFactory");
         this.defaultGroup = Objects.requireNonNull(defaultGroup, "defaultGroup");
         this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
-        this.defaultProperties = defaultProperties == null ? Collections.emptyMap() : defaultProperties;
+        this.defaultConfig = Objects.requireNonNull(defaultConfig, "defaultConfig");
         this.transactionGroup = transactionGroup;
     }
 
@@ -139,8 +140,12 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
                     return result;
                 } catch (StreamMqException ex) {
                     lastError = ex;
+                    notifyProducerException(message, ex, InvokeTiming.EXECUTING);
                     LOG.warn("syncSend attempt {}/{} failed for topic {}: {}",
                         attempt + 1, retryTimes + 1, message.getTopic(), ex.getMessage(), ex);
+                } catch (RuntimeException ex) {
+                    notifyProducerException(message, ex, InvokeTiming.EXECUTING);
+                    throw ex;
                 }
             }
             applyInterceptorsAfter(message, buildFailedResult(message, lastError));
@@ -167,6 +172,10 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
             return producer.asyncSend(message).whenComplete((result, ex) -> {
                 if (ex == null) {
                     applyInterceptorsAfter(message, result);
+                } else {
+                    Exception e = ex instanceof Exception ? (Exception) ex
+                        : new StreamMqException("async send failed", ex);
+                    notifyProducerException(message, e, InvokeTiming.EXECUTING);
                 }
             });
         } finally {
@@ -197,6 +206,9 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
                     applyInterceptorsAfter(message, result);
                     callback.onSuccess(result);
                 } else {
+                    Exception e = ex instanceof Exception ? (Exception) ex
+                        : new StreamMqException("async send failed", ex);
+                    notifyProducerException(message, e, InvokeTiming.EXECUTING);
                     callback.onException(ex instanceof RuntimeException re ? re : new StreamMqException("async send failed", ex));
                 }
             });
@@ -214,7 +226,12 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
         try {
             applyInterceptorsBefore(message);
             StreamMqProducer producer = resolveProducer(message);
-            producer.sendOneway(message);
+            try {
+                producer.sendOneway(message);
+            } catch (RuntimeException ex) {
+                notifyProducerException(message, ex, InvokeTiming.EXECUTING);
+                throw ex;
+            }
         } finally {
             // 清理 MDC 结构化日志上下文
             clearProducerMdc();
@@ -236,7 +253,15 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
         }
 
         StreamMqProducer producer = resolveProducer(batch.getTopic());
-        List<SendResult> results = producer.syncSendBatch(batch.getMessages());
+        List<SendResult> results;
+        try {
+            results = producer.syncSendBatch(batch.getMessages());
+        } catch (RuntimeException ex) {
+            for (Message<T> msg : batch.getMessages()) {
+                notifyProducerException(msg, ex, InvokeTiming.EXECUTING);
+            }
+            throw ex;
+        }
 
         List<SendResult> finalResults = new ArrayList<>(results.size());
         for (int i = 0; i < results.size(); i++) {
@@ -367,6 +392,7 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
             } catch (RuntimeException ex) {
                 LOG.warn("Interceptor {} beforeSend threw exception: {}",
                     interceptor.name(), ex.getMessage(), ex);
+                notifyProducerException(message, ex, InvokeTiming.BEFORE);
                 return false;
             }
         }
@@ -386,6 +412,26 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
             } catch (RuntimeException ex) {
                 LOG.warn("Interceptor {} afterSend threw exception: {}",
                     interceptor.name(), ex.getMessage(), ex);
+                notifyProducerException(message, ex, InvokeTiming.AFTER);
+            }
+        }
+    }
+
+    /**
+     * 通知所有生产者拦截器发生异常（按 order() 升序）。
+     *
+     * <p>拦截器自身的 onException 异常被忽略，不影响主流程。
+     *
+     * @param message 消息
+     * @param ex 异常
+     * @param timing 触发时机（BEFORE/EXECUTING/AFTER）
+     */
+    private void notifyProducerException(Message<?> message, Exception ex, InvokeTiming timing) {
+        for (ProducerInterceptor interceptor : interceptors) {
+            try {
+                interceptor.onException(message, ex, timing);
+            } catch (Exception ignored) {
+                // 拦截器异常不应影响主流程
             }
         }
     }
@@ -425,9 +471,7 @@ public class DefaultStreamMqTemplate<T> extends StreamMqTemplate<T> {
      * @return Producer 实例
      */
     private StreamMqProducer resolveProducer(String topic) {
-        Map<String, Object> props = new java.util.HashMap<>(defaultProperties);
-        props.putIfAbsent("group", defaultGroup);
-        return producerFactory.createProducer(props);
+        return producerFactory.createProducer(defaultConfig);
     }
 
     /**

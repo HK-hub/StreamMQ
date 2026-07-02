@@ -52,6 +52,13 @@ public @interface StreamMqTransactionListener {
     long checkTimeout() default 60000L;
 
     /**
+     * 回查间隔（毫秒），默认 {@link StreamMqConstants#DEFAULT_CHECK_INTERVAL_MS}。
+     *
+     * @return 回查间隔毫秒数
+     */
+    long checkIntervalMillis() default StreamMqConstants.DEFAULT_CHECK_INTERVAL_MS;
+
+    /**
      * 最大回查次数，默认 {@link StreamMqConstants#DEFAULT_MAX_CHECK_TIMES}。
      *
      * @return 最大回查次数
