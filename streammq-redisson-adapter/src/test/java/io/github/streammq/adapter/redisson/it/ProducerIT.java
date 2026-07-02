@@ -1,23 +1,18 @@
 package io.github.streammq.adapter.redisson.it;
 
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.exception.StreamMqBrokerException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.message.SendResult;
-import io.github.streammq.core.message.SendStatus;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.redisson.Redisson;
-import org.redisson.api.RMap;
-import org.redisson.api.RScoredSortedSet;
-import org.redisson.api.RStream;
-import org.redisson.api.RedissonClient;
-import org.redisson.api.StreamMessageId;
+import org.redisson.api.*;
 import org.redisson.config.Config;
 
 import java.util.ArrayList;
@@ -25,7 +20,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -69,7 +63,7 @@ class ProducerIT extends AbstractRedisIT {
         assertThat(result.getTag()).isEqualTo("tag1");
         assertThat(result.isSuccess()).isTrue();
 
-        RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, TOPIC));
+        RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, TOPIC));
         assertThat(stream.size()).isEqualTo(1L);
     }
 
@@ -87,7 +81,7 @@ class ProducerIT extends AbstractRedisIT {
         SendResult result = producer.syncSend(msg);
         assertThat(result.isSuccess()).isTrue();
 
-        RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, TOPIC));
+        RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, TOPIC));
         Map<StreamMessageId, Map<String, String>> range = stream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
         assertThat(range).hasSize(1);
         Map<String, String> fields = range.values().iterator().next();
@@ -110,7 +104,7 @@ class ProducerIT extends AbstractRedisIT {
         assertThat(result.getMessageId()).isNotNull();
         assertThat(result.getTopic()).isEqualTo(TOPIC);
 
-        RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, TOPIC));
+        RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, TOPIC));
         assertThat(stream.size()).isEqualTo(1L);
     }
 
@@ -143,7 +137,7 @@ class ProducerIT extends AbstractRedisIT {
         List<SendResult> results = producer.syncSendBatch(messages);
 
         assertThat(results).hasSize(3);
-        RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, TOPIC));
+        RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, TOPIC));
         assertThat(stream.size()).isEqualTo(3L);
     }
 
@@ -188,12 +182,12 @@ class ProducerIT extends AbstractRedisIT {
         assertThat(result).isNotNull();
         assertThat(result.getMessageId()).isNotNull();
 
-        String zsetKey = StreamMqKeys.delayZSet(namespace, DelayLevel.SECOND_1.name());
+        String zsetKey = StreamMQKeys.delayZSet(namespace, DelayLevel.SECOND_1.name());
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
         assertThat(zset.size()).isEqualTo(1);
 
         String msgId = zset.iterator().next();
-        String payloadKey = StreamMqKeys.delayPayloadHash(namespace, msgId);
+        String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
         RMap<String, String> payload = redisson.getMap(payloadKey);
         assertThat(payload).isNotEmpty();
         assertThat(payload).containsEntry("targetTopic", TOPIC);
@@ -217,9 +211,9 @@ class ProducerIT extends AbstractRedisIT {
         producer.syncSend(msg2);
 
         RScoredSortedSet<String> zset1 =
-            redisson.getScoredSortedSet(StreamMqKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
+            redisson.getScoredSortedSet(StreamMQKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
         RScoredSortedSet<String> zset5 =
-            redisson.getScoredSortedSet(StreamMqKeys.delayZSet(namespace, DelayLevel.SECOND_5.name()));
+            redisson.getScoredSortedSet(StreamMQKeys.delayZSet(namespace, DelayLevel.SECOND_5.name()));
         assertThat(zset1.size()).isEqualTo(1);
         assertThat(zset5.size()).isEqualTo(1);
     }
@@ -232,7 +226,7 @@ class ProducerIT extends AbstractRedisIT {
         producer.sendOneway(msg);
 
         await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
-            RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, TOPIC));
+            RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, TOPIC));
             assertThat(stream.size()).isEqualTo(1L);
         });
     }

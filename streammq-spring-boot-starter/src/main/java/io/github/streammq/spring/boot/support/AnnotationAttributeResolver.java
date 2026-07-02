@@ -9,7 +9,7 @@ import org.springframework.core.env.Environment;
 /**
  * 注解属性解析器，支持 ${...} 属性占位符和 #{...} SpEL 表达式。
  *
- * <p>用于解析 @StreamMqListener、@StreamMqProducer 等注解中的
+ * <p>用于解析 @StreamMqConsumer、@StreamMqProducer 等注解中的
  * topic、consumerGroup、group、namespace、selectorExpression 等字符串属性，
  * 使其支持通过配置文件动态指定。
  */

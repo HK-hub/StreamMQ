@@ -1,11 +1,11 @@
 package io.github.streammq.adapter.redisson.it;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
-import io.github.streammq.adapter.redisson.consumer.RedissonStreamConsumer;
+import io.github.streammq.adapter.redisson.listener.RedissonStreamListener;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.adapter.redisson.serializer.JdkSerializer;
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.spi.MessageConverter;
@@ -90,8 +90,8 @@ class SerializerSwitchIT extends AbstractRedisIT {
         // 基类已使用 JacksonJsonSerializer 构建 converter,这里直接复用
         RedissonStreamProducer producer =
             new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
-        RedissonStreamConsumer consumer =
-            new RedissonStreamConsumer(redisson, namespace, topic, group, "c1", converter);
+        RedissonStreamListener consumer =
+            new RedissonStreamListener(redisson, namespace, topic, group, "c1", converter);
         createConsumerGroup(topic, group);
 
         try {
@@ -126,8 +126,8 @@ class SerializerSwitchIT extends AbstractRedisIT {
 
         RedissonStreamProducer producer =
             new RedissonStreamProducer(redisson, namespace, group + "-p", jdkConverter, 3000L, 0);
-        RedissonStreamConsumer consumer =
-            new RedissonStreamConsumer(redisson, namespace, topic, group, "c1", jdkConverter);
+        RedissonStreamListener consumer =
+            new RedissonStreamListener(redisson, namespace, topic, group, "c1", jdkConverter);
         createConsumerGroup(topic, group);
 
         try {
@@ -175,9 +175,9 @@ class SerializerSwitchIT extends AbstractRedisIT {
 
             // 读取两个 Stream 的 entry 字段,对比 body 字段格式
             RStream<String, String> jacksonStream =
-                redisson.getStream(StreamMqKeys.topicStream(namespace, topicJackson));
+                redisson.getStream(StreamMQKeys.topicStream(namespace, topicJackson));
             RStream<String, String> jdkStream =
-                redisson.getStream(StreamMqKeys.topicStream(namespace, topicJdk));
+                redisson.getStream(StreamMQKeys.topicStream(namespace, topicJdk));
 
             Map<StreamMessageId, Map<String, String>> jacksonRange =
                 jacksonStream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
@@ -201,10 +201,10 @@ class SerializerSwitchIT extends AbstractRedisIT {
             createConsumerGroup(topicJackson, group + "-jc");
             createConsumerGroup(topicJdk, group + "-jc");
 
-            RedissonStreamConsumer jacksonConsumer =
-                new RedissonStreamConsumer(redisson, namespace, topicJackson, group + "-jc", "c1", jacksonConverter);
-            RedissonStreamConsumer jdkConsumer =
-                new RedissonStreamConsumer(redisson, namespace, topicJdk, group + "-jc", "c1", jdkConverter);
+            RedissonStreamListener jacksonConsumer =
+                new RedissonStreamListener(redisson, namespace, topicJackson, group + "-jc", "c1", jacksonConverter);
+            RedissonStreamListener jdkConsumer =
+                new RedissonStreamListener(redisson, namespace, topicJdk, group + "-jc", "c1", jdkConverter);
             try {
                 List<Message<?>> jacksonMessages = jacksonConsumer.pull(1);
                 List<Message<?>> jdkMessages = jdkConsumer.pull(1);
@@ -231,8 +231,8 @@ class SerializerSwitchIT extends AbstractRedisIT {
 
         RedissonStreamProducer producer =
             new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
-        RedissonStreamConsumer consumer =
-            new RedissonStreamConsumer(redisson, namespace, topic, group, "c1", converter);
+        RedissonStreamListener consumer =
+            new RedissonStreamListener(redisson, namespace, topic, group, "c1", converter);
         createConsumerGroup(topic, group);
 
         try {
@@ -264,8 +264,8 @@ class SerializerSwitchIT extends AbstractRedisIT {
 
         RedissonStreamProducer producer =
             new RedissonStreamProducer(redisson, namespace, group + "-p", jdkConverter, 3000L, 0);
-        RedissonStreamConsumer consumer =
-            new RedissonStreamConsumer(redisson, namespace, topic, group, "c1", jdkConverter);
+        RedissonStreamListener consumer =
+            new RedissonStreamListener(redisson, namespace, topic, group, "c1", jdkConverter);
         createConsumerGroup(topic, group);
 
         try {

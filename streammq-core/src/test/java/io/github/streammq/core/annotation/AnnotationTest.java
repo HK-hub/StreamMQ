@@ -14,28 +14,28 @@ import java.lang.reflect.Method;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 注解默认值测试，覆盖 @StreamMqListener / @StreamMqOrderlyListener / @StreamMqProducer /
- * @StreamMqTransactionListener / @EnableStreamMq 的默认值与元注解。
+ * 注解默认值测试，覆盖 @StreamMqConsumer / @StreamMqOrderlyConsumer / @StreamMqProducer /
+ * @StreamMqTransactionConsumer / @EnableStreamMq 的默认值与元注解。
  */
 @DisplayName("StreamMQ 注解默认值测试")
 class AnnotationTest {
 
-    @StreamMqListener(topic = "t", consumerGroup = "g")
+    @StreamMQConsumer(topic = "t", consumerGroup = "g")
     static class ListenerSample {
     }
 
-    @StreamMqOrderlyListener(topic = "t", consumerGroup = "g")
+    @StreamMQOrderlyConsumer(topic = "t", consumerGroup = "g")
     static class OrderlyListenerSample {
     }
 
-    @StreamMqProducer(group = "g")
+    @StreamMQProducer(group = "g")
     transient Object producerField;
 
-    @StreamMqTransactionListener(transactionGroup = "tg")
+    @StreamMQTransactionConsumer(transactionGroup = "tg")
     static class TxListenerSample {
     }
 
-    @EnableStreamMq
+    @EnableStreamMQ
     static class EnableSample {
     }
 
@@ -45,13 +45,13 @@ class AnnotationTest {
     }
 
     @Nested
-    @DisplayName("@StreamMqListener 默认值")
-    class StreamMqListenerDefaults {
+    @DisplayName("@StreamMqConsumer 默认值")
+    class StreamMQConsumerDefaults {
 
         @Test
         @DisplayName("consumeMode 默认 CLUSTERING")
         void consumeModeDefault() throws Exception {
-            StreamMqListener ann = ListenerSample.class.getAnnotation(StreamMqListener.class);
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.consumeMode()).isEqualTo(ConsumeMode.CLUSTERING);
             assertThat(defaultValue(ann, "consumeMode")).isEqualTo(ConsumeMode.CLUSTERING);
         }
@@ -59,21 +59,21 @@ class AnnotationTest {
         @Test
         @DisplayName("messageModel 默认 CONCURRENT")
         void messageModelDefault() throws Exception {
-            StreamMqListener ann = ListenerSample.class.getAnnotation(StreamMqListener.class);
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.messageModel()).isEqualTo(MessageModel.CONCURRENT);
         }
 
         @Test
         @DisplayName("acknowledgeMode 默认 AUTO")
         void acknowledgeModeDefault() {
-            StreamMqListener ann = ListenerSample.class.getAnnotation(StreamMqListener.class);
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.acknowledgeMode()).isEqualTo(AcknowledgeMode.AUTO);
         }
 
         @Test
         @DisplayName("consumeThreadMin 默认 1，consumeThreadMax 默认 64")
         void threadDefaults() {
-            StreamMqListener ann = ListenerSample.class.getAnnotation(StreamMqListener.class);
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.consumeThreadMin()).isEqualTo(1);
             assertThat(ann.consumeThreadMax()).isEqualTo(64);
         }
@@ -81,35 +81,35 @@ class AnnotationTest {
         @Test
         @DisplayName("maxReconsumeTimes 默认 16")
         void maxReconsumeTimesDefault() {
-            StreamMqListener ann = ListenerSample.class.getAnnotation(StreamMqListener.class);
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.maxReconsumeTimes()).isEqualTo(16);
         }
 
         @Test
         @DisplayName("consumeTimeout 默认 30000L")
         void consumeTimeoutDefault() {
-            StreamMqListener ann = ListenerSample.class.getAnnotation(StreamMqListener.class);
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.consumeTimeout()).isEqualTo(30000L);
         }
 
         @Test
         @DisplayName("selectorExpression 默认 *")
         void selectorExpressionDefault() {
-            StreamMqListener ann = ListenerSample.class.getAnnotation(StreamMqListener.class);
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.selectorExpression()).isEqualTo("*");
         }
 
         @Test
         @DisplayName("serializer 默认 MessageSerializer.class")
         void serializerDefault() {
-            StreamMqListener ann = ListenerSample.class.getAnnotation(StreamMqListener.class);
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.serializer()).isEqualTo(MessageSerializer.class);
         }
 
         @Test
         @DisplayName("namespace 默认空字符串，enable 默认 true")
         void namespaceAndEnableDefault() {
-            StreamMqListener ann = ListenerSample.class.getAnnotation(StreamMqListener.class);
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.namespace()).isEmpty();
             assertThat(ann.enable()).isTrue();
         }
@@ -117,48 +117,48 @@ class AnnotationTest {
         @Test
         @DisplayName("topic 与 consumerGroup 必填值正确读取")
         void requiredValues() {
-            StreamMqListener ann = ListenerSample.class.getAnnotation(StreamMqListener.class);
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.topic()).isEqualTo("t");
             assertThat(ann.consumerGroup()).isEqualTo("g");
         }
     }
 
     @Nested
-    @DisplayName("@StreamMqOrderlyListener 默认值")
-    class StreamMqOrderlyListenerDefaults {
+    @DisplayName("@StreamMqOrderlyConsumer 默认值")
+    class StreamMessageOrderlyConsumerDefaults {
 
         @Test
         @DisplayName("selectorExpression 默认 *")
         void selectorExpressionDefault() {
-            StreamMqOrderlyListener ann = OrderlyListenerSample.class.getAnnotation(StreamMqOrderlyListener.class);
+            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
             assertThat(ann.selectorExpression()).isEqualTo("*");
         }
 
         @Test
         @DisplayName("serializer 默认 MessageSerializer.class")
         void serializerDefault() {
-            StreamMqOrderlyListener ann = OrderlyListenerSample.class.getAnnotation(StreamMqOrderlyListener.class);
+            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
             assertThat(ann.serializer()).isEqualTo(MessageSerializer.class);
         }
 
         @Test
         @DisplayName("consumeMode 默认 CLUSTERING")
         void consumeModeDefault() {
-            StreamMqOrderlyListener ann = OrderlyListenerSample.class.getAnnotation(StreamMqOrderlyListener.class);
+            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
             assertThat(ann.consumeMode()).isEqualTo(ConsumeMode.CLUSTERING);
         }
 
         @Test
         @DisplayName("acknowledgeMode 默认 AUTO")
         void acknowledgeModeDefault() {
-            StreamMqOrderlyListener ann = OrderlyListenerSample.class.getAnnotation(StreamMqOrderlyListener.class);
+            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
             assertThat(ann.acknowledgeMode()).isEqualTo(AcknowledgeMode.AUTO);
         }
 
         @Test
         @DisplayName("consumeThreadMin/Max 默认均为 1")
         void threadDefaults() {
-            StreamMqOrderlyListener ann = OrderlyListenerSample.class.getAnnotation(StreamMqOrderlyListener.class);
+            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
             assertThat(ann.consumeThreadMin()).isEqualTo(1);
             assertThat(ann.consumeThreadMax()).isEqualTo(1);
         }
@@ -166,28 +166,28 @@ class AnnotationTest {
         @Test
         @DisplayName("maxReconsumeTimes 默认 Integer.MAX_VALUE")
         void maxReconsumeTimesDefault() {
-            StreamMqOrderlyListener ann = OrderlyListenerSample.class.getAnnotation(StreamMqOrderlyListener.class);
+            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
             assertThat(ann.maxReconsumeTimes()).isEqualTo(Integer.MAX_VALUE);
         }
 
         @Test
         @DisplayName("consumeTimeout 默认 30000L")
         void consumeTimeoutDefault() {
-            StreamMqOrderlyListener ann = OrderlyListenerSample.class.getAnnotation(StreamMqOrderlyListener.class);
+            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
             assertThat(ann.consumeTimeout()).isEqualTo(30000L);
         }
 
         @Test
         @DisplayName("shardCount 默认 4")
         void shardCountDefault() {
-            StreamMqOrderlyListener ann = OrderlyListenerSample.class.getAnnotation(StreamMqOrderlyListener.class);
+            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
             assertThat(ann.shardCount()).isEqualTo(4);
         }
 
         @Test
         @DisplayName("namespace 默认空，enable 默认 true")
         void namespaceAndEnableDefault() {
-            StreamMqOrderlyListener ann = OrderlyListenerSample.class.getAnnotation(StreamMqOrderlyListener.class);
+            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
             assertThat(ann.namespace()).isEmpty();
             assertThat(ann.enable()).isTrue();
         }
@@ -195,66 +195,66 @@ class AnnotationTest {
 
     @Nested
     @DisplayName("@StreamMqProducer 默认值")
-    class StreamMqProducerDefaults {
+    class StreamMQProducerDefaults {
 
         @Test
         @DisplayName("group 必填值正确读取")
         void groupRequired() throws Exception {
-            StreamMqProducer ann = AnnotationTest.class
-                .getDeclaredField("producerField").getAnnotation(StreamMqProducer.class);
+            StreamMQProducer ann = AnnotationTest.class
+                .getDeclaredField("producerField").getAnnotation(StreamMQProducer.class);
             assertThat(ann.group()).isEqualTo("g");
         }
 
         @Test
         @DisplayName("namespace 默认空字符串")
         void namespaceDefault() throws Exception {
-            StreamMqProducer ann = AnnotationTest.class
-                .getDeclaredField("producerField").getAnnotation(StreamMqProducer.class);
+            StreamMQProducer ann = AnnotationTest.class
+                .getDeclaredField("producerField").getAnnotation(StreamMQProducer.class);
             assertThat(ann.namespace()).isEmpty();
         }
 
         @Test
         @DisplayName("serializer 默认 MessageSerializer.class")
         void serializerDefault() throws Exception {
-            StreamMqProducer ann = AnnotationTest.class
-                .getDeclaredField("producerField").getAnnotation(StreamMqProducer.class);
+            StreamMQProducer ann = AnnotationTest.class
+                .getDeclaredField("producerField").getAnnotation(StreamMQProducer.class);
             assertThat(ann.serializer()).isEqualTo(MessageSerializer.class);
         }
 
         @Test
         @DisplayName("sendMessageTimeout 默认 0L")
         void sendMessageTimeoutDefault() throws Exception {
-            StreamMqProducer ann = AnnotationTest.class
-                .getDeclaredField("producerField").getAnnotation(StreamMqProducer.class);
+            StreamMQProducer ann = AnnotationTest.class
+                .getDeclaredField("producerField").getAnnotation(StreamMQProducer.class);
             assertThat(ann.sendMessageTimeout()).isEqualTo(0L);
         }
 
         @Test
         @DisplayName("retryTimes 默认 -1")
         void retryTimesDefault() throws Exception {
-            StreamMqProducer ann = AnnotationTest.class
-                .getDeclaredField("producerField").getAnnotation(StreamMqProducer.class);
+            StreamMQProducer ann = AnnotationTest.class
+                .getDeclaredField("producerField").getAnnotation(StreamMQProducer.class);
             assertThat(ann.retryTimes()).isEqualTo(-1);
         }
     }
 
     @Nested
-    @DisplayName("@StreamMqTransactionListener 默认值")
-    class StreamMqTransactionListenerDefaults {
+    @DisplayName("@StreamMqTransactionConsumer 默认值")
+    class StreamMQTransactionConsumerDefaults {
 
         @Test
         @DisplayName("transactionGroup 必填值正确读取")
         void transactionGroupRequired() {
-            StreamMqTransactionListener ann = TxListenerSample.class
-                .getAnnotation(StreamMqTransactionListener.class);
+            StreamMQTransactionConsumer ann = TxListenerSample.class
+                .getAnnotation(StreamMQTransactionConsumer.class);
             assertThat(ann.transactionGroup()).isEqualTo("tg");
         }
 
         @Test
         @DisplayName("checkTimeout 默认 60000L")
         void checkTimeoutDefault() throws Exception {
-            StreamMqTransactionListener ann = TxListenerSample.class
-                .getAnnotation(StreamMqTransactionListener.class);
+            StreamMQTransactionConsumer ann = TxListenerSample.class
+                .getAnnotation(StreamMQTransactionConsumer.class);
             assertThat(ann.checkTimeout()).isEqualTo(60000L);
             assertThat(defaultValue(ann, "checkTimeout")).isEqualTo(60000L);
         }
@@ -262,20 +262,20 @@ class AnnotationTest {
         @Test
         @DisplayName("namespace 默认空字符串")
         void namespaceDefault() {
-            StreamMqTransactionListener ann = TxListenerSample.class
-                .getAnnotation(StreamMqTransactionListener.class);
+            StreamMQTransactionConsumer ann = TxListenerSample.class
+                .getAnnotation(StreamMQTransactionConsumer.class);
             assertThat(ann.namespace()).isEmpty();
         }
     }
 
     @Nested
     @DisplayName("@EnableStreamMq 默认值")
-    class EnableStreamMqDefaults {
+    class EnableStreamMQDefaults {
 
         @Test
         @DisplayName("mode 默认 STANDARD")
         void modeDefault() throws Exception {
-            EnableStreamMq ann = EnableSample.class.getAnnotation(EnableStreamMq.class);
+            EnableStreamMQ ann = EnableSample.class.getAnnotation(EnableStreamMQ.class);
             assertThat(ann.mode()).isEqualTo("STANDARD");
             assertThat(defaultValue(ann, "mode")).isEqualTo("STANDARD");
         }
@@ -283,7 +283,7 @@ class AnnotationTest {
         @Test
         @DisplayName("scanBasePackages 默认空数组")
         void scanBasePackagesDefault() {
-            EnableStreamMq ann = EnableSample.class.getAnnotation(EnableStreamMq.class);
+            EnableStreamMQ ann = EnableSample.class.getAnnotation(EnableStreamMQ.class);
             assertThat(ann.scanBasePackages()).isEmpty();
         }
     }

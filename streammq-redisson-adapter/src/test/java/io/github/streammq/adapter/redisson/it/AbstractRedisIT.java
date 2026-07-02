@@ -2,7 +2,7 @@ package io.github.streammq.adapter.redisson.it;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.MessageSerializer;
 import org.junit.jupiter.api.AfterEach;
@@ -48,10 +48,10 @@ public abstract class AbstractRedisIT {
     }
 
     /**
-     * 显式创建消费者组,绕过主代码 RedissonStreamConsumer.ensureGroup() 中
+     * 显式创建消费者组,绕过主代码 RedissonStreamListener.ensureGroup() 中
      * 使用 StreamMessageId.MIN(序列化为 "-")导致 XGROUP CREATE 失败的 bug。
      *
-     * <p>主代码 bug 记录:RedissonStreamConsumer.java:231 使用 {@code StreamMessageId.MIN}
+     * <p>主代码 bug 记录:RedissonStreamListener.java:286 使用 {@code StreamMessageId.MIN}
      * 作为 XGROUP CREATE 的起始 ID,但 MIN 序列化为 "-" 在 Redis 中无效,
      * 应使用 {@code new StreamMessageId(0, 0)}(即 "0-0")。
      *
@@ -62,7 +62,7 @@ public abstract class AbstractRedisIT {
      * @param group 消费者组名
      */
     protected void createConsumerGroup(String topic, String group) {
-        RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+        RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
         stream.createGroup(StreamCreateGroupArgs.name(group).makeStream().id(new StreamMessageId(0, 0)));
     }
 }

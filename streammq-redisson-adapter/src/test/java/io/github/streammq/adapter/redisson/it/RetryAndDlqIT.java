@@ -1,15 +1,13 @@
 package io.github.streammq.adapter.redisson.it;
 
-import io.github.streammq.adapter.redisson.container.DefaultStreamMqListenerContainer;
-import io.github.streammq.adapter.redisson.consumer.RedissonStreamConsumerFactory;
+import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
+import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
-import io.github.streammq.core.enums.AcknowledgeMode;
-import io.github.streammq.core.enums.Action;
-import io.github.streammq.core.enums.ConsumeMode;
-import io.github.streammq.core.enums.MessageModel;
-import io.github.streammq.core.enums.SelectorType;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.core.annotation.StreamMQConsumer;
+import io.github.streammq.core.consumer.StreamMessageConsumer;
+import io.github.streammq.core.enums.*;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.spi.MessageConverter;
@@ -19,11 +17,7 @@ import io.github.streammq.core.spi.RetryPolicy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
-import org.redisson.api.RMap;
-import org.redisson.api.RScoredSortedSet;
-import org.redisson.api.RStream;
-import org.redisson.api.RedissonClient;
-import org.redisson.api.StreamMessageId;
+import org.redisson.api.*;
 import org.redisson.api.stream.StreamAddArgs;
 
 import java.lang.reflect.Proxy;
@@ -72,14 +66,14 @@ class RetryAndDlqIT extends AbstractRedisIT {
     }
 
     /**
-     * 通过动态代理构造 {@link io.github.streammq.core.annotation.StreamMqListener} 注解实例。
+     * 通过动态代理构造 {@link StreamMQConsumer} 注解实例。
      */
     @SuppressWarnings("unchecked")
-    private static io.github.streammq.core.annotation.StreamMqListener mkAnnotation(
+    private static StreamMQConsumer mkAnnotation(
             String topic, String group, int maxReconsumeTimes) {
-        return (io.github.streammq.core.annotation.StreamMqListener) Proxy.newProxyInstance(
-            io.github.streammq.core.annotation.StreamMqListener.class.getClassLoader(),
-            new Class<?>[]{io.github.streammq.core.annotation.StreamMqListener.class},
+        return (StreamMQConsumer) Proxy.newProxyInstance(
+            StreamMQConsumer.class.getClassLoader(),
+            new Class<?>[]{StreamMQConsumer.class},
             (proxy, method, args) -> switch (method.getName()) {
                 case "topic" -> topic;
                 case "consumerGroup" -> group;
@@ -103,10 +97,10 @@ class RetryAndDlqIT extends AbstractRedisIT {
                 case "rebalanceStrategy" -> RebalanceStrategy.class;
                 case "pullInterval" -> 0L;
                 case "suspendCurrentQueueTimeMillis" -> 1000L;
-                case "annotationType" -> io.github.streammq.core.annotation.StreamMqListener.class;
+                case "annotationType" -> StreamMQConsumer.class;
                 case "hashCode" -> (topic + group).hashCode();
                 case "equals" -> args != null && args.length > 0 && proxy == args[0];
-                case "toString" -> "@StreamMqListener(topic=" + topic + ", consumerGroup=" + group + ")";
+                case "toString" -> "@StreamMqConsumer(topic=" + topic + ", consumerGroup=" + group + ")";
                 default -> defaultAnnotationValue(method.getReturnType());
             });
     }
@@ -131,13 +125,13 @@ class RetryAndDlqIT extends AbstractRedisIT {
         String group = "retry-fail-group";
 
         RetryPolicy fastPolicy = new FastRetryPolicy(100, 100);
-        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
-        DefaultStreamMqListenerContainer container =
-            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, fastPolicy, namespace);
+        RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+            new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, fastPolicy, namespace);
 
-        io.github.streammq.core.listener.StreamMqListener<String> listener =
+        StreamMessageConsumer<String> listener =
             (msg, ctx) -> { throw new RuntimeException("intentional failure"); };
-        container.registerListener(listener, mkAnnotation(topic, group, 16));
+        container.registerConsumer(listener, mkAnnotation(topic, group, 16));
         createConsumerGroup(topic, group);
         container.start();
 
@@ -147,14 +141,14 @@ class RetryAndDlqIT extends AbstractRedisIT {
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("retry-test").build());
             producer.close();
 
-            String retryKey = StreamMqKeys.retryZSet(namespace, topic, group);
+            String retryKey = StreamMQKeys.retryZSet(namespace, topic, group);
             await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> {
                 RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
                 assertThat(zset.size()).isEqualTo(1);
             });
 
             // 原消息应已 ACK(从 PEL 移除)
-            RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+            RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
             assertThat(stream.listPending(group, StreamMessageId.MIN, StreamMessageId.MAX, 100)).isEmpty();
         } finally {
             container.stop();
@@ -168,18 +162,18 @@ class RetryAndDlqIT extends AbstractRedisIT {
         String group = "retry-redeliver-group";
 
         RetryPolicy fastPolicy = new FastRetryPolicy(100, 100);
-        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
-        DefaultStreamMqListenerContainer container =
-            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, fastPolicy, namespace);
+        RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+            new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, fastPolicy, namespace);
 
         AtomicInteger attempt = new AtomicInteger(0);
-        io.github.streammq.core.listener.StreamMqListener<String> listener = (msg, ctx) -> {
+        StreamMessageConsumer<String> listener = (msg, ctx) -> {
             if (attempt.incrementAndGet() == 1) {
                 throw new RuntimeException("first attempt fails");
             }
             return Action.SUCCESS;
         };
-        container.registerListener(listener, mkAnnotation(topic, group, 16));
+        container.registerConsumer(listener, mkAnnotation(topic, group, 16));
 
         RetryScheduler scheduler = new RetryScheduler(redisson, namespace, 100L, 10);
         container.registerRetryTargets(scheduler);
@@ -199,7 +193,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
 
             // 最终成功后 PEL 应为空
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
-                RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+                RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
                 assertThat(stream.listPending(group, StreamMessageId.MIN, StreamMessageId.MAX, 100)).isEmpty();
             });
         } finally {
@@ -215,14 +209,14 @@ class RetryAndDlqIT extends AbstractRedisIT {
         String group = "retry-max-group";
 
         RetryPolicy fastPolicy = new FastRetryPolicy(100, 100);
-        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
-        DefaultStreamMqListenerContainer container =
-            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, fastPolicy, namespace);
+        RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+            new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, fastPolicy, namespace);
 
-        io.github.streammq.core.listener.StreamMqListener<String> listener =
+        StreamMessageConsumer<String> listener =
             (msg, ctx) -> { throw new RuntimeException("always fails"); };
         // maxReconsumeTimes=2:RetryScheduler 在 retryCount>=2 时路由到 DLQ
-        container.registerListener(listener, mkAnnotation(topic, group, 2));
+        container.registerConsumer(listener, mkAnnotation(topic, group, 2));
 
         RetryScheduler scheduler = new RetryScheduler(redisson, namespace, 100L, 10);
         container.registerRetryTargets(scheduler);
@@ -236,7 +230,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("dlq-bound").build());
             producer.close();
 
-            String dlqKey = StreamMqKeys.dlqStream(namespace, topic, group);
+            String dlqKey = StreamMQKeys.dlqStream(namespace, topic, group);
             await().atMost(20, TimeUnit.SECONDS).untilAsserted(() -> {
                 RStream<String, String> dlqStream = redisson.getStream(dlqKey);
                 assertThat(dlqStream.size()).isEqualTo(1L);
@@ -255,13 +249,13 @@ class RetryAndDlqIT extends AbstractRedisIT {
 
         // RetryPolicy 返回 null:container 直接路由到 DLQ
         RetryPolicy noRetryPolicy = new FastRetryPolicy(100, 0);
-        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
-        DefaultStreamMqListenerContainer container =
-            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, noRetryPolicy, namespace);
+        RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+            new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, noRetryPolicy, namespace);
 
-        io.github.streammq.core.listener.StreamMqListener<String> listener =
+        StreamMessageConsumer<String> listener =
             (msg, ctx) -> { throw new RuntimeException("trigger DLQ"); };
-        container.registerListener(listener, mkAnnotation(topic, group, 0));
+        container.registerConsumer(listener, mkAnnotation(topic, group, 0));
         createConsumerGroup(topic, group);
         container.start();
 
@@ -271,7 +265,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("to-dlq").build());
             producer.close();
 
-            String dlqKey = StreamMqKeys.dlqStream(namespace, topic, group);
+            String dlqKey = StreamMQKeys.dlqStream(namespace, topic, group);
             await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> {
                 RStream<String, String> dlqStream = redisson.getStream(dlqKey);
                 assertThat(dlqStream.size()).isEqualTo(1L);
@@ -279,7 +273,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
 
             // DLQ 路由成功后 ACK,PEL 应为空
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
-                RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+                RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
                 assertThat(stream.listPending(group, StreamMessageId.MIN, StreamMessageId.MAX, 100)).isEmpty();
             });
         } finally {
@@ -293,7 +287,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
     void dlqRoutingFailure_messageStaysInPel() {
         String topic = "dlq-fail-topic";
         String group = "dlq-fail-group";
-        String dlqKey = StreamMqKeys.dlqStream(namespace, topic, group);
+        String dlqKey = StreamMQKeys.dlqStream(namespace, topic, group);
 
         // 创建 spy 客户端:DLQ stream add 时抛异常
         RedissonClient spyClient = Mockito.spy(redisson);
@@ -304,13 +298,13 @@ class RetryAndDlqIT extends AbstractRedisIT {
         Mockito.doReturn(failingStream).when(spyClient).getStream(dlqKey);
 
         RetryPolicy noRetryPolicy = new FastRetryPolicy(100, 0);
-        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
-        DefaultStreamMqListenerContainer container =
-            new DefaultStreamMqListenerContainer(spyClient, consumerFactory, converter, noRetryPolicy, namespace);
+        RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+            new DefaultStreamMQListenerContainer(spyClient, consumerFactory, converter, noRetryPolicy, namespace);
 
-        io.github.streammq.core.listener.StreamMqListener<String> listener =
+        StreamMessageConsumer<String> listener =
             (msg, ctx) -> { throw new RuntimeException("trigger DLQ fail"); };
-        container.registerListener(listener, mkAnnotation(topic, group, 0));
+        container.registerConsumer(listener, mkAnnotation(topic, group, 0));
         createConsumerGroup(topic, group);
         container.start();
 
@@ -322,7 +316,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
 
             // DLQ 写入失败,消息应留在 PEL 中(未 ACK)
             await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> {
-                RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+                RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
                 List<?> pending = stream.listPending(group, StreamMessageId.MIN, StreamMessageId.MAX, 100);
                 assertThat(pending).hasSize(1);
             });
@@ -338,13 +332,13 @@ class RetryAndDlqIT extends AbstractRedisIT {
         String group = "retry-payload-group";
 
         RetryPolicy fastPolicy = new FastRetryPolicy(100, 100);
-        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
-        DefaultStreamMqListenerContainer container =
-            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, fastPolicy, namespace);
+        RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+            new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, fastPolicy, namespace);
 
-        io.github.streammq.core.listener.StreamMqListener<String> listener =
+        StreamMessageConsumer<String> listener =
             (msg, ctx) -> { throw new RuntimeException("fail"); };
-        container.registerListener(listener, mkAnnotation(topic, group, 16));
+        container.registerConsumer(listener, mkAnnotation(topic, group, 16));
         createConsumerGroup(topic, group);
         container.start();
 
@@ -355,7 +349,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
             producer.close();
 
             // 等待 retry ZSet 有消息
-            String retryKey = StreamMqKeys.retryZSet(namespace, topic, group);
+            String retryKey = StreamMQKeys.retryZSet(namespace, topic, group);
             await().atMost(10, TimeUnit.SECONDS).until(() -> {
                 RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
                 return zset.size() == 1;
@@ -364,7 +358,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
             // 读取 payload Hash,验证元数据
             RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
             String msgId = zset.iterator().next();
-            String payloadKey = StreamMqKeys.delayPayloadHash(namespace, msgId);
+            String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
             RMap<String, String> payload = redisson.getMap(payloadKey);
             assertThat(payload).containsKey(RetryScheduler.FIELD_RETRY_COUNT);
             assertThat(payload).containsEntry(RetryScheduler.FIELD_TARGET_TOPIC, topic);

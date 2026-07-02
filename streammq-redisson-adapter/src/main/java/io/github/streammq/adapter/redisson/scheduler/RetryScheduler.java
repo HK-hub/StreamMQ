@@ -1,7 +1,7 @@
 package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMqConstants;
 import org.redisson.api.RMap;
 import org.redisson.api.RScoredSortedSet;
@@ -14,11 +14,7 @@ import org.slf4j.LoggerFactory;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -170,7 +166,7 @@ public class RetryScheduler {
      * @param target 重试目标
      */
     void scanRetryEntries(RetryTarget target) {
-        String retryKey = StreamMqKeys.retryZSet(namespace, target.topic, target.group);
+        String retryKey = StreamMQKeys.retryZSet(namespace, target.topic, target.group);
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
         long now = System.currentTimeMillis();
 
@@ -179,8 +175,8 @@ public class RetryScheduler {
             return;
         }
 
-        String targetStreamKey = StreamMqKeys.topicStream(namespace, target.topic);
-        String dlqStreamKey = StreamMqKeys.dlqStream(namespace, target.topic, target.group);
+        String targetStreamKey = StreamMQKeys.topicStream(namespace, target.topic);
+        String dlqStreamKey = StreamMQKeys.dlqStream(namespace, target.topic, target.group);
 
         for (String msgId : expired) {
             boolean acquired = zset.remove(msgId);
@@ -193,7 +189,7 @@ public class RetryScheduler {
 
     private void transferOne(String msgId, RetryTarget target, String targetStreamKey, String dlqStreamKey,
                               RScoredSortedSet<String> zset) {
-        String payloadKey = StreamMqKeys.delayPayloadHash(namespace, msgId);
+        String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
         try {
             RMap<String, String> payloadMap = redisson.getMap(payloadKey);
             Map<String, String> fields = payloadMap.readAllMap();

@@ -1,19 +1,14 @@
 package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMqConstants;
 import io.github.streammq.core.enums.LocalTransactionState;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.spi.MessageConverter;
-import io.github.streammq.core.spi.MessageSerializer;
 import io.github.streammq.core.transaction.TransactionChecker;
 import io.github.streammq.core.transaction.TransactionContext;
-import org.redisson.api.RMap;
-import org.redisson.api.RScoredSortedSet;
-import org.redisson.api.RStream;
-import org.redisson.api.RedissonClient;
-import org.redisson.api.StreamMessageId;
+import org.redisson.api.*;
 import org.redisson.api.stream.StreamAddArgs;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,11 +17,7 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -166,12 +157,12 @@ public class TransactionScanner {
         Objects.requireNonNull(fields, "fields");
 
         // 1. XADD 到 half Stream
-        String halfStreamKey = StreamMqKeys.halfStream(namespace, txGroup);
+        String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
         RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
         StreamMessageId halfId = halfStream.add(StreamAddArgs.entries(fields));
 
         // 2. 写入 txstate Hash
-        String stateHashKey = StreamMqKeys.transactionStateHash(namespace, txGroup);
+        String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
         RMap<String, String> stateMap = redisson.getMap(stateHashKey);
         Map<String, String> stateFields = new HashMap<>(3);
         stateFields.put(txId, STATE_PREPARE);
@@ -180,7 +171,7 @@ public class TransactionScanner {
         stateMap.putAll(stateFields);
 
         // 3. 写入 txcheck ZSet，score = now + checkInterval
-        String checkZSetKey = StreamMqKeys.transactionCheckZSet(namespace, txGroup);
+        String checkZSetKey = StreamMQKeys.transactionCheckZSet(namespace, txGroup);
         long firstCheckAt = System.currentTimeMillis() + checkIntervalMs;
         redisson.getScoredSortedSet(checkZSetKey).add(firstCheckAt, txId);
 
@@ -245,7 +236,7 @@ public class TransactionScanner {
     public void markCommit(String txId, String txGroup) {
         Objects.requireNonNull(txId, "txId");
         Objects.requireNonNull(txGroup, "txGroup");
-        String stateHashKey = StreamMqKeys.transactionStateHash(namespace, txGroup);
+        String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
         RMap<String, String> stateMap = redisson.getMap(stateHashKey);
 
         // 仅在 PREPARE / UNKNOWN 状态下可 COMMIT
@@ -284,7 +275,7 @@ public class TransactionScanner {
     public void markRollback(String txId, String txGroup) {
         Objects.requireNonNull(txId, "txId");
         Objects.requireNonNull(txGroup, "txGroup");
-        String stateHashKey = StreamMqKeys.transactionStateHash(namespace, txGroup);
+        String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
         RMap<String, String> stateMap = redisson.getMap(stateHashKey);
 
         String currentState = stateMap.get(txId);
@@ -296,7 +287,7 @@ public class TransactionScanner {
         String halfIdStr = stateMap.get(txId + FIELD_HALF_ID_SUFFIX);
         if (halfIdStr != null) {
             // XDEL 半消息
-            String halfStreamKey = StreamMqKeys.halfStream(namespace, txGroup);
+            String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
             RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
             try {
                 halfStream.remove(parseStreamId(halfIdStr));
@@ -334,7 +325,7 @@ public class TransactionScanner {
      * @param txGroup 事务组名
      */
     void scanTimeoutHalf(String txGroup) {
-        String checkZSetKey = StreamMqKeys.transactionCheckZSet(namespace, txGroup);
+        String checkZSetKey = StreamMQKeys.transactionCheckZSet(namespace, txGroup);
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(checkZSetKey);
         long now = System.currentTimeMillis();
         Collection<String> timeoutTxIds = zset.valueRange(0, true, now, true, 0, batchSize - 1);
@@ -358,7 +349,7 @@ public class TransactionScanner {
      */
     void triggerCheck(String txId, String txGroup) {
         TransactionChecker<?> checker = checkerRegistry.get(txGroup);
-        String stateHashKey = StreamMqKeys.transactionStateHash(namespace, txGroup);
+        String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
         RMap<String, String> stateMap = redisson.getMap(stateHashKey);
 
         String currentState = stateMap.get(txId);
@@ -421,7 +412,7 @@ public class TransactionScanner {
                     incrementCheckCount(txId, txGroup);
                     long nextCheckAt = System.currentTimeMillis() + checkIntervalMs;
                     redisson.getScoredSortedSet(
-                        StreamMqKeys.transactionCheckZSet(namespace, txGroup)).add(nextCheckAt, txId);
+                        StreamMQKeys.transactionCheckZSet(namespace, txGroup)).add(nextCheckAt, txId);
                     LOG.debug("Transaction check UNKNOWN, rescheduled: txId={}, checkCount={}, nextCheckAt={}",
                         txId, checkCount + 1, nextCheckAt);
                 }
@@ -436,7 +427,7 @@ public class TransactionScanner {
      * 将半消息从 half Stream 转投到目标 Stream（COMMIT 时调用）。
      */
     private void publishHalfToBusiness(String txGroup, String halfIdStr, String targetTopic) {
-        String halfStreamKey = StreamMqKeys.halfStream(namespace, txGroup);
+        String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
         RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
         StreamMessageId halfId = parseStreamId(halfIdStr);
 
@@ -451,7 +442,7 @@ public class TransactionScanner {
         fields.remove(DefaultMessageConverter.FIELD_ORIGIN_TOPIC);
 
         // XADD 到目标 Stream
-        String targetStreamKey = StreamMqKeys.topicStream(namespace, targetTopic);
+        String targetStreamKey = StreamMQKeys.topicStream(namespace, targetTopic);
         RStream<String, String> targetStream = redisson.getStream(targetStreamKey);
         targetStream.add(StreamAddArgs.entries(fields));
 
@@ -471,7 +462,7 @@ public class TransactionScanner {
         if (halfIdStr == null) {
             return null;
         }
-        String halfStreamKey = StreamMqKeys.halfStream(namespace, txGroup);
+        String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
         RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
         StreamMessageId halfId = parseStreamId(halfIdStr);
         Map<StreamMessageId, Map<String, String>> entries = halfStream.range(1, halfId, halfId);
@@ -502,10 +493,10 @@ public class TransactionScanner {
      * 从 txcheck ZSet 移除 txId。
      */
     private void removeCheckEntry(String txId, String txGroup) {
-        String checkZSetKey = StreamMqKeys.transactionCheckZSet(namespace, txGroup);
+        String checkZSetKey = StreamMQKeys.transactionCheckZSet(namespace, txGroup);
         redisson.getScoredSortedSet(checkZSetKey).remove(txId);
         // 同时清理回查计数
-        String counterKey = StreamMqKeys.transactionCheckCounter(namespace, txGroup);
+        String counterKey = StreamMQKeys.transactionCheckCounter(namespace, txGroup);
         redisson.getMap(counterKey).remove(txId);
     }
 
@@ -521,7 +512,7 @@ public class TransactionScanner {
      * 获取 txId 的回查次数。
      */
     private int getCheckCount(String txId, String txGroup) {
-        String counterKey = StreamMqKeys.transactionCheckCounter(namespace, txGroup);
+        String counterKey = StreamMQKeys.transactionCheckCounter(namespace, txGroup);
         String countStr = redisson.<String, String>getMap(counterKey).get(txId);
         if (countStr == null || countStr.isEmpty()) {
             return 0;
@@ -540,7 +531,7 @@ public class TransactionScanner {
      * 单线程扫描场景下无需加锁。
      */
     private void incrementCheckCount(String txId, String txGroup) {
-        String counterKey = StreamMqKeys.transactionCheckCounter(namespace, txGroup);
+        String counterKey = StreamMQKeys.transactionCheckCounter(namespace, txGroup);
         RMap<String, String> counterMap = redisson.getMap(counterKey);
         String current = counterMap.get(txId);
         int newVal = 1;

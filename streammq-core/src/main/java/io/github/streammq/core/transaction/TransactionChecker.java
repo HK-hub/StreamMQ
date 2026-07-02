@@ -1,12 +1,13 @@
 package io.github.streammq.core.transaction;
 
+import io.github.streammq.core.annotation.StreamMQTransactionConsumer;
 import io.github.streammq.core.enums.LocalTransactionState;
 import io.github.streammq.core.message.Message;
 
 /**
  * 事务消息回查接口。
  *
- * <p>实现此接口并在类上标注 {@link io.github.streammq.core.annotation.StreamMqTransactionListener} 注解即可注册为事务回查器。
+ * <p>实现此接口并在类上标注 {@link StreamMQTransactionConsumer} 注解即可注册为事务回查器。
  * 框架将在半消息超时未确认时调用 {@link #check} 回查本地事务状态。
  *
  * @param <T> body 类型

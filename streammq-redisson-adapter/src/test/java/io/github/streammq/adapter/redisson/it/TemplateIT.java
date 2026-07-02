@@ -1,16 +1,15 @@
 package io.github.streammq.adapter.redisson.it;
 
-import io.github.streammq.adapter.redisson.consumer.RedissonStreamConsumer;
+import io.github.streammq.adapter.redisson.listener.RedissonStreamListener;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducerFactory;
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
-import io.github.streammq.adapter.redisson.template.DefaultStreamMqTemplate;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate;
 import io.github.streammq.core.message.BatchMessage;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.SendCallback;
-import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.ProducerInterceptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,7 +27,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * {@link DefaultStreamMqTemplate} 的 Redis 联动集成测试。
+ * {@link DefaultStreamMessageTemplate} 的 Redis 联动集成测试。
  *
  * <p>覆盖 syncSend/asyncSend/syncSendBatch 往返、拦截器链(含中止)与多 Topic 场景。
  */
@@ -36,7 +35,7 @@ import static org.awaitility.Awaitility.await;
 class TemplateIT extends AbstractRedisIT {
 
     private RedissonStreamProducerFactory producerFactory;
-    private DefaultStreamMqTemplate<String> template;
+    private DefaultStreamMessageTemplate<String> template;
     private static final String DEFAULT_GROUP = "template-test-group";
 
     @BeforeEach
@@ -46,7 +45,7 @@ class TemplateIT extends AbstractRedisIT {
             .group(DEFAULT_GROUP)
             .namespace(namespace)
             .build();
-        template = new DefaultStreamMqTemplate<>(producerFactory, DEFAULT_GROUP, converter, defaultProps, null);
+        template = new DefaultStreamMessageTemplate<>(producerFactory, DEFAULT_GROUP, converter, defaultProps, null);
     }
 
     @AfterEach
@@ -69,8 +68,8 @@ class TemplateIT extends AbstractRedisIT {
         SendResult result = template.syncSend(msg);
         assertThat(result.isSuccess()).isTrue();
 
-        RedissonStreamConsumer consumer =
-            new RedissonStreamConsumer(redisson, namespace, topic, "tpl-rt-group", "c1", converter);
+        RedissonStreamListener consumer =
+            new RedissonStreamListener(redisson, namespace, topic, "tpl-rt-group", "c1", converter);
         createConsumerGroup(topic, "tpl-rt-group");
         try {
             List<Message<?>> messages = consumer.pull(1);
@@ -122,8 +121,8 @@ class TemplateIT extends AbstractRedisIT {
         List<SendResult> results = template.syncSendBatch(batch);
         assertThat(results).hasSize(3);
 
-        RedissonStreamConsumer consumer =
-            new RedissonStreamConsumer(redisson, namespace, topic, "tpl-batch-group", "c1", converter);
+        RedissonStreamListener consumer =
+            new RedissonStreamListener(redisson, namespace, topic, "tpl-batch-group", "c1", converter);
         createConsumerGroup(topic, "tpl-batch-group");
         try {
             List<Message<?>> messages = consumer.pull(10);
@@ -179,7 +178,7 @@ class TemplateIT extends AbstractRedisIT {
         SendResult result = template.syncSend(msg);
 
         assertThat(result.isSuccess()).isFalse();
-        RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+        RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
         assertThat(stream.size()).isEqualTo(0L);
     }
 
@@ -239,10 +238,10 @@ class TemplateIT extends AbstractRedisIT {
         template.syncSend(MessageBuilder.<String>withTopic(topicA).body("a-body").build());
         template.syncSend(MessageBuilder.<String>withTopic(topicB).body("b-body").build());
 
-        RedissonStreamConsumer consumerA =
-            new RedissonStreamConsumer(redisson, namespace, topicA, "grp-a", "c1", converter);
-        RedissonStreamConsumer consumerB =
-            new RedissonStreamConsumer(redisson, namespace, topicB, "grp-b", "c1", converter);
+        RedissonStreamListener consumerA =
+            new RedissonStreamListener(redisson, namespace, topicA, "grp-a", "c1", converter);
+        RedissonStreamListener consumerB =
+            new RedissonStreamListener(redisson, namespace, topicB, "grp-b", "c1", converter);
         createConsumerGroup(topicA, "grp-a");
         createConsumerGroup(topicB, "grp-b");
         try {
@@ -270,7 +269,7 @@ class TemplateIT extends AbstractRedisIT {
             .join();
 
         assertThat(result.isSuccess()).isTrue();
-        RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+        RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
         assertThat(stream.size()).isEqualTo(1L);
     }
 
@@ -283,7 +282,7 @@ class TemplateIT extends AbstractRedisIT {
         template.sendOneway(msg);
 
         await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
-            RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+            RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
             assertThat(stream.size()).isEqualTo(1L);
         });
     }
@@ -306,8 +305,8 @@ class TemplateIT extends AbstractRedisIT {
 
         template.syncSend(MessageBuilder.<String>withTopic(topic).body("modified").build());
 
-        RedissonStreamConsumer consumer =
-            new RedissonStreamConsumer(redisson, namespace, topic, "tpl-modify-group", "c1", converter);
+        RedissonStreamListener consumer =
+            new RedissonStreamListener(redisson, namespace, topic, "tpl-modify-group", "c1", converter);
         createConsumerGroup(topic, "tpl-modify-group");
         try {
             List<Message<?>> messages = consumer.pull(1);

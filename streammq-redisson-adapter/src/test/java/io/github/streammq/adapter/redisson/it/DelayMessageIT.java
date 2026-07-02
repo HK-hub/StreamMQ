@@ -2,7 +2,7 @@ package io.github.streammq.adapter.redisson.it;
 
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler;
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
@@ -57,12 +57,12 @@ class DelayMessageIT extends AbstractRedisIT {
         assertThat(result.getTopic()).isEqualTo(topic);
 
         // 立即检查目标 Stream 应为空
-        RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+        RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
         assertThat(stream.size()).isZero();
 
         // ZSet 中应有 1 条
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(
-            StreamMqKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
+            StreamMQKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
         assertThat(zset.size()).isEqualTo(1);
 
         producer.close();
@@ -89,12 +89,12 @@ class DelayMessageIT extends AbstractRedisIT {
 
             // 等待目标 Stream 出现消息
             await().atMost(AWAIT_SECONDS, TimeUnit.SECONDS).until(() -> {
-                RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+                RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
                 return stream.size() > 0;
             });
 
             // 验证 Stream 内容
-            RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+            RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
             Map<StreamMessageId, Map<String, String>> entries = stream.range(10, StreamMessageId.MIN, StreamMessageId.MAX);
             assertThat(entries).hasSize(1);
             Map<String, String> fields = entries.values().iterator().next();
@@ -125,7 +125,7 @@ class DelayMessageIT extends AbstractRedisIT {
             producer.syncSend(msg);
 
             RScoredSortedSet<String> zset = redisson.getScoredSortedSet(
-                StreamMqKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
+                StreamMQKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
             assertThat(zset.size()).isEqualTo(1);
             String msgIdBefore = zset.iterator().next();
 
@@ -134,7 +134,7 @@ class DelayMessageIT extends AbstractRedisIT {
             // 等待 ZSet 被清空
             await().atMost(AWAIT_SECONDS, TimeUnit.SECONDS).until(() -> {
                 RScoredSortedSet<String> z = redisson.getScoredSortedSet(
-                    StreamMqKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
+                    StreamMQKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
                 return z.size() == 0;
             });
 
@@ -164,9 +164,9 @@ class DelayMessageIT extends AbstractRedisIT {
 
             // 投递前应存在 payload Hash（通过 ZSet member 反查）
             RScoredSortedSet<String> zset = redisson.getScoredSortedSet(
-                StreamMqKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
+                StreamMQKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
             String msgId = zset.iterator().next();
-            String payloadKey = StreamMqKeys.delayPayloadHash(namespace, msgId);
+            String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
             RMap<String, String> payloadMap = redisson.getMap(payloadKey);
             assertThat(payloadMap.isExists()).isTrue();
             assertThat(payloadMap.get("targetTopic")).isEqualTo(topic);
@@ -207,18 +207,18 @@ class DelayMessageIT extends AbstractRedisIT {
 
             // 验证 ZSet 中有 3 条
             RScoredSortedSet<String> zset = redisson.getScoredSortedSet(
-                StreamMqKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
+                StreamMQKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
             assertThat(zset.size()).isEqualTo(count);
 
             scheduler.start();
 
             // 等待所有消息被转投
             await().atMost(AWAIT_SECONDS, TimeUnit.SECONDS).until(() -> {
-                RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+                RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
                 return stream.size() >= count;
             });
 
-            RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+            RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
             Map<StreamMessageId, Map<String, String>> entries = stream.range(count, StreamMessageId.MIN, StreamMessageId.MAX);
             assertThat(entries).hasSize(count);
 
@@ -259,23 +259,23 @@ class DelayMessageIT extends AbstractRedisIT {
 
             // 1 秒级应先到达
             await().atMost(3, TimeUnit.SECONDS).until(() -> {
-                RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topicLevel1));
+                RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topicLevel1));
                 return stream.size() > 0;
             });
 
             // 此时 5 秒级应尚未到达
-            RStream<String, String> streamL5Before = redisson.getStream(StreamMqKeys.topicStream(namespace, topicLevel5));
+            RStream<String, String> streamL5Before = redisson.getStream(StreamMQKeys.topicStream(namespace, topicLevel5));
             assertThat(streamL5Before.size()).isZero();
 
             // 等待 5 秒级到达
             await().atMost(AWAIT_SECONDS, TimeUnit.SECONDS).until(() -> {
-                RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topicLevel5));
+                RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topicLevel5));
                 return stream.size() > 0;
             });
 
             // 两个目标 Stream 均有消息
-            RStream<String, String> streamL1 = redisson.getStream(StreamMqKeys.topicStream(namespace, topicLevel1));
-            RStream<String, String> streamL5 = redisson.getStream(StreamMqKeys.topicStream(namespace, topicLevel5));
+            RStream<String, String> streamL1 = redisson.getStream(StreamMQKeys.topicStream(namespace, topicLevel1));
+            RStream<String, String> streamL5 = redisson.getStream(StreamMQKeys.topicStream(namespace, topicLevel5));
             assertThat(streamL1.size()).isEqualTo(1);
             assertThat(streamL5.size()).isEqualTo(1);
         } finally {
@@ -310,15 +310,15 @@ class DelayMessageIT extends AbstractRedisIT {
             // 等待全部投递完成
             await().atMost(AWAIT_SECONDS, TimeUnit.SECONDS).until(() -> {
                 RScoredSortedSet<String> zset = redisson.getScoredSortedSet(
-                    StreamMqKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
-                RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+                    StreamMQKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
+                RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
                 return zset.size() == 0 && stream.size() >= total;
             });
 
             // 最终 ZSet 为空,目标 Stream 有 total 条
             RScoredSortedSet<String> zset = redisson.getScoredSortedSet(
-                StreamMqKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
-            RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+                StreamMQKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
+            RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
             assertThat(zset.size()).isZero();
             assertThat(stream.size()).isEqualTo(total);
 

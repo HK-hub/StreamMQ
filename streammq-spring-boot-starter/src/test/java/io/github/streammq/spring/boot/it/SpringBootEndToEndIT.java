@@ -1,20 +1,18 @@
 package io.github.streammq.spring.boot.it;
 
 import io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler;
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.core.annotation.StreamMQConsumer;
+import io.github.streammq.core.consumer.ConsumerContext;
+import io.github.streammq.core.consumer.StreamMessageConsumer;
 import io.github.streammq.core.enums.Action;
-import io.github.streammq.core.listener.StreamMqListener;
-import io.github.streammq.core.listener.ConsumerContext;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.message.SendResult;
-import io.github.streammq.core.template.StreamMqTemplate;
-import io.github.streammq.spring.boot.properties.StreamMqProperties;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.TestInstance;
+import io.github.streammq.core.template.StreamMessageTemplate;
+import io.github.streammq.spring.boot.autoconfigure.StreamMQCoreAutoConfiguration;
+import io.github.streammq.spring.boot.properties.StreamMQProperties;
+import org.junit.jupiter.api.*;
 import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,8 +32,8 @@ import static org.awaitility.Awaitility.await;
 /**
  * Spring Boot 端到端集成测试。
  *
- * <p>启动完整的 Spring Boot 上下文,通过 {@link StreamMqTemplate} 发送消息,
- * 由 {@code @StreamMqListener} 注解驱动的 Listener 自动消费,验证生产→存储→消费全链路。
+ * <p>启动完整的 Spring Boot 上下文,通过 {@link StreamMessageTemplate} 发送消息,
+ * 由 {@code @StreamMqConsumer} 注解驱动的 Listener 自动消费,验证生产→存储→消费全链路。
  *
  * <p>覆盖场景:
  * <ul>
@@ -61,7 +59,7 @@ class SpringBootEndToEndIT {
 
     @Autowired
     @SuppressWarnings("rawtypes")
-    private StreamMqTemplate streamMqTemplate;
+    private StreamMessageTemplate streamMessageTemplate;
 
     @Autowired
     private E2EStringListener e2eStringListener;
@@ -70,7 +68,7 @@ class SpringBootEndToEndIT {
     private RedissonClient redissonClient;
 
     @Autowired
-    private StreamMqProperties properties;
+    private StreamMQProperties properties;
 
     @Autowired
     private DelayMessageScheduler delayMessageScheduler;
@@ -107,7 +105,7 @@ class SpringBootEndToEndIT {
             .build();
 
         @SuppressWarnings("unchecked")
-        SendResult result = streamMqTemplate.syncSend(msg);
+        SendResult result = streamMessageTemplate.syncSend(msg);
 
         assertThat(result).isNotNull();
         assertThat(result.isSuccess()).isTrue();
@@ -126,7 +124,7 @@ class SpringBootEndToEndIT {
             .build();
 
         @SuppressWarnings("unchecked")
-        SendResult result = streamMqTemplate.syncSend(msg);
+        SendResult result = streamMessageTemplate.syncSend(msg);
         assertThat(result.isSuccess()).isTrue();
 
         await().atMost(10, TimeUnit.SECONDS).until(() -> e2eStringListener.receivedBodies.contains(body));
@@ -142,7 +140,7 @@ class SpringBootEndToEndIT {
             .build();
 
         @SuppressWarnings("unchecked")
-        java.util.concurrent.CompletableFuture<SendResult> future = streamMqTemplate.asyncSend(msg);
+        java.util.concurrent.CompletableFuture<SendResult> future = streamMessageTemplate.asyncSend(msg);
 
         SendResult result = await().atMost(5, TimeUnit.SECONDS).until(future::join, r -> r != null);
         assertThat(result.isSuccess()).isTrue();
@@ -159,7 +157,7 @@ class SpringBootEndToEndIT {
             .body(body)
             .build();
 
-        streamMqTemplate.sendOneway(msg);
+        streamMessageTemplate.sendOneway(msg);
 
         await().atMost(10, TimeUnit.SECONDS).until(() -> e2eStringListener.receivedBodies.contains(body));
     }
@@ -176,7 +174,7 @@ class SpringBootEndToEndIT {
                 .body(body)
                 .build();
             @SuppressWarnings("unchecked")
-            SendResult result = streamMqTemplate.syncSend(msg);
+            SendResult result = streamMessageTemplate.syncSend(msg);
             assertThat(result.isSuccess()).isTrue();
         }
 
@@ -195,12 +193,12 @@ class SpringBootEndToEndIT {
             .build();
 
         @SuppressWarnings("unchecked")
-        SendResult result = streamMqTemplate.syncSend(msg);
+        SendResult result = streamMessageTemplate.syncSend(msg);
         assertThat(result).isNotNull();
         assertThat(result.getMessageId()).isNotNull();
 
         // 验证延时 ZSet 中存在该消息
-        String delayZSetKey = StreamMqKeys.delayZSet(properties.getNamespace(),
+        String delayZSetKey = StreamMQKeys.delayZSet(properties.getNamespace(),
             io.github.streammq.core.enums.DelayLevel.SECOND_1.name());
         RScoredSortedSet<String> zset = redissonClient.getScoredSortedSet(delayZSetKey);
         assertThat(zset.size()).isEqualTo(1);
@@ -220,7 +218,7 @@ class SpringBootEndToEndIT {
     /**
      * 测试配置:注册端到端测试用 Listener Bean。
      *
-     * <p>namespace 由 {@link StreamMqCoreAutoConfiguration#streamMqTemplate} 自动注入
+     * <p>namespace 由 {@link StreamMQCoreAutoConfiguration#streamMqTemplate} 自动注入
      * (已修复:defaultProperties 含 namespace,Producer 与 ListenerContainer 使用相同 namespace)。
      */
     @TestConfiguration
@@ -233,13 +231,13 @@ class SpringBootEndToEndIT {
     }
 
     /**
-     * 端到端测试用 Listener,实现 {@link StreamMqListener} 接口,
-     * 标注 {@code @StreamMqListener} 注解,由 Spring 自动扫描注册。
+     * 端到端测试用 Listener,实现 {@link StreamMessageConsumer} 接口,
+     * 标注 {@code @StreamMqConsumer} 注解,由 Spring 自动扫描注册。
      *
      * <p>使用 {@link ConcurrentLinkedQueue} 收集所有接收到的消息 body,线程安全。
      */
-    @io.github.streammq.core.annotation.StreamMqListener(topic = E2E_TOPIC, consumerGroup = E2E_GROUP)
-    public static class E2EStringListener implements StreamMqListener<String> {
+    @StreamMQConsumer(topic = E2E_TOPIC, consumerGroup = E2E_GROUP)
+    public static class E2EStringListener implements StreamMessageConsumer<String> {
 
         /** 已接收的消息 body 集合 */
         final ConcurrentLinkedQueue<String> receivedBodies = new ConcurrentLinkedQueue<>();

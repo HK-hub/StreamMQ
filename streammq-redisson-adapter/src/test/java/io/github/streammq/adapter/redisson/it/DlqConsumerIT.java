@@ -1,10 +1,12 @@
 package io.github.streammq.adapter.redisson.it;
 
-import io.github.streammq.adapter.redisson.container.DefaultStreamMqListenerContainer;
-import io.github.streammq.adapter.redisson.consumer.RedissonStreamConsumerFactory;
+import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
+import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
-import io.github.streammq.core.annotation.StreamMqDlqListener;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.core.annotation.StreamMQConsumer;
+import io.github.streammq.core.annotation.StreamMQDlqConsumer;
+import io.github.streammq.core.consumer.StreamMessageConsumer;
 import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.Action;
 import io.github.streammq.core.enums.ConsumeMode;
@@ -61,14 +63,14 @@ class DlqConsumerIT extends AbstractRedisIT {
     }
 
     /**
-     * 通过动态代理构造 {@link io.github.streammq.core.annotation.StreamMqListener} 注解实例。
+     * 通过动态代理构造 {@link StreamMQConsumer} 注解实例。
      */
     @SuppressWarnings("unchecked")
-    private static io.github.streammq.core.annotation.StreamMqListener mkListenerAnnotation(
+    private static StreamMQConsumer mkListenerAnnotation(
             String topic, String group, int maxReconsumeTimes) {
-        return (io.github.streammq.core.annotation.StreamMqListener) Proxy.newProxyInstance(
-            io.github.streammq.core.annotation.StreamMqListener.class.getClassLoader(),
-            new Class<?>[]{io.github.streammq.core.annotation.StreamMqListener.class},
+        return (StreamMQConsumer) Proxy.newProxyInstance(
+            StreamMQConsumer.class.getClassLoader(),
+            new Class<?>[]{StreamMQConsumer.class},
             (proxy, method, args) -> switch (method.getName()) {
                 case "topic" -> topic;
                 case "consumerGroup" -> group;
@@ -92,23 +94,23 @@ class DlqConsumerIT extends AbstractRedisIT {
                 case "rebalanceStrategy" -> RebalanceStrategy.class;
                 case "pullInterval" -> 0L;
                 case "suspendCurrentQueueTimeMillis" -> 1000L;
-                case "annotationType" -> io.github.streammq.core.annotation.StreamMqListener.class;
+                case "annotationType" -> StreamMQConsumer.class;
                 case "hashCode" -> (topic + group).hashCode();
                 case "equals" -> args != null && args.length > 0 && proxy == args[0];
-                case "toString" -> "@StreamMqListener(topic=" + topic + ", consumerGroup=" + group + ")";
+                case "toString" -> "@StreamMqConsumer(topic=" + topic + ", consumerGroup=" + group + ")";
                 default -> defaultAnnotationValue(method.getReturnType());
             });
     }
 
     /**
-     * 通过动态代理构造 {@link StreamMqDlqListener} 注解实例。
+     * 通过动态代理构造 {@link StreamMQDlqConsumer} 注解实例。
      */
     @SuppressWarnings("unchecked")
-    private static StreamMqDlqListener mkDlqAnnotation(
+    private static StreamMQDlqConsumer mkDlqAnnotation(
             String topic, String group, String dlqConsumerGroup, int maxReconsumeTimes) {
-        return (StreamMqDlqListener) Proxy.newProxyInstance(
-            StreamMqDlqListener.class.getClassLoader(),
-            new Class<?>[]{StreamMqDlqListener.class},
+        return (StreamMQDlqConsumer) Proxy.newProxyInstance(
+            StreamMQDlqConsumer.class.getClassLoader(),
+            new Class<?>[]{StreamMQDlqConsumer.class},
             (proxy, method, args) -> switch (method.getName()) {
                 case "topic" -> topic;
                 case "consumerGroup" -> group;
@@ -124,10 +126,10 @@ class DlqConsumerIT extends AbstractRedisIT {
                 case "serializer" -> MessageSerializer.class;
                 case "messageConverter" -> MessageConverter.class;
                 case "enable" -> true;
-                case "annotationType" -> StreamMqDlqListener.class;
+                case "annotationType" -> StreamMQDlqConsumer.class;
                 case "hashCode" -> (topic + group + dlqConsumerGroup).hashCode();
                 case "equals" -> args != null && args.length > 0 && proxy == args[0];
-                case "toString" -> "@StreamMqDlqListener(topic=" + topic + ", consumerGroup=" + group
+                case "toString" -> "@StreamMqDlqConsumer(topic=" + topic + ", consumerGroup=" + group
                     + ", dlqConsumerGroup=" + dlqConsumerGroup + ")";
                 default -> defaultAnnotationValue(method.getReturnType());
             });
@@ -154,22 +156,22 @@ class DlqConsumerIT extends AbstractRedisIT {
         String dlqConsumerGroup = "dlq-consumer-" + group;
 
         RetryPolicy noRetryPolicy = new NoRetryPolicy();
-        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
-        DefaultStreamMqListenerContainer container =
-            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, noRetryPolicy, namespace);
+        RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+            new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, noRetryPolicy, namespace);
 
         // 业务消费者：始终失败，触发 DLQ 路由
-        io.github.streammq.core.listener.StreamMqListener<String> businessListener =
+        StreamMessageConsumer<String> businessListener =
             (msg, ctx) -> { throw new RuntimeException("always fails, trigger DLQ"); };
-        container.registerListener(businessListener, mkListenerAnnotation(topic, group, 0));
+        container.registerConsumer(businessListener, mkListenerAnnotation(topic, group, 0));
 
         // DLQ 消费者：接收死信消息
         AtomicReference<Message<?>> receivedDlqMessage = new AtomicReference<>();
-        io.github.streammq.core.listener.StreamMqListener<String> dlqListener = (msg, ctx) -> {
+        StreamMessageConsumer<String> dlqListener = (msg, ctx) -> {
             receivedDlqMessage.set(msg);
             return Action.SUCCESS;
         };
-        container.registerDlqListener(dlqListener, mkDlqAnnotation(topic, group, dlqConsumerGroup, 0));
+        container.registerDlqConsumer(dlqListener, mkDlqAnnotation(topic, group, dlqConsumerGroup, 0));
 
         // 创建消费者组：业务 Stream + DLQ Stream
         createConsumerGroup(topic, group);
@@ -198,7 +200,7 @@ class DlqConsumerIT extends AbstractRedisIT {
             assertThat(dlqMsg.getMessageId()).isNotNull();
 
             // DLQ 消费成功后 ACK，DLQ PEL 应为空
-            String dlqStreamKey = StreamMqKeys.dlqStream(namespace, topic, group);
+            String dlqStreamKey = StreamMQKeys.dlqStream(namespace, topic, group);
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
                 RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
                 assertThat(dlqStream.listPending(dlqConsumerGroup,
@@ -217,19 +219,19 @@ class DlqConsumerIT extends AbstractRedisIT {
         String expectedDlqGroup = "dlq-consumer-" + group;
 
         RetryPolicy noRetryPolicy = new NoRetryPolicy();
-        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
-        DefaultStreamMqListenerContainer container =
-            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, noRetryPolicy, namespace);
+        RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+            new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, noRetryPolicy, namespace);
 
         // 业务消费者：始终失败
-        container.registerListener(
+        container.registerConsumer(
             (msg, ctx) -> { throw new RuntimeException("fail"); },
             mkListenerAnnotation(topic, group, 0));
 
         // DLQ 消费者：使用默认 dlqConsumerGroup（传空字符串）
         AtomicReference<Message<?>> receivedDlqMessage = new AtomicReference<>();
-        container.registerDlqListener(
-            (io.github.streammq.core.listener.StreamMqListener<String>) (msg, ctx) -> {
+        container.registerDlqConsumer(
+            (StreamMessageConsumer<String>) (msg, ctx) -> {
                 receivedDlqMessage.set(msg);
                 return Action.SUCCESS;
             },
@@ -260,19 +262,19 @@ class DlqConsumerIT extends AbstractRedisIT {
         String dlqConsumerGroup = "dlq-consumer-" + group;
 
         RetryPolicy noRetryPolicy = new NoRetryPolicy();
-        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
-        DefaultStreamMqListenerContainer container =
-            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, noRetryPolicy, namespace);
+        RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+            new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, noRetryPolicy, namespace);
 
         // 业务消费者：始终失败
-        container.registerListener(
+        container.registerConsumer(
             (msg, ctx) -> { throw new RuntimeException("fail"); },
             mkListenerAnnotation(topic, group, 0));
 
         // DLQ 消费者：也始终失败（应被直接丢弃）
         java.util.concurrent.atomic.AtomicInteger dlqAttempts = new java.util.concurrent.atomic.AtomicInteger(0);
-        container.registerDlqListener(
-            (io.github.streammq.core.listener.StreamMqListener<String>) (msg, ctx) -> {
+        container.registerDlqConsumer(
+            (StreamMessageConsumer<String>) (msg, ctx) -> {
                 dlqAttempts.incrementAndGet();
                 throw new RuntimeException("DLQ consumer also fails");
             },
@@ -292,7 +294,7 @@ class DlqConsumerIT extends AbstractRedisIT {
             await().atMost(20, TimeUnit.SECONDS).until(() -> dlqAttempts.get() >= 1);
 
             // DLQ 消费失败后应直接 ACK 丢弃，PEL 应为空
-            String dlqStreamKey = StreamMqKeys.dlqStream(namespace, topic, group);
+            String dlqStreamKey = StreamMQKeys.dlqStream(namespace, topic, group);
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
                 RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
                 assertThat(dlqStream.listPending(dlqConsumerGroup,
@@ -311,7 +313,7 @@ class DlqConsumerIT extends AbstractRedisIT {
      * @param dlqConsumerGroup DLQ 消费者组名
      */
     protected void createDlqConsumerGroup(String topic, String originalGroup, String dlqConsumerGroup) {
-        String dlqStreamKey = StreamMqKeys.dlqStream(namespace, topic, originalGroup);
+        String dlqStreamKey = StreamMQKeys.dlqStream(namespace, topic, originalGroup);
         RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
         try {
             dlqStream.createGroup(StreamCreateGroupArgs.name(dlqConsumerGroup).makeStream().id(new StreamMessageId(0, 0)));

@@ -1,6 +1,6 @@
 package io.github.streammq.adapter.redisson.producer;
 
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.exception.ProducerTimeoutException;
 import io.github.streammq.core.exception.StreamMqBrokerException;
@@ -8,36 +8,22 @@ import io.github.streammq.core.exception.StreamMqException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.message.SendResult;
-import io.github.streammq.core.producer.StreamMqProducer;
+import io.github.streammq.core.producer.StreamMessageProducer;
 import io.github.streammq.core.spi.MessageConverter;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NonNull;
-import org.redisson.api.RBatch;
-import org.redisson.api.RMap;
-import org.redisson.api.RScoredSortedSet;
-import org.redisson.api.RStream;
-import org.redisson.api.RedissonClient;
-import org.redisson.api.StreamMessageId;
+import org.redisson.api.*;
 import org.redisson.api.stream.StreamAddArgs;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 基于 Redisson 的 {@link StreamMqProducer} 默认实现。
+ * 基于 Redisson 的 {@link StreamMessageProducer} 默认实现。
  *
  * <p>底层调用 {@link RStream#add} / {@link RBatch} 完成 Redis Stream XADD。
  * 每个实例绑定一个生产组（{@code group}），可发送任意 Topic 的消息。
@@ -57,7 +43,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * @since 0.1.0
  */
 @Getter
-public class RedissonStreamProducer implements StreamMqProducer {
+public class RedissonStreamProducer implements StreamMessageProducer {
 
     private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamProducer.class);
 
@@ -127,7 +113,7 @@ public class RedissonStreamProducer implements StreamMqProducer {
         }
 
         Map<String, String> fields = converter.toStreamFields(message);
-        String streamKey = StreamMqKeys.topicStream(namespace, message.getTopic());
+        String streamKey = StreamMQKeys.topicStream(namespace, message.getTopic());
 
         try {
             StreamMessageId streamId = appendStream(streamKey, fields, timeoutMillis);
@@ -198,7 +184,7 @@ public class RedissonStreamProducer implements StreamMqProducer {
             return results;
         }
 
-        String streamKey = StreamMqKeys.topicStream(namespace, firstTopic);
+        String streamKey = StreamMQKeys.topicStream(namespace, firstTopic);
         RBatch batch = redisson.createBatch();
         List<Message<?>> messageList = new ArrayList<>(messages);
         for (Message<?> message : messageList) {
@@ -246,8 +232,8 @@ public class RedissonStreamProducer implements StreamMqProducer {
         }
 
         long deliverAt = now + level.toMillis();
-        String zsetKey = StreamMqKeys.delayZSet(namespace, level.name());
-        String payloadHashKey = StreamMqKeys.delayPayloadHash(namespace, msgId);
+        String zsetKey = StreamMQKeys.delayZSet(namespace, level.name());
+        String payloadHashKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
 
         Map<String, String> fields = converter.toStreamFields(message);
         fields.put(FIELD_TARGET_TOPIC, message.getTopic());

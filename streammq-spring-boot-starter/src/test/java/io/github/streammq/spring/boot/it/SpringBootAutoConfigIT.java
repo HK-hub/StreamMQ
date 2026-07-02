@@ -1,23 +1,17 @@
 package io.github.streammq.spring.boot.it;
 
-import io.github.streammq.adapter.redisson.container.DefaultStreamMqListenerContainer;
+import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
-import io.github.streammq.core.consumer.StreamMqConsumerFactory;
-import io.github.streammq.core.producer.StreamMqProducerFactory;
+import io.github.streammq.core.listener.StreamMQListenerFactory;
+import io.github.streammq.core.producer.StreamMessageProducerFactory;
 import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.MessageSerializer;
 import io.github.streammq.core.spi.RetryPolicy;
-import io.github.streammq.core.template.StreamMqTemplate;
-import io.github.streammq.spring.boot.autoconfigure.StreamMqAutoConfiguration;
-import io.github.streammq.spring.boot.autoconfigure.StreamMqCoreAutoConfiguration;
-import io.github.streammq.spring.boot.autoconfigure.StreamMqHealthAutoConfiguration;
-import io.github.streammq.spring.boot.autoconfigure.StreamMqListenerContainerAutoConfiguration;
-import io.github.streammq.spring.boot.autoconfigure.StreamMqListenerContainerLifecycle;
-import io.github.streammq.spring.boot.autoconfigure.StreamMqSchedulerAutoConfiguration;
-import io.github.streammq.spring.boot.autoconfigure.StreamMqSchedulerLifecycle;
-import io.github.streammq.spring.boot.properties.StreamMqProperties;
+import io.github.streammq.core.template.StreamMessageTemplate;
+import io.github.streammq.spring.boot.autoconfigure.*;
+import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.redisson.api.RedissonClient;
@@ -56,7 +50,7 @@ class SpringBootAutoConfigIT {
     private ApplicationContext applicationContext;
 
     @Autowired
-    private StreamMqProperties properties;
+    private StreamMQProperties properties;
 
     @Autowired
     private RedissonClient redissonClient;
@@ -67,35 +61,35 @@ class SpringBootAutoConfigIT {
     @DisplayName("StreamMqAutoConfiguration 主配置类被装配")
     void streamMqAutoConfiguration_isLoaded() {
         assertThat(applicationContext.containsBeanDefinition(
-            StreamMqAutoConfiguration.class.getName())).isTrue();
+            StreamMQAutoConfiguration.class.getName())).isTrue();
     }
 
     @Test
     @DisplayName("StreamMqCoreAutoConfiguration 核心配置类被装配")
     void coreAutoConfiguration_isLoaded() {
         assertThat(applicationContext.containsBeanDefinition(
-            StreamMqCoreAutoConfiguration.class.getName())).isTrue();
+            StreamMQCoreAutoConfiguration.class.getName())).isTrue();
     }
 
     @Test
     @DisplayName("StreamMqSchedulerAutoConfiguration 调度器配置类被装配")
     void schedulerAutoConfiguration_isLoaded() {
         assertThat(applicationContext.containsBeanDefinition(
-            StreamMqSchedulerAutoConfiguration.class.getName())).isTrue();
+            StreamMQSchedulerAutoConfiguration.class.getName())).isTrue();
     }
 
     @Test
     @DisplayName("StreamMqListenerContainerAutoConfiguration 容器配置类被装配")
     void listenerContainerAutoConfiguration_isLoaded() {
         assertThat(applicationContext.containsBeanDefinition(
-            StreamMqListenerContainerAutoConfiguration.class.getName())).isTrue();
+            StreamMQListenerContainerAutoConfiguration.class.getName())).isTrue();
     }
 
     @Test
     @DisplayName("StreamMqHealthAutoConfiguration 健康检查配置类被装配")
     void healthAutoConfiguration_isLoaded() {
         assertThat(applicationContext.containsBeanDefinition(
-            StreamMqHealthAutoConfiguration.class.getName())).isTrue();
+            StreamMQHealthAutoConfiguration.class.getName())).isTrue();
     }
 
     // ===================== 核心 Bean 实例验证 =====================
@@ -130,21 +124,21 @@ class SpringBootAutoConfigIT {
     @Test
     @DisplayName("StreamMqProducerFactory Bean 存在")
     void producerFactory_beanExists() {
-        StreamMqProducerFactory factory = applicationContext.getBean(StreamMqProducerFactory.class);
+        StreamMessageProducerFactory factory = applicationContext.getBean(StreamMessageProducerFactory.class);
         assertThat(factory).isNotNull();
     }
 
     @Test
-    @DisplayName("StreamMqConsumerFactory Bean 存在")
+    @DisplayName("StreamMqListenerFactory Bean 存在")
     void consumerFactory_beanExists() {
-        StreamMqConsumerFactory factory = applicationContext.getBean(StreamMqConsumerFactory.class);
+        StreamMQListenerFactory factory = applicationContext.getBean(StreamMQListenerFactory.class);
         assertThat(factory).isNotNull();
     }
 
     @Test
     @DisplayName("StreamMqTemplate Bean 存在且为 DefaultStreamMqTemplate")
     void streamMqTemplate_beanExists() {
-        StreamMqTemplate<?> template = applicationContext.getBean(StreamMqTemplate.class);
+        StreamMessageTemplate<?> template = applicationContext.getBean(StreamMessageTemplate.class);
         assertThat(template).isNotNull();
         assertThat(template.getClass().getName())
             .isEqualTo("io.github.streammq.adapter.redisson.template.DefaultStreamMqTemplate");
@@ -155,16 +149,16 @@ class SpringBootAutoConfigIT {
     @Test
     @DisplayName("DefaultStreamMqListenerContainer Bean 存在")
     void listenerContainer_beanExists() {
-        DefaultStreamMqListenerContainer container =
-            applicationContext.getBean(DefaultStreamMqListenerContainer.class);
+        DefaultStreamMQListenerContainer container =
+            applicationContext.getBean(DefaultStreamMQListenerContainer.class);
         assertThat(container).isNotNull();
     }
 
     @Test
     @DisplayName("StreamMqListenerContainerLifecycle Bean 存在且为 SmartLifecycle")
     void listenerContainerLifecycle_beanExists() {
-        StreamMqListenerContainerLifecycle lifecycle =
-            applicationContext.getBean(StreamMqListenerContainerLifecycle.class);
+        StreamMQListenerContainerLifecycle lifecycle =
+            applicationContext.getBean(StreamMQListenerContainerLifecycle.class);
         assertThat(lifecycle).isNotNull();
         assertThat(lifecycle).isInstanceOf(SmartLifecycle.class);
     }
@@ -195,8 +189,8 @@ class SpringBootAutoConfigIT {
     @Test
     @DisplayName("StreamMqSchedulerLifecycle Bean 存在且为 SmartLifecycle")
     void schedulerLifecycle_beanExists() {
-        StreamMqSchedulerLifecycle lifecycle =
-            applicationContext.getBean(StreamMqSchedulerLifecycle.class);
+        StreamMQSchedulerLifecycle lifecycle =
+            applicationContext.getBean(StreamMQSchedulerLifecycle.class);
         assertThat(lifecycle).isNotNull();
         assertThat(lifecycle).isInstanceOf(SmartLifecycle.class);
     }
@@ -265,10 +259,10 @@ class SpringBootAutoConfigIT {
     @Test
     @DisplayName("SchedulerLifecycle 相位为 Integer.MAX_VALUE - 100(高于 ListenerContainer)")
     void schedulerLifecycle_phaseHigherThanListener() {
-        StreamMqSchedulerLifecycle schedulerLifecycle =
-            applicationContext.getBean(StreamMqSchedulerLifecycle.class);
-        StreamMqListenerContainerLifecycle listenerLifecycle =
-            applicationContext.getBean(StreamMqListenerContainerLifecycle.class);
+        StreamMQSchedulerLifecycle schedulerLifecycle =
+            applicationContext.getBean(StreamMQSchedulerLifecycle.class);
+        StreamMQListenerContainerLifecycle listenerLifecycle =
+            applicationContext.getBean(StreamMQListenerContainerLifecycle.class);
         assertThat(schedulerLifecycle.getPhase()).isEqualTo(Integer.MAX_VALUE - 100);
         assertThat(listenerLifecycle.getPhase()).isEqualTo(Integer.MAX_VALUE - 200);
         assertThat(schedulerLifecycle.getPhase()).isGreaterThan(listenerLifecycle.getPhase());
@@ -277,10 +271,10 @@ class SpringBootAutoConfigIT {
     @Test
     @DisplayName("SmartLifecycle Bean 启动后 isRunning 为 true")
     void smartLifecycle_runningAfterStart() {
-        StreamMqSchedulerLifecycle schedulerLifecycle =
-            applicationContext.getBean(StreamMqSchedulerLifecycle.class);
-        StreamMqListenerContainerLifecycle listenerLifecycle =
-            applicationContext.getBean(StreamMqListenerContainerLifecycle.class);
+        StreamMQSchedulerLifecycle schedulerLifecycle =
+            applicationContext.getBean(StreamMQSchedulerLifecycle.class);
+        StreamMQListenerContainerLifecycle listenerLifecycle =
+            applicationContext.getBean(StreamMQListenerContainerLifecycle.class);
         assertThat(schedulerLifecycle.isRunning()).isTrue();
         assertThat(listenerLifecycle.isRunning()).isTrue();
     }

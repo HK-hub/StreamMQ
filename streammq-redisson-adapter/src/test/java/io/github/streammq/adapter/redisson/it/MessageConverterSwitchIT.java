@@ -1,9 +1,9 @@
 package io.github.streammq.adapter.redisson.it;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
-import io.github.streammq.adapter.redisson.consumer.RedissonStreamConsumer;
+import io.github.streammq.adapter.redisson.listener.RedissonStreamListener;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.spi.MessageConverter;
@@ -117,8 +117,8 @@ class MessageConverterSwitchIT extends AbstractRedisIT {
         // 基类已使用 DefaultMessageConverter + JacksonJsonSerializer
         RedissonStreamProducer producer =
             new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
-        RedissonStreamConsumer consumer =
-            new RedissonStreamConsumer(redisson, namespace, topic, group, "c1", converter);
+        RedissonStreamListener consumer =
+            new RedissonStreamListener(redisson, namespace, topic, group, "c1", converter);
         createConsumerGroup(topic, group);
 
         try {
@@ -150,8 +150,8 @@ class MessageConverterSwitchIT extends AbstractRedisIT {
 
         RedissonStreamProducer producer =
             new RedissonStreamProducer(redisson, namespace, group + "-p", passThroughConverter, 3000L, 0);
-        RedissonStreamConsumer consumer =
-            new RedissonStreamConsumer(redisson, namespace, topic, group, "c1", passThroughConverter);
+        RedissonStreamListener consumer =
+            new RedissonStreamListener(redisson, namespace, topic, group, "c1", passThroughConverter);
         createConsumerGroup(topic, group);
 
         try {
@@ -194,9 +194,9 @@ class MessageConverterSwitchIT extends AbstractRedisIT {
 
             // 读取两个 Stream 的 entry 字段,对比 body 字段格式
             RStream<String, String> defaultStream =
-                redisson.getStream(StreamMqKeys.topicStream(namespace, topicDefault));
+                redisson.getStream(StreamMQKeys.topicStream(namespace, topicDefault));
             RStream<String, String> passStream =
-                redisson.getStream(StreamMqKeys.topicStream(namespace, topicPass));
+                redisson.getStream(StreamMQKeys.topicStream(namespace, topicPass));
 
             Map<StreamMessageId, Map<String, String>> defaultRange =
                 defaultStream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
@@ -225,10 +225,10 @@ class MessageConverterSwitchIT extends AbstractRedisIT {
             createConsumerGroup(topicDefault, group + "-c");
             createConsumerGroup(topicPass, group + "-c");
 
-            RedissonStreamConsumer defaultConsumer =
-                new RedissonStreamConsumer(redisson, namespace, topicDefault, group + "-c", "c1", defaultConverter);
-            RedissonStreamConsumer passConsumer =
-                new RedissonStreamConsumer(redisson, namespace, topicPass, group + "-c", "c1", passThroughConverter);
+            RedissonStreamListener defaultConsumer =
+                new RedissonStreamListener(redisson, namespace, topicDefault, group + "-c", "c1", defaultConverter);
+            RedissonStreamListener passConsumer =
+                new RedissonStreamListener(redisson, namespace, topicPass, group + "-c", "c1", passThroughConverter);
             try {
                 List<Message<?>> defaultMessages = defaultConsumer.pull(1);
                 List<Message<?>> passMessages = passConsumer.pull(1);
@@ -257,8 +257,8 @@ class MessageConverterSwitchIT extends AbstractRedisIT {
 
         RedissonStreamProducer producer =
             new RedissonStreamProducer(redisson, namespace, group + "-p", passThroughConverter, 3000L, 0);
-        RedissonStreamConsumer consumer =
-            new RedissonStreamConsumer(redisson, namespace, topic, group, "c1", passThroughConverter);
+        RedissonStreamListener consumer =
+            new RedissonStreamListener(redisson, namespace, topic, group, "c1", passThroughConverter);
         createConsumerGroup(topic, group);
 
         try {

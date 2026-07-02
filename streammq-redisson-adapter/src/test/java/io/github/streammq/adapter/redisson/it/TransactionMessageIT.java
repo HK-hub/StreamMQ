@@ -1,7 +1,7 @@
 package io.github.streammq.adapter.redisson.it;
 
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.enums.LocalTransactionState;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
@@ -63,18 +63,18 @@ class TransactionMessageIT extends AbstractRedisIT {
             assertThat(halfId).isNotNull();
 
             // half Stream 应有 1 条
-            RStream<String, String> halfStream = redisson.getStream(StreamMqKeys.halfStream(namespace, TX_GROUP));
+            RStream<String, String> halfStream = redisson.getStream(StreamMQKeys.halfStream(namespace, TX_GROUP));
             assertThat(halfStream.size()).isEqualTo(1);
 
             // txstate Hash 应有 3 个字段：txId, txId.target, txId.halfId
-            RMap<String, String> stateMap = redisson.getMap(StreamMqKeys.transactionStateHash(namespace, TX_GROUP));
+            RMap<String, String> stateMap = redisson.getMap(StreamMQKeys.transactionStateHash(namespace, TX_GROUP));
             assertThat(stateMap.get(txId)).isEqualTo(TransactionScanner.STATE_PREPARE);
             assertThat(stateMap.get(txId + ".target")).isEqualTo(targetTopic);
             assertThat(stateMap.get(txId + ".halfId")).isEqualTo(halfId.toString());
 
             // txcheck ZSet 应有 1 条
             RScoredSortedSet<String> zset = redisson.getScoredSortedSet(
-                StreamMqKeys.transactionCheckZSet(namespace, TX_GROUP));
+                StreamMQKeys.transactionCheckZSet(namespace, TX_GROUP));
             assertThat(zset.size()).isEqualTo(1);
             assertThat(zset.contains(txId)).isTrue();
         } finally {
@@ -97,7 +97,7 @@ class TransactionMessageIT extends AbstractRedisIT {
             scanner.markCommit(txId, TX_GROUP);
 
             // 目标 Stream 应有 1 条消息
-            RStream<String, String> targetStream = redisson.getStream(StreamMqKeys.topicStream(namespace, targetTopic));
+            RStream<String, String> targetStream = redisson.getStream(StreamMQKeys.topicStream(namespace, targetTopic));
             assertThat(targetStream.size()).isEqualTo(1);
             Map<StreamMessageId, Map<String, String>> entries = targetStream.range(
                 1, StreamMessageId.MIN, StreamMessageId.MAX);
@@ -105,16 +105,16 @@ class TransactionMessageIT extends AbstractRedisIT {
             assertThat(transferredFields.get("body")).isNotEmpty();
 
             // half Stream 应被清理（XDEL）
-            RStream<String, String> halfStream = redisson.getStream(StreamMqKeys.halfStream(namespace, TX_GROUP));
+            RStream<String, String> halfStream = redisson.getStream(StreamMQKeys.halfStream(namespace, TX_GROUP));
             assertThat(halfStream.size()).isZero();
 
             // txstate 主状态应为 COMMIT
-            RMap<String, String> stateMap = redisson.getMap(StreamMqKeys.transactionStateHash(namespace, TX_GROUP));
+            RMap<String, String> stateMap = redisson.getMap(StreamMQKeys.transactionStateHash(namespace, TX_GROUP));
             assertThat(stateMap.get(txId)).isEqualTo(TransactionScanner.STATE_COMMIT);
 
             // txcheck ZSet 应为空
             RScoredSortedSet<String> zset = redisson.getScoredSortedSet(
-                StreamMqKeys.transactionCheckZSet(namespace, TX_GROUP));
+                StreamMQKeys.transactionCheckZSet(namespace, TX_GROUP));
             assertThat(zset.size()).isZero();
         } finally {
             scanner.stop();
@@ -136,20 +136,20 @@ class TransactionMessageIT extends AbstractRedisIT {
             scanner.markRollback(txId, TX_GROUP);
 
             // 目标 Stream 应为空
-            RStream<String, String> targetStream = redisson.getStream(StreamMqKeys.topicStream(namespace, targetTopic));
+            RStream<String, String> targetStream = redisson.getStream(StreamMQKeys.topicStream(namespace, targetTopic));
             assertThat(targetStream.size()).isZero();
 
             // half Stream 应被清理（XDEL）
-            RStream<String, String> halfStream = redisson.getStream(StreamMqKeys.halfStream(namespace, TX_GROUP));
+            RStream<String, String> halfStream = redisson.getStream(StreamMQKeys.halfStream(namespace, TX_GROUP));
             assertThat(halfStream.size()).isZero();
 
             // txstate 主状态应为 ROLLBACK
-            RMap<String, String> stateMap = redisson.getMap(StreamMqKeys.transactionStateHash(namespace, TX_GROUP));
+            RMap<String, String> stateMap = redisson.getMap(StreamMQKeys.transactionStateHash(namespace, TX_GROUP));
             assertThat(stateMap.get(txId)).isEqualTo(TransactionScanner.STATE_ROLLBACK);
 
             // txcheck ZSet 应为空
             RScoredSortedSet<String> zset = redisson.getScoredSortedSet(
-                StreamMqKeys.transactionCheckZSet(namespace, TX_GROUP));
+                StreamMQKeys.transactionCheckZSet(namespace, TX_GROUP));
             assertThat(zset.size()).isZero();
         } finally {
             scanner.stop();
@@ -179,25 +179,25 @@ class TransactionMessageIT extends AbstractRedisIT {
 
             // 等待目标 Stream 出现消息
             await().atMost(AWAIT_SECONDS, TimeUnit.SECONDS).until(() -> {
-                RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, targetTopic));
+                RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, targetTopic));
                 return stream.size() > 0;
             });
 
             // 验证目标 Stream 有消息
-            RStream<String, String> targetStream = redisson.getStream(StreamMqKeys.topicStream(namespace, targetTopic));
+            RStream<String, String> targetStream = redisson.getStream(StreamMQKeys.topicStream(namespace, targetTopic));
             assertThat(targetStream.size()).isEqualTo(1);
 
             // half Stream 应被清理
-            RStream<String, String> halfStream = redisson.getStream(StreamMqKeys.halfStream(namespace, TX_GROUP));
+            RStream<String, String> halfStream = redisson.getStream(StreamMQKeys.halfStream(namespace, TX_GROUP));
             assertThat(halfStream.size()).isZero();
 
             // txstate 应为 COMMIT
-            RMap<String, String> stateMap = redisson.getMap(StreamMqKeys.transactionStateHash(namespace, TX_GROUP));
+            RMap<String, String> stateMap = redisson.getMap(StreamMQKeys.transactionStateHash(namespace, TX_GROUP));
             assertThat(stateMap.get(txId)).isEqualTo(TransactionScanner.STATE_COMMIT);
 
             // txcheck ZSet 应为空
             RScoredSortedSet<String> zset = redisson.getScoredSortedSet(
-                StreamMqKeys.transactionCheckZSet(namespace, TX_GROUP));
+                StreamMQKeys.transactionCheckZSet(namespace, TX_GROUP));
             assertThat(zset.size()).isZero();
         } finally {
             scanner.stop();
@@ -225,20 +225,20 @@ class TransactionMessageIT extends AbstractRedisIT {
             // 等待 txcheck ZSet 被清空（说明回查已执行）
             await().atMost(AWAIT_SECONDS, TimeUnit.SECONDS).until(() -> {
                 RScoredSortedSet<String> zset = redisson.getScoredSortedSet(
-                    StreamMqKeys.transactionCheckZSet(namespace, TX_GROUP));
+                    StreamMQKeys.transactionCheckZSet(namespace, TX_GROUP));
                 return zset.size() == 0;
             });
 
             // 目标 Stream 应为空
-            RStream<String, String> targetStream = redisson.getStream(StreamMqKeys.topicStream(namespace, targetTopic));
+            RStream<String, String> targetStream = redisson.getStream(StreamMQKeys.topicStream(namespace, targetTopic));
             assertThat(targetStream.size()).isZero();
 
             // half Stream 应被清理
-            RStream<String, String> halfStream = redisson.getStream(StreamMqKeys.halfStream(namespace, TX_GROUP));
+            RStream<String, String> halfStream = redisson.getStream(StreamMQKeys.halfStream(namespace, TX_GROUP));
             assertThat(halfStream.size()).isZero();
 
             // txstate 应为 ROLLBACK
-            RMap<String, String> stateMap = redisson.getMap(StreamMqKeys.transactionStateHash(namespace, TX_GROUP));
+            RMap<String, String> stateMap = redisson.getMap(StreamMQKeys.transactionStateHash(namespace, TX_GROUP));
             assertThat(stateMap.get(txId)).isEqualTo(TransactionScanner.STATE_ROLLBACK);
         } finally {
             scanner.stop();
@@ -270,12 +270,12 @@ class TransactionMessageIT extends AbstractRedisIT {
             await().atMost(AWAIT_SECONDS, TimeUnit.SECONDS).until(() -> checkCount.get() >= 1);
 
             // 此时 txstate 主状态应为 UNKNOWN
-            RMap<String, String> stateMap = redisson.getMap(StreamMqKeys.transactionStateHash(namespace, TX_GROUP));
+            RMap<String, String> stateMap = redisson.getMap(StreamMQKeys.transactionStateHash(namespace, TX_GROUP));
             assertThat(stateMap.get(txId)).isEqualTo(TransactionScanner.STATE_UNKNOWN);
 
             // 回查计数 Hash 应 >= 1
             RMap<String, String> counterMap = redisson.getMap(
-                StreamMqKeys.transactionCheckCounter(namespace, TX_GROUP));
+                StreamMQKeys.transactionCheckCounter(namespace, TX_GROUP));
             String countStr = counterMap.get(txId);
             assertThat(countStr).isNotNull();
             assertThat(Integer.parseInt(countStr)).isGreaterThanOrEqualTo(1);
@@ -316,15 +316,15 @@ class TransactionMessageIT extends AbstractRedisIT {
 
             // 验证状态为 ROLLBACK
             RMap<String, String> stateMap = redisson.getMap(
-                StreamMqKeys.transactionStateHash(namespace, TX_GROUP));
+                StreamMQKeys.transactionStateHash(namespace, TX_GROUP));
             assertThat(stateMap.get(txId)).isEqualTo(TransactionScanner.STATE_ROLLBACK);
 
             // 目标 Stream 应为空
-            RStream<String, String> targetStream = redisson.getStream(StreamMqKeys.topicStream(namespace, targetTopic));
+            RStream<String, String> targetStream = redisson.getStream(StreamMQKeys.topicStream(namespace, targetTopic));
             assertThat(targetStream.size()).isZero();
 
             // half Stream 应被清理
-            RStream<String, String> halfStream = redisson.getStream(StreamMqKeys.halfStream(namespace, TX_GROUP));
+            RStream<String, String> halfStream = redisson.getStream(StreamMQKeys.halfStream(namespace, TX_GROUP));
             assertThat(halfStream.size()).isZero();
         } finally {
             scanner.stop();

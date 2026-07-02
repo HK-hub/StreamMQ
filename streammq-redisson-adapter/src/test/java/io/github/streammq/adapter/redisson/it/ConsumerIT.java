@@ -1,8 +1,8 @@
 package io.github.streammq.adapter.redisson.it;
 
-import io.github.streammq.adapter.redisson.consumer.RedissonStreamConsumer;
+import io.github.streammq.adapter.redisson.listener.RedissonStreamListener;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.message.MessageId;
@@ -16,20 +16,19 @@ import org.redisson.api.StreamMessageId;
 
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * {@link RedissonStreamConsumer} 的 Redis 联动集成测试。
+ * {@link RedissonStreamListener} 的 Redis 联动集成测试。
  *
  * <p>覆盖消费组创建、消息拉取、ACK、PEL 留存与超时阻塞拉取等场景。
  */
-@DisplayName("RedissonStreamConsumer 集成测试")
+@DisplayName("RedissonStreamListener 集成测试")
 class ConsumerIT extends AbstractRedisIT {
 
-    private RedissonStreamConsumer consumer;
+    private RedissonStreamListener consumer;
     private RedissonStreamProducer producer;
     private static final String TOPIC = "consumer-test-topic";
     private static final String GROUP = "consumer-test-group";
@@ -38,7 +37,7 @@ class ConsumerIT extends AbstractRedisIT {
     @BeforeEach
     void setUpConsumerAndProducer() {
         producer = new RedissonStreamProducer(redisson, namespace, GROUP + "-p", converter, 3000L, 0);
-        consumer = new RedissonStreamConsumer(redisson, namespace, TOPIC, GROUP, CONSUMER_NAME, converter);
+        consumer = new RedissonStreamListener(redisson, namespace, TOPIC, GROUP, CONSUMER_NAME, converter);
         // 显式创建消费者组,绕过主代码 StreamMessageId.MIN bug
         createConsumerGroup(TOPIC, GROUP);
     }
@@ -58,7 +57,7 @@ class ConsumerIT extends AbstractRedisIT {
     void createGroup_groupExistsAfterPull() {
         consumer.pull(1);
 
-        RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, TOPIC));
+        RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, TOPIC));
         List<StreamGroup> groups = stream.listGroups();
         assertThat(groups).anyMatch(g -> GROUP.equals(g.getName()));
     }
@@ -109,7 +108,7 @@ class ConsumerIT extends AbstractRedisIT {
 
         consumer.ack(messages.get(0).getMessageId());
 
-        RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, TOPIC));
+        RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, TOPIC));
         assertThat(stream.listPending(GROUP, StreamMessageId.MIN, StreamMessageId.MAX, 100)).isEmpty();
     }
 
@@ -120,7 +119,7 @@ class ConsumerIT extends AbstractRedisIT {
         List<Message<?>> messages = consumer.pull(1);
         assertThat(messages).hasSize(1);
 
-        RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, TOPIC));
+        RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, TOPIC));
         assertThat(stream.listPending(GROUP, StreamMessageId.MIN, StreamMessageId.MAX, 100)).hasSize(1);
     }
 
@@ -148,7 +147,7 @@ class ConsumerIT extends AbstractRedisIT {
         List<MessageId> ids = messages.stream().map(Message::getMessageId).toList();
         consumer.ackBatch(ids);
 
-        RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, TOPIC));
+        RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, TOPIC));
         assertThat(stream.listPending(GROUP, StreamMessageId.MIN, StreamMessageId.MAX, 100)).isEmpty();
     }
 

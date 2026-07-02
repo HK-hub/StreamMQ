@@ -2,8 +2,8 @@ package io.github.streammq.adapter.redisson.producer;
 
 import io.github.streammq.core.StreamMqConstants;
 import io.github.streammq.core.producer.ProducerConfig;
-import io.github.streammq.core.producer.StreamMqProducer;
-import io.github.streammq.core.producer.StreamMqProducerFactory;
+import io.github.streammq.core.producer.StreamMessageProducer;
+import io.github.streammq.core.producer.StreamMessageProducerFactory;
 import io.github.streammq.core.spi.MessageConverter;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
@@ -17,7 +17,7 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * {@link StreamMqProducerFactory} 的 Redisson 默认实现。
+ * {@link StreamMessageProducerFactory} 的 Redisson 默认实现。
  *
  * <p>按 {@code group} 缓存 {@link RedissonStreamProducer} 实例，避免重复创建。
  * 同一 {@code group} 的所有 Producer 共享底层 {@link RedissonClient}。
@@ -34,7 +34,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * @since 0.1.0
  */
 @RequiredArgsConstructor
-public class RedissonStreamProducerFactory implements StreamMqProducerFactory {
+public class RedissonStreamProducerFactory implements StreamMessageProducerFactory {
 
     private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamProducerFactory.class);
 
@@ -52,7 +52,7 @@ public class RedissonStreamProducerFactory implements StreamMqProducerFactory {
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     @Override
-    public StreamMqProducer createProducer(ProducerConfig config) {
+    public StreamMessageProducer createProducer(ProducerConfig config) {
         ensureOpen();
         Objects.requireNonNull(config, "config");
         String group = config.getGroup();

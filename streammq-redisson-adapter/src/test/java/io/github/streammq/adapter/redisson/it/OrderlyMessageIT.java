@@ -1,15 +1,13 @@
 package io.github.streammq.adapter.redisson.it;
 
-import io.github.streammq.adapter.redisson.container.DefaultStreamMqListenerContainer;
-import io.github.streammq.adapter.redisson.consumer.RedissonStreamConsumerFactory;
+import io.github.streammq.adapter.redisson.container.ContainerState;
+import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
+import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
-import io.github.streammq.core.enums.AcknowledgeMode;
-import io.github.streammq.core.enums.Action;
-import io.github.streammq.core.enums.ConsumeMode;
-import io.github.streammq.core.enums.MessageModel;
-import io.github.streammq.core.enums.SelectorType;
-import io.github.streammq.core.listener.StreamMqOrderlyListener;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.core.annotation.StreamMQOrderlyConsumer;
+import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
+import io.github.streammq.core.enums.*;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.spi.MessageConverter;
@@ -33,10 +31,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * 顺序消费({@code @StreamMqOrderlyListener})端到端 Redis 联动集成测试。
+ * 顺序消费({@code @StreamMqOrderlyConsumer})端到端 Redis 联动集成测试。
  *
- * <p>覆盖 {@link DefaultStreamMqListenerContainer#registerOrderlyListener} 注册的
- * {@link StreamMqOrderlyListener} 在真实 Redis 环境下的消息接收、顺序消费、
+ * <p>覆盖 {@link DefaultStreamMQListenerContainer#registerOrderlyConsumer} 注册的
+ * {@link StreamMessageOrderlyConsumer} 在真实 Redis 环境下的消息接收、顺序消费、
  * {@link Action#RECONSUME_LATER} 重试以及容器生命周期管理。
  */
 @DisplayName("顺序消费集成测试")
@@ -70,7 +68,7 @@ class OrderlyMessageIT extends AbstractRedisIT {
     }
 
     /**
-     * 通过动态代理构造 {@link io.github.streammq.core.annotation.StreamMqOrderlyListener} 注解实例。
+     * 通过动态代理构造 {@link StreamMQOrderlyConsumer} 注解实例。
      *
      * @param topic 主题
      * @param group 消费者组
@@ -78,11 +76,11 @@ class OrderlyMessageIT extends AbstractRedisIT {
      * @return 注解代理实例
      */
     @SuppressWarnings("unchecked")
-    private static io.github.streammq.core.annotation.StreamMqOrderlyListener mkOrderlyAnnotation(
+    private static StreamMQOrderlyConsumer mkOrderlyAnnotation(
             String topic, String group, int maxReconsumeTime) {
-        return (io.github.streammq.core.annotation.StreamMqOrderlyListener) Proxy.newProxyInstance(
-            io.github.streammq.core.annotation.StreamMqOrderlyListener.class.getClassLoader(),
-            new Class<?>[]{io.github.streammq.core.annotation.StreamMqOrderlyListener.class},
+        return (StreamMQOrderlyConsumer) Proxy.newProxyInstance(
+            StreamMQOrderlyConsumer.class.getClassLoader(),
+            new Class<?>[]{StreamMQOrderlyConsumer.class},
             (proxy, method, args) -> switch (method.getName()) {
                 case "topic" -> topic;
                 case "consumerGroup" -> group;
@@ -107,10 +105,10 @@ class OrderlyMessageIT extends AbstractRedisIT {
                 case "rebalanceStrategy" -> RebalanceStrategy.class;
                 case "pullInterval" -> 0L;
                 case "suspendCurrentQueueTimeMillis" -> 1000L;
-                case "annotationType" -> io.github.streammq.core.annotation.StreamMqOrderlyListener.class;
+                case "annotationType" -> StreamMQOrderlyConsumer.class;
                 case "hashCode" -> (topic + group).hashCode();
                 case "equals" -> args != null && args.length > 0 && proxy == args[0];
-                case "toString" -> "@StreamMqOrderlyListener(topic=" + topic + ", consumerGroup=" + group + ")";
+                case "toString" -> "@StreamMqOrderlyConsumer(topic=" + topic + ", consumerGroup=" + group + ")";
                 default -> defaultAnnotationValue(method.getReturnType());
             });
     }
@@ -135,16 +133,16 @@ class OrderlyMessageIT extends AbstractRedisIT {
         String group = "orderly-recv-group";
 
         RetryPolicy retryPolicy = new FastRetryPolicy(100, 3);
-        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
-        DefaultStreamMqListenerContainer container =
-            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, retryPolicy, namespace);
+        RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+            new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, retryPolicy, namespace);
 
         AtomicReference<Message<?>> receivedRef = new AtomicReference<>();
-        StreamMqOrderlyListener<String> listener = (msg, ctx) -> {
+        StreamMessageOrderlyConsumer<String> listener = (msg, ctx) -> {
             receivedRef.set(msg);
             return Action.SUCCESS;
         };
-        container.registerOrderlyListener(listener, mkOrderlyAnnotation(topic, group, 3));
+        container.registerOrderlyConsumer(listener, mkOrderlyAnnotation(topic, group, 3));
         createConsumerGroup(topic, group);
         container.start();
 
@@ -168,7 +166,7 @@ class OrderlyMessageIT extends AbstractRedisIT {
 
             // SUCCESS 后 PEL 应为空
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
-                RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+                RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
                 assertThat(stream.listPending(group, StreamMessageId.MIN, StreamMessageId.MAX, 100)).isEmpty();
             });
         } finally {
@@ -184,16 +182,16 @@ class OrderlyMessageIT extends AbstractRedisIT {
         String group = "orderly-multi-group";
 
         RetryPolicy retryPolicy = new FastRetryPolicy(100, 3);
-        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
-        DefaultStreamMqListenerContainer container =
-            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, retryPolicy, namespace);
+        RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+            new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, retryPolicy, namespace);
 
         List<String> consumedBodies = new java.util.concurrent.CopyOnWriteArrayList<>();
-        StreamMqOrderlyListener<String> listener = (msg, ctx) -> {
+        StreamMessageOrderlyConsumer<String> listener = (msg, ctx) -> {
             consumedBodies.add((String) msg.getBody());
             return Action.SUCCESS;
         };
-        container.registerOrderlyListener(listener, mkOrderlyAnnotation(topic, group, 3));
+        container.registerOrderlyConsumer(listener, mkOrderlyAnnotation(topic, group, 3));
         createConsumerGroup(topic, group);
         container.start();
 
@@ -215,7 +213,7 @@ class OrderlyMessageIT extends AbstractRedisIT {
 
             // 全部 ACK 后 PEL 应为空
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
-                RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+                RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
                 assertThat(stream.listPending(group, StreamMessageId.MIN, StreamMessageId.MAX, 100)).isEmpty();
             });
         } finally {
@@ -231,19 +229,19 @@ class OrderlyMessageIT extends AbstractRedisIT {
         String group = "orderly-reconsume-group";
 
         RetryPolicy retryPolicy = new FastRetryPolicy(100, 100);
-        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
-        DefaultStreamMqListenerContainer container =
-            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, retryPolicy, namespace);
+        RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+            new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, retryPolicy, namespace);
 
         AtomicInteger attempt = new AtomicInteger(0);
-        StreamMqOrderlyListener<String> listener = (msg, ctx) -> {
+        StreamMessageOrderlyConsumer<String> listener = (msg, ctx) -> {
             // 第一次返回 RECONSUME_LATER 触发重试,第二次返回 SUCCESS
             if (attempt.incrementAndGet() == 1) {
                 return Action.RECONSUME_LATER;
             }
             return Action.SUCCESS;
         };
-        container.registerOrderlyListener(listener, mkOrderlyAnnotation(topic, group, 16));
+        container.registerOrderlyConsumer(listener, mkOrderlyAnnotation(topic, group, 16));
         createConsumerGroup(topic, group);
         container.start();
 
@@ -255,14 +253,14 @@ class OrderlyMessageIT extends AbstractRedisIT {
                 .build());
 
             // 等待重试 ZSet 出现消息(第一次返回 RECONSUME_LATER 后写入)
-            String retryKey = StreamMqKeys.retryZSet(namespace, topic, group);
+            String retryKey = StreamMQKeys.retryZSet(namespace, topic, group);
             await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> {
                 RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
                 assertThat(zset.size()).isEqualTo(1);
             });
 
             // 原消息已被 ACK(从 PEL 移除)
-            RStream<String, String> stream = redisson.getStream(StreamMqKeys.topicStream(namespace, topic));
+            RStream<String, String> stream = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
             assertThat(stream.listPending(group, StreamMessageId.MIN, StreamMessageId.MAX, 100)).isEmpty();
         } finally {
             producer.close();
@@ -277,27 +275,27 @@ class OrderlyMessageIT extends AbstractRedisIT {
         String group = "orderly-lifecycle-group";
 
         RetryPolicy retryPolicy = new FastRetryPolicy(100, 3);
-        RedissonStreamConsumerFactory consumerFactory = new RedissonStreamConsumerFactory(redisson, converter);
-        DefaultStreamMqListenerContainer container =
-            new DefaultStreamMqListenerContainer(redisson, consumerFactory, converter, retryPolicy, namespace);
+        RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+            new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, retryPolicy, namespace);
 
         AtomicInteger consumed = new AtomicInteger(0);
-        StreamMqOrderlyListener<String> listener = (msg, ctx) -> {
+        StreamMessageOrderlyConsumer<String> listener = (msg, ctx) -> {
             consumed.incrementAndGet();
             return Action.SUCCESS;
         };
-        container.registerOrderlyListener(listener, mkOrderlyAnnotation(topic, group, 3));
+        container.registerOrderlyConsumer(listener, mkOrderlyAnnotation(topic, group, 3));
         createConsumerGroup(topic, group);
 
         // 启动前应为 INIT 状态且非运行
         assertThat(container.isRunning()).isFalse();
-        assertThat(container.getState()).isEqualTo(DefaultStreamMqListenerContainer.ContainerState.INIT);
+        assertThat(container.getState()).isEqualTo(ContainerState.INIT);
 
         container.start();
         try {
             // 启动后应为 RUNNING 状态
             assertThat(container.isRunning()).isTrue();
-            assertThat(container.getState()).isEqualTo(DefaultStreamMqListenerContainer.ContainerState.RUNNING);
+            assertThat(container.getState()).isEqualTo(ContainerState.RUNNING);
 
             RedissonStreamProducer producer =
                 new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
@@ -316,6 +314,6 @@ class OrderlyMessageIT extends AbstractRedisIT {
 
         // 停止后应为 STOPPED 状态且非运行
         assertThat(container.isRunning()).isFalse();
-        assertThat(container.getState()).isEqualTo(DefaultStreamMqListenerContainer.ContainerState.STOPPED);
+        assertThat(container.getState()).isEqualTo(ContainerState.STOPPED);
     }
 }

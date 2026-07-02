@@ -1,6 +1,6 @@
 package io.github.streammq.adapter.redisson.scheduler;
 
-import io.github.streammq.adapter.redisson.support.StreamMqKeys;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMqConstants;
 import io.github.streammq.core.enums.DelayLevel;
 import org.redisson.api.RBatch;
@@ -134,7 +134,7 @@ public class DelayMessageScheduler {
      * @param level 延时级别
      */
     void scanExpired(DelayLevel level) {
-        String zsetKey = StreamMqKeys.delayZSet(namespace, level.name());
+        String zsetKey = StreamMQKeys.delayZSet(namespace, level.name());
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
         long now = System.currentTimeMillis();
 
@@ -153,7 +153,7 @@ public class DelayMessageScheduler {
                 continue;
             }
             try {
-                String payloadKey = StreamMqKeys.delayPayloadHash(namespace, msgId);
+                String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
                 RMap<String, String> payloadMap = redisson.getMap(payloadKey);
                 Map<String, String> fields = payloadMap.readAllMap();
                 if (fields == null || fields.isEmpty()) {
@@ -174,7 +174,7 @@ public class DelayMessageScheduler {
                 if (batch == null) {
                     batch = redisson.createBatch();
                 }
-                String targetStreamKey = StreamMqKeys.topicStream(namespace, targetTopic);
+                String targetStreamKey = StreamMQKeys.topicStream(namespace, targetTopic);
                 StreamAddArgs<String, String> args = StreamAddArgs.entries(fields);
                 batch.<String, String>getStream(targetStreamKey).addAsync(args);
                 batch.<String, String>getMap(payloadKey).deleteAsync();
