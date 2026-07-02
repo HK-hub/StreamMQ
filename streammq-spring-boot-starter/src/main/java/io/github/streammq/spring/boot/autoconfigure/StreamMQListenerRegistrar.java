@@ -6,14 +6,13 @@ import io.github.streammq.core.annotation.StreamMQConsumer;
 import io.github.streammq.core.annotation.StreamMQDlqConsumer;
 import io.github.streammq.core.annotation.StreamMQOrderlyConsumer;
 import io.github.streammq.core.annotation.StreamMQTransactionConsumer;
-import io.github.streammq.core.consumer.StreamMessageAckConsumer;
-import io.github.streammq.core.consumer.StreamMessageConsumer;
+import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
+import io.github.streammq.core.consumer.StreamMessageManualAckConsumer;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
 import io.github.streammq.core.transaction.TransactionChecker;
 import io.github.streammq.spring.boot.support.AnnotationAttributeResolver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.context.ApplicationContext;
 import org.springframework.context.ApplicationContextAware;
@@ -31,10 +30,10 @@ import java.util.Map;
  *
  * <p>注册顺序：
  * <ol>
- *   <li>扫描 {@code @StreamMqConsumer} 标注的 Bean（实现 {@link StreamMessageConsumer}
- *       或 {@link StreamMessageAckConsumer}）</li>
+ *   <li>扫描 {@code @StreamMqConsumer} 标注的 Bean（实现 {@link StreamMessageConcurrentlyConsumer}
+ *       或 {@link StreamMessageManualAckConsumer}）</li>
  *   <li>扫描 {@code @StreamMqOrderlyConsumer} 标注的 Bean（实现 {@link StreamMQOrderlyConsumer}）</li>
- *   <li>扫描 {@code @StreamMqDlqConsumer} 标注的 Bean（实现 {@link StreamMessageConsumer}），
+ *   <li>扫描 {@code @StreamMqDlqConsumer} 标注的 Bean（实现 {@link StreamMessageConcurrentlyConsumer}），
  *       注册为 DLQ 消费者</li>
  *   <li>扫描 {@code @StreamMqTransactionConsumer} 标注的 Bean（实现 {@link TransactionChecker}），
  *       注册到 {@link TransactionScanner}</li>
@@ -285,14 +284,14 @@ public class StreamMQListenerRegistrar implements SmartInitializingSingleton, Ap
                 LOG.info("Skip disabled @StreamMqConsumer: bean={}, topic={}", beanName, resolved.topic());
                 continue;
             }
-            if (bean instanceof StreamMessageAckConsumer) {
-                StreamMessageAckConsumer listener = (StreamMessageAckConsumer) bean;
+            if (bean instanceof StreamMessageManualAckConsumer) {
+                StreamMessageManualAckConsumer listener = (StreamMessageManualAckConsumer) bean;
                 listenerContainer.registerAckConsumer(listener, resolved);
                 LOG.info("Registered AckConsumer: bean={}, topic={}, group={}",
                     beanName, resolved.topic(), resolved.consumerGroup());
-            } else if (bean instanceof StreamMessageConsumer) {
-                StreamMessageConsumer listener =
-                    (StreamMessageConsumer) bean;
+            } else if (bean instanceof StreamMessageConcurrentlyConsumer) {
+                StreamMessageConcurrentlyConsumer listener =
+                    (StreamMessageConcurrentlyConsumer) bean;
                 listenerContainer.registerConsumer(listener, resolved);
                 LOG.info("Registered Consumer: bean={}, topic={}, group={}",
                     beanName, resolved.topic(), resolved.consumerGroup());
@@ -356,9 +355,9 @@ public class StreamMQListenerRegistrar implements SmartInitializingSingleton, Ap
                     beanName, resolved.topic());
                 continue;
             }
-            if (bean instanceof StreamMessageConsumer) {
-                StreamMessageConsumer listener =
-                    (StreamMessageConsumer) bean;
+            if (bean instanceof StreamMessageConcurrentlyConsumer) {
+                StreamMessageConcurrentlyConsumer listener =
+                    (StreamMessageConcurrentlyConsumer) bean;
                 listenerContainer.registerDlqConsumer(listener, resolved);
                 LOG.info("Registered DlqConsumer: bean={}, topic={}, originalGroup={}",
                     beanName, resolved.topic(), resolved.consumerGroup());

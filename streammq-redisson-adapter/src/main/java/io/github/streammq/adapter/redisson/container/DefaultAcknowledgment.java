@@ -13,7 +13,7 @@ import java.time.Duration;
 /**
  * 默认 {@link Acknowledgment} 实现。
  *
- * <p>由 {@link DefaultConsumerContext#acknowledge()} 创建，封装消息确认逻辑：
+ * <p>由 {@link DefaultConsumeContextConsume#acknowledge()} 创建，封装消息确认逻辑：
  * <ul>
  *   <li>{@link #acknowledge()} - ACK 消息（从 PEL 移除），标记 context 已 ack</li>
  *   <li>{@link #nack()} - 不 ACK，消息留在 PEL 中等待 XAUTOCLAIM 补偿</li>
@@ -30,7 +30,7 @@ public class DefaultAcknowledgment implements Acknowledgment {
 
     private final Message<?> message;
     private final StreamMQListener listener;
-    private final DefaultConsumerContext context;
+    private final DefaultConsumeContextConsume context;
 
     @Override
     public void acknowledge() {

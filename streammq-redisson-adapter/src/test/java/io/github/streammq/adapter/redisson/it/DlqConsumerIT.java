@@ -6,7 +6,7 @@ import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.annotation.StreamMQConsumer;
 import io.github.streammq.core.annotation.StreamMQDlqConsumer;
-import io.github.streammq.core.consumer.StreamMessageConsumer;
+import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.Action;
 import io.github.streammq.core.enums.ConsumeMode;
@@ -161,13 +161,13 @@ class DlqConsumerIT extends AbstractRedisIT {
             new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, noRetryPolicy, namespace);
 
         // 业务消费者：始终失败，触发 DLQ 路由
-        StreamMessageConsumer<String> businessListener =
+        StreamMessageConcurrentlyConsumer<String> businessListener =
             (msg, ctx) -> { throw new RuntimeException("always fails, trigger DLQ"); };
         container.registerConsumer(businessListener, mkListenerAnnotation(topic, group, 0));
 
         // DLQ 消费者：接收死信消息
         AtomicReference<Message<?>> receivedDlqMessage = new AtomicReference<>();
-        StreamMessageConsumer<String> dlqListener = (msg, ctx) -> {
+        StreamMessageConcurrentlyConsumer<String> dlqListener = (msg, ctx) -> {
             receivedDlqMessage.set(msg);
             return Action.SUCCESS;
         };
@@ -231,7 +231,7 @@ class DlqConsumerIT extends AbstractRedisIT {
         // DLQ 消费者：使用默认 dlqConsumerGroup（传空字符串）
         AtomicReference<Message<?>> receivedDlqMessage = new AtomicReference<>();
         container.registerDlqConsumer(
-            (StreamMessageConsumer<String>) (msg, ctx) -> {
+            (StreamMessageConcurrentlyConsumer<String>) (msg, ctx) -> {
                 receivedDlqMessage.set(msg);
                 return Action.SUCCESS;
             },
@@ -274,7 +274,7 @@ class DlqConsumerIT extends AbstractRedisIT {
         // DLQ 消费者：也始终失败（应被直接丢弃）
         java.util.concurrent.atomic.AtomicInteger dlqAttempts = new java.util.concurrent.atomic.AtomicInteger(0);
         container.registerDlqConsumer(
-            (StreamMessageConsumer<String>) (msg, ctx) -> {
+            (StreamMessageConcurrentlyConsumer<String>) (msg, ctx) -> {
                 dlqAttempts.incrementAndGet();
                 throw new RuntimeException("DLQ consumer also fails");
             },

@@ -5,7 +5,7 @@ import java.time.Duration;
 /**
  * ACK 操作接口（手动 ACK 模式专用）。
  *
- * <p>仅在 {@code AcknowledgeMode.MANUAL} 模式下生效，通过 {@link ConsumerContext#acknowledge()} 获取。
+ * <p>仅在 {@code AcknowledgeMode.MANUAL} 模式下生效，通过 {@link ConsumeConcurrentlyContext#acknowledge()} 获取。
  *
  * <p>使用示例：
  * <pre>{@code

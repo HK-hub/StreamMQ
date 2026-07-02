@@ -6,7 +6,7 @@ import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.annotation.StreamMQConsumer;
-import io.github.streammq.core.consumer.StreamMessageConsumer;
+import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.enums.*;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
@@ -129,7 +129,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
         DefaultStreamMQListenerContainer container =
             new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, fastPolicy, namespace);
 
-        StreamMessageConsumer<String> listener =
+        StreamMessageConcurrentlyConsumer<String> listener =
             (msg, ctx) -> { throw new RuntimeException("intentional failure"); };
         container.registerConsumer(listener, mkAnnotation(topic, group, 16));
         createConsumerGroup(topic, group);
@@ -167,7 +167,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
             new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, fastPolicy, namespace);
 
         AtomicInteger attempt = new AtomicInteger(0);
-        StreamMessageConsumer<String> listener = (msg, ctx) -> {
+        StreamMessageConcurrentlyConsumer<String> listener = (msg, ctx) -> {
             if (attempt.incrementAndGet() == 1) {
                 throw new RuntimeException("first attempt fails");
             }
@@ -213,7 +213,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
         DefaultStreamMQListenerContainer container =
             new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, fastPolicy, namespace);
 
-        StreamMessageConsumer<String> listener =
+        StreamMessageConcurrentlyConsumer<String> listener =
             (msg, ctx) -> { throw new RuntimeException("always fails"); };
         // maxReconsumeTimes=2:RetryScheduler 在 retryCount>=2 时路由到 DLQ
         container.registerConsumer(listener, mkAnnotation(topic, group, 2));
@@ -253,7 +253,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
         DefaultStreamMQListenerContainer container =
             new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, noRetryPolicy, namespace);
 
-        StreamMessageConsumer<String> listener =
+        StreamMessageConcurrentlyConsumer<String> listener =
             (msg, ctx) -> { throw new RuntimeException("trigger DLQ"); };
         container.registerConsumer(listener, mkAnnotation(topic, group, 0));
         createConsumerGroup(topic, group);
@@ -302,7 +302,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
         DefaultStreamMQListenerContainer container =
             new DefaultStreamMQListenerContainer(spyClient, consumerFactory, converter, noRetryPolicy, namespace);
 
-        StreamMessageConsumer<String> listener =
+        StreamMessageConcurrentlyConsumer<String> listener =
             (msg, ctx) -> { throw new RuntimeException("trigger DLQ fail"); };
         container.registerConsumer(listener, mkAnnotation(topic, group, 0));
         createConsumerGroup(topic, group);
@@ -336,7 +336,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
         DefaultStreamMQListenerContainer container =
             new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, fastPolicy, namespace);
 
-        StreamMessageConsumer<String> listener =
+        StreamMessageConcurrentlyConsumer<String> listener =
             (msg, ctx) -> { throw new RuntimeException("fail"); };
         container.registerConsumer(listener, mkAnnotation(topic, group, 16));
         createConsumerGroup(topic, group);

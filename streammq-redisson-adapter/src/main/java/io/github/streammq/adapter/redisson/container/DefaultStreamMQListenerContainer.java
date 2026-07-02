@@ -5,8 +5,8 @@ import io.github.streammq.core.StreamMqConstants;
 import io.github.streammq.core.annotation.StreamMQConsumer;
 import io.github.streammq.core.annotation.StreamMQDlqConsumer;
 import io.github.streammq.core.annotation.StreamMQOrderlyConsumer;
-import io.github.streammq.core.consumer.StreamMessageAckConsumer;
-import io.github.streammq.core.consumer.StreamMessageConsumer;
+import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
+import io.github.streammq.core.consumer.StreamMessageManualAckConsumer;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
 import io.github.streammq.core.enums.Action;
 import io.github.streammq.core.enums.ConsumeMode;
@@ -47,7 +47,7 @@ import java.util.concurrent.atomic.AtomicReference;
  *   <li>{@link RetryAndDlqHandler} - ACK / 重试 / DLQ 路由</li>
  *   <li>{@link OrderlyShardLockManager} - 顺序消费分片锁管理</li>
  *   <li>{@link ConsumerMdcTrace} - MDC 结构化日志上下文</li>
- *   <li>{@link DefaultConsumerContext} / {@link DefaultAcknowledgment} - 消费上下文与 ACK 实现</li>
+ *   <li>{@link DefaultConsumeContextConsume} / {@link DefaultAcknowledgment} - 消费上下文与 ACK 实现</li>
  * </ul>
  *
  * <p>线程安全：注册方法与生命周期方法均线程安全；消费循环在独立虚拟线程执行。
@@ -140,7 +140,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     // ===================== 注册方法 =====================
 
     @Override
-    public <T> void registerConsumer(StreamMessageConsumer<T> consumer, StreamMQConsumer annotation) {
+    public <T> void registerConsumer(StreamMessageConcurrentlyConsumer<T> consumer, StreamMQConsumer annotation) {
         Objects.requireNonNull(consumer, "consumer");
         Objects.requireNonNull(annotation, "annotation");
         checkBeforeStart();
@@ -179,7 +179,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     }
 
     @Override
-    public <T> void registerAckConsumer(StreamMessageAckConsumer<T> consumer, StreamMQConsumer annotation) {
+    public <T> void registerAckConsumer(StreamMessageManualAckConsumer<T> consumer, StreamMQConsumer annotation) {
         Objects.requireNonNull(consumer, "consumer");
         Objects.requireNonNull(annotation, "annotation");
         checkBeforeStart();
@@ -278,7 +278,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      * @param annotation @StreamMqDlqConsumer 注解实例
      * @param <T> body 类型
      */
-    public <T> void registerDlqConsumer(StreamMessageConsumer<T> consumer, StreamMQDlqConsumer annotation) {
+    public <T> void registerDlqConsumer(StreamMessageConcurrentlyConsumer<T> consumer, StreamMQDlqConsumer annotation) {
         Objects.requireNonNull(consumer, "consumer");
         Objects.requireNonNull(annotation, "annotation");
         checkBeforeStart();
@@ -476,7 +476,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void handleMessage(Message<?> message, ListenerRegistration reg, StreamMQListener listener) {
-        DefaultConsumerContext ctx = new DefaultConsumerContext(message, reg, listener);
+        DefaultConsumeContextConsume ctx = new DefaultConsumeContextConsume(message, reg, listener);
         ConsumerMdcTrace.inject(message, reg);
         Action finalAction = Action.RECONSUME_LATER;
         try {
@@ -491,7 +491,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                     finalAction = shardLockManager.consumeWithShardLock(message, reg, ctx, orderly);
                     retryDlqHandler.handleAction(finalAction, message, reg, listener);
                 } else if (reg.getType() == ListenerType.MANUAL_ACK) {
-                    StreamMessageAckConsumer ackListener = (StreamMessageAckConsumer) reg.getConsumer();
+                    StreamMessageManualAckConsumer ackListener = (StreamMessageManualAckConsumer) reg.getConsumer();
                     ackListener.onMessage(message, ctx);
                     if (!ctx.isAcked()) {
                         LOG.debug("AckListener exited without acknowledge, message stays in PEL: messageId={}",
@@ -499,7 +499,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                     }
                     finalAction = ctx.isAcked() ? Action.SUCCESS : Action.RECONSUME_LATER;
                 } else {
-                    StreamMessageConsumer consumer = (StreamMessageConsumer) reg.getConsumer();
+                    StreamMessageConcurrentlyConsumer consumer = (StreamMessageConcurrentlyConsumer) reg.getConsumer();
                     finalAction = consumer.onMessage(message, ctx);
                     retryDlqHandler.handleAction(finalAction, message, reg, listener);
                 }

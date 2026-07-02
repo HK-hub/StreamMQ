@@ -22,7 +22,7 @@ import java.util.Map;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public interface ConsumerContext {
+public interface ConsumeConcurrentlyContext {
 
     /**
      * 返回当前消息所属 Topic。

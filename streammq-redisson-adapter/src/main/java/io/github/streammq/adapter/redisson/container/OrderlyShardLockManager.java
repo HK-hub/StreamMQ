@@ -1,7 +1,7 @@
 package io.github.streammq.adapter.redisson.container;
 
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
-import io.github.streammq.core.consumer.OrderlyContext;
+import io.github.streammq.core.consumer.ConsumeOrderlyContext;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
 import io.github.streammq.core.message.Message;
 import lombok.NonNull;
@@ -65,7 +65,7 @@ public class OrderlyShardLockManager {
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
     public io.github.streammq.core.enums.Action consumeWithShardLock(Message<?> message, ListenerRegistration reg,
-            OrderlyContext ctx, StreamMessageOrderlyConsumer orderly) throws Exception {
+                                                                     ConsumeOrderlyContext ctx, StreamMessageOrderlyConsumer orderly) throws Exception {
         if (reg.getShardLocks() == null || reg.getShardCount() <= 0) {
             return orderly.onMessage(message, ctx);
         }

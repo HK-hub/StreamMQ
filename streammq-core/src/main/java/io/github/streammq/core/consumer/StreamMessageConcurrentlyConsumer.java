@@ -26,7 +26,7 @@ import io.github.streammq.core.message.Message;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public interface StreamMessageConsumer<T> {
+public interface StreamMessageConcurrentlyConsumer<T> {
 
     /**
      * 处理单条消息。
@@ -36,5 +36,5 @@ public interface StreamMessageConsumer<T> {
      * @return 处理结果动作
      * @throws Exception 业务异常，框架将其视为 {@link Action#RECONSUME_LATER}
      */
-    Action onMessage(Message<T> message, ConsumerContext context) throws Exception;
+    Action onMessage(Message<T> message, ConsumeConcurrentlyContext context) throws Exception;
 }

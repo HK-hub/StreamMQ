@@ -17,7 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>验证从 Listener 实现类的泛型声明中解析 body 类型 T 的能力，覆盖：
  * <ul>
- *   <li>三种 Listener 接口（{@link StreamMessageConsumer} / {@link StreamMessageAckConsumer} / {@link StreamMessageOrderlyConsumer}）</li>
+ *   <li>三种 Listener 接口（{@link StreamMessageConcurrentlyConsumer} / {@link StreamMessageManualAckConsumer} / {@link StreamMessageOrderlyConsumer}）</li>
  *   <li>直接实现 + 父类实现 + 嵌套泛型</li>
  *   <li>无泛型信息（裸接口实现）的回退行为</li>
  * </ul>
@@ -31,32 +31,32 @@ class BodyTypeResolverTest {
     // ===================== 测试用 Listener 类定义 =====================
 
     /** 直接实现 StreamMqConsumer&lt;String&gt; */
-    static class StringListener implements StreamMessageConsumer<String> {
+    static class StringListener implements StreamMessageConcurrentlyConsumer<String> {
         @Override
-        public Action onMessage(Message<String> message, ConsumerContext context) {
+        public Action onMessage(Message<String> message, ConsumeConcurrentlyContext context) {
             return Action.SUCCESS;
         }
     }
 
     /** 直接实现 StreamMqConsumer&lt;Integer&gt; */
-    static class IntegerListener implements StreamMessageConsumer<Integer> {
+    static class IntegerListener implements StreamMessageConcurrentlyConsumer<Integer> {
         @Override
-        public Action onMessage(Message<Integer> message, ConsumerContext context) {
+        public Action onMessage(Message<Integer> message, ConsumeConcurrentlyContext context) {
             return Action.SUCCESS;
         }
     }
 
     /** 直接实现 StreamMqAckConsumer&lt;Long&gt; */
-    static class LongAckListener implements StreamMessageAckConsumer<Long> {
+    static class LongManualAckListener implements StreamMessageManualAckConsumer<Long> {
         @Override
-        public void onMessage(Message<Long> message, ConsumerContext context) {
+        public void onMessage(Message<Long> message, ConsumeConcurrentlyContext context) {
         }
     }
 
     /** 直接实现 StreamMqOrderlyConsumer&lt;Map&gt; */
     static class MapOrderlyListener implements StreamMessageOrderlyConsumer<Map> {
         @Override
-        public Action onMessage(Message<Map> message, OrderlyContext context) {
+        public Action onMessage(Message<Map> message, ConsumeOrderlyContext context) {
             return Action.SUCCESS;
         }
     }
@@ -68,25 +68,25 @@ class BodyTypeResolverTest {
     }
 
     /** 实现 StreamMqConsumer&lt;OrderDto&gt;（自定义 POJO） */
-    static class OrderDtoListener implements StreamMessageConsumer<OrderDto> {
+    static class OrderDtoListener implements StreamMessageConcurrentlyConsumer<OrderDto> {
         @Override
-        public Action onMessage(Message<OrderDto> message, ConsumerContext context) {
+        public Action onMessage(Message<OrderDto> message, ConsumeConcurrentlyContext context) {
             return Action.SUCCESS;
         }
     }
 
     /** 嵌套泛型：StreamMqConsumer&lt;List&lt;OrderDto&gt;&gt; → 应解析为 List.class */
-    static class OrderListListener implements StreamMessageConsumer<List<OrderDto>> {
+    static class OrderListListener implements StreamMessageConcurrentlyConsumer<List<OrderDto>> {
         @Override
-        public Action onMessage(Message<List<OrderDto>> message, ConsumerContext context) {
+        public Action onMessage(Message<List<OrderDto>> message, ConsumeConcurrentlyContext context) {
             return Action.SUCCESS;
         }
     }
 
     /** 父类实现 StreamMqConsumer&lt;String&gt;，子类继承 */
-    static class ParentStringListener implements StreamMessageConsumer<String> {
+    static class ParentStringListener implements StreamMessageConcurrentlyConsumer<String> {
         @Override
-        public Action onMessage(Message<String> message, ConsumerContext context) {
+        public Action onMessage(Message<String> message, ConsumeConcurrentlyContext context) {
             return Action.SUCCESS;
         }
     }
@@ -95,18 +95,18 @@ class BodyTypeResolverTest {
     }
 
     /** 裸泛型 T（未指定具体类型）→ 应返回 null */
-    static class GenericListener<T> implements StreamMessageConsumer<T> {
+    static class GenericListener<T> implements StreamMessageConcurrentlyConsumer<T> {
         @Override
-        public Action onMessage(Message<T> message, ConsumerContext context) {
+        public Action onMessage(Message<T> message, ConsumeConcurrentlyContext context) {
             return Action.SUCCESS;
         }
     }
 
     /** 实现 Listener 但不指定泛型（raw type）→ 应返回 null */
     @SuppressWarnings("rawtypes")
-    static class RawListener implements StreamMessageConsumer {
+    static class RawListener implements StreamMessageConcurrentlyConsumer {
         @Override
-        public Action onMessage(Message message, ConsumerContext context) {
+        public Action onMessage(Message message, ConsumeConcurrentlyContext context) {
             return Action.SUCCESS;
         }
     }
@@ -138,7 +138,7 @@ class BodyTypeResolverTest {
         @Test
         @DisplayName("StreamMqAckConsumer<Long> → Long.class")
         void resolveLongAckListener() {
-            Class<?> bodyType = BodyTypeResolver.resolve(new LongAckListener());
+            Class<?> bodyType = BodyTypeResolver.resolve(new LongManualAckListener());
             assertThat(bodyType).isEqualTo(Long.class);
         }
 
@@ -214,7 +214,7 @@ class BodyTypeResolverTest {
     void crossPlatformScenario() {
         // 模拟消费者声明 StreamMqConsumer<String>
         // 期望 BodyTypeResolver 解析出 String.class，作为反序列化目标类型
-        StreamMessageConsumer<String> goInteropListener = new StringListener();
+        StreamMessageConcurrentlyConsumer<String> goInteropListener = new StringListener();
         Class<?> bodyType = BodyTypeResolver.resolve(goInteropListener);
 
         assertThat(bodyType)

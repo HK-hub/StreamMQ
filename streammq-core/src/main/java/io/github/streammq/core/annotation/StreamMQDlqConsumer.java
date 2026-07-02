@@ -1,6 +1,6 @@
 package io.github.streammq.core.annotation;
 
-import io.github.streammq.core.consumer.StreamMessageConsumer;
+import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.MessageSerializer;
@@ -10,7 +10,7 @@ import java.lang.annotation.*;
 /**
  * DLQ（死信队列）消费者注解。
  *
- * <p>标注在 {@link StreamMessageConsumer} 实现类上，
+ * <p>标注在 {@link StreamMessageConcurrentlyConsumer} 实现类上，
  * 用于消费指定 (topic, consumerGroup) 的死信消息。
  *
  * <p>DLQ Stream Key 为 {@code streammq:{ns}:dlq:{topic}:{consumerGroup}}，

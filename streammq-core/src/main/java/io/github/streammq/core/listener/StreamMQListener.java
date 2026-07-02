@@ -1,6 +1,6 @@
 package io.github.streammq.core.listener;
 
-import io.github.streammq.core.consumer.StreamMessageConsumer;
+import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 
@@ -12,7 +12,7 @@ import java.util.List;
  *
  * <p>负责"监听" Redis Stream，从 Stream 拉取消息并确认（ACK）。
  * 该接口是底层 API，由 {@link StreamMQListenerContainer} 内部调用，
- * 将拉取到的消息分发给业务层实现的 {@link StreamMessageConsumer} 处理。
+ * 将拉取到的消息分发给业务层实现的 {@link StreamMessageConcurrentlyConsumer} 处理。
  *
  * <p>命名说明：对齐 RocketMQ 的 {@code PullConsumer}，
  * "监听"（Listen）Stream 获取消息的角色是 Listener，与业务消费回调（Consumer）分离：

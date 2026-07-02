@@ -1,7 +1,7 @@
 package io.github.streammq.adapter.redisson.container;
 
 import io.github.streammq.core.consumer.Acknowledgment;
-import io.github.streammq.core.consumer.OrderlyContext;
+import io.github.streammq.core.consumer.ConsumeOrderlyContext;
 import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.listener.StreamMQListener;
 import io.github.streammq.core.message.Message;
@@ -15,7 +15,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
- * 默认 {@link OrderlyContext} 实现，同时兼容普通消费场景。
+ * 默认 {@link ConsumeOrderlyContext} 实现，同时兼容普通消费场景。
  *
  * <p>由容器在 {@code handleMessage} 中创建，传给 Consumer 的 {@code onMessage} 方法。
  * 封装当前消息、注册信息、消费者实例，提供消息元数据访问与手动 ACK 能力。
@@ -26,9 +26,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * @since 0.1.0
  */
 @RequiredArgsConstructor
-public class DefaultConsumerContext implements OrderlyContext {
+public class DefaultConsumeContextConsume implements ConsumeOrderlyContext {
 
-    private static final Logger LOG = LoggerFactory.getLogger(DefaultConsumerContext.class);
+    private static final Logger LOG = LoggerFactory.getLogger(DefaultConsumeContextConsume.class);
 
     /** 默认消费者实例名后缀 */
     private static final String DEFAULT_CONSUMER_NAME_SUFFIX = "-consumer";

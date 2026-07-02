@@ -2,8 +2,8 @@ package io.github.streammq.core.listener;
 
 import io.github.streammq.core.annotation.StreamMQConsumer;
 import io.github.streammq.core.annotation.StreamMQOrderlyConsumer;
-import io.github.streammq.core.consumer.StreamMessageAckConsumer;
-import io.github.streammq.core.consumer.StreamMessageConsumer;
+import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
+import io.github.streammq.core.consumer.StreamMessageManualAckConsumer;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
 
 import java.util.Collection;
@@ -15,7 +15,7 @@ import java.util.Collection;
  * 实现类位于 {@code streammq-redisson-adapter} 模块，建议继承 Spring {@code SmartLifecycle}。
  *
  * <p>容器内部为每个注册项创建一个 {@link StreamMQListener}（监听器，负责 PULL 消息），
- * 拉取到的消息分发给业务层实现的 {@link StreamMessageConsumer}（消费者，onMessage 业务处理）。
+ * 拉取到的消息分发给业务层实现的 {@link StreamMessageConcurrentlyConsumer}（消费者，onMessage 业务处理）。
  *
  * <p>注册 Consumer 时需提供注解元数据，框架据此创建对应的 Listener 与消费线程。
  *
@@ -27,11 +27,11 @@ public interface StreamMQListenerContainer {
     /**
      * 注册一个并发消费 Consumer（自动 ACK）。
      *
-     * @param consumer Consumer 实例（{@link StreamMessageConsumer}）
+     * @param consumer Consumer 实例（{@link StreamMessageConcurrentlyConsumer}）
      * @param annotation 注解元数据（{@link StreamMQConsumer}）
      * @param <T> body 类型
      */
-    <T> void registerConsumer(StreamMessageConsumer<T> consumer,
+    <T> void registerConsumer(StreamMessageConcurrentlyConsumer<T> consumer,
                               StreamMQConsumer annotation);
 
     /**
@@ -41,7 +41,7 @@ public interface StreamMQListenerContainer {
      * @param annotation 注解元数据
      * @param <T> body 类型
      */
-    <T> void registerAckConsumer(StreamMessageAckConsumer<T> consumer,
+    <T> void registerAckConsumer(StreamMessageManualAckConsumer<T> consumer,
                                  StreamMQConsumer annotation);
 
     /**

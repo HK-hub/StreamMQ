@@ -1,7 +1,7 @@
 package io.github.streammq.core.listener;
 
 import io.github.streammq.core.StreamMqConstants;
-import io.github.streammq.core.consumer.StreamMessageConsumer;
+import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.spi.MessageSerializer;
 import lombok.Builder;
 import lombok.Getter;
@@ -12,7 +12,7 @@ import lombok.NonNull;
  *
  * <p>用于 {@link StreamMQListenerFactory#createListener(ListenerConfig)} 创建底层
  * {@link StreamMQListener} 实例。Listener 负责从 Redis Stream 拉取消息，
- * 然后交给业务层 {@link StreamMessageConsumer} 处理。
+ * 然后交给业务层 {@link StreamMessageConcurrentlyConsumer} 处理。
  *
  * <p>使用 Builder 模式构造：
  * <pre>{@code

@@ -31,5 +31,5 @@ public interface StreamMessageOrderlyConsumer<T> {
      * @return 处理结果动作
      * @throws Exception 业务异常，框架将其视为 {@link Action#SUSPEND_CURRENT_QUEUE_A_MOMENT}
      */
-    Action onMessage(Message<T> message, OrderlyContext context) throws Exception;
+    Action onMessage(Message<T> message, ConsumeOrderlyContext context) throws Exception;
 }

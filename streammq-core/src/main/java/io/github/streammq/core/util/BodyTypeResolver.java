@@ -1,7 +1,7 @@
 package io.github.streammq.core.util;
 
-import io.github.streammq.core.consumer.StreamMessageAckConsumer;
-import io.github.streammq.core.consumer.StreamMessageConsumer;
+import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
+import io.github.streammq.core.consumer.StreamMessageManualAckConsumer;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
 
 import java.lang.reflect.ParameterizedType;
@@ -12,8 +12,8 @@ import java.lang.reflect.Type;
  *
  * <p>StreamMQ 的三个 Consumer 接口均声明了泛型 T：
  * <ul>
- *   <li>{@link StreamMessageConsumer}&lt;T&gt;</li>
- *   <li>{@link StreamMessageAckConsumer}&lt;T&gt;</li>
+ *   <li>{@link StreamMessageConcurrentlyConsumer}&lt;T&gt;</li>
+ *   <li>{@link StreamMessageManualAckConsumer}&lt;T&gt;</li>
  *   <li>{@link StreamMessageOrderlyConsumer}&lt;T&gt;</li>
  * </ul>
  *
@@ -35,7 +35,7 @@ public final class BodyTypeResolver {
     /**
      * 从 Consumer 实例解析其泛型 body 类型 T。
      *
-     * @param consumer Consumer 实例（实现了 {@link StreamMessageConsumer} / {@link StreamMessageAckConsumer} / {@link StreamMessageOrderlyConsumer}）
+     * @param consumer Consumer 实例（实现了 {@link StreamMessageConcurrentlyConsumer} / {@link StreamMessageManualAckConsumer} / {@link StreamMessageOrderlyConsumer}）
      * @return 泛型 T 对应的 Class，解析失败返回 {@code null}
      */
     public static Class<?> resolve(Object consumer) {
@@ -77,8 +77,8 @@ public final class BodyTypeResolver {
      * 判断类型是否为 StreamMQ Consumer 接口。
      */
     private static boolean isStreamMqConsumer(Class<?> rawType) {
-        return rawType == StreamMessageConsumer.class
-            || rawType == StreamMessageAckConsumer.class
+        return rawType == StreamMessageConcurrentlyConsumer.class
+            || rawType == StreamMessageManualAckConsumer.class
             || rawType == StreamMessageOrderlyConsumer.class;
     }
 

@@ -3,8 +3,8 @@ package io.github.streammq.spring.boot.it;
 import io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.annotation.StreamMQConsumer;
-import io.github.streammq.core.consumer.ConsumerContext;
-import io.github.streammq.core.consumer.StreamMessageConsumer;
+import io.github.streammq.core.consumer.ConsumeConcurrentlyContext;
+import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.enums.Action;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
@@ -231,19 +231,19 @@ class SpringBootEndToEndIT {
     }
 
     /**
-     * 端到端测试用 Listener,实现 {@link StreamMessageConsumer} 接口,
+     * 端到端测试用 Listener,实现 {@link StreamMessageConcurrentlyConsumer} 接口,
      * 标注 {@code @StreamMqConsumer} 注解,由 Spring 自动扫描注册。
      *
      * <p>使用 {@link ConcurrentLinkedQueue} 收集所有接收到的消息 body,线程安全。
      */
     @StreamMQConsumer(topic = E2E_TOPIC, consumerGroup = E2E_GROUP)
-    public static class E2EStringListener implements StreamMessageConsumer<String> {
+    public static class E2EStringListener implements StreamMessageConcurrentlyConsumer<String> {
 
         /** 已接收的消息 body 集合 */
         final ConcurrentLinkedQueue<String> receivedBodies = new ConcurrentLinkedQueue<>();
 
         @Override
-        public Action onMessage(Message<String> message, ConsumerContext context) {
+        public Action onMessage(Message<String> message, ConsumeConcurrentlyContext context) {
             if (message.getBody() != null) {
                 receivedBodies.add(message.getBody());
             }
