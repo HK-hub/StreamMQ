@@ -14,7 +14,7 @@ import java.lang.reflect.Method;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 注解默认值测试，覆盖 @StreamMqConsumer / @StreamMqOrderlyConsumer / @StreamMqProducer /
+ * 注解默认值测试，覆盖 @StreamMqConsumer / @StreamMqOrderlyConsumer /
  * @StreamMqTransactionConsumer / @EnableStreamMq 的默认值与元注解。
  */
 @DisplayName("StreamMQ 注解默认值测试")
@@ -27,9 +27,6 @@ class AnnotationTest {
     @StreamMQOrderlyConsumer(topic = "t", consumerGroup = "g")
     static class OrderlyListenerSample {
     }
-
-    @StreamMQProducer(group = "g")
-    transient Object producerField;
 
     @StreamMQTransactionConsumer(transactionGroup = "tg")
     static class TxListenerSample {
@@ -190,51 +187,6 @@ class AnnotationTest {
             StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
             assertThat(ann.namespace()).isEmpty();
             assertThat(ann.enable()).isTrue();
-        }
-    }
-
-    @Nested
-    @DisplayName("@StreamMqProducer 默认值")
-    class StreamMQProducerDefaults {
-
-        @Test
-        @DisplayName("group 必填值正确读取")
-        void groupRequired() throws Exception {
-            StreamMQProducer ann = AnnotationTest.class
-                .getDeclaredField("producerField").getAnnotation(StreamMQProducer.class);
-            assertThat(ann.group()).isEqualTo("g");
-        }
-
-        @Test
-        @DisplayName("namespace 默认空字符串")
-        void namespaceDefault() throws Exception {
-            StreamMQProducer ann = AnnotationTest.class
-                .getDeclaredField("producerField").getAnnotation(StreamMQProducer.class);
-            assertThat(ann.namespace()).isEmpty();
-        }
-
-        @Test
-        @DisplayName("serializer 默认 MessageSerializer.class")
-        void serializerDefault() throws Exception {
-            StreamMQProducer ann = AnnotationTest.class
-                .getDeclaredField("producerField").getAnnotation(StreamMQProducer.class);
-            assertThat(ann.serializer()).isEqualTo(MessageSerializer.class);
-        }
-
-        @Test
-        @DisplayName("sendMessageTimeout 默认 0L")
-        void sendMessageTimeoutDefault() throws Exception {
-            StreamMQProducer ann = AnnotationTest.class
-                .getDeclaredField("producerField").getAnnotation(StreamMQProducer.class);
-            assertThat(ann.sendMessageTimeout()).isEqualTo(0L);
-        }
-
-        @Test
-        @DisplayName("retryTimes 默认 -1")
-        void retryTimesDefault() throws Exception {
-            StreamMQProducer ann = AnnotationTest.class
-                .getDeclaredField("producerField").getAnnotation(StreamMQProducer.class);
-            assertThat(ann.retryTimes()).isEqualTo(-1);
         }
     }
 

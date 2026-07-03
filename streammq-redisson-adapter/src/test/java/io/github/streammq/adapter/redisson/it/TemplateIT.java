@@ -35,7 +35,7 @@ import static org.awaitility.Awaitility.await;
 class TemplateIT extends AbstractRedisIT {
 
     private RedissonStreamProducerFactory producerFactory;
-    private DefaultStreamMessageTemplate<String> template;
+    private DefaultStreamMessageTemplate template;
     private static final String DEFAULT_GROUP = "template-test-group";
 
     @BeforeEach
@@ -45,7 +45,7 @@ class TemplateIT extends AbstractRedisIT {
             .group(DEFAULT_GROUP)
             .namespace(namespace)
             .build();
-        template = new DefaultStreamMessageTemplate<>(producerFactory, DEFAULT_GROUP, converter, defaultProps, null);
+        template = new DefaultStreamMessageTemplate(producerFactory, DEFAULT_GROUP, converter, defaultProps, null);
     }
 
     @AfterEach

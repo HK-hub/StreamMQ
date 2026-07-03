@@ -136,12 +136,12 @@ class SpringBootAutoConfigIT {
     }
 
     @Test
-    @DisplayName("StreamMqTemplate Bean 存在且为 DefaultStreamMqTemplate")
+    @DisplayName("StreamMessageTemplate Bean 存在且为 DefaultStreamMessageTemplate")
     void streamMqTemplate_beanExists() {
-        StreamMessageTemplate<?> template = applicationContext.getBean(StreamMessageTemplate.class);
+        StreamMessageTemplate template = applicationContext.getBean(StreamMessageTemplate.class);
         assertThat(template).isNotNull();
         assertThat(template.getClass().getName())
-            .isEqualTo("io.github.streammq.adapter.redisson.template.DefaultStreamMqTemplate");
+            .isEqualTo("io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate");
     }
 
     // ===================== Listener 容器 Bean 验证 =====================
