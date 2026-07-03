@@ -43,5 +43,5 @@ public class ProducerConfig {
     private final int streamMaxLen = StreamMqConstants.DEFAULT_STREAM_MAX_LEN;
 
     /** 序列化器类（可选，为 null 表示使用全局配置） */
-    private final Class<? extends MessageSerializer> serializer;
+    private final Class<? extends MessageSerializer<?>> serializer;
 }

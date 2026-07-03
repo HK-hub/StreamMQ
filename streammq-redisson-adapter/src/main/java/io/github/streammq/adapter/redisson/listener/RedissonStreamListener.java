@@ -9,6 +9,7 @@ import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.spi.MessageConverter;
 import lombok.Builder;
+import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.NonNull;
 import org.redisson.api.RStream;
@@ -46,6 +47,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * @since 0.1.0
  */
 @Getter
+@EqualsAndHashCode(of = {"namespace", "topic", "group", "consumerName", "dlqMode", "dlqOriginalGroup"})
 public class RedissonStreamListener implements StreamMQListener {
 
     private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamListener.class);

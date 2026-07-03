@@ -13,7 +13,7 @@ import io.github.streammq.adapter.redisson.trace.Slf4jTraceCollector;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.StreamMessageProducerFactory;
-import io.github.streammq.core.service.StreamMessageService;
+import io.github.streammq.core.service.StreamMessageProducerService;
 import io.github.streammq.core.spi.*;
 import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
@@ -158,7 +158,7 @@ public class StreamMQCoreAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(StreamMessageTemplate.class)
-    public StreamMessageTemplate<?> streamMqTemplate(StreamMessageProducerFactory producerFactory,
+    public StreamMessageTemplate streamMqTemplate(StreamMessageProducerFactory producerFactory,
                                                      MessageConverter converter,
                                                      StreamMQProperties properties) {
         String defaultGroup = properties.getProducer().getGroup();
@@ -171,43 +171,26 @@ public class StreamMQCoreAutoConfiguration {
             .sendMessageTimeout(properties.getProducer().getSendMessageTimeout())
             .streamMaxLen(properties.getProducer().getStreamMaxLen())
             .build();
-        LOG.info("Creating DefaultStreamMqTemplate: defaultGroup={}, transactionGroup={}, namespace={}",
+        LOG.info("Creating DefaultStreamMessageTemplate: defaultGroup={}, transactionGroup={}, namespace={}",
             defaultGroup, txGroup, properties.getNamespace());
-        return new DefaultStreamMessageTemplate<>(
+        return new DefaultStreamMessageTemplate(
             producerFactory, defaultGroup, converter, defaultConfig, txGroup);
     }
 
     /**
-     * 注册 {@link StreamMessageService}，封装 {@link StreamMessageTemplate} 提供更简洁的发送 API。
+     * 注册 {@link StreamMessageProducerService}，封装 {@link StreamMessageTemplate} 提供更简洁的发送 API。
      *
-     * <p>用户可直接注入 {@link StreamMessageService}，仅传入 topic 与 body 即可发送消息，
+     * <p>用户可直接注入 {@link StreamMessageProducerService}，仅传入 topic 与 body 即可发送消息，
      * 无需手动构造 {@code Message} 对象。
      *
      * @param template StreamMq 模板
-     * @return StreamMqService 实例
+     * @return StreamMessageService 实例
      */
     @Bean
     @ConditionalOnMissingBean
-    public StreamMessageService streamMqService(StreamMessageTemplate<?> template) {
-        LOG.info("Creating StreamMqService wrapping {}", template.getClass().getSimpleName());
-        return new StreamMessageService(template);
-    }
-
-    /**
-     * 注册 {@link StreamMQProducerBeanPostProcessor}，处理 {@code @StreamMqProducer} 字段注入。
-     *
-     * @param producerFactory 生产者工厂
-     * @param converter 消息转换器
-     * @param properties 配置
-     * @return BeanPostProcessor
-     */
-    @Bean
-    @ConditionalOnMissingBean(StreamMQProducerBeanPostProcessor.class)
-    public StreamMQProducerBeanPostProcessor streamMqProducerBeanPostProcessor(
-            StreamMessageProducerFactory producerFactory,
-            MessageConverter converter,
-            StreamMQProperties properties) {
-        return new StreamMQProducerBeanPostProcessor(producerFactory, converter, properties);
+    public StreamMessageProducerService streamMqService(StreamMessageTemplate template) {
+        LOG.info("Creating StreamMessageService wrapping {}", template.getClass().getSimpleName());
+        return new StreamMessageProducerService(template);
     }
 
     // ===================== 内置策略 Bean =====================

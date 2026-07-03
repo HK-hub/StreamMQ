@@ -17,7 +17,7 @@ import org.springframework.context.annotation.Import;
  *
  * <p>装配链：
  * <ol>
- *   <li>{@link StreamMQCoreAutoConfiguration} - 序列化器 / 转换器 / 工厂 / 模板 / @StreamMqProducer 注入</li>
+ *   <li>{@link StreamMQCoreAutoConfiguration} - 序列化器 / 转换器 / 工厂 / 模板 / 服务</li>
  *   <li>{@link StreamMQSchedulerAutoConfiguration} - 重试 / 延时 / 事务回查 调度器</li>
  *   <li>{@link StreamMQListenerContainerAutoConfiguration} - Listener 容器 + 注解扫描 + SmartLifecycle</li>
  *   <li>{@link StreamMQHealthAutoConfiguration} - Actuator HealthIndicator（可选）</li>

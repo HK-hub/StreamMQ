@@ -13,7 +13,7 @@
 
     <artifactId>streammq-sample-quickstart</artifactId>
     <name>StreamMQ Sample - QuickStart</name>
-    <description>StreamMQ 快速开始示例：最简单的发送与消费示例，演示 @EnableStreamMq + @StreamMqProducer + @StreamMqListener。</description>
+    <description>StreamMQ 快速开始示例：最简单的发送与消费示例，演示 @EnableStreamMq + StreamMessageTemplate 发送 + @StreamMqConsumer 消费。</description>
 
     <build>
         <finalName>${project.artifactId}</finalName>

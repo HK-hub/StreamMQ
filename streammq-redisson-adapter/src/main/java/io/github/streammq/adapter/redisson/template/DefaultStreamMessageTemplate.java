@@ -38,11 +38,12 @@ import java.util.concurrent.CopyOnWriteArrayList;
  *
  * <p>线程安全：所有字段均为 final 或线程安全类型，可在多线程间共享单例。
  *
- * @param <T> body 类型
+ * <p><b>泛型设计</b>：泛型参数 {@code <T>} 声明在方法级别，单例 Template 可发送任意 body 类型的消息。
+ *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
+public class DefaultStreamMessageTemplate extends StreamMessageTemplate {
 
     private static final Logger LOG = LoggerFactory.getLogger(DefaultStreamMessageTemplate.class);
 
@@ -89,17 +90,17 @@ public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
     }
 
     @Override
-    public SendResult syncSend(Message<T> message) {
+    public <T> SendResult syncSend(Message<T> message) {
         return syncSend(message, DEFAULT_SEND_TIMEOUT_MILLIS, DEFAULT_SYNC_RETRY_TIMES);
     }
 
     @Override
-    public SendResult syncSend(Message<T> message, long timeoutMillis) {
+    public <T> SendResult syncSend(Message<T> message, long timeoutMillis) {
         return syncSend(message, timeoutMillis, DEFAULT_SYNC_RETRY_TIMES);
     }
 
     @Override
-    public SendResult syncSend(Message<T> message, long timeoutMillis, int retryTimes) {
+    public <T> SendResult syncSend(Message<T> message, long timeoutMillis, int retryTimes) {
         Objects.requireNonNull(message, "message");
         if (timeoutMillis <= 0) {
             timeoutMillis = DEFAULT_SEND_TIMEOUT_MILLIS;
@@ -123,7 +124,7 @@ public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
             }
 
             // 2. 委派 Producer 发送（含重试）
-            StreamMessageProducer producer = resolveProducer(message);
+            StreamMessageProducer producer = resolveProducer(message.getTopic());
             StreamMqException lastError = null;
             for (int attempt = 0; attempt <= retryTimes; attempt++) {
                 try {
@@ -150,7 +151,7 @@ public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
     }
 
     @Override
-    public CompletableFuture<SendResult> asyncSend(Message<T> message) {
+    public <T> CompletableFuture<SendResult> asyncSend(Message<T> message) {
         Objects.requireNonNull(message, "message");
         // 注入 MDC 结构化日志上下文
         injectProducerMdc(message);
@@ -160,7 +161,7 @@ public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
                 return CompletableFuture.failedFuture(
                     new StreamMqException("Aborted by interceptor"));
             }
-            StreamMessageProducer producer = resolveProducer(message);
+            StreamMessageProducer producer = resolveProducer(message.getTopic());
             return producer.asyncSend(message).whenComplete((result, ex) -> {
                 if (ex == null) {
                     applyInterceptorsAfter(message, result);
@@ -177,12 +178,12 @@ public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
     }
 
     @Override
-    public void asyncSend(Message<T> message, SendCallback callback) {
+    public <T> void asyncSend(Message<T> message, SendCallback callback) {
         asyncSend(message, callback, DEFAULT_SEND_TIMEOUT_MILLIS);
     }
 
     @Override
-    public void asyncSend(Message<T> message, SendCallback callback, long timeoutMillis) {
+    public <T> void asyncSend(Message<T> message, SendCallback callback, long timeoutMillis) {
         Objects.requireNonNull(message, "message");
         Objects.requireNonNull(callback, "callback");
         // 注入 MDC 结构化日志上下文
@@ -192,7 +193,7 @@ public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
                 callback.onException(new StreamMqException("Aborted by interceptor"));
                 return;
             }
-            StreamMessageProducer producer = resolveProducer(message);
+            StreamMessageProducer producer = resolveProducer(message.getTopic());
             producer.asyncSend(message).whenComplete((result, ex) -> {
                 if (ex == null) {
                     applyInterceptorsAfter(message, result);
@@ -211,13 +212,13 @@ public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
     }
 
     @Override
-    public void sendOneway(Message<T> message) {
+    public <T> void sendOneway(Message<T> message) {
         Objects.requireNonNull(message, "message");
         // 注入 MDC 结构化日志上下文
         injectProducerMdc(message);
         try {
             applyInterceptorsBefore(message);
-            StreamMessageProducer producer = resolveProducer(message);
+            StreamMessageProducer producer = resolveProducer(message.getTopic());
             try {
                 producer.sendOneway(message);
             } catch (RuntimeException ex) {
@@ -231,7 +232,7 @@ public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
     }
 
     @Override
-    public List<SendResult> syncSendBatch(BatchMessage<T> batch) {
+    public <T> List<SendResult> syncSendBatch(BatchMessage<T> batch) {
         Objects.requireNonNull(batch, "batch");
         if (batch.isEmpty()) {
             throw new IllegalArgumentException("batch is empty");
@@ -265,7 +266,7 @@ public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
     }
 
     @Override
-    public SendResult executeInTransaction(Message<T> message, TransactionCallback<T> callback) {
+    public <T> SendResult executeInTransaction(Message<T> message, TransactionCallback<T> callback) {
         Objects.requireNonNull(message, "message");
         Objects.requireNonNull(callback, "callback");
         if (transactionGroup == null) {
@@ -334,7 +335,7 @@ public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
     @Override
     public void setMessageConverter(MessageConverter converter) {
         throw new UnsupportedOperationException(
-            "DefaultStreamMqTemplate does not support changing converter after construction");
+            "DefaultStreamMessageTemplate does not support changing converter after construction");
     }
 
     @Override
@@ -367,13 +368,15 @@ public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
         interceptors.add(insertIndex, interceptor);
     }
 
+    // ===================== 内部方法 =====================
+
     /**
      * 执行 before 拦截器链。
      *
      * @param message 待发送消息
      * @return true 全部通过，false 任一拦截器拒绝
      */
-    private boolean applyInterceptorsBefore(Message<T> message) {
+    private boolean applyInterceptorsBefore(Message<?> message) {
         for (ProducerInterceptor interceptor : interceptors) {
             try {
                 if (!interceptor.beforeSend(message)) {
@@ -397,7 +400,7 @@ public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
      * @param message 已发送消息
      * @param result 发送结果
      */
-    private void applyInterceptorsAfter(Message<T> message, SendResult result) {
+    private void applyInterceptorsAfter(Message<?> message, SendResult result) {
         for (ProducerInterceptor interceptor : interceptors) {
             try {
                 interceptor.afterSend(message, result);
@@ -433,7 +436,7 @@ public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
      *
      * @param message 待发送消息
      */
-    private void injectProducerMdc(Message<T> message) {
+    private void injectProducerMdc(Message<?> message) {
         MDC.put(MdcKeys.TOPIC, message.getTopic());
         MDC.put(MdcKeys.PRODUCER_GROUP, defaultGroup);
         if (message.getMessageId() != null) {
@@ -467,23 +470,13 @@ public class DefaultStreamMessageTemplate<T> extends StreamMessageTemplate<T> {
     }
 
     /**
-     * 解析消息对应的 Producer。
-     *
-     * @param message 消息
-     * @return Producer 实例
-     */
-    private StreamMessageProducer resolveProducer(Message<T> message) {
-        return resolveProducer(message.getTopic());
-    }
-
-    /**
      * 构造失败结果。
      *
      * @param message 消息
      * @param error 异常
      * @return 失败 SendResult
      */
-    private SendResult buildFailedResult(Message<T> message, StreamMqException error) {
+    private SendResult buildFailedResult(Message<?> message, StreamMqException error) {
         return new SendResult(
             new MessageId(System.currentTimeMillis() + "-0"),
             message.getTopic(), message.getTag(),

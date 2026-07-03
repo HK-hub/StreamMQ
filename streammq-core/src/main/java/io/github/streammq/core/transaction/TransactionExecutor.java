@@ -19,19 +19,22 @@ import io.github.streammq.core.message.SendResult;
  *   </li>
  * </ol>
  *
- * @param <T> body 类型
+ * <p><b>泛型设计</b>：泛型参数 {@code <T>} 声明在方法级别，支持同一事务执行器
+ * 处理不同 body 类型的事务消息。
+ *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public interface TransactionExecutor<T> {
+public interface TransactionExecutor {
 
     /**
      * 在事务中执行消息发送。
      *
      * @param message 半消息载体（topic 必填，body 必填）
      * @param callback 本地事务回调
+     * @param <T> body 类型
      * @return 发送结果（仅在 COMMIT_MESSAGE 时为 SEND_OK，其他状态为 SEND_FAILED）
      * @throws io.github.streammq.core.exception.TransactionException 如果半消息发送失败
      */
-    SendResult executeInTransaction(Message<T> message, TransactionCallback<T> callback);
+    <T> SendResult executeInTransaction(Message<T> message, TransactionCallback<T> callback);
 }

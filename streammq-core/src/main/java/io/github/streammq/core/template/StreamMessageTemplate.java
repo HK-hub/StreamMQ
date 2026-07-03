@@ -7,12 +7,13 @@ import io.github.streammq.core.producer.SendCallback;
 import io.github.streammq.core.spi.MessageConverter;
 import io.github.streammq.core.spi.ProducerInterceptor;
 import io.github.streammq.core.transaction.TransactionExecutor;
+import io.github.streammq.core.transaction.TransactionCallback;
 
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * StreamMQ 模板（核心生产者 API），对齐 RocketMQ {@code RocketMQTemplate} 体验。
+ * StreamMQ 消息模板（核心生产者 API），对齐 RocketMQ {@code RocketMQTemplate} 体验。
  *
  * <p>核心发送语义：
  * <ul>
@@ -25,13 +26,16 @@ import java.util.concurrent.CompletableFuture;
  *
  * <p>拦截器链：所有 {@code syncSend} / {@code asyncSend} 调用前后均经过 {@link ProducerInterceptor} 链。
  *
- * <p>实现类位于 {@code streammq-redisson-adapter} 模块（如 {@code DefaultStreamMqTemplate}）。
+ * <p><b>泛型设计</b>：泛型参数 {@code <T>} 声明在方法级别而非类级别。一个 Template 单例
+ * 可发送不同 body 类型的消息，无需为每种 body 类型创建独立的 Template 实例，
+ * 也避免了调用方繁琐的泛型强转。
  *
- * @param <T> body 类型，使用 {@code StreamMqTemplate<Object>} 可支持混合类型
+ * <p>实现类位于 {@code streammq-redisson-adapter} 模块（{@code DefaultStreamMessageTemplate}）。
+ *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public abstract class StreamMessageTemplate<T> implements TransactionExecutor<T> {
+public abstract class StreamMessageTemplate implements TransactionExecutor {
 
     /** 默认发送超时（毫秒） */
     public static final long DEFAULT_SEND_TIMEOUT_MILLIS = 3000L;
@@ -46,20 +50,22 @@ public abstract class StreamMessageTemplate<T> implements TransactionExecutor<T>
      * 同步发送（默认超时、默认重试次数）。
      *
      * @param message 消息
+     * @param <T> body 类型
      * @return 发送结果
      * @throws io.github.streammq.core.exception.StreamMqException 发送失败
      */
-    public abstract SendResult syncSend(Message<T> message);
+    public abstract <T> SendResult syncSend(Message<T> message);
 
     /**
      * 同步发送（指定超时）。
      *
      * @param message 消息
      * @param timeoutMillis 超时毫秒数
+     * @param <T> body 类型
      * @return 发送结果
      * @throws io.github.streammq.core.exception.ProducerTimeoutException 超时
      */
-    public abstract SendResult syncSend(Message<T> message, long timeoutMillis);
+    public abstract <T> SendResult syncSend(Message<T> message, long timeoutMillis);
 
     /**
      * 同步发送（指定超时与重试次数）。
@@ -67,26 +73,29 @@ public abstract class StreamMessageTemplate<T> implements TransactionExecutor<T>
      * @param message 消息
      * @param timeoutMillis 超时毫秒数
      * @param retryTimes 重试次数（0 表示不重试）
+     * @param <T> body 类型
      * @return 发送结果
      * @throws io.github.streammq.core.exception.ProducerTimeoutException 重试后仍超时
      */
-    public abstract SendResult syncSend(Message<T> message, long timeoutMillis, int retryTimes);
+    public abstract <T> SendResult syncSend(Message<T> message, long timeoutMillis, int retryTimes);
 
     /**
      * 异步发送（返回 {@link CompletableFuture}）。
      *
      * @param message 消息
+     * @param <T> body 类型
      * @return 异步结果
      */
-    public abstract CompletableFuture<SendResult> asyncSend(Message<T> message);
+    public abstract <T> CompletableFuture<SendResult> asyncSend(Message<T> message);
 
     /**
      * 异步发送（回调通知）。
      *
      * @param message 消息
      * @param callback 回调
+     * @param <T> body 类型
      */
-    public abstract void asyncSend(Message<T> message, SendCallback callback);
+    public abstract <T> void asyncSend(Message<T> message, SendCallback callback);
 
     /**
      * 异步发送（回调通知 + 指定超时）。
@@ -94,24 +103,27 @@ public abstract class StreamMessageTemplate<T> implements TransactionExecutor<T>
      * @param message 消息
      * @param callback 回调
      * @param timeoutMillis 超时毫秒数
+     * @param <T> body 类型
      */
-    public abstract void asyncSend(Message<T> message, SendCallback callback, long timeoutMillis);
+    public abstract <T> void asyncSend(Message<T> message, SendCallback callback, long timeoutMillis);
 
     /**
      * 单向发送：不等待响应，不抛异常。
      *
      * @param message 消息
+     * @param <T> body 类型
      */
-    public abstract void sendOneway(Message<T> message);
+    public abstract <T> void sendOneway(Message<T> message);
 
     /**
      * 批量发送。
      *
      * @param batch 批量消息
+     * @param <T> body 类型
      * @return 每条消息的发送结果
      * @throws IllegalArgumentException 如果 batch 为空
      */
-    public abstract List<SendResult> syncSendBatch(BatchMessage<T> batch);
+    public abstract <T> List<SendResult> syncSendBatch(BatchMessage<T> batch);
 
     /**
      * 返回消息转换器。
