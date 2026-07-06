@@ -1,4 +1,4 @@
-package io.github.streammq.core.spi;
+package io.github.streammq.core.policy;
 
 /**
  * 运维管理鉴权 SPI（v1.0 GA 提供）。

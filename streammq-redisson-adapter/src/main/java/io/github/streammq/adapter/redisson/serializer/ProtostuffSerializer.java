@@ -1,6 +1,6 @@
 package io.github.streammq.adapter.redisson.serializer;
 
-import io.github.streammq.core.spi.MessageSerializer;
+import io.github.streammq.core.serializer.MessageSerializer;
 import io.protostuff.LinkedBuffer;
 import io.protostuff.ProtostuffIOUtil;
 import io.protostuff.Schema;

@@ -1,4 +1,4 @@
-package io.github.streammq.core.spi;
+package io.github.streammq.core.policy;
 
 import io.github.streammq.core.message.Message;
 

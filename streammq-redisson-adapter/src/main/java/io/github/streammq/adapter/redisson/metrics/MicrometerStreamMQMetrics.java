@@ -1,5 +1,6 @@
 package io.github.streammq.adapter.redisson.metrics;
 
+import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
 
@@ -22,7 +23,7 @@ import java.time.Duration;
  *   <li>streammq_transaction_check_total{group,result} — 事务回查总数</li>
  * </ul>
  */
-public class StreamMQMetrics {
+public class MicrometerStreamMQMetrics implements StreamMQMetrics {
     public static final String METRIC_SEND_TOTAL = "streammq.send.total";
     public static final String METRIC_SEND_DURATION = "streammq.send.duration";
     public static final String METRIC_CONSUME_TOTAL = "streammq.consume.total";
@@ -36,47 +37,55 @@ public class StreamMQMetrics {
 
     private final MeterRegistry registry;
 
-    public StreamMQMetrics(MeterRegistry registry) {
+    public MicrometerStreamMQMetrics(MeterRegistry registry) {
         this.registry = registry;
     }
 
+    @Override
     public void recordSend(String topic, boolean success, Duration duration) {
         if (registry == null) return;
         registry.counter(METRIC_SEND_TOTAL, Tags.of("topic", topic, "success", String.valueOf(success))).increment();
         registry.timer(METRIC_SEND_DURATION, Tags.of("topic", topic)).record(duration);
     }
 
+    @Override
     public void recordConsume(String topic, String group, boolean success, Duration duration) {
         if (registry == null) return;
         registry.counter(METRIC_CONSUME_TOTAL, Tags.of("topic", topic, "group", group, "success", String.valueOf(success))).increment();
         registry.timer(METRIC_CONSUME_DURATION, Tags.of("topic", topic, "group", group)).record(duration);
     }
 
+    @Override
     public void recordRetry(String topic, String group) {
         if (registry == null) return;
         registry.counter(METRIC_RETRY_TOTAL, Tags.of("topic", topic, "group", group)).increment();
     }
 
+    @Override
     public void recordDlq(String topic, String group) {
         if (registry == null) return;
         registry.counter(METRIC_DLQ_TOTAL, Tags.of("topic", topic, "group", group)).increment();
     }
 
+    @Override
     public void recordDelayDelivery(String level) {
         if (registry == null) return;
         registry.counter(METRIC_DELAY_TOTAL, Tags.of("level", level)).increment();
     }
 
+    @Override
     public void recordTransactionCommit(String group) {
         if (registry == null) return;
         registry.counter(METRIC_TX_COMMIT_TOTAL, Tags.of("group", group)).increment();
     }
 
+    @Override
     public void recordTransactionRollback(String group) {
         if (registry == null) return;
         registry.counter(METRIC_TX_ROLLBACK_TOTAL, Tags.of("group", group)).increment();
     }
 
+    @Override
     public void recordTransactionCheck(String group, String result) {
         if (registry == null) return;
         registry.counter(METRIC_TX_CHECK_TOTAL, Tags.of("group", group, "result", result)).increment();

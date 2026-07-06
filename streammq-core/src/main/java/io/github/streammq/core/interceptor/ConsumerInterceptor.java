@@ -1,6 +1,6 @@
-package io.github.streammq.core.spi;
+package io.github.streammq.core.interceptor;
 
-import io.github.streammq.core.enums.Action;
+import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.enums.InvokeTiming;
 import io.github.streammq.core.message.Message;
 
@@ -32,9 +32,9 @@ public interface ConsumerInterceptor {
      * 消费后回调。
      *
      * @param message 已消费消息
-     * @param action 消费动作（SUCCESS / RECONSUME_LATER / SUSPEND / ...）
+     * @param action 消费动作（SUCCESS / RECONSUME_LATER）；顺序消费的 SUSPEND 会映射为 RECONSUME_LATER
      */
-    void afterConsume(Message<?> message, Action action);
+    void afterConsume(Message<?> message, ConsumeAction action);
 
     /**
      * 消费过程中发生异常时调用。

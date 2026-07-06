@@ -1,6 +1,6 @@
 package io.github.streammq.adapter.redisson.rebalance;
 
-import io.github.streammq.core.spi.RebalanceStrategy;
+import io.github.streammq.core.policy.RebalanceStrategy;
 
 import java.util.Collections;
 import java.util.List;

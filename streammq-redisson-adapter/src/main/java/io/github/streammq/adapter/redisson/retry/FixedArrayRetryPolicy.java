@@ -1,8 +1,8 @@
 package io.github.streammq.adapter.redisson.retry;
 
-import io.github.streammq.core.StreamMqConstants;
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.message.Message;
-import io.github.streammq.core.spi.RetryPolicy;
+import io.github.streammq.core.policy.RetryPolicy;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -53,7 +53,7 @@ public class FixedArrayRetryPolicy implements RetryPolicy {
      * 使用默认最大重试次数（16）。
      */
     public FixedArrayRetryPolicy() {
-        this(StreamMqConstants.DEFAULT_MAX_RECONSUME_TIMES);
+        this(StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES);
     }
 
     /**

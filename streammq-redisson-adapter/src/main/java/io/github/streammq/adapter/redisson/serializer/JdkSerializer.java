@@ -1,7 +1,7 @@
 package io.github.streammq.adapter.redisson.serializer;
 
 import io.github.streammq.core.exception.SerializationException;
-import io.github.streammq.core.spi.MessageSerializer;
+import io.github.streammq.core.serializer.MessageSerializer;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;

@@ -1,6 +1,6 @@
 package io.github.streammq.adapter.redisson.trace;
 
-import io.github.streammq.core.spi.TraceCollector;
+import io.github.streammq.core.interceptor.TraceCollector;
 
 /**
  * 空操作链路追踪收集器，默认实现。

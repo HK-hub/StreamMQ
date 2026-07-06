@@ -1,6 +1,6 @@
 package io.github.streammq.adapter.redisson.security;
 
-import io.github.streammq.core.spi.ManagementAuthenticator;
+import io.github.streammq.core.policy.ManagementAuthenticator;
 
 /**
  * 拒绝所有请求的鉴权器，安全兜底默认实现。

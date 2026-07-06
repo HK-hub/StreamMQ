@@ -1,9 +1,9 @@
 package io.github.streammq.adapter.redisson.interceptor;
 
-import io.github.streammq.core.enums.Action;
+import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.message.Message;
-import io.github.streammq.core.spi.ConsumerInterceptor;
-import io.github.streammq.core.spi.TraceCollector;
+import io.github.streammq.core.interceptor.ConsumerInterceptor;
+import io.github.streammq.core.interceptor.TraceCollector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -62,7 +62,7 @@ public class TraceContextConsumerInterceptor implements ConsumerInterceptor {
     }
 
     @Override
-    public void afterConsume(Message<?> message, Action action) {
+    public void afterConsume(Message<?> message, ConsumeAction action) {
         Long start = consumeStartTimestamp.get();
         consumeStartTimestamp.remove();
         String traceId = MDC.get(MDC_TRACE_ID_KEY);
@@ -73,7 +73,7 @@ public class TraceContextConsumerInterceptor implements ConsumerInterceptor {
             return;
         }
         long duration = start != null ? System.currentTimeMillis() - start : 0L;
-        boolean success = action == Action.SUCCESS;
+        boolean success = action == ConsumeAction.SUCCESS;
         Map<String, String> attributes = new HashMap<>(2);
         attributes.put("action", action.name());
 

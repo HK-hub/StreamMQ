@@ -2,8 +2,8 @@ package io.github.streammq.adapter.redisson.interceptor;
 
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.SendResult;
-import io.github.streammq.core.spi.ProducerInterceptor;
-import io.github.streammq.core.spi.TraceCollector;
+import io.github.streammq.core.interceptor.ProducerInterceptor;
+import io.github.streammq.core.interceptor.TraceCollector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

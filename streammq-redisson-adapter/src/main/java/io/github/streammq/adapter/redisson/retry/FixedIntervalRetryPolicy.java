@@ -1,7 +1,7 @@
 package io.github.streammq.adapter.redisson.retry;
 
 import io.github.streammq.core.message.Message;
-import io.github.streammq.core.spi.RetryPolicy;
+import io.github.streammq.core.policy.RetryPolicy;
 
 import java.time.Duration;
 import java.util.Objects;

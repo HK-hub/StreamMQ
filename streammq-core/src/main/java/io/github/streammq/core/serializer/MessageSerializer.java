@@ -1,4 +1,4 @@
-package io.github.streammq.core.spi;
+package io.github.streammq.core.serializer;
 
 import io.github.streammq.core.exception.SerializationException;
 

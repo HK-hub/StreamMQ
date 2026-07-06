@@ -1,6 +1,6 @@
 package io.github.streammq.adapter.redisson.security;
 
-import io.github.streammq.core.spi.ManagementAuthenticator;
+import io.github.streammq.core.policy.ManagementAuthenticator;
 
 import java.util.Objects;
 

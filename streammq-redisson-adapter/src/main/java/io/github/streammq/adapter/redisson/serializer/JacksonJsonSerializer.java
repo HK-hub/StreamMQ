@@ -6,7 +6,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.databind.json.JsonMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.github.streammq.core.exception.SerializationException;
-import io.github.streammq.core.spi.MessageSerializer;
+import io.github.streammq.core.serializer.MessageSerializer;
 
 import java.util.Objects;
 

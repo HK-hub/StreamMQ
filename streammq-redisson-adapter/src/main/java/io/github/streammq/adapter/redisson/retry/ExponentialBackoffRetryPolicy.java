@@ -1,8 +1,8 @@
 package io.github.streammq.adapter.redisson.retry;
 
-import io.github.streammq.core.StreamMqConstants;
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.message.Message;
-import io.github.streammq.core.spi.RetryPolicy;
+import io.github.streammq.core.policy.RetryPolicy;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -34,7 +34,7 @@ public class ExponentialBackoffRetryPolicy implements RetryPolicy {
     /** 默认最大延时 2h */
     public static final Duration DEFAULT_MAX = Duration.ofHours(2);
     /** 默认最大重试次数 16 */
-    public static final int DEFAULT_MAX_RECONSUME_TIMES = StreamMqConstants.DEFAULT_MAX_RECONSUME_TIMES;
+    public static final int DEFAULT_MAX_RECONSUME_TIMES = StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
 
     private final long initialMillis;
     private final double multiplier;

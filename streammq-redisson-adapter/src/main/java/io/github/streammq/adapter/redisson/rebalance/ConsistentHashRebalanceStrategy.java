@@ -1,13 +1,9 @@
 package io.github.streammq.adapter.redisson.rebalance;
 
-import io.github.streammq.core.StreamMqConstants;
-import io.github.streammq.core.spi.RebalanceStrategy;
+import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.core.policy.RebalanceStrategy;
 
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.TreeMap;
+import java.util.*;
 
 /**
  * 一致性哈希 Rebalance 策略（默认实现）。
@@ -32,7 +28,7 @@ import java.util.TreeMap;
 public class ConsistentHashRebalanceStrategy implements RebalanceStrategy {
 
     /** 默认虚拟节点数 */
-    public static final int DEFAULT_VIRTUAL_NODES = StreamMqConstants.DEFAULT_VIRTUAL_NODES;
+    public static final int DEFAULT_VIRTUAL_NODES = StreamMQConstants.DEFAULT_VIRTUAL_NODES;
 
     private final int virtualNodes;
 

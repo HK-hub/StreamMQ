@@ -1,4 +1,4 @@
-package io.github.streammq.core.spi;
+package io.github.streammq.core.interceptor;
 
 import io.github.streammq.core.message.MessageId;
 
