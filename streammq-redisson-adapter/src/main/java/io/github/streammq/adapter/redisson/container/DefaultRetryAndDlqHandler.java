@@ -39,7 +39,7 @@ import java.util.Map;
  * 由容器直接处理（消息留在 PEL），不进入本处理器。
  *
  * <p>重试超时路由：当 {@link RetryPolicy#nextRetryDelay} 返回 null（不再重试）时，
- * 路由到 DLQ Stream（{@code streammq:{ns}:dlq:{topic}:{group}}）。
+ * 路由到 DLQ Stream（{@code streammq:{ns}:dlq:{group}}）。
  *
  * <p>设计模式：策略模式，将 ACK/重试/DLQ 路由逻辑从容器中分离。
  *
@@ -165,6 +165,60 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
     }
 
     /**
+     * 处理 defer：将消息写入 retry ZSet + payload Hash（使用指定延迟），并 ACK 原消息。
+     *
+     * <p>流程类似 {@link #handleReconsumeLater}，但用指定的 delay 而非
+     * {@link RetryPolicy#nextRetryDelay} 计算的延迟。当重试次数达到
+     * {@link ListenerRegistration#getMaxReconsumeTimes()} 时路由到 DLQ Stream。
+     */
+    @Override
+    public void handleDefer(Message<?> message, ListenerRegistration<?> reg,
+                            StreamMQListener listener, MessageId messageId, Duration delay) {
+        try {
+            int retryCount = message.getReconsumeTimes();
+            if (retryCount >= reg.getMaxReconsumeTimes()) {
+                LOG.warn("Defer reached maxReconsumeTimes, routing to DLQ " +
+                        "(topic={}, group={}, messageId={}, retryCount={})",
+                    reg.getTopic(), reg.getGroup(), messageId, retryCount);
+                if (routeToDlq(message, reg, messageId, RetryScheduler.DLQ_REASON_MAX_RETRY)) {
+                    listener.ack(messageId);
+                } else {
+                    LOG.error("DLQ routing failed, message kept in PEL for re-delivery " +
+                        "(topic={}, group={}, messageId={})", reg.getTopic(), reg.getGroup(), messageId);
+                }
+                return;
+            }
+
+            Map<String, String> fields = messageConverter.toStreamFields(message);
+            long nextRetryAt = System.currentTimeMillis() + delay.toMillis();
+
+            String msgIdStr = messageId.getStreamEntryId();
+            String payloadKey = StreamMQKeys.delayPayloadHash(reg.getNamespace(), msgIdStr);
+            Map<String, String> payload = new HashMap<>(fields.size() + 2);
+            payload.putAll(fields);
+            payload.put(RetryScheduler.FIELD_RETRY_COUNT, Integer.toString(retryCount));
+            payload.put(RetryScheduler.FIELD_TARGET_TOPIC, reg.getTopic());
+            RMap<String, String> payloadMap = redisson.getMap(payloadKey);
+            payloadMap.putAll(payload);
+
+            String retryKey = StreamMQKeys.retryZSet(reg.getNamespace(), reg.getTopic(), reg.getGroup());
+            RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
+            zset.add(nextRetryAt, msgIdStr);
+
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Message deferred for retry: topic={}, group={}, messageId={}, " +
+                        "retryCount={}, delayMs={}, nextRetryAt={}",
+                    reg.getTopic(), reg.getGroup(), messageId, retryCount, delay.toMillis(), nextRetryAt);
+            }
+
+            listener.ack(messageId);
+        } catch (RuntimeException ex) {
+            LOG.error("Failed to defer message (topic={}, group={}, messageId={}): {}",
+                reg.getTopic(), reg.getGroup(), messageId, ex.getMessage(), ex);
+        }
+    }
+
+    /**
      * 将消息路由到 DLQ Stream。
      *
      * @param message 原始消息
@@ -180,7 +234,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             Map<String, String> fields = messageConverter.toStreamFields(message);
             fields.put(RetryScheduler.FIELD_DLQ_REASON, reason);
             fields.put(FIELD_ORIGINAL_MESSAGE_ID, messageId.getStreamEntryId());
-            String dlqKey = StreamMQKeys.dlqStream(reg.getNamespace(), reg.getTopic(), reg.getGroup());
+            String dlqKey = StreamMQKeys.dlqStream(reg.getNamespace(), reg.getGroup());
             RStream<String, String> dlqStream = redisson.getStream(dlqKey);
             dlqStream.add(StreamAddArgs.entries(fields));
             LOG.info("Message routed to DLQ: topic={}, group={}, messageId={}, reason={}",

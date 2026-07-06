@@ -7,7 +7,9 @@ import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.listener.StreamMQListener;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
+import io.github.streammq.core.policy.RetryAndDlqHandler;
 import lombok.RequiredArgsConstructor;
+import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -37,6 +39,8 @@ public class DefaultConsumeContextConsume implements ConsumeOrderlyContext {
     private final Message<?> message;
     private final ListenerRegistration<?> registration;
     private final StreamMQListener listener;
+    private final RetryAndDlqHandler retryDlqHandler;
+    private final RedissonClient redisson;
     private final AtomicBoolean acked = new AtomicBoolean(false);
 
     /**
@@ -105,7 +109,7 @@ public class DefaultConsumeContextConsume implements ConsumeOrderlyContext {
 
     @Override
     public Acknowledgment acknowledge() {
-        return new DefaultAcknowledgment(message, listener, this);
+        return new DefaultAcknowledgment(message, listener, this, registration, retryDlqHandler, redisson);
     }
 
     @Override

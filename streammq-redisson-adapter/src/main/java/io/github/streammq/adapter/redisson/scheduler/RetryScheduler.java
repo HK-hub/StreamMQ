@@ -32,7 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <ul>
  *   <li>{@code retryCount < maxReconsumeTimes}：转投到目标 Stream（{@code streammq:{ns}:msg:{topic}}），
  *       递增 {@code retryTimes} 字段</li>
- *   <li>{@code retryCount >= maxReconsumeTimes}：转投到 DLQ Stream（{@code streammq:{ns}:dlq:{topic}:{group}}）</li>
+ *   <li>{@code retryCount >= maxReconsumeTimes}：转投到 DLQ Stream（{@code streammq:{ns}:dlq:{group}}）</li>
  * </ul>
  *
  * <p>转投流程（Java 端原子操作，ZREM 保证 only-once）：
@@ -179,7 +179,7 @@ public class RetryScheduler implements StreamMQScheduler {
         }
 
         String targetStreamKey = StreamMQKeys.topicStream(namespace, target.topic);
-        String dlqStreamKey = StreamMQKeys.dlqStream(namespace, target.topic, target.group);
+        String dlqStreamKey = StreamMQKeys.dlqStream(namespace, target.group);
 
         for (String msgId : expired) {
             boolean acquired = zset.remove(msgId);

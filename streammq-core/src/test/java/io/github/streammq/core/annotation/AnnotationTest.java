@@ -27,7 +27,7 @@ class AnnotationTest {
     static class OrderlyListenerSample {
     }
 
-    @StreamMQConsumer(topic = "t", consumerGroup = "g", dlqConsumerGroup = "dlq-cg")
+    @StreamMQConsumer(topic = "t", consumerGroup = "g", dlqMode = true)
     static class DlqListenerSample {
     }
 
@@ -130,17 +130,10 @@ class AnnotationTest {
         }
 
         @Test
-        @DisplayName("dlqConsumerGroup 默认空字符串")
-        void dlqConsumerGroupDefault() {
+        @DisplayName("dlqMode 默认 false")
+        void dlqModeDefault() {
             StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
-            assertThat(ann.dlqConsumerGroup()).isEmpty();
-        }
-
-        @Test
-        @DisplayName("dlqOriginalGroup 默认空字符串")
-        void dlqOriginalGroupDefault() {
-            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
-            assertThat(ann.dlqOriginalGroup()).isEmpty();
+            assertThat(ann.dlqMode()).isFalse();
         }
 
         @Test
@@ -163,10 +156,10 @@ class AnnotationTest {
         }
 
         @Test
-        @DisplayName("dlqConsumerGroup 非空时正确读取")
-        void dlqConsumerGroupSet() {
+        @DisplayName("dlqMode 为 true 时正确读取")
+        void dlqModeSet() {
             StreamMQConsumer ann = DlqListenerSample.class.getAnnotation(StreamMQConsumer.class);
-            assertThat(ann.dlqConsumerGroup()).isEqualTo("dlq-cg");
+            assertThat(ann.dlqMode()).isTrue();
             assertThat(ann.consumerGroup()).isEqualTo("g");
         }
     }

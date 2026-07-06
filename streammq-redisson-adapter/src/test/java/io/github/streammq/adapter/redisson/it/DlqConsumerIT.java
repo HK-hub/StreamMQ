@@ -39,7 +39,7 @@ import static org.awaitility.Awaitility.await;
  * <ul>
  *   <li>DLQ 消费者正常接收死信消息</li>
  *   <li>DLQ 消费者消费成功后 ACK（消息从 DLQ PEL 移除）</li>
- *   <li>DLQ 消费者使用自定义 dlqConsumerGroup</li>
+ *   <li>DLQ 消费者使用 dlqMode = true 标识</li>
  *   <li>DLQ 消费者消费失败后直接丢弃（不进入重试循环）</li>
  * </ul>
  */
@@ -67,21 +67,21 @@ class DlqConsumerIT extends AbstractRedisIT {
     @SuppressWarnings("unchecked")
     private static StreamMQConsumer mkListenerAnnotation(
             String topic, String group, int maxReconsumeTimes) {
-        return mkListenerAnnotation(topic, group, "", maxReconsumeTimes);
+        return mkListenerAnnotation(topic, group, maxReconsumeTimes, false);
     }
 
     /**
      * 通过动态代理构造 {@link StreamMQConsumer} 注解实例。
      *
      * @param topic 主题
-     * @param group 消费者组（DLQ 模式下为原始消费者组）
-     * @param dlqConsumerGroup DLQ 消费者组名，空字符串表示非 DLQ 模式
+     * @param group 消费者组（DLQ 模式下为原始消费者组，用于构造 DLQ Stream Key）
      * @param maxReconsumeTimes 最大重试次数
+     * @param dlqMode 是否为 DLQ 消费者
      * @return 注解代理实例
      */
     @SuppressWarnings("unchecked")
     private static StreamMQConsumer mkListenerAnnotation(
-            String topic, String group, String dlqConsumerGroup, int maxReconsumeTimes) {
+            String topic, String group, int maxReconsumeTimes, boolean dlqMode) {
         return (StreamMQConsumer) Proxy.newProxyInstance(
             StreamMQConsumer.class.getClassLoader(),
             new Class<?>[]{StreamMQConsumer.class},
@@ -109,14 +109,13 @@ class DlqConsumerIT extends AbstractRedisIT {
                 case "pullInterval" -> 0L;
                 case "suspendCurrentQueueTimeMillis" -> 1000L;
                 case "shardCount" -> 4;
-                case "dlqConsumerGroup" -> dlqConsumerGroup;
-                case "dlqOriginalGroup" -> "";
+                case "dlqMode" -> dlqMode;
                 case "consumerName" -> "";
                 case "annotationType" -> StreamMQConsumer.class;
-                case "hashCode" -> (topic + group + dlqConsumerGroup).hashCode();
+                case "hashCode" -> (topic + group + dlqMode).hashCode();
                 case "equals" -> args != null && args.length > 0 && proxy == args[0];
                 case "toString" -> "@StreamMQConsumer(topic=" + topic + ", consumerGroup=" + group
-                    + ", dlqConsumerGroup=" + dlqConsumerGroup + ")";
+                    + ", dlqMode=" + dlqMode + ")";
                 default -> defaultAnnotationValue(method.getReturnType());
             });
     }
@@ -139,7 +138,6 @@ class DlqConsumerIT extends AbstractRedisIT {
     void dlqConsumer_receivesDeadLetterMessage() {
         String topic = "dlq-consume-topic";
         String group = "dlq-consume-group";
-        String dlqConsumerGroup = "dlq-consumer-" + group;
 
         RetryPolicy noRetryPolicy = new NoRetryPolicy();
         RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
@@ -157,11 +155,11 @@ class DlqConsumerIT extends AbstractRedisIT {
             receivedDlqMessage.set(msg);
             return ConsumeAction.SUCCESS;
         };
-        container.registerConsumer(dlqListener, mkListenerAnnotation(topic, group, dlqConsumerGroup, 0));
+        container.registerConsumer(dlqListener, mkListenerAnnotation(topic, group, 0, true));
 
         // 创建消费者组：业务 Stream + DLQ Stream
         createConsumerGroup(topic, group);
-        createDlqConsumerGroup(topic, group, dlqConsumerGroup);
+        createDlqConsumerGroup(group);
 
         container.start();
         try {
@@ -186,10 +184,10 @@ class DlqConsumerIT extends AbstractRedisIT {
             assertThat(dlqMsg.getMessageId()).isNotNull();
 
             // DLQ 消费成功后 ACK，DLQ PEL 应为空
-            String dlqStreamKey = StreamMQKeys.dlqStream(namespace, topic, group);
+            String dlqStreamKey = StreamMQKeys.dlqStream(namespace, group);
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
                 RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
-                assertThat(dlqStream.listPending(dlqConsumerGroup,
+                assertThat(dlqStream.listPending(group,
                     StreamMessageId.MIN, StreamMessageId.MAX, 100)).isEmpty();
             });
         } finally {
@@ -198,11 +196,10 @@ class DlqConsumerIT extends AbstractRedisIT {
     }
 
     @Test
-    @DisplayName("DLQ 消费者显式指定 dlqConsumerGroup（dlq-consumer-{originalGroup}）")
+    @DisplayName("DLQ 消费者使用 dlqMode=true（对齐 RocketMQ %DLQ%{group}）")
     void dlqConsumer_defaultDlqConsumerGroup() {
         String topic = "dlq-default-group-topic";
         String group = "dlq-default-group";
-        String expectedDlqGroup = "dlq-consumer-" + group;
 
         RetryPolicy noRetryPolicy = new NoRetryPolicy();
         RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
@@ -214,17 +211,17 @@ class DlqConsumerIT extends AbstractRedisIT {
             (msg, ctx) -> { throw new RuntimeException("fail"); },
             mkListenerAnnotation(topic, group, 0));
 
-        // DLQ 消费者：显式指定 dlqConsumerGroup 为 dlq-consumer-{group}
+        // DLQ 消费者：dlqMode=true
         AtomicReference<Message<?>> receivedDlqMessage = new AtomicReference<>();
         container.registerConsumer(
             (StreamMessageConcurrentlyConsumer<String>) (msg, ctx) -> {
                 receivedDlqMessage.set(msg);
                 return ConsumeAction.SUCCESS;
             },
-            mkListenerAnnotation(topic, group, expectedDlqGroup, 0));
+            mkListenerAnnotation(topic, group, 0, true));
 
         createConsumerGroup(topic, group);
-        createDlqConsumerGroup(topic, group, expectedDlqGroup);
+        createDlqConsumerGroup(group);
 
         container.start();
         try {
@@ -245,7 +242,6 @@ class DlqConsumerIT extends AbstractRedisIT {
     void dlqConsumer_consumeFailure_dropsMessage() {
         String topic = "dlq-drop-topic";
         String group = "dlq-drop-group";
-        String dlqConsumerGroup = "dlq-consumer-" + group;
 
         RetryPolicy noRetryPolicy = new NoRetryPolicy();
         RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
@@ -264,10 +260,10 @@ class DlqConsumerIT extends AbstractRedisIT {
                 dlqAttempts.incrementAndGet();
                 throw new RuntimeException("DLQ consumer also fails");
             },
-            mkListenerAnnotation(topic, group, dlqConsumerGroup, 0));
+            mkListenerAnnotation(topic, group, 0, true));
 
         createConsumerGroup(topic, group);
-        createDlqConsumerGroup(topic, group, dlqConsumerGroup);
+        createDlqConsumerGroup(group);
 
         container.start();
         try {
@@ -280,10 +276,10 @@ class DlqConsumerIT extends AbstractRedisIT {
             await().atMost(20, TimeUnit.SECONDS).until(() -> dlqAttempts.get() >= 1);
 
             // DLQ 消费失败后应直接 ACK 丢弃，PEL 应为空
-            String dlqStreamKey = StreamMQKeys.dlqStream(namespace, topic, group);
+            String dlqStreamKey = StreamMQKeys.dlqStream(namespace, group);
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
                 RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
-                assertThat(dlqStream.listPending(dlqConsumerGroup,
+                assertThat(dlqStream.listPending(group,
                     StreamMessageId.MIN, StreamMessageId.MAX, 100)).isEmpty();
             });
         } finally {
@@ -294,15 +290,13 @@ class DlqConsumerIT extends AbstractRedisIT {
     /**
      * 在 DLQ Stream 上创建消费者组。
      *
-     * @param topic 原始主题
-     * @param originalGroup 原始消费者组
-     * @param dlqConsumerGroup DLQ 消费者组名
+     * @param group 消费者组名（即原始消费者组，用于构造 DLQ Stream Key）
      */
-    protected void createDlqConsumerGroup(String topic, String originalGroup, String dlqConsumerGroup) {
-        String dlqStreamKey = StreamMQKeys.dlqStream(namespace, topic, originalGroup);
+    protected void createDlqConsumerGroup(String group) {
+        String dlqStreamKey = StreamMQKeys.dlqStream(namespace, group);
         RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
         try {
-            dlqStream.createGroup(StreamCreateGroupArgs.name(dlqConsumerGroup).makeStream().id(new StreamMessageId(0, 0)));
+            dlqStream.createGroup(StreamCreateGroupArgs.name(group).makeStream().id(new StreamMessageId(0, 0)));
         } catch (RuntimeException ex) {
             // BUSYGROUP 表示组已存在，忽略
             if (ex.getMessage() == null || !ex.getMessage().contains("BUSYGROUP")) {

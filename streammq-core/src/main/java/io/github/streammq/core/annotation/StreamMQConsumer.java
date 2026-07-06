@@ -4,6 +4,7 @@ import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
+import io.github.streammq.core.enums.NackRetryMode;
 import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.serializer.MessageSerializer;
@@ -17,7 +18,7 @@ import java.lang.annotation.*;
  * {@code StreamMessageOrderlyConsumer} 实现类上。
  *
  * <p>对齐 RocketMQ {@code @RocketMQMessageListener} 体验。本注解为统一入口，
- * 通过 {@link #messageModel()} 区分并发 / 顺序消费，通过 {@link #dlqConsumerGroup()}
+ * 通过 {@link #messageModel()} 区分并发 / 顺序消费，通过 {@link #dlqMode()}
  * 标识 DLQ 消费者。
  *
  * <p>使用示例：
@@ -47,8 +48,7 @@ import java.lang.annotation.*;
  *
  * // DLQ 消费
  * @Component
- * @StreamMQConsumer(topic = "order-topic", consumerGroup = "order-cg",
- *                  dlqConsumerGroup = "order-dlq-cg")
+ * @StreamMQConsumer(topic = "order-topic", consumerGroup = "order-cg", dlqMode = true)
  * public class OrderDlqHandler implements StreamMessageConcurrentlyConsumer<String> {
  *     @Override
  *     public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
@@ -76,8 +76,8 @@ public @interface StreamMQConsumer {
     /**
      * 消费者组名（必填）。
      *
-     * <p>DLQ 模式下（{@link #dlqConsumerGroup()} 不为空时），本字段表示原始消费者组名，
-     * 用于构造 DLQ Stream Key。
+     * <p>DLQ 模式下（{@link #dlqMode()} 为 true 时），本字段表示原始消费者组名，
+     * 用于构造 DLQ Stream Key（{@code streammq:{ns}:dlq:{consumerGroup}}）。
      *
      * @return 消费者组
      */
@@ -247,27 +247,43 @@ public @interface StreamMQConsumer {
     int shardCount() default StreamMQConstants.DEFAULT_SHARD_COUNT;
 
     /**
-     * DLQ 消费者使用的消费者组名（可选，默认空字符串表示非 DLQ 消费者）。
+     * nack 之后的重试模式，默认 {@link NackRetryMode#RETRY_ZSET}。
      *
-     * <p>当此字段不为空时，表示这是一个 DLQ（死信队列）消费者，从对应的死信 Stream 消费消息。
-     * 实际 DLQ 消费者组名：若此字段为空字符串则使用默认 {@code dlq-consumer-{consumerGroup}}，
-     * 但通常作为 DLQ 消费者时应显式指定此字段。
+     * <p>RETRY_ZSET：主动写入 retry ZSet + ACK（对齐 RocketMQ）
+     * <p>STREAM_AUTO：留 PEL 依赖 XAUTOCLAIM，超过 fastRetryCount 后可选转入 RETRY_ZSET
      *
-     * <p>DLQ Stream Key 为 {@code streammq:{ns}:dlq:{topic}:{consumerGroup}}，
-     * 其中 {@code consumerGroup} 为原消费者的组名（即 {@link #consumerGroup()}）。
-     *
-     * @return DLQ 消费者组名，空字符串表示非 DLQ 消费者
+     * @return nack 重试模式
      */
-    String dlqConsumerGroup() default "";
+    NackRetryMode nackRetryMode() default NackRetryMode.RETRY_ZSET;
 
     /**
-     * DLQ 原始消费者组（仅 DLQ 模式下使用，默认空字符串）。
+     * STREAM_AUTO 模式下的快速重投次数（默认 3）。
+     * 超过此次数后，根据 fallbackToRetryZset 决定是否转入 RETRY_ZSET。
      *
-     * <p>用于构造 DLQ Stream Key 的 group 段。若为空，则使用 {@link #consumerGroup()} 作为原始组名。
-     *
-     * @return DLQ 原始消费者组名
+     * @return 快速重投次数
      */
-    String dlqOriginalGroup() default "";
+    int fastRetryCount() default 3;
+
+    /**
+     * STREAM_AUTO 模式下，超过 fastRetryCount 后是否转入 RETRY_ZSET（默认 true）。
+     * false 则继续留 PEL 直到 maxReconsumeTimes 后进 DLQ。
+     *
+     * @return true 转入 RETRY_ZSET，false 继续留 PEL
+     */
+    boolean fallbackToRetryZset() default true;
+
+    /**
+     * 是否为 DLQ（死信队列）消费者，默认 false。
+     *
+     * <p>设置为 true 时，消费者从约定的死信 Stream 消费消息：
+     * DLQ Stream Key 为 {@code streammq:{ns}:dlq:{consumerGroup}}（对齐 RocketMQ %DLQ%{group}）。
+     * 此时 {@link #consumerGroup()} 表示原始消费者组名（用于构造 DLQ Stream Key）。
+     *
+     * <p>DLQ 消费者收到的消息体中携带原始 topic 字段，可从 {@link io.github.streammq.core.message.Message#getTopic()} 获取。
+     *
+     * @return true 表示 DLQ 消费者
+     */
+    boolean dlqMode() default false;
 
     /**
      * 消费者实例名（可选，默认空字符串表示自动生成）。

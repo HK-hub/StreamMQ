@@ -19,7 +19,7 @@ import java.util.Objects;
  *   <li>消费组分片分配：{@code streammq:{ns}:cg:{group}:assignment}（Hash）</li>
  *   <li>消费组通知频道：{@code streammq:{ns}:cg:{group}:notify}（PubSub）</li>
  *   <li>重试队列：{@code streammq:{ns}:retry:{topic}:{group}}（ZSet）</li>
- *   <li>死信队列：{@code streammq:{ns}:dlq:{topic}:{group}}（Stream）</li>
+ *   <li>死信队列：{@code streammq:{ns}:dlq:{group}}（Stream，对齐 RocketMQ %DLQ%{group}）</li>
  *   <li>重试转移降级锁：{@code streammq:{ns}:retry:{topic}:{group}:transfer:lock}（String）</li>
  *   <li>延时级别队列：{@code streammq:{ns}:delay:{level}}（ZSet）</li>
  *   <li>延时已投递计数：{@code streammq:{ns}:delay:meta:delivered}（Hash）</li>
@@ -68,6 +68,8 @@ public final class StreamMQKeys {
     public static final String TYPE_SHARDLOCK = "shardlock";
     /** 元数据类型段 */
     public static final String TYPE_META = "meta";
+    /** nack 计数类型段 */
+    public static final String TYPE_NACKCOUNT = "nackcount";
 
     // ==================== Key 后缀段（suffix segment） ====================
     /** 实例列表后缀 */
@@ -170,11 +172,12 @@ public final class StreamMQKeys {
     }
 
     /**
-     * 死信队列 Stream Key：{@code streammq:{ns}:dlq:{topic}:{group}}。
+     * 死信队列 Stream Key：{@code streammq:{ns}:dlq:{group}}（对齐 RocketMQ %DLQ%{group}）。
+     * 按消费者组隔离，一个组的所有 topic 的死信消息混在同一 DLQ Stream 中，
+     * 消息本身携带 topic 字段，消费时可从消息字段获取原 topic。
      */
-    public static String dlqStream(String namespace, String topic, String group) {
-        return prefix(namespace) + SEP + TYPE_DLQ + SEP + requireNonEmpty(topic, "topic")
-            + SEP + requireNonEmpty(group, "group");
+    public static String dlqStream(String namespace, String group) {
+        return prefix(namespace) + SEP + TYPE_DLQ + SEP + requireNonEmpty(group, "group");
     }
 
     /**
@@ -271,6 +274,22 @@ public final class StreamMQKeys {
     public static String metaStats(String namespace, String group, String topic) {
         return prefix(namespace) + SEP + TYPE_META + SEP + SEG_STATS + SEP
             + requireNonEmpty(group, "group") + SEP + requireNonEmpty(topic, "topic");
+    }
+
+    /**
+     * nack 计数 Hash Key：{@code streammq:{ns}:nackcount:{topic}:{group}:{msgId}}。
+     *
+     * <p>用于 STREAM_AUTO 模式下记录每条消息的 nack 次数。
+     *
+     * @param namespace 命名空间
+     * @param topic 主题
+     * @param group 消费者组
+     * @param msgId 消息 ID
+     * @return Hash Key
+     */
+    public static String nackCountHash(String namespace, String topic, String group, String msgId) {
+        return prefix(namespace) + SEP + TYPE_NACKCOUNT + SEP + requireNonEmpty(topic, "topic")
+            + SEP + requireNonEmpty(group, "group") + SEP + requireNonEmpty(msgId, "msgId");
     }
 
     private static String requireNonEmpty(String value, String name) {

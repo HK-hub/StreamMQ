@@ -79,7 +79,7 @@ public class RedissonOrderlyShardLockManager implements OrderlyShardLockManager 
             shardingKey = "";
         }
         int shardIndex = Math.abs(shardingKey.hashCode()) % reg.getShardCount();
-        RLock lock = reg.getShardLocks()[shardIndex];
+        RLock lock = (RLock) reg.getShardLocks().get(shardIndex);
         try {
             lock.lock(reg.getConsumeTimeoutMillis(), TimeUnit.MILLISECONDS);
             return orderly.onMessage(message, ctx);

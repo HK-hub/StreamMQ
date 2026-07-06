@@ -33,7 +33,7 @@ import java.util.Map;
  *     <ul>
  *       <li>若 {@code messageModel = ORDERLY} 且实现 {@link StreamMessageOrderlyConsumer}，注册为顺序消费者</li>
  *       <li>否则若实现 {@link StreamMessageConcurrentlyConsumer}，注册为并发消费者（含 DLQ 场景，由
- *           {@code dlqConsumerGroup} 是否为空区分）</li>
+ *           {@code dlqMode} 是否为 true 区分）</li>
  *     </ul>
  *   </li>
  *   <li>扫描 {@code @StreamMQTransactionConsumer} 标注的 Bean（实现 {@link TransactionChecker}），
@@ -44,7 +44,7 @@ import java.util.Map;
  * <p>容器的实际启动由 {@code SmartLifecycle} 完成，本类仅负责注册。
  *
  * <p>支持 ${...} 属性占位符与 #{...} SpEL 表达式：在注册前对注解中的
- * topic、consumerGroup、namespace、selectorExpression、dlqConsumerGroup、transactionGroup 等字符串属性进行解析。
+ * topic、consumerGroup、namespace、selectorExpression、transactionGroup 等字符串属性进行解析。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -92,7 +92,7 @@ public class StreamMQListenerRegistrar implements SmartInitializingSingleton, Ap
 
     /**
      * 创建 {@link StreamMQConsumer} 注解的动态代理，覆盖 topic/consumerGroup/namespace/selectorExpression
-     * /dlqConsumerGroup/dlqOriginalGroup 为解析后的值，其余方法委托给原注解。
+     * 为解析后的值，其余方法委托给原注解。
      *
      * @param original 原注解
      * @return 解析后的代理注解
@@ -102,25 +102,19 @@ public class StreamMQListenerRegistrar implements SmartInitializingSingleton, Ap
         String resolvedGroup = resolveAttribute(original.consumerGroup());
         String resolvedNamespace = resolveAttribute(original.namespace());
         String resolvedSelector = resolveAttribute(original.selectorExpression());
-        String resolvedDlqConsumerGroup = resolveAttribute(original.dlqConsumerGroup());
-        String resolvedDlqOriginalGroup = resolveAttribute(original.dlqOriginalGroup());
         // 若无需解析，直接返回原注解
         if (resolvedTopic.equals(original.topic())
             && resolvedGroup.equals(original.consumerGroup())
             && resolvedNamespace.equals(original.namespace())
-            && resolvedSelector.equals(original.selectorExpression())
-            && resolvedDlqConsumerGroup.equals(original.dlqConsumerGroup())
-            && resolvedDlqOriginalGroup.equals(original.dlqOriginalGroup())) {
+            && resolvedSelector.equals(original.selectorExpression())) {
             return original;
         }
         LOG.info("Resolved @StreamMQConsumer attributes: topic={} -> {}, consumerGroup={} -> {}, namespace={} -> {}, " +
-                "selectorExpression={} -> {}, dlqConsumerGroup={} -> {}, dlqOriginalGroup={} -> {}",
+                "selectorExpression={} -> {}",
             original.topic(), resolvedTopic,
             original.consumerGroup(), resolvedGroup,
             original.namespace(), resolvedNamespace,
-            original.selectorExpression(), resolvedSelector,
-            original.dlqConsumerGroup(), resolvedDlqConsumerGroup,
-            original.dlqOriginalGroup(), resolvedDlqOriginalGroup);
+            original.selectorExpression(), resolvedSelector);
         InvocationHandler handler = (proxy, method, args) -> {
             String name = method.getName();
             switch (name) {
@@ -128,8 +122,6 @@ public class StreamMQListenerRegistrar implements SmartInitializingSingleton, Ap
                 case "consumerGroup": return resolvedGroup;
                 case "namespace": return resolvedNamespace;
                 case "selectorExpression": return resolvedSelector;
-                case "dlqConsumerGroup": return resolvedDlqConsumerGroup;
-                case "dlqOriginalGroup": return resolvedDlqOriginalGroup;
                 default: return method.invoke(original, args);
             }
         };
@@ -196,7 +188,7 @@ public class StreamMQListenerRegistrar implements SmartInitializingSingleton, Ap
 
     /**
      * 扫描 {@code @StreamMQConsumer} 标注的 Bean，按 {@code messageModel} 与实现的接口区分并发 / 顺序模式，
-     * 按 {@code dlqConsumerGroup} 是否为空区分 DLQ 消费者。
+     * 按 {@code dlqMode} 是否为 true 区分 DLQ 消费者。
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     private void registerStreamMQListeners() {
@@ -208,7 +200,7 @@ public class StreamMQListenerRegistrar implements SmartInitializingSingleton, Ap
             if (annotation == null) {
                 continue;
             }
-            // 解析 ${} 占位符与 #{} SpEL 表达式，得到最终的 topic/consumerGroup/namespace/selectorExpression/dlqConsumerGroup
+            // 解析 ${} 占位符与 #{} SpEL 表达式，得到最终的 topic/consumerGroup/namespace/selectorExpression
             StreamMQConsumer resolved = resolveStreamMQListener(annotation);
             if (!resolved.enable()) {
                 LOG.info("Skip disabled @StreamMQConsumer: bean={}, topic={}", beanName, resolved.topic());
@@ -224,9 +216,9 @@ public class StreamMQListenerRegistrar implements SmartInitializingSingleton, Ap
                 StreamMessageConcurrentlyConsumer listener =
                     (StreamMessageConcurrentlyConsumer) bean;
                 listenerContainer.registerConsumer(listener, resolved);
-                if (resolved.dlqConsumerGroup() != null && !resolved.dlqConsumerGroup().isEmpty()) {
-                    LOG.info("Registered DlqConsumer: bean={}, topic={}, originalGroup={}, dlqConsumerGroup={}",
-                        beanName, resolved.topic(), resolved.consumerGroup(), resolved.dlqConsumerGroup());
+                if (resolved.dlqMode()) {
+                    LOG.info("Registered DlqConsumer: bean={}, topic={}, group={}",
+                        beanName, resolved.topic(), resolved.consumerGroup());
                 } else {
                     LOG.info("Registered Consumer: bean={}, topic={}, group={}",
                         beanName, resolved.topic(), resolved.consumerGroup());

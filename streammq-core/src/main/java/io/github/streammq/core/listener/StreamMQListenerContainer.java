@@ -17,7 +17,7 @@ import java.util.Collection;
  *
  * <p>注册 Consumer 时需提供注解元数据，框架据此创建对应的 Listener 与消费线程。
  * 通过 {@link StreamMQConsumer#messageModel()} 区分并发 / 顺序消费，
- * 通过 {@link StreamMQConsumer#dlqConsumerGroup()} 区分 DLQ 消费者。
+ * 通过 {@link StreamMQConsumer#dlqMode()} 区分 DLQ 消费者。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -25,7 +25,7 @@ import java.util.Collection;
 public interface StreamMQListenerContainer {
 
     /**
-     * 注册一个并发消费 Consumer（包含普通、DLQ 场景；通过 annotation 的 dlqConsumerGroup 区分）。
+     * 注册一个并发消费 Consumer（包含普通、DLQ 场景；通过 annotation 的 dlqMode 区分）。
      *
      * <p>{@link StreamMQConsumer#acknowledgeMode()} 为 {@code MANUAL} 时表示手动 ACK 模式，
      * 框架将忽略 {@code onMessage} 返回值，由 Consumer 通过 {@code context.acknowledge()} 控制 ACK。

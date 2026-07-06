@@ -105,8 +105,6 @@ class OrderlyMessageIT extends AbstractRedisIT {
                 case "rebalanceStrategy" -> RebalanceStrategy.class;
                 case "pullInterval" -> 0L;
                 case "suspendCurrentQueueTimeMillis" -> 1000L;
-                case "dlqConsumerGroup" -> "";
-                case "dlqOriginalGroup" -> "";
                 case "consumerName" -> "";
                 case "annotationType" -> StreamMQConsumer.class;
                 case "hashCode" -> (topic + group).hashCode();

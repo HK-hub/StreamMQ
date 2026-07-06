@@ -1,134 +1,265 @@
 package io.github.streammq.core.listener;
 
+import io.github.streammq.core.consumer.StreamMessageConsumer;
 import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.ConsumeMode;
-import lombok.Builder;
-import lombok.Getter;
-import lombok.Setter;
-import org.redisson.api.RLock;
+import io.github.streammq.core.enums.NackRetryMode;
+import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.serializer.MessageSerializer;
+import io.github.streammq.core.policy.RebalanceStrategy;
+import io.github.streammq.core.policy.RetryPolicy;
+
+import java.util.List;
+import java.util.concurrent.locks.Lock;
 
 /**
- * Listener 注册信息（值对象）。
+ * Listener 注册信息接口（值对象）。
  *
  * <p>封装容器在注册 Listener 时所需的全量配置，包括监听类型、消费参数、重试策略、
  * 顺序消费分片锁、DLQ 模式标志、跨平台 body 类型等。
  *
- * <p>使用 {@link Builder} 模式构造，避免多参数构造器的可读性问题。
+ * <p>使用 Builder 模式构造（参见 {@link ListenerRegistration.Builder}），避免多参数构造器的可读性问题。
  *
  * @param <T> Listener 处理的 body 类型
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-@Getter
-public class ListenerRegistration<T> {
+public interface ListenerRegistration<T> {
 
-    /** Listener 类型 */
-    private final ListenerType type;
-    /** Consumer 实例（StreamMessageConcurrentlyConsumer / StreamMessageOrderlyConsumer） */
-    private final Object consumer;
-    /** 主题 */
-    private final String topic;
-    /** 消费者组名 */
-    private final String group;
-    /** 消费模式 */
-    private final ConsumeMode consumeMode;
-    /** ACK 模式 */
-    private final AcknowledgeMode ackMode;
-    /** 最大重试次数 */
-    private final int maxReconsumeTimes;
-    /** 顺序消费分片数（仅 ORDERLY 类型有效，其他类型为 0） */
-    private final int shardCount;
-    /** 单条消息消费超时（毫秒），用于 shard 锁租约时间 */
-    private final long consumeTimeoutMillis;
-    /** 顺序消费 shard 级分布式锁数组（仅 ORDERLY 类型非 null） */
-    private final RLock[] shardLocks;
-    /** 单次拉取批量大小 */
-    private final int pullBatchSize;
-    /** 拉取阻塞超时（毫秒） */
-    private final long pullBlockTimeoutMillis;
-    /** 拉取间隔（毫秒，0=不间隔） */
-    private final long pullIntervalMillis;
-    /** Tag 过滤表达式 */
-    private final String selectorExpression;
-    /** 序列化器类（null=使用全局） */
-    private final Class<?> serializer;
-    /** 重试策略类（null=使用全局） */
-    private final Class<?> retryPolicy;
-    /** 消息转换器类（null=使用全局） */
-    private final Class<?> messageConverter;
-    /** 重平衡策略类（null=使用全局） */
-    private final Class<?> rebalanceStrategy;
-    /** 顺序消费挂起时长（毫秒） */
-    private final long suspendCurrentQueueTimeMillis;
-    /** Stream 最大长度（0=使用全局配置） */
-    private final int streamMaxLen;
-    /** 是否启用消息追踪 */
-    private final boolean enableMsgTrace;
-    /** DLQ 模式标志：true=从 DLQ Stream 消费死信消息 */
-    private final boolean dlqMode;
-    /** DLQ 原始消费者组（仅 dlqMode=true 时使用，用于构造 DLQ Stream Key） */
-    private final String dlqOriginalGroup;
-    /** 目标 body 类型（解析自 Listener 泛型 T，跨平台反序列化回退类型） */
-    private final Class<?> targetBodyType;
+    ListenerType getType();
 
-    /** 命名空间（由 setter 注入，resolveNamespace 后确定最终值） */
-    @Setter
-    private String namespace;
+    StreamMessageConsumer<T> getConsumer();
 
-    @Builder
-    public ListenerRegistration(ListenerType type, Object consumer, String topic, String group,
-                                ConsumeMode consumeMode, AcknowledgeMode ackMode, int maxReconsumeTimes,
-                                int shardCount, long consumeTimeoutMillis, RLock[] shardLocks,
-                                int pullBatchSize, long pullBlockTimeoutMillis, long pullIntervalMillis,
-                                String selectorExpression, Class<?> serializer, Class<?> retryPolicy,
-                                Class<?> messageConverter, Class<?> rebalanceStrategy,
-                                long suspendCurrentQueueTimeMillis, int streamMaxLen, boolean enableMsgTrace,
-                                boolean dlqMode, String dlqOriginalGroup, Class<?> targetBodyType,
-                                String namespace) {
-        this.type = type;
-        this.consumer = consumer;
-        this.topic = topic;
-        this.group = group;
-        this.consumeMode = consumeMode;
-        this.ackMode = ackMode;
-        this.maxReconsumeTimes = maxReconsumeTimes;
-        this.shardCount = shardCount;
-        this.consumeTimeoutMillis = consumeTimeoutMillis;
-        this.shardLocks = shardLocks;
-        this.pullBatchSize = pullBatchSize;
-        this.pullBlockTimeoutMillis = pullBlockTimeoutMillis;
-        this.pullIntervalMillis = pullIntervalMillis;
-        this.selectorExpression = selectorExpression;
-        this.serializer = serializer;
-        this.retryPolicy = retryPolicy;
-        this.messageConverter = messageConverter;
-        this.rebalanceStrategy = rebalanceStrategy;
-        this.suspendCurrentQueueTimeMillis = suspendCurrentQueueTimeMillis;
-        this.streamMaxLen = streamMaxLen;
-        this.enableMsgTrace = enableMsgTrace;
-        this.dlqMode = dlqMode;
-        this.dlqOriginalGroup = dlqOriginalGroup;
-        this.targetBodyType = targetBodyType;
-        this.namespace = namespace;
-    }
+    String getTopic();
 
-    /**
-     * 解析命名空间：若当前 namespace 为 null 或空，则使用默认命名空间。
-     *
-     * @param defaultNs 默认命名空间
-     */
-    public void resolveNamespace(String defaultNs) {
-        if (namespace == null || namespace.isEmpty()) {
-            namespace = defaultNs;
+    String getGroup();
+
+    ConsumeMode getConsumeMode();
+
+    AcknowledgeMode getAckMode();
+
+    int getMaxReconsumeTimes();
+
+    int getShardCount();
+
+    long getConsumeTimeoutMillis();
+
+    List<Lock> getShardLocks();
+
+    int getPullBatchSize();
+
+    long getPullBlockTimeoutMillis();
+
+    long getPullIntervalMillis();
+
+    String getSelectorExpression();
+
+    Class<? extends MessageSerializer> getSerializer();
+
+    Class<? extends RetryPolicy> getRetryPolicy();
+
+    Class<? extends MessageConverter> getMessageConverter();
+
+    Class<? extends RebalanceStrategy> getRebalanceStrategy();
+
+    long getSuspendCurrentQueueTimeMillis();
+
+    int getStreamMaxLen();
+
+    boolean isEnableMsgTrace();
+
+    boolean isDlqMode();
+
+    Class<?> getTargetBodyType();
+
+    NackRetryMode getNackRetryMode();
+
+    int getFastRetryCount();
+
+    boolean isFallbackToRetryZset();
+
+    String getNamespace();
+
+    void setNamespace(String namespace);
+
+    void resolveNamespace(String defaultNs);
+
+    String key();
+
+    class Builder<T> {
+        private ListenerType type;
+        private StreamMessageConsumer<T> consumer;
+        private String topic;
+        private String group;
+        private ConsumeMode consumeMode;
+        private AcknowledgeMode ackMode;
+        private int maxReconsumeTimes;
+        private int shardCount;
+        private long consumeTimeoutMillis;
+        private List<Lock> shardLocks;
+        private int pullBatchSize;
+        private long pullBlockTimeoutMillis;
+        private long pullIntervalMillis;
+        private String selectorExpression;
+        private Class<? extends MessageSerializer> serializer;
+        private Class<? extends RetryPolicy> retryPolicy;
+        private Class<? extends MessageConverter> messageConverter;
+        private Class<? extends RebalanceStrategy> rebalanceStrategy;
+        private long suspendCurrentQueueTimeMillis;
+        private int streamMaxLen;
+        private boolean enableMsgTrace;
+        private boolean dlqMode;
+        private Class<?> targetBodyType;
+        private NackRetryMode nackRetryMode;
+        private int fastRetryCount;
+        private boolean fallbackToRetryZset;
+        private String namespace;
+
+        public Builder<T> type(ListenerType type) {
+            this.type = type;
+            return this;
+        }
+
+        public Builder<T> consumer(StreamMessageConsumer<T> consumer) {
+            this.consumer = consumer;
+            return this;
+        }
+
+        public Builder<T> topic(String topic) {
+            this.topic = topic;
+            return this;
+        }
+
+        public Builder<T> group(String group) {
+            this.group = group;
+            return this;
+        }
+
+        public Builder<T> consumeMode(ConsumeMode consumeMode) {
+            this.consumeMode = consumeMode;
+            return this;
+        }
+
+        public Builder<T> ackMode(AcknowledgeMode ackMode) {
+            this.ackMode = ackMode;
+            return this;
+        }
+
+        public Builder<T> maxReconsumeTimes(int maxReconsumeTimes) {
+            this.maxReconsumeTimes = maxReconsumeTimes;
+            return this;
+        }
+
+        public Builder<T> shardCount(int shardCount) {
+            this.shardCount = shardCount;
+            return this;
+        }
+
+        public Builder<T> consumeTimeoutMillis(long consumeTimeoutMillis) {
+            this.consumeTimeoutMillis = consumeTimeoutMillis;
+            return this;
+        }
+
+        public Builder<T> shardLocks(List<Lock> shardLocks) {
+            this.shardLocks = shardLocks;
+            return this;
+        }
+
+        public Builder<T> pullBatchSize(int pullBatchSize) {
+            this.pullBatchSize = pullBatchSize;
+            return this;
+        }
+
+        public Builder<T> pullBlockTimeoutMillis(long pullBlockTimeoutMillis) {
+            this.pullBlockTimeoutMillis = pullBlockTimeoutMillis;
+            return this;
+        }
+
+        public Builder<T> pullIntervalMillis(long pullIntervalMillis) {
+            this.pullIntervalMillis = pullIntervalMillis;
+            return this;
+        }
+
+        public Builder<T> selectorExpression(String selectorExpression) {
+            this.selectorExpression = selectorExpression;
+            return this;
+        }
+
+        public Builder<T> serializer(Class<? extends MessageSerializer> serializer) {
+            this.serializer = serializer;
+            return this;
+        }
+
+        public Builder<T> retryPolicy(Class<? extends RetryPolicy> retryPolicy) {
+            this.retryPolicy = retryPolicy;
+            return this;
+        }
+
+        public Builder<T> messageConverter(Class<? extends MessageConverter> messageConverter) {
+            this.messageConverter = messageConverter;
+            return this;
+        }
+
+        public Builder<T> rebalanceStrategy(Class<? extends RebalanceStrategy> rebalanceStrategy) {
+            this.rebalanceStrategy = rebalanceStrategy;
+            return this;
+        }
+
+        public Builder<T> suspendCurrentQueueTimeMillis(long suspendCurrentQueueTimeMillis) {
+            this.suspendCurrentQueueTimeMillis = suspendCurrentQueueTimeMillis;
+            return this;
+        }
+
+        public Builder<T> streamMaxLen(int streamMaxLen) {
+            this.streamMaxLen = streamMaxLen;
+            return this;
+        }
+
+        public Builder<T> enableMsgTrace(boolean enableMsgTrace) {
+            this.enableMsgTrace = enableMsgTrace;
+            return this;
+        }
+
+        public Builder<T> dlqMode(boolean dlqMode) {
+            this.dlqMode = dlqMode;
+            return this;
+        }
+
+        public Builder<T> targetBodyType(Class<?> targetBodyType) {
+            this.targetBodyType = targetBodyType;
+            return this;
+        }
+
+        public Builder<T> nackRetryMode(NackRetryMode nackRetryMode) {
+            this.nackRetryMode = nackRetryMode;
+            return this;
+        }
+
+        public Builder<T> fastRetryCount(int fastRetryCount) {
+            this.fastRetryCount = fastRetryCount;
+            return this;
+        }
+
+        public Builder<T> fallbackToRetryZset(boolean fallbackToRetryZset) {
+            this.fallbackToRetryZset = fallbackToRetryZset;
+            return this;
+        }
+
+        public Builder<T> namespace(String namespace) {
+            this.namespace = namespace;
+            return this;
+        }
+
+        public ListenerRegistration<T> build() {
+            return new DefaultListenerRegistration<>(type, consumer, topic, group, consumeMode, ackMode,
+                maxReconsumeTimes, shardCount, consumeTimeoutMillis, shardLocks, pullBatchSize,
+                pullBlockTimeoutMillis, pullIntervalMillis, selectorExpression, serializer, retryPolicy,
+                messageConverter, rebalanceStrategy, suspendCurrentQueueTimeMillis, streamMaxLen,
+                enableMsgTrace, dlqMode, targetBodyType, nackRetryMode, fastRetryCount, fallbackToRetryZset, namespace);
         }
     }
 
-    /**
-     * 返回注册项的唯一 key（topic:group，DLQ 模式加前缀）。
-     *
-     * @return key 字符串
-     */
-    public String key() {
-        return (dlqMode ? "dlq:" : "") + topic + ":" + group;
+    static <T> Builder<T> builder() {
+        return new Builder<>();
     }
 }

@@ -47,7 +47,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * @since 0.1.0
  */
 @Getter
-@EqualsAndHashCode(of = {"namespace", "topic", "group", "consumerName", "dlqMode", "dlqOriginalGroup"})
+@EqualsAndHashCode(of = {"namespace", "topic", "group", "consumerName", "dlqMode"})
 public class RedissonStreamListener implements StreamMQListener {
 
     private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamListener.class);
@@ -60,8 +60,6 @@ public class RedissonStreamListener implements StreamMQListener {
     private final @NonNull MessageConverter converter;
     /** DLQ 模式标志：true=从 DLQ Stream 消费死信消息 */
     private final boolean dlqMode;
-    /** DLQ 原始消费者组（仅 dlqMode=true 时使用，用于构造 DLQ Stream Key） */
-    private final String dlqOriginalGroup;
     /**
      * 目标 body 类型（跨平台反序列化回退类型）。
      *
@@ -78,7 +76,7 @@ public class RedissonStreamListener implements StreamMQListener {
     private static final String BUSYGROUP_MARKER = "BUSYGROUP";
 
     /**
-     * 兼容构造器：不启用 DLQ 模式（等价于 {@code dlqMode=false, dlqOriginalGroup=null, targetBodyType=null}）。
+     * 兼容构造器：不启用 DLQ 模式（等价于 {@code dlqMode=false, targetBodyType=null}）。
      *
      * @param redisson Redisson 客户端（必填）
      * @param namespace 命名空间（可为 null，默认空字符串）
@@ -89,7 +87,7 @@ public class RedissonStreamListener implements StreamMQListener {
      */
     public RedissonStreamListener(@NonNull RedissonClient redisson, String namespace, @NonNull String topic,
                                    @NonNull String group, @NonNull String consumerName, @NonNull MessageConverter converter) {
-        this(redisson, namespace, topic, group, consumerName, converter, false, null, null);
+        this(redisson, namespace, topic, group, consumerName, converter, false, null);
     }
 
     /**
@@ -111,11 +109,10 @@ public class RedissonStreamListener implements StreamMQListener {
      * RedissonStreamListener dlqListener = RedissonStreamListener.builder()
      *     .redisson(redissonClient)
      *     .topic("my-topic")              // 原始 topic
-     *     .group("dlq-consumer-my-group") // DLQ 消费者组
+     *     .group("my-group")              // 原始消费者组（用于构造 DLQ Stream Key）
      *     .consumerName("dlq-consumer-1")
      *     .converter(converter)
      *     .dlqMode(true)
-     *     .dlqOriginalGroup("my-group")   // 原始消费者组
      *     .build();
      * }</pre>
      *
@@ -138,13 +135,12 @@ public class RedissonStreamListener implements StreamMQListener {
      * @param consumerName 消费者实例名（必填）
      * @param converter 消息转换器（必填）
      * @param dlqMode DLQ 模式标志（true=从 DLQ Stream 消费）
-     * @param dlqOriginalGroup DLQ 原始消费者组（仅 dlqMode=true 时使用）
      * @param targetBodyType 目标 body 类型（跨平台回退类型，null=最终回退到 String）
      */
     @Builder
     public RedissonStreamListener(@NonNull RedissonClient redisson, String namespace, @NonNull String topic,
                                    @NonNull String group, @NonNull String consumerName, @NonNull MessageConverter converter,
-                                   boolean dlqMode, String dlqOriginalGroup, Class<?> targetBodyType) {
+                                   boolean dlqMode, Class<?> targetBodyType) {
         this.redisson = redisson;
         this.namespace = namespace == null ? "" : namespace;
         this.topic = topic;
@@ -152,7 +148,6 @@ public class RedissonStreamListener implements StreamMQListener {
         this.consumerName = consumerName;
         this.converter = converter;
         this.dlqMode = dlqMode;
-        this.dlqOriginalGroup = dlqOriginalGroup;
         this.targetBodyType = targetBodyType;
     }
 
@@ -252,28 +247,48 @@ public class RedissonStreamListener implements StreamMQListener {
 
     @SuppressWarnings({"unchecked", "rawtypes"})
     private Message<?> toMessage(StreamMessageId streamId, Map<String, String> fields) {
-        // 反序列化目标类型回退链：
-        //   1. Stream Entry 中的 bodyType 字段（StreamMQ SDK 发送方写入）
-        //   2. targetBodyType（容器解析自 Listener 泛型 T，跨平台场景使用）
-        //   3. String.class（最终回退，由消费者自行反序列化）
-        String bodyTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE);
-        Class<?> bodyType = null;
-        if (bodyTypeName != null && !bodyTypeName.isEmpty()) {
-            try {
-                bodyType = Class.forName(bodyTypeName, false, Thread.currentThread().getContextClassLoader());
-            } catch (ClassNotFoundException ex) {
-                LOG.warn("Body type class not found, fallback to targetBodyType/String: {}", bodyTypeName);
-                bodyType = null;
+        // 反序列化目标类型回退链（对齐 RocketMQ，优先使用消费者声明的泛型类型）：
+        //   1. targetBodyType（容器解析自 Listener 泛型 T，消费者声明的类型优先级最高）
+        //   2. bodyTypeName 匹配（仅类名匹配，支持跨包/跨模块场景：发送端 com.foo.UserInfo -> 消费端 com.bar.UserInfo）
+        //   3. bodyType（Stream Entry 中的完整类名字段）
+        //   4. String.class（最终回退，由消费者自行反序列化）
+        Class<?> bodyType = targetBodyType;
+        if (bodyType == null) {
+            String simpleTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE_NAME);
+            if (simpleTypeName != null && !simpleTypeName.isEmpty()) {
+                bodyType = findClassBySimpleName(simpleTypeName);
             }
         }
         if (bodyType == null) {
-            bodyType = targetBodyType != null ? targetBodyType : String.class;
+            String fullTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE);
+            if (fullTypeName != null && !fullTypeName.isEmpty()) {
+                try {
+                    bodyType = Class.forName(fullTypeName, false, Thread.currentThread().getContextClassLoader());
+                } catch (ClassNotFoundException ex) {
+                    LOG.warn("Body type class not found by full name, fallback to String: {}", fullTypeName);
+                }
+            }
+        }
+        if (bodyType == null) {
+            bodyType = String.class;
         }
         Message<?> message = converter.fromStreamFields(fields, (Class) bodyType);
-        // 回填 topic 与 messageId（Stream Entry 字段中不含 topic）
         DefaultMessageConverter.applyTopic(message, topic);
         DefaultMessageConverter.applyMessageId(message, streamId.toString());
         return message;
+    }
+
+    private Class<?> findClassBySimpleName(String simpleName) {
+        try {
+            ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+            if (classLoader == null) {
+                classLoader = getClass().getClassLoader();
+            }
+            return Class.forName(simpleName, false, classLoader);
+        } catch (ClassNotFoundException e) {
+            LOG.debug("Body type class not found by simple name '{}', will try full name or fallback", simpleName);
+            return null;
+        }
     }
 
     private void ensureGroup() {
@@ -304,7 +319,7 @@ public class RedissonStreamListener implements StreamMQListener {
 
     private RStream<String, String> getStream() {
         String streamKey = dlqMode
-            ? StreamMQKeys.dlqStream(namespace, topic, dlqOriginalGroup)
+            ? StreamMQKeys.dlqStream(namespace, group)
             : StreamMQKeys.topicStream(namespace, topic);
         return redisson.getStream(streamKey);
     }

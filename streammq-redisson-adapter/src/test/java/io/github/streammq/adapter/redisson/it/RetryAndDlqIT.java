@@ -98,8 +98,6 @@ class RetryAndDlqIT extends AbstractRedisIT {
                 case "pullInterval" -> 0L;
                 case "suspendCurrentQueueTimeMillis" -> 1000L;
                 case "shardCount" -> 4;
-                case "dlqConsumerGroup" -> "";
-                case "dlqOriginalGroup" -> "";
                 case "consumerName" -> "";
                 case "annotationType" -> StreamMQConsumer.class;
                 case "hashCode" -> (topic + group).hashCode();
@@ -234,7 +232,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("dlq-bound").build());
             producer.close();
 
-            String dlqKey = StreamMQKeys.dlqStream(namespace, topic, group);
+            String dlqKey = StreamMQKeys.dlqStream(namespace, group);
             await().atMost(20, TimeUnit.SECONDS).untilAsserted(() -> {
                 RStream<String, String> dlqStream = redisson.getStream(dlqKey);
                 assertThat(dlqStream.size()).isEqualTo(1L);
@@ -269,7 +267,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("to-dlq").build());
             producer.close();
 
-            String dlqKey = StreamMQKeys.dlqStream(namespace, topic, group);
+            String dlqKey = StreamMQKeys.dlqStream(namespace, group);
             await().atMost(10, TimeUnit.SECONDS).untilAsserted(() -> {
                 RStream<String, String> dlqStream = redisson.getStream(dlqKey);
                 assertThat(dlqStream.size()).isEqualTo(1L);
@@ -291,7 +289,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
     void dlqRoutingFailure_messageStaysInPel() {
         String topic = "dlq-fail-topic";
         String group = "dlq-fail-group";
-        String dlqKey = StreamMQKeys.dlqStream(namespace, topic, group);
+        String dlqKey = StreamMQKeys.dlqStream(namespace, group);
 
         // 创建 spy 客户端:DLQ stream add 时抛异常
         RedissonClient spyClient = Mockito.spy(redisson);

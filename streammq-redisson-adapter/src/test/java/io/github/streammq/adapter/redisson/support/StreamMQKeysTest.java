@@ -94,8 +94,8 @@ class StreamMQKeysTest {
     @Test
     @DisplayName("dlqStream: 死信队列 Key")
     void dlqStream() {
-        assertThat(StreamMQKeys.dlqStream("ns", "topic", "group"))
-            .isEqualTo("streammq:ns:dlq:topic:group");
+        assertThat(StreamMQKeys.dlqStream("ns", "group"))
+            .isEqualTo("streammq:ns:dlq:group");
     }
 
     @Test
@@ -297,8 +297,8 @@ class StreamMQKeysTest {
         @Test
         @DisplayName("dlqStream: null 与空字符串结果一致")
         void dlqStreamEquivalence() {
-            assertThat(StreamMQKeys.dlqStream(null, "topic", "group"))
-                .isEqualTo(StreamMQKeys.dlqStream("", "topic", "group"));
+            assertThat(StreamMQKeys.dlqStream(null, "group"))
+                .isEqualTo(StreamMQKeys.dlqStream("", "group"));
         }
 
         @Test

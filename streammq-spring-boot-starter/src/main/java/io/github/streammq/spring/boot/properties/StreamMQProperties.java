@@ -1,6 +1,7 @@
 package io.github.streammq.spring.boot.properties;
 
 import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.core.enums.NackRetryMode;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -123,6 +124,12 @@ public class StreamMQProperties {
         private long brokerErrorBackoffMillis = StreamMQConstants.DEFAULT_BROKER_ERROR_BACKOFF_MS;
         /** 最大拉取批量上界 */
         private int maxBatchSizeLimit = StreamMQConstants.MAX_BATCH_SIZE_LIMIT;
+        /** nack 之后的默认重试模式 */
+        private NackRetryMode nackRetryMode = NackRetryMode.RETRY_ZSET;
+        /** STREAM_AUTO 模式下的默认快速重投次数 */
+        private int fastRetryCount = 3;
+        /** STREAM_AUTO 模式下，超过 fastRetryCount 后是否默认转入 RETRY_ZSET */
+        private boolean fallbackToRetryZset = true;
     }
 
     /**

@@ -33,6 +33,7 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.Lock;
 
 /**
  * {@link StreamMQListenerContainer} 默认实现，编排 Listener 的生命周期与消费循环。
@@ -187,17 +188,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         Objects.requireNonNull(annotation, "annotation");
         checkBeforeStart();
         Class<?> bodyType = BodyTypeResolver.resolve(consumer);
-        boolean dlqMode = annotation.dlqConsumerGroup() != null && !annotation.dlqConsumerGroup().isEmpty();
+        boolean dlqMode = annotation.dlqMode();
         String effectiveGroup = annotation.consumerGroup();
-        String dlqOriginalGroup = null;
-        if (dlqMode) {
-            // DLQ 模式：consumerGroup 作为原始组名，dlqConsumerGroup 作为实际消费组名
-            dlqOriginalGroup = annotation.dlqOriginalGroup();
-            if (dlqOriginalGroup == null || dlqOriginalGroup.isEmpty()) {
-                dlqOriginalGroup = annotation.consumerGroup();
-            }
-            effectiveGroup = annotation.dlqConsumerGroup();
-        }
         ListenerRegistration<T> reg = ListenerRegistration.<T>builder()
             .type(ListenerType.AUTO_ACK)
             .consumer(consumer)
@@ -221,15 +213,17 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .streamMaxLen(annotation.streamMaxLen())
             .enableMsgTrace(annotation.enableMsgTrace())
             .dlqMode(dlqMode)
-            .dlqOriginalGroup(dlqOriginalGroup)
             .targetBodyType(bodyType)
+            .nackRetryMode(annotation.nackRetryMode())
+            .fastRetryCount(annotation.fastRetryCount())
+            .fallbackToRetryZset(annotation.fallbackToRetryZset())
             .namespace(annotation.namespace())
             .build();
         reg.resolveNamespace(defaultNamespace);
         registrations.put(reg.key(), reg);
         if (dlqMode) {
-            LOG.info("Registered StreamMQ DLQ Consumer: topic={}, originalGroup={}, dlqConsumerGroup={}, ackMode={}, bodyType={}",
-                annotation.topic(), dlqOriginalGroup, effectiveGroup, annotation.acknowledgeMode(), bodyType);
+            LOG.info("Registered StreamMQ DLQ Consumer: topic={}, group={}, ackMode={}, bodyType={}",
+                annotation.topic(), effectiveGroup, annotation.acknowledgeMode(), bodyType);
         } else {
             LOG.info("Registered StreamMQ Consumer: topic={}, group={}, ackMode={}, bodyType={}",
                 annotation.topic(), effectiveGroup, annotation.acknowledgeMode(), bodyType);
@@ -242,8 +236,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         Objects.requireNonNull(annotation, "annotation");
         checkBeforeStart();
         int shardCount = annotation.shardCount();
-        RLock[] shardLocks = shardLockManager.createShardLocks(defaultNamespace, annotation.topic(),
+        RLock[] shardLockArray = shardLockManager.createShardLocks(defaultNamespace, annotation.topic(),
             annotation.consumerGroup(), annotation.namespace(), shardCount);
+        List<Lock> shardLocks = shardLockArray != null ? Arrays.asList(shardLockArray) : null;
         Class<?> bodyType = BodyTypeResolver.resolve(consumer);
         ListenerRegistration<T> reg = ListenerRegistration.<T>builder()
             .type(ListenerType.ORDERLY)
@@ -268,8 +263,10 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .streamMaxLen(annotation.streamMaxLen())
             .enableMsgTrace(annotation.enableMsgTrace())
             .dlqMode(false)
-            .dlqOriginalGroup(null)
             .targetBodyType(bodyType)
+            .nackRetryMode(annotation.nackRetryMode())
+            .fastRetryCount(annotation.fastRetryCount())
+            .fallbackToRetryZset(annotation.fallbackToRetryZset())
             .namespace(annotation.namespace())
             .build();
         reg.resolveNamespace(defaultNamespace);
@@ -436,7 +433,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .consumerName(reg.getGroup() + "-" + UUID.randomUUID().toString().substring(0, 8))
             .namespace(reg.getNamespace())
             .dlqMode(reg.isDlqMode())
-            .dlqOriginalGroup(reg.getDlqOriginalGroup())
             .targetBodyType(reg.getTargetBodyType())
             .build();
         return consumerFactory.createListener(config);
@@ -444,7 +440,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void handleMessage(Message<?> message, ListenerRegistration reg, StreamMQListener listener) {
-        DefaultConsumeContextConsume ctx = new DefaultConsumeContextConsume(message, reg, listener);
+        DefaultConsumeContextConsume ctx = new DefaultConsumeContextConsume(message, reg, listener, retryDlqHandler, redisson);
         ConsumerMdcTrace.inject(message, reg);
         ConsumeAction finalAction = ConsumeAction.RECONSUME_LATER;
         try {

@@ -6,6 +6,8 @@ import io.github.streammq.core.listener.StreamMQListener;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 
+import java.time.Duration;
+
 /**
  * ACK / 重试 / DLQ 路由处理器策略接口。
  *
@@ -58,6 +60,22 @@ public interface RetryAndDlqHandler {
      */
     void handleReconsumeLater(Message<?> message, ListenerRegistration<?> reg,
                               StreamMQListener listener, MessageId messageId);
+
+    /**
+     * 处理 defer：将消息写入 retry ZSet + payload Hash（使用指定延迟），并 ACK 原消息。
+     *
+     * <p>流程类似 {@link #handleReconsumeLater}，但用指定的 delay 而非
+     * {@link RetryPolicy#nextRetryDelay} 计算的延迟。当重试次数达到
+     * {@link ListenerRegistration#getMaxReconsumeTimes()} 时路由到 DLQ Stream。
+     *
+     * @param message 消息
+     * @param reg Listener 注册信息
+     * @param listener 监听器实例
+     * @param messageId 消息 ID
+     * @param delay 指定的延迟时长
+     */
+    void handleDefer(Message<?> message, ListenerRegistration<?> reg,
+                     StreamMQListener listener, MessageId messageId, Duration delay);
 
     /**
      * 将消息路由到 DLQ Stream。

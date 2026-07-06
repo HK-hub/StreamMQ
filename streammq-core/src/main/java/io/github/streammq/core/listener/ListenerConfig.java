@@ -64,20 +64,12 @@ public class ListenerConfig {
     /**
      * DLQ 模式标志（可选，默认 false）。
      * 设置为 true 时，监听器从 DLQ Stream 消费死信消息，
-     * Stream Key 使用 {@code streammq:{ns}:dlq:{topic}:{dlqOriginalGroup}}。
+     * Stream Key 使用 {@code streammq:{ns}:dlq:{consumerGroup}}（对齐 RocketMQ %DLQ%{group}）。
      *
      * @return true 表示 DLQ 模式
      */
     @Builder.Default
     private final boolean dlqMode = false;
-
-    /**
-     * DLQ 原始消费者组（仅 {@link #dlqMode}=true 时使用）。
-     * 用于构造 DLQ Stream Key 的 group 段，即原消费者的 consumerGroup。
-     *
-     * @return 原始消费者组名
-     */
-    private final String dlqOriginalGroup;
 
     /**
      * 目标 body 类型（跨平台反序列化回退类型）。

@@ -47,6 +47,7 @@ public class DefaultMessageConverter implements MessageConverter {
     /** Stream Entry 字段名常量 */
     public static final String FIELD_BODY = "body";
     public static final String FIELD_BODY_TYPE = "bodyType";
+    public static final String FIELD_BODY_TYPE_NAME = "bodyTypeName";
     public static final String FIELD_TAG = "tag";
     public static final String FIELD_KEYS = "keys";
     public static final String FIELD_SHARDING_KEY = "shardingKey";
@@ -83,6 +84,7 @@ public class DefaultMessageConverter implements MessageConverter {
             byte[] bodyBytes = serializer.serialize(body, (Class<Object>) (Class) bodyType);
             fields.put(FIELD_BODY, Base64.getEncoder().encodeToString(bodyBytes));
             fields.put(FIELD_BODY_TYPE, bodyType.getName());
+            fields.put(FIELD_BODY_TYPE_NAME, bodyType.getSimpleName());
         }
 
         if (message.getTag() != null) {
