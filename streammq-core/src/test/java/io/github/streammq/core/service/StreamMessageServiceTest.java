@@ -26,24 +26,25 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * {@link StreamMessageProducerService} 单元测试，验证各便捷发送方法正确构造 {@link Message} 并委派给 {@link StreamMessageTemplate}。
+ * {@link StreamMessageService} 单元测试，验证各便捷发送方法正确构造 {@link Message} 并委派给 {@link StreamMessageTemplate}。
  *
- * <p>使用 Mockito 模拟 {@link StreamMessageTemplate}，通过 {@link ArgumentCaptor} 捕获传入的消息，
+ * <p>测试针对 {@link StreamMessageService} 接口，使用默认实现 {@link DefaultStreamMessageService} 进行验证。
+ * 使用 Mockito 模拟 {@link StreamMessageTemplate}，通过 {@link ArgumentCaptor} 捕获传入的消息，
  * 校验 topic / body / tag / keys / shardingKey / 延时参数是否正确设置。
  */
-@DisplayName("StreamMqService 便捷发送服务测试")
+@DisplayName("StreamMQService 便捷发送服务测试")
 @ExtendWith(MockitoExtension.class)
 @SuppressWarnings({"rawtypes", "unchecked"})
-class StreamMessageProducerServiceTest {
+class StreamMessageServiceTest {
 
     @Mock
     private StreamMessageTemplate template;
 
-    private StreamMessageProducerService mqService;
+    private StreamMessageService mqService;
 
     @BeforeEach
     void setUp() {
-        mqService = new StreamMessageProducerService(template);
+        mqService = new DefaultStreamMessageService(template);
     }
 
     private static SendResult okResult() {

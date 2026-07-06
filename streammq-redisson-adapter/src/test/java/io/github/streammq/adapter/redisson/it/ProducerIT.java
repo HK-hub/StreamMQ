@@ -3,7 +3,7 @@ package io.github.streammq.adapter.redisson.it;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.enums.DelayLevel;
-import io.github.streammq.core.exception.StreamMqBrokerException;
+import io.github.streammq.core.exception.StreamMQBrokerException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.message.SendResult;
@@ -242,7 +242,7 @@ class ProducerIT extends AbstractRedisIT {
     }
 
     @Test
-    @DisplayName("syncSend 异常被包装为 StreamMqBrokerException")
+    @DisplayName("syncSend 异常被包装为 StreamMQBrokerException")
     void syncSend_streamError_wrapsInBrokerException() {
         Config config = new Config();
         config.useSingleServer().setAddress("redis://localhost:6379").setDatabase(0);
@@ -253,7 +253,7 @@ class ProducerIT extends AbstractRedisIT {
 
         Message<String> msg = buildMessage(TOPIC, "x", "y", "z");
         assertThatThrownBy(() -> closedProducer.syncSend(msg))
-            .isInstanceOf(StreamMqBrokerException.class);
+            .isInstanceOf(StreamMQBrokerException.class);
         closedProducer.close();
     }
 

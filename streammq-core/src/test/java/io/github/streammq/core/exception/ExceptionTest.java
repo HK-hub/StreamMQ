@@ -13,13 +13,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ExceptionTest {
 
     @Nested
-    @DisplayName("StreamMqException 基类")
-    class StreamMqExceptionTest {
+    @DisplayName("StreamMQException 基类")
+    class StreamMQExceptionTest {
 
         @Test
         @DisplayName("带 message 构造")
         void withMessage() {
-            StreamMqException ex = new StreamMqException("boom");
+            StreamMQException ex = new StreamMQException("boom");
             assertThat(ex.getMessage()).isEqualTo("boom");
             assertThat(ex.getCause()).isNull();
         }
@@ -28,60 +28,60 @@ class ExceptionTest {
         @DisplayName("带 message + cause 构造")
         void withMessageAndCause() {
             Throwable cause = new RuntimeException("root");
-            StreamMqException ex = new StreamMqException("boom", cause);
+            StreamMQException ex = new StreamMQException("boom", cause);
             assertThat(ex.getMessage()).isEqualTo("boom");
             assertThat(ex.getCause()).isSameAs(cause);
         }
 
         @Test
-        @DisplayName("StreamMqException 继承 RuntimeException")
+        @DisplayName("StreamMQException 继承 RuntimeException")
         void extendsRuntimeException() {
-            assertThat(RuntimeException.class).isAssignableFrom(StreamMqException.class);
+            assertThat(RuntimeException.class).isAssignableFrom(StreamMQException.class);
         }
     }
 
     @Nested
-    @DisplayName("StreamMqClientException")
-    class StreamMqClientExceptionTest {
+    @DisplayName("StreamMQClientException")
+    class StreamMQClientExceptionTest {
 
         @Test
-        @DisplayName("继承 StreamMqException")
-        void extendsStreamMqException() {
-            assertThat(StreamMqException.class).isAssignableFrom(StreamMqClientException.class);
+        @DisplayName("继承 StreamMQException")
+        void extendsStreamMQException() {
+            assertThat(StreamMQException.class).isAssignableFrom(StreamMQClientException.class);
         }
 
         @Test
         @DisplayName("带 message 构造")
         void withMessage() {
-            StreamMqClientException ex = new StreamMqClientException("bad config");
+            StreamMQClientException ex = new StreamMQClientException("bad config");
             assertThat(ex.getMessage()).isEqualTo("bad config");
-            assertThat(ex).isInstanceOf(StreamMqException.class);
+            assertThat(ex).isInstanceOf(StreamMQException.class);
         }
 
         @Test
         @DisplayName("带 message + cause 构造")
         void withMessageAndCause() {
             Throwable cause = new IllegalStateException("root");
-            StreamMqClientException ex = new StreamMqClientException("bad config", cause);
+            StreamMQClientException ex = new StreamMQClientException("bad config", cause);
             assertThat(ex.getMessage()).isEqualTo("bad config");
             assertThat(ex.getCause()).isSameAs(cause);
         }
     }
 
     @Nested
-    @DisplayName("StreamMqBrokerException")
-    class StreamMqBrokerExceptionTest {
+    @DisplayName("StreamMQBrokerException")
+    class StreamMQBrokerExceptionTest {
 
         @Test
-        @DisplayName("继承 StreamMqException")
-        void extendsStreamMqException() {
-            assertThat(StreamMqException.class).isAssignableFrom(StreamMqBrokerException.class);
+        @DisplayName("继承 StreamMQException")
+        void extendsStreamMQException() {
+            assertThat(StreamMQException.class).isAssignableFrom(StreamMQBrokerException.class);
         }
 
         @Test
         @DisplayName("单参构造：errorCode 与 cause 均为 null")
         void singleArg() {
-            StreamMqBrokerException ex = new StreamMqBrokerException("redis error");
+            StreamMQBrokerException ex = new StreamMQBrokerException("redis error");
             assertThat(ex.getMessage()).isEqualTo("redis error");
             assertThat(ex.getErrorCode()).isNull();
             assertThat(ex.getCause()).isNull();
@@ -90,7 +90,7 @@ class ExceptionTest {
         @Test
         @DisplayName("带 message + errorCode 构造")
         void withErrorCode() {
-            StreamMqBrokerException ex = new StreamMqBrokerException("redis error", "OOM");
+            StreamMQBrokerException ex = new StreamMQBrokerException("redis error", "OOM");
             assertThat(ex.getMessage()).isEqualTo("redis error");
             assertThat(ex.getErrorCode()).isEqualTo("OOM");
             assertThat(ex.getCause()).isNull();
@@ -100,7 +100,7 @@ class ExceptionTest {
         @DisplayName("全参构造：message + errorCode + cause")
         void fullConstructor() {
             Throwable cause = new RuntimeException("conn reset");
-            StreamMqBrokerException ex = new StreamMqBrokerException("redis error", "LOADING", cause);
+            StreamMQBrokerException ex = new StreamMQBrokerException("redis error", "LOADING", cause);
             assertThat(ex.getMessage()).isEqualTo("redis error");
             assertThat(ex.getErrorCode()).isEqualTo("LOADING");
             assertThat(ex.getCause()).isSameAs(cause);
@@ -112,9 +112,9 @@ class ExceptionTest {
     class SerializationExceptionTest {
 
         @Test
-        @DisplayName("继承 StreamMqException")
-        void extendsStreamMqException() {
-            assertThat(StreamMqException.class).isAssignableFrom(SerializationException.class);
+        @DisplayName("继承 StreamMQException")
+        void extendsStreamMQException() {
+            assertThat(StreamMQException.class).isAssignableFrom(SerializationException.class);
         }
 
         @Test
@@ -139,9 +139,9 @@ class ExceptionTest {
     class ProducerTimeoutExceptionTest {
 
         @Test
-        @DisplayName("继承 StreamMqException")
-        void extendsStreamMqException() {
-            assertThat(StreamMqException.class).isAssignableFrom(ProducerTimeoutException.class);
+        @DisplayName("继承 StreamMQException")
+        void extendsStreamMQException() {
+            assertThat(StreamMQException.class).isAssignableFrom(ProducerTimeoutException.class);
         }
 
         @Test
@@ -170,9 +170,9 @@ class ExceptionTest {
     class ConsumerInterruptedExceptionTest {
 
         @Test
-        @DisplayName("继承 StreamMqException")
-        void extendsStreamMqException() {
-            assertThat(StreamMqException.class).isAssignableFrom(ConsumerInterruptedException.class);
+        @DisplayName("继承 StreamMQException")
+        void extendsStreamMQException() {
+            assertThat(StreamMQException.class).isAssignableFrom(ConsumerInterruptedException.class);
         }
 
         @Test
@@ -200,9 +200,9 @@ class ExceptionTest {
     class TransactionExceptionTest {
 
         @Test
-        @DisplayName("继承 StreamMqException")
-        void extendsStreamMqException() {
-            assertThat(StreamMqException.class).isAssignableFrom(TransactionException.class);
+        @DisplayName("继承 StreamMQException")
+        void extendsStreamMQException() {
+            assertThat(StreamMQException.class).isAssignableFrom(TransactionException.class);
         }
 
         @Test

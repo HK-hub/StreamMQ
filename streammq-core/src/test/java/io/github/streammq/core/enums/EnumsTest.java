@@ -7,7 +7,7 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 各枚举类型完整性测试，覆盖 AcknowledgeMode / Action / ConsumeMode / MessageModel / LocalTransactionState。
+ * 各枚举类型完整性测试，覆盖 AcknowledgeMode / ConsumeAction / OrderlyAction / ConsumeMode / MessageModel / LocalTransactionState。
  */
 @DisplayName("核心枚举完整性测试")
 class EnumsTest {
@@ -25,23 +25,42 @@ class EnumsTest {
     }
 
     @Nested
-    @DisplayName("Action")
-    class ActionTest {
+    @DisplayName("ConsumeAction")
+    class ConsumeActionTest {
 
         @Test
-        @DisplayName("Action 含 SUCCESS 与 RECONSUME_LATER")
+        @DisplayName("ConsumeAction 含 SUCCESS 与 RECONSUME_LATER")
         void containsSuccessAndReconsumeLater() {
-            assertThat(Action.values())
-                .contains(Action.SUCCESS, Action.RECONSUME_LATER);
+            assertThat(ConsumeAction.values())
+                .contains(ConsumeAction.SUCCESS, ConsumeAction.RECONSUME_LATER);
         }
 
         @Test
-        @DisplayName("Action 含全部 5 个值")
-        void hasAllFiveValues() {
-            assertThat(Action.values()).hasSize(5);
-            assertThat(Action.values())
-                .containsExactly(Action.SUCCESS, Action.RECONSUME_LATER,
-                    Action.SUSPEND_CURRENT_QUEUE_A_MOMENT, Action.COMMIT, Action.ROLLBACK);
+        @DisplayName("ConsumeAction 含全部 2 个值")
+        void hasAllTwoValues() {
+            assertThat(ConsumeAction.values()).hasSize(2);
+            assertThat(ConsumeAction.values())
+                .containsExactly(ConsumeAction.SUCCESS, ConsumeAction.RECONSUME_LATER);
+        }
+    }
+
+    @Nested
+    @DisplayName("OrderlyAction")
+    class OrderlyActionTest {
+
+        @Test
+        @DisplayName("OrderlyAction 含 SUCCESS 与 SUSPEND_CURRENT_QUEUE_A_MOMENT")
+        void containsSuccessAndSuspend() {
+            assertThat(OrderlyAction.values())
+                .contains(OrderlyAction.SUCCESS, OrderlyAction.SUSPEND_CURRENT_QUEUE_A_MOMENT);
+        }
+
+        @Test
+        @DisplayName("OrderlyAction 含全部 2 个值")
+        void hasAllTwoValues() {
+            assertThat(OrderlyAction.values()).hasSize(2);
+            assertThat(OrderlyAction.values())
+                .containsExactly(OrderlyAction.SUCCESS, OrderlyAction.SUSPEND_CURRENT_QUEUE_A_MOMENT);
         }
     }
 

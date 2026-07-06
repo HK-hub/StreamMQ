@@ -3,7 +3,7 @@ package io.github.streammq.core.annotation;
 import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
-import io.github.streammq.core.spi.MessageSerializer;
+import io.github.streammq.core.serializer.MessageSerializer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -14,8 +14,7 @@ import java.lang.reflect.Method;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * 注解默认值测试，覆盖 @StreamMqConsumer / @StreamMqOrderlyConsumer /
- * @StreamMqTransactionConsumer / @EnableStreamMq 的默认值与元注解。
+ * 注解默认值测试，覆盖 @StreamMQConsumer / @StreamMQTransactionConsumer / @EnableStreamMQ 的默认值与元注解。
  */
 @DisplayName("StreamMQ 注解默认值测试")
 class AnnotationTest {
@@ -24,8 +23,12 @@ class AnnotationTest {
     static class ListenerSample {
     }
 
-    @StreamMQOrderlyConsumer(topic = "t", consumerGroup = "g")
+    @StreamMQConsumer(topic = "t", consumerGroup = "g", messageModel = MessageModel.ORDERLY)
     static class OrderlyListenerSample {
+    }
+
+    @StreamMQConsumer(topic = "t", consumerGroup = "g", dlqConsumerGroup = "dlq-cg")
+    static class DlqListenerSample {
     }
 
     @StreamMQTransactionConsumer(transactionGroup = "tg")
@@ -42,7 +45,7 @@ class AnnotationTest {
     }
 
     @Nested
-    @DisplayName("@StreamMqConsumer 默认值")
+    @DisplayName("@StreamMQConsumer 默认值")
     class StreamMQConsumerDefaults {
 
         @Test
@@ -118,80 +121,58 @@ class AnnotationTest {
             assertThat(ann.topic()).isEqualTo("t");
             assertThat(ann.consumerGroup()).isEqualTo("g");
         }
-    }
-
-    @Nested
-    @DisplayName("@StreamMqOrderlyConsumer 默认值")
-    class StreamMessageOrderlyConsumerDefaults {
-
-        @Test
-        @DisplayName("selectorExpression 默认 *")
-        void selectorExpressionDefault() {
-            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
-            assertThat(ann.selectorExpression()).isEqualTo("*");
-        }
-
-        @Test
-        @DisplayName("serializer 默认 MessageSerializer.class")
-        void serializerDefault() {
-            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
-            assertThat(ann.serializer()).isEqualTo(MessageSerializer.class);
-        }
-
-        @Test
-        @DisplayName("consumeMode 默认 CLUSTERING")
-        void consumeModeDefault() {
-            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
-            assertThat(ann.consumeMode()).isEqualTo(ConsumeMode.CLUSTERING);
-        }
-
-        @Test
-        @DisplayName("acknowledgeMode 默认 AUTO")
-        void acknowledgeModeDefault() {
-            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
-            assertThat(ann.acknowledgeMode()).isEqualTo(AcknowledgeMode.AUTO);
-        }
-
-        @Test
-        @DisplayName("consumeThreadMin/Max 默认均为 1")
-        void threadDefaults() {
-            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
-            assertThat(ann.consumeThreadMin()).isEqualTo(1);
-            assertThat(ann.consumeThreadMax()).isEqualTo(1);
-        }
-
-        @Test
-        @DisplayName("maxReconsumeTimes 默认 Integer.MAX_VALUE")
-        void maxReconsumeTimesDefault() {
-            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
-            assertThat(ann.maxReconsumeTimes()).isEqualTo(Integer.MAX_VALUE);
-        }
-
-        @Test
-        @DisplayName("consumeTimeout 默认 30000L")
-        void consumeTimeoutDefault() {
-            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
-            assertThat(ann.consumeTimeout()).isEqualTo(30000L);
-        }
 
         @Test
         @DisplayName("shardCount 默认 4")
         void shardCountDefault() {
-            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.shardCount()).isEqualTo(4);
         }
 
         @Test
-        @DisplayName("namespace 默认空，enable 默认 true")
-        void namespaceAndEnableDefault() {
-            StreamMQOrderlyConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQOrderlyConsumer.class);
-            assertThat(ann.namespace()).isEmpty();
-            assertThat(ann.enable()).isTrue();
+        @DisplayName("dlqConsumerGroup 默认空字符串")
+        void dlqConsumerGroupDefault() {
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
+            assertThat(ann.dlqConsumerGroup()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("dlqOriginalGroup 默认空字符串")
+        void dlqOriginalGroupDefault() {
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
+            assertThat(ann.dlqOriginalGroup()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("consumerName 默认空字符串")
+        void consumerNameDefault() {
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
+            assertThat(ann.consumerName()).isEmpty();
         }
     }
 
     @Nested
-    @DisplayName("@StreamMqTransactionConsumer 默认值")
+    @DisplayName("@StreamMQConsumer 顺序消费与 DLQ 配置")
+    class StreamMQConsumerOrderlyAndDlq {
+
+        @Test
+        @DisplayName("messageModel=ORDERLY 正确读取")
+        void orderlyMessageModel() {
+            StreamMQConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQConsumer.class);
+            assertThat(ann.messageModel()).isEqualTo(MessageModel.ORDERLY);
+        }
+
+        @Test
+        @DisplayName("dlqConsumerGroup 非空时正确读取")
+        void dlqConsumerGroupSet() {
+            StreamMQConsumer ann = DlqListenerSample.class.getAnnotation(StreamMQConsumer.class);
+            assertThat(ann.dlqConsumerGroup()).isEqualTo("dlq-cg");
+            assertThat(ann.consumerGroup()).isEqualTo("g");
+        }
+    }
+
+    @Nested
+    @DisplayName("@StreamMQTransactionConsumer 默认值")
     class StreamMQTransactionConsumerDefaults {
 
         @Test
@@ -221,7 +202,7 @@ class AnnotationTest {
     }
 
     @Nested
-    @DisplayName("@EnableStreamMq 默认值")
+    @DisplayName("@EnableStreamMQ 默认值")
     class EnableStreamMQDefaults {
 
         @Test

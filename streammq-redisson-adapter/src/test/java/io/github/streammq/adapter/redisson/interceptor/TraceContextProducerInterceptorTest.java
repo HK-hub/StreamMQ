@@ -6,7 +6,7 @@ import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.message.SendStatus;
-import io.github.streammq.core.spi.TraceCollector;
+import io.github.streammq.core.interceptor.TraceCollector;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;

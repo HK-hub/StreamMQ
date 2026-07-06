@@ -6,7 +6,7 @@ import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
-import io.github.streammq.core.spi.MessageConverter;
+import io.github.streammq.core.converter.MessageConverter;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.redisson.api.RStream;

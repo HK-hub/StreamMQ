@@ -2,10 +2,10 @@ package io.github.streammq.adapter.redisson.interceptor;
 
 import io.github.streammq.adapter.redisson.trace.NoopTraceCollector;
 import io.github.streammq.adapter.redisson.trace.Slf4jTraceCollector;
-import io.github.streammq.core.enums.Action;
+import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
-import io.github.streammq.core.spi.TraceCollector;
+import io.github.streammq.core.interceptor.TraceCollector;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -94,7 +94,7 @@ class TraceContextConsumerInterceptorTest {
         interceptor.beforeConsume(msg);
         assertThat(MDC.get(TraceContextConsumerInterceptor.MDC_TRACE_ID_KEY)).isEqualTo("trace-1");
 
-        interceptor.afterConsume(msg, Action.SUCCESS);
+        interceptor.afterConsume(msg, ConsumeAction.SUCCESS);
 
         // MDC 中 traceId 已被移除
         assertThat(MDC.get(TraceContextConsumerInterceptor.MDC_TRACE_ID_KEY)).isNull();
@@ -125,7 +125,7 @@ class TraceContextConsumerInterceptorTest {
         msg.putUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, "trace-1");
 
         interceptor.beforeConsume(msg);
-        interceptor.afterConsume(msg, Action.RECONSUME_LATER);
+        interceptor.afterConsume(msg, ConsumeAction.RECONSUME_LATER);
 
         ArgumentCaptor<TraceCollector.ConsumeTraceContext> captor =
                 ArgumentCaptor.forClass(TraceCollector.ConsumeTraceContext.class);
@@ -144,7 +144,7 @@ class TraceContextConsumerInterceptorTest {
         Message<String> msg = new Message<>();
         msg.putUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, "trace-1");
         interceptor.beforeConsume(msg);
-        interceptor.afterConsume(msg, Action.SUCCESS);
+        interceptor.afterConsume(msg, ConsumeAction.SUCCESS);
 
         verify(collector, never()).recordConsume(any(TraceCollector.ConsumeTraceContext.class));
         // 即使未启用，MDC 中的 traceId 仍被移除
@@ -163,7 +163,7 @@ class TraceContextConsumerInterceptorTest {
         msg.putUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, "trace-1");
         interceptor.beforeConsume(msg);
         // 不应抛异常
-        interceptor.afterConsume(msg, Action.SUCCESS);
+        interceptor.afterConsume(msg, ConsumeAction.SUCCESS);
         assertThat(MDC.get(TraceContextConsumerInterceptor.MDC_TRACE_ID_KEY)).isNull();
     }
 
@@ -176,7 +176,7 @@ class TraceContextConsumerInterceptorTest {
 
         Message<String> msg = new Message<>();
         msg.setTopic("topic-1");
-        interceptor.afterConsume(msg, Action.SUCCESS);
+        interceptor.afterConsume(msg, ConsumeAction.SUCCESS);
 
         ArgumentCaptor<TraceCollector.ConsumeTraceContext> captor =
                 ArgumentCaptor.forClass(TraceCollector.ConsumeTraceContext.class);

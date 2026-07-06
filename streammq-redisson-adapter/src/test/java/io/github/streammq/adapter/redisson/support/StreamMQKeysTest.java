@@ -16,7 +16,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-@DisplayName("StreamMqKeys Key 命名工具测试")
+@DisplayName("StreamMQKeys Key 命名工具测试")
 class StreamMQKeysTest {
 
     @Test

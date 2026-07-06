@@ -10,7 +10,7 @@ import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.SendCallback;
-import io.github.streammq.core.spi.ProducerInterceptor;
+import io.github.streammq.core.interceptor.ProducerInterceptor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -31,7 +31,7 @@ import static org.awaitility.Awaitility.await;
  *
  * <p>覆盖 syncSend/asyncSend/syncSendBatch 往返、拦截器链(含中止)与多 Topic 场景。
  */
-@DisplayName("DefaultStreamMqTemplate 集成测试")
+@DisplayName("DefaultStreamMQTemplate 集成测试")
 class TemplateIT extends AbstractRedisIT {
 
     private RedissonStreamProducerFactory producerFactory;

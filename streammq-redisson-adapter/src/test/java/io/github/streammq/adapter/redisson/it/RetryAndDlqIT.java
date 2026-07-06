@@ -10,10 +10,10 @@ import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.enums.*;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
-import io.github.streammq.core.spi.MessageConverter;
-import io.github.streammq.core.spi.MessageSerializer;
-import io.github.streammq.core.spi.RebalanceStrategy;
-import io.github.streammq.core.spi.RetryPolicy;
+import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.serializer.MessageSerializer;
+import io.github.streammq.core.policy.RebalanceStrategy;
+import io.github.streammq.core.policy.RetryPolicy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -97,10 +97,14 @@ class RetryAndDlqIT extends AbstractRedisIT {
                 case "rebalanceStrategy" -> RebalanceStrategy.class;
                 case "pullInterval" -> 0L;
                 case "suspendCurrentQueueTimeMillis" -> 1000L;
+                case "shardCount" -> 4;
+                case "dlqConsumerGroup" -> "";
+                case "dlqOriginalGroup" -> "";
+                case "consumerName" -> "";
                 case "annotationType" -> StreamMQConsumer.class;
                 case "hashCode" -> (topic + group).hashCode();
                 case "equals" -> args != null && args.length > 0 && proxy == args[0];
-                case "toString" -> "@StreamMqConsumer(topic=" + topic + ", consumerGroup=" + group + ")";
+                case "toString" -> "@StreamMQConsumer(topic=" + topic + ", consumerGroup=" + group + ")";
                 default -> defaultAnnotationValue(method.getReturnType());
             });
     }
@@ -171,7 +175,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
             if (attempt.incrementAndGet() == 1) {
                 throw new RuntimeException("first attempt fails");
             }
-            return Action.SUCCESS;
+            return ConsumeAction.SUCCESS;
         };
         container.registerConsumer(listener, mkAnnotation(topic, group, 16));
 
