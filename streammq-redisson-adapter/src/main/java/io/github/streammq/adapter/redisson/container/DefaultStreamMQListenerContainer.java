@@ -1,25 +1,28 @@
 package io.github.streammq.adapter.redisson.container;
 
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
-import io.github.streammq.core.StreamMqConstants;
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.annotation.StreamMQConsumer;
-import io.github.streammq.core.annotation.StreamMQDlqConsumer;
-import io.github.streammq.core.annotation.StreamMQOrderlyConsumer;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
-import io.github.streammq.core.consumer.StreamMessageManualAckConsumer;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
-import io.github.streammq.core.enums.Action;
-import io.github.streammq.core.enums.ConsumeMode;
+import io.github.streammq.core.enums.AcknowledgeMode;
+import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.enums.InvokeTiming;
-import io.github.streammq.core.exception.StreamMqBrokerException;
+import io.github.streammq.core.enums.OrderlyAction;
+import io.github.streammq.core.exception.StreamMQBrokerException;
 import io.github.streammq.core.listener.ListenerConfig;
 import io.github.streammq.core.listener.StreamMQListener;
 import io.github.streammq.core.listener.StreamMQListenerContainer;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.message.Message;
-import io.github.streammq.core.spi.ConsumerInterceptor;
-import io.github.streammq.core.spi.MessageConverter;
-import io.github.streammq.core.spi.RetryPolicy;
+import io.github.streammq.core.interceptor.ConsumerInterceptor;
+import io.github.streammq.core.interceptor.ConsumerInterceptorChain;
+import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.listener.ListenerRegistration;
+import io.github.streammq.core.listener.ListenerType;
+import io.github.streammq.core.policy.OrderlyShardLockManager;
+import io.github.streammq.core.policy.RetryAndDlqHandler;
+import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.core.util.BodyTypeResolver;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
@@ -36,10 +39,13 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>核心职责（单一职责：消费循环编排）：
  * <ul>
- *   <li>注册并发 / 手动 ACK / 顺序 / DLQ Listener</li>
+ *   <li>注册并发 / 顺序 / DLQ Listener（统一通过 {@link StreamMQConsumer} 注解驱动）</li>
  *   <li>管理容器生命周期（start / stop / pause / resume）</li>
  *   <li>为每个 Listener 启动虚拟线程消费循环</li>
  * </ul>
+ *
+ * <p>手动 ACK 模式由 {@link AcknowledgeMode#MANUAL} 配置驱动，
+ * 不再单独设立 Listener 类型，仍走 {@link ListenerType#AUTO_ACK} 或 {@link ListenerType#ORDERLY} 分支。
  *
  * <p>以下职责已委托给独立的策略类（组合模式）：
  * <ul>
@@ -52,7 +58,7 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>线程安全：注册方法与生命周期方法均线程安全；消费循环在独立虚拟线程执行。
  *
- * @author StreamMq Contributors
+ * @author StreamMQ Contributors
  * @since 0.1.0
  */
 public class DefaultStreamMQListenerContainer implements StreamMQListenerContainer {
@@ -60,15 +66,15 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     private static final Logger LOG = LoggerFactory.getLogger(DefaultStreamMQListenerContainer.class);
 
     /** 单次 pull 批量大小 */
-    private static final int DEFAULT_BATCH_SIZE = StreamMqConstants.DEFAULT_CONSUME_BATCH_SIZE;
+    private static final int DEFAULT_BATCH_SIZE = StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE;
     /** pullBlock 超时（秒），控制消费循环响应停止信号的延迟 */
     private static final Duration PULL_BLOCK_TIMEOUT = Duration.ofSeconds(1);
     /** 暂停状态下消费循环的休眠间隔（毫秒） */
-    private static final long PAUSED_SLEEP_MILLIS = StreamMqConstants.DEFAULT_PAUSED_SLEEP_MS;
+    private static final long PAUSED_SLEEP_MILLIS = StreamMQConstants.DEFAULT_PAUSED_SLEEP_MS;
     /** Broker 异常后消费循环的退避休眠间隔（毫秒） */
-    private static final long BROKER_ERROR_BACKOFF_MILLIS = StreamMqConstants.DEFAULT_BROKER_ERROR_BACKOFF_MS;
+    private static final long BROKER_ERROR_BACKOFF_MILLIS = StreamMQConstants.DEFAULT_BROKER_ERROR_BACKOFF_MS;
     /** 关闭消费线程池时的等待超时（秒） */
-    private static final long AWAIT_TERMINATION_SECONDS = StreamMqConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
+    private static final long AWAIT_TERMINATION_SECONDS = StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
 
     private final RedissonClient redisson;
     private final StreamMQListenerFactory consumerFactory;
@@ -88,14 +94,14 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     private volatile boolean paused = false;
 
     /** 策略类：拦截器链 */
-    private final ConsumerInterceptorChain interceptorChain = new ConsumerInterceptorChain();
+    private final ConsumerInterceptorChain interceptorChain;
     /** 策略类：ACK/重试/DLQ 路由 */
     private final RetryAndDlqHandler retryDlqHandler;
     /** 策略类：顺序消费分片锁 */
     private final OrderlyShardLockManager shardLockManager;
 
     /**
-     * 构造容器。
+     * 构造容器（向后兼容：内部创建默认策略实现）。
      *
      * @param redisson Redisson 客户端
      * @param consumerFactory 消费者工厂
@@ -113,8 +119,44 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
         this.retryPolicy = Objects.requireNonNull(retryPolicy, "retryPolicy");
         this.defaultNamespace = defaultNamespace == null ? "" : defaultNamespace;
-        this.shardLockManager = new OrderlyShardLockManager(redisson);
-        this.retryDlqHandler = new RetryAndDlqHandler(redisson, messageConverter, retryPolicy, interceptorChain);
+        // 拦截器链创建一次，由容器字段与 RetryAndDlqHandler 共享同一实例
+        DefaultConsumerInterceptorChain chain = new DefaultConsumerInterceptorChain();
+        this.interceptorChain = chain;
+        this.shardLockManager = new RedissonOrderlyShardLockManager(redisson);
+        this.retryDlqHandler = new DefaultRetryAndDlqHandler(redisson, messageConverter, retryPolicy, chain);
+    }
+
+    /**
+     * 构造容器并注入自定义策略实现（依赖接口而非实现）。
+     *
+     * <p>允许调用方提供自定义的拦截器链、ACK/重试/DLQ 路由处理器、顺序消费分片锁管理器，
+     * 三个策略均面向 core 模块接口编程，便于扩展与替换。
+     *
+     * @param redisson Redisson 客户端
+     * @param consumerFactory 消费者工厂
+     * @param messageConverter 消息转换器
+     * @param retryPolicy 重试策略
+     * @param defaultNamespace 默认命名空间（可为空字符串）
+     * @param interceptorChain 消费者拦截器链
+     * @param retryDlqHandler ACK/重试/DLQ 路由处理器
+     * @param shardLockManager 顺序消费分片锁管理器
+     */
+    public DefaultStreamMQListenerContainer(RedissonClient redisson,
+                                            StreamMQListenerFactory consumerFactory,
+                                            MessageConverter messageConverter,
+                                            RetryPolicy retryPolicy,
+                                            String defaultNamespace,
+                                            ConsumerInterceptorChain interceptorChain,
+                                            RetryAndDlqHandler retryDlqHandler,
+                                            OrderlyShardLockManager shardLockManager) {
+        this.redisson = Objects.requireNonNull(redisson, "redisson");
+        this.consumerFactory = Objects.requireNonNull(consumerFactory, "consumerFactory");
+        this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
+        this.retryPolicy = Objects.requireNonNull(retryPolicy, "retryPolicy");
+        this.defaultNamespace = defaultNamespace == null ? "" : defaultNamespace;
+        this.interceptorChain = Objects.requireNonNull(interceptorChain, "interceptorChain");
+        this.retryDlqHandler = Objects.requireNonNull(retryDlqHandler, "retryDlqHandler");
+        this.shardLockManager = Objects.requireNonNull(shardLockManager, "shardLockManager");
     }
 
     // ===================== 消费者拦截器 =====================
@@ -145,11 +187,22 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         Objects.requireNonNull(annotation, "annotation");
         checkBeforeStart();
         Class<?> bodyType = BodyTypeResolver.resolve(consumer);
+        boolean dlqMode = annotation.dlqConsumerGroup() != null && !annotation.dlqConsumerGroup().isEmpty();
+        String effectiveGroup = annotation.consumerGroup();
+        String dlqOriginalGroup = null;
+        if (dlqMode) {
+            // DLQ 模式：consumerGroup 作为原始组名，dlqConsumerGroup 作为实际消费组名
+            dlqOriginalGroup = annotation.dlqOriginalGroup();
+            if (dlqOriginalGroup == null || dlqOriginalGroup.isEmpty()) {
+                dlqOriginalGroup = annotation.consumerGroup();
+            }
+            effectiveGroup = annotation.dlqConsumerGroup();
+        }
         ListenerRegistration<T> reg = ListenerRegistration.<T>builder()
             .type(ListenerType.AUTO_ACK)
             .consumer(consumer)
             .topic(annotation.topic())
-            .group(annotation.consumerGroup())
+            .group(effectiveGroup)
             .consumeMode(annotation.consumeMode())
             .ackMode(annotation.acknowledgeMode())
             .maxReconsumeTimes(annotation.maxReconsumeTimes())
@@ -167,58 +220,24 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .suspendCurrentQueueTimeMillis(annotation.suspendCurrentQueueTimeMillis())
             .streamMaxLen(annotation.streamMaxLen())
             .enableMsgTrace(annotation.enableMsgTrace())
-            .dlqMode(false)
-            .dlqOriginalGroup(null)
+            .dlqMode(dlqMode)
+            .dlqOriginalGroup(dlqOriginalGroup)
             .targetBodyType(bodyType)
             .namespace(annotation.namespace())
             .build();
         reg.resolveNamespace(defaultNamespace);
         registrations.put(reg.key(), reg);
-        LOG.info("Registered StreamMqConsumer: topic={}, group={}, ackMode={}, bodyType={}",
-            annotation.topic(), annotation.consumerGroup(), annotation.acknowledgeMode(), bodyType);
+        if (dlqMode) {
+            LOG.info("Registered StreamMQ DLQ Consumer: topic={}, originalGroup={}, dlqConsumerGroup={}, ackMode={}, bodyType={}",
+                annotation.topic(), dlqOriginalGroup, effectiveGroup, annotation.acknowledgeMode(), bodyType);
+        } else {
+            LOG.info("Registered StreamMQ Consumer: topic={}, group={}, ackMode={}, bodyType={}",
+                annotation.topic(), effectiveGroup, annotation.acknowledgeMode(), bodyType);
+        }
     }
 
     @Override
-    public <T> void registerAckConsumer(StreamMessageManualAckConsumer<T> consumer, StreamMQConsumer annotation) {
-        Objects.requireNonNull(consumer, "consumer");
-        Objects.requireNonNull(annotation, "annotation");
-        checkBeforeStart();
-        Class<?> bodyType = BodyTypeResolver.resolve(consumer);
-        ListenerRegistration<T> reg = ListenerRegistration.<T>builder()
-            .type(ListenerType.MANUAL_ACK)
-            .consumer(consumer)
-            .topic(annotation.topic())
-            .group(annotation.consumerGroup())
-            .consumeMode(annotation.consumeMode())
-            .ackMode(annotation.acknowledgeMode())
-            .maxReconsumeTimes(annotation.maxReconsumeTimes())
-            .shardCount(0)
-            .consumeTimeoutMillis(annotation.consumeTimeout())
-            .shardLocks(null)
-            .pullBatchSize(annotation.pullBatchSize())
-            .pullBlockTimeoutMillis(annotation.consumeTimeout())
-            .pullIntervalMillis(annotation.pullInterval())
-            .selectorExpression(annotation.selectorExpression())
-            .serializer(annotation.serializer())
-            .retryPolicy(annotation.retryPolicy())
-            .messageConverter(annotation.messageConverter())
-            .rebalanceStrategy(annotation.rebalanceStrategy())
-            .suspendCurrentQueueTimeMillis(annotation.suspendCurrentQueueTimeMillis())
-            .streamMaxLen(annotation.streamMaxLen())
-            .enableMsgTrace(annotation.enableMsgTrace())
-            .dlqMode(false)
-            .dlqOriginalGroup(null)
-            .targetBodyType(bodyType)
-            .namespace(annotation.namespace())
-            .build();
-        reg.resolveNamespace(defaultNamespace);
-        registrations.put(reg.key(), reg);
-        LOG.info("Registered StreamMqAckConsumer: topic={}, group={}, ackMode={}, bodyType={}",
-            annotation.topic(), annotation.consumerGroup(), annotation.acknowledgeMode(), bodyType);
-    }
-
-    @Override
-    public <T> void registerOrderlyConsumer(StreamMessageOrderlyConsumer<T> consumer, StreamMQOrderlyConsumer annotation) {
+    public <T> void registerOrderlyConsumer(StreamMessageOrderlyConsumer<T> consumer, StreamMQConsumer annotation) {
         Objects.requireNonNull(consumer, "consumer");
         Objects.requireNonNull(annotation, "annotation");
         checkBeforeStart();
@@ -255,8 +274,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .build();
         reg.resolveNamespace(defaultNamespace);
         registrations.put(reg.key(), reg);
-        LOG.info("Registered StreamMqOrderlyConsumer: topic={}, group={}, shardCount={}, bodyType={}",
-            annotation.topic(), annotation.consumerGroup(), annotation.shardCount(), bodyType);
+        LOG.info("Registered StreamMQ Orderly Consumer: topic={}, group={}, shardCount={}, ackMode={}, bodyType={}",
+            annotation.topic(), annotation.consumerGroup(), annotation.shardCount(),
+            annotation.acknowledgeMode(), bodyType);
     }
 
     @Override
@@ -267,58 +287,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 reg.getTargetBodyType() != null ? reg.getTargetBodyType() : Object.class));
         }
         return Collections.unmodifiableList(list);
-    }
-
-    /**
-     * 注册 DLQ 消费者。
-     *
-     * <p>DLQ 消费者从死信队列 Stream 消费消息，使用独立的消费者组名，消费失败直接 ACK 丢弃。
-     *
-     * @param consumer DLQ 消息处理器
-     * @param annotation @StreamMqDlqConsumer 注解实例
-     * @param <T> body 类型
-     */
-    public <T> void registerDlqConsumer(StreamMessageConcurrentlyConsumer<T> consumer, StreamMQDlqConsumer annotation) {
-        Objects.requireNonNull(consumer, "consumer");
-        Objects.requireNonNull(annotation, "annotation");
-        checkBeforeStart();
-        String originalTopic = annotation.topic();
-        String originalGroup = annotation.consumerGroup();
-        String dlqConsumerGroup = annotation.dlqConsumerGroup() == null || annotation.dlqConsumerGroup().isEmpty()
-            ? "dlq-consumer-" + originalGroup
-            : annotation.dlqConsumerGroup();
-        Class<?> bodyType = BodyTypeResolver.resolve(consumer);
-        ListenerRegistration<T> reg = ListenerRegistration.<T>builder()
-            .type(ListenerType.AUTO_ACK)
-            .consumer(consumer)
-            .topic(originalTopic)
-            .group(dlqConsumerGroup)
-            .consumeMode(ConsumeMode.CLUSTERING)
-            .ackMode(annotation.acknowledgeMode())
-            .maxReconsumeTimes(annotation.maxReconsumeTimes())
-            .shardCount(0)
-            .consumeTimeoutMillis(annotation.consumeTimeout())
-            .shardLocks(null)
-            .pullBatchSize(annotation.pullBatchSize())
-            .pullBlockTimeoutMillis(annotation.consumeTimeout())
-            .pullIntervalMillis(0L)
-            .selectorExpression("*")
-            .serializer(annotation.serializer())
-            .retryPolicy(RetryPolicy.class)
-            .messageConverter(annotation.messageConverter())
-            .rebalanceStrategy(io.github.streammq.core.spi.RebalanceStrategy.class)
-            .suspendCurrentQueueTimeMillis(StreamMqConstants.DEFAULT_SUSPEND_CURRENT_QUEUE_TIME_MS)
-            .streamMaxLen(0)
-            .enableMsgTrace(false)
-            .dlqMode(true)
-            .dlqOriginalGroup(originalGroup)
-            .targetBodyType(bodyType)
-            .namespace(annotation.namespace())
-            .build();
-        reg.resolveNamespace(defaultNamespace);
-        registrations.put(reg.key(), reg);
-        LOG.info("Registered StreamMqDlqConsumer: topic={}, originalGroup={}, dlqConsumerGroup={}, bodyType={}",
-            originalTopic, originalGroup, dlqConsumerGroup, bodyType);
     }
 
     /**
@@ -446,7 +414,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         }
                         handleMessage(message, reg, listener);
                     }
-                } catch (StreamMqBrokerException ex) {
+                } catch (StreamMQBrokerException ex) {
                     LOG.warn("Broker error in consume loop (topic={}, group={}): {}",
                         reg.getTopic(), reg.getGroup(), ex.getMessage());
                     sleepQuietly(BROKER_ERROR_BACKOFF_MILLIS);
@@ -478,36 +446,65 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     private void handleMessage(Message<?> message, ListenerRegistration reg, StreamMQListener listener) {
         DefaultConsumeContextConsume ctx = new DefaultConsumeContextConsume(message, reg, listener);
         ConsumerMdcTrace.inject(message, reg);
-        Action finalAction = Action.RECONSUME_LATER;
+        ConsumeAction finalAction = ConsumeAction.RECONSUME_LATER;
         try {
             if (!interceptorChain.applyBefore(message)) {
-                finalAction = Action.SUCCESS;
-                retryDlqHandler.handleAction(Action.SUCCESS, message, reg, listener);
+                finalAction = ConsumeAction.SUCCESS;
+                retryDlqHandler.handleAction(ConsumeAction.SUCCESS, message, reg, listener);
                 return;
             }
             try {
                 if (reg.getType() == ListenerType.ORDERLY) {
                     StreamMessageOrderlyConsumer orderly = (StreamMessageOrderlyConsumer) reg.getConsumer();
-                    finalAction = shardLockManager.consumeWithShardLock(message, reg, ctx, orderly);
-                    retryDlqHandler.handleAction(finalAction, message, reg, listener);
-                } else if (reg.getType() == ListenerType.MANUAL_ACK) {
-                    StreamMessageManualAckConsumer ackListener = (StreamMessageManualAckConsumer) reg.getConsumer();
-                    ackListener.onMessage(message, ctx);
-                    if (!ctx.isAcked()) {
-                        LOG.debug("AckListener exited without acknowledge, message stays in PEL: messageId={}",
-                            message.getMessageId());
+                    OrderlyAction orderlyAction = shardLockManager.consumeWithShardLock(message, reg, ctx, orderly);
+                    if (reg.getAckMode() == AcknowledgeMode.MANUAL) {
+                        // MANUAL 模式：忽略 onMessage 返回值，通过 context.acknowledge() 控制
+                        if (ctx.isAcked()) {
+                            retryDlqHandler.handleAction(ConsumeAction.SUCCESS, message, reg, listener);
+                            finalAction = ConsumeAction.SUCCESS;
+                        } else {
+                            LOG.debug("Orderly MANUAL consumer exited without acknowledge, message stays in PEL: messageId={}",
+                                message.getMessageId());
+                            finalAction = ConsumeAction.RECONSUME_LATER;
+                        }
+                    } else {
+                        // AUTO 模式：根据 OrderlyAction 决定
+                        if (orderlyAction == OrderlyAction.SUCCESS) {
+                            retryDlqHandler.handleAction(ConsumeAction.SUCCESS, message, reg, listener);
+                            finalAction = ConsumeAction.SUCCESS;
+                        } else {
+                            // SUSPEND_CURRENT_QUEUE_A_MOMENT：不 ACK，消息留在 PEL 等待 XAUTOCLAIM
+                            LOG.debug("Suspend current shard (messageId={}): message stays in PEL",
+                                message.getMessageId());
+                            finalAction = ConsumeAction.RECONSUME_LATER;
+                        }
                     }
-                    finalAction = ctx.isAcked() ? Action.SUCCESS : Action.RECONSUME_LATER;
                 } else {
+                    // AUTO_ACK（并发消费）
                     StreamMessageConcurrentlyConsumer consumer = (StreamMessageConcurrentlyConsumer) reg.getConsumer();
-                    finalAction = consumer.onMessage(message, ctx);
-                    retryDlqHandler.handleAction(finalAction, message, reg, listener);
+                    ConsumeAction action = consumer.onMessage(message, ctx);
+                    if (reg.getAckMode() == AcknowledgeMode.MANUAL) {
+                        // MANUAL 模式：忽略 onMessage 返回值，通过 context.acknowledge() 控制
+                        if (ctx.isAcked()) {
+                            retryDlqHandler.handleAction(ConsumeAction.SUCCESS, message, reg, listener);
+                            finalAction = ConsumeAction.SUCCESS;
+                        } else {
+                            LOG.debug("Concurrent MANUAL consumer exited without acknowledge, message will retry: messageId={}",
+                                message.getMessageId());
+                            retryDlqHandler.handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener);
+                            finalAction = ConsumeAction.RECONSUME_LATER;
+                        }
+                    } else {
+                        // AUTO 模式：根据 ConsumeAction 决定
+                        retryDlqHandler.handleAction(action, message, reg, listener);
+                        finalAction = action;
+                    }
                 }
             } catch (Exception ex) {
                 LOG.warn("Listener onMessage threw exception (topic={}, group={}, messageId={}): {}",
                     reg.getTopic(), reg.getGroup(), message.getMessageId(), ex.getMessage(), ex);
                 interceptorChain.notifyException(message, ex, InvokeTiming.EXECUTING);
-                finalAction = Action.RECONSUME_LATER;
+                finalAction = ConsumeAction.RECONSUME_LATER;
                 retryDlqHandler.handleAction(finalAction, message, reg, listener);
             }
         } finally {

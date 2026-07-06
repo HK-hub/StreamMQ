@@ -8,7 +8,7 @@ package io.github.streammq.core.exception;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public class SerializationException extends StreamMqException {
+public class SerializationException extends StreamMQException {
 
     private static final long serialVersionUID = 1L;
 

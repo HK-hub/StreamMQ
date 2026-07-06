@@ -9,7 +9,7 @@ import lombok.Getter;
  * @since 0.1.0
  */
 @Getter
-public class TransactionException extends StreamMqException {
+public class TransactionException extends StreamMQException {
 
     private static final long serialVersionUID = 1L;
 

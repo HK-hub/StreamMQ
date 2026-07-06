@@ -2,15 +2,15 @@ package io.github.streammq.adapter.redisson.template;
 
 import io.github.streammq.adapter.redisson.support.MdcKeys;
 import io.github.streammq.core.enums.InvokeTiming;
-import io.github.streammq.core.exception.StreamMqException;
+import io.github.streammq.core.exception.StreamMQException;
 import io.github.streammq.core.exception.TransactionException;
 import io.github.streammq.core.message.*;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.SendCallback;
 import io.github.streammq.core.producer.StreamMessageProducer;
 import io.github.streammq.core.producer.StreamMessageProducerFactory;
-import io.github.streammq.core.spi.MessageConverter;
-import io.github.streammq.core.spi.ProducerInterceptor;
+import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.core.transaction.TransactionCallback;
 import io.github.streammq.core.transaction.TransactionContext;
@@ -43,7 +43,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public class DefaultStreamMessageTemplate extends StreamMessageTemplate {
+public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
 
     private static final Logger LOG = LoggerFactory.getLogger(DefaultStreamMessageTemplate.class);
 
@@ -125,13 +125,13 @@ public class DefaultStreamMessageTemplate extends StreamMessageTemplate {
 
             // 2. 委派 Producer 发送（含重试）
             StreamMessageProducer producer = resolveProducer(message.getTopic());
-            StreamMqException lastError = null;
+            StreamMQException lastError = null;
             for (int attempt = 0; attempt <= retryTimes; attempt++) {
                 try {
                     SendResult result = producer.syncSend(message, timeoutMillis);
                     applyInterceptorsAfter(message, result);
                     return result;
-                } catch (StreamMqException ex) {
+                } catch (StreamMQException ex) {
                     lastError = ex;
                     notifyProducerException(message, ex, InvokeTiming.EXECUTING);
                     LOG.warn("syncSend attempt {}/{} failed for topic {}: {}",
@@ -143,7 +143,7 @@ public class DefaultStreamMessageTemplate extends StreamMessageTemplate {
             }
             applyInterceptorsAfter(message, buildFailedResult(message, lastError));
             throw lastError != null ? lastError
-                : new StreamMqException("syncSend failed for unknown reason: " + message.getTopic());
+                : new StreamMQException("syncSend failed for unknown reason: " + message.getTopic());
         } finally {
             // 清理 MDC 结构化日志上下文
             clearProducerMdc();
@@ -159,7 +159,7 @@ public class DefaultStreamMessageTemplate extends StreamMessageTemplate {
             // 先执行 before 拦截器，被中止时返回 failedFuture
             if (!applyInterceptorsBefore(message)) {
                 return CompletableFuture.failedFuture(
-                    new StreamMqException("Aborted by interceptor"));
+                    new StreamMQException("Aborted by interceptor"));
             }
             StreamMessageProducer producer = resolveProducer(message.getTopic());
             return producer.asyncSend(message).whenComplete((result, ex) -> {
@@ -167,7 +167,7 @@ public class DefaultStreamMessageTemplate extends StreamMessageTemplate {
                     applyInterceptorsAfter(message, result);
                 } else {
                     Exception e = ex instanceof Exception ? (Exception) ex
-                        : new StreamMqException("async send failed", ex);
+                        : new StreamMQException("async send failed", ex);
                     notifyProducerException(message, e, InvokeTiming.EXECUTING);
                 }
             });
@@ -190,7 +190,7 @@ public class DefaultStreamMessageTemplate extends StreamMessageTemplate {
         injectProducerMdc(message);
         try {
             if (!applyInterceptorsBefore(message)) {
-                callback.onException(new StreamMqException("Aborted by interceptor"));
+                callback.onException(new StreamMQException("Aborted by interceptor"));
                 return;
             }
             StreamMessageProducer producer = resolveProducer(message.getTopic());
@@ -200,9 +200,9 @@ public class DefaultStreamMessageTemplate extends StreamMessageTemplate {
                     callback.onSuccess(result);
                 } else {
                     Exception e = ex instanceof Exception ? (Exception) ex
-                        : new StreamMqException("async send failed", ex);
+                        : new StreamMQException("async send failed", ex);
                     notifyProducerException(message, e, InvokeTiming.EXECUTING);
-                    callback.onException(ex instanceof RuntimeException re ? re : new StreamMqException("async send failed", ex));
+                    callback.onException(ex instanceof RuntimeException re ? re : new StreamMQException("async send failed", ex));
                 }
             });
         } finally {
@@ -240,7 +240,7 @@ public class DefaultStreamMessageTemplate extends StreamMessageTemplate {
 
         for (Message<T> message : batch.getMessages()) {
             if (!applyInterceptorsBefore(message)) {
-                throw new StreamMqException(
+                throw new StreamMQException(
                     "Batch send aborted by interceptor for topic: " + message.getTopic());
             }
         }
@@ -476,7 +476,7 @@ public class DefaultStreamMessageTemplate extends StreamMessageTemplate {
      * @param error 异常
      * @return 失败 SendResult
      */
-    private SendResult buildFailedResult(Message<?> message, StreamMqException error) {
+    private SendResult buildFailedResult(Message<?> message, StreamMQException error) {
         return new SendResult(
             new MessageId(System.currentTimeMillis() + "-0"),
             message.getTopic(), message.getTag(),

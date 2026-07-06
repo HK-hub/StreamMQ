@@ -2,10 +2,11 @@ package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
-import io.github.streammq.core.StreamMqConstants;
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.LocalTransactionState;
 import io.github.streammq.core.message.Message;
-import io.github.streammq.core.spi.MessageConverter;
+import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.core.transaction.TransactionChecker;
 import io.github.streammq.core.transaction.TransactionContext;
 import org.redisson.api.*;
@@ -51,7 +52,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public class TransactionScanner {
+public class TransactionScanner implements StreamMQScheduler {
 
     private static final Logger LOG = LoggerFactory.getLogger(TransactionScanner.class);
 
@@ -62,18 +63,18 @@ public class TransactionScanner {
     public static final String STATE_UNKNOWN = "UNKNOWN";
 
     /** 默认扫描间隔 60s */
-    public static final long DEFAULT_CHECK_INTERVAL_MS = StreamMqConstants.DEFAULT_CHECK_INTERVAL_MS;
+    public static final long DEFAULT_CHECK_INTERVAL_MS = StreamMQConstants.DEFAULT_CHECK_INTERVAL_MS;
     /** 默认最大回查次数 15 次 */
-    public static final int DEFAULT_MAX_CHECK_TIMES = StreamMqConstants.DEFAULT_MAX_CHECK_TIMES;
+    public static final int DEFAULT_MAX_CHECK_TIMES = StreamMQConstants.DEFAULT_MAX_CHECK_TIMES;
     /** 默认单次扫描批量 */
-    public static final int DEFAULT_BATCH_SIZE = StreamMqConstants.DEFAULT_BATCH_SIZE;
+    public static final int DEFAULT_BATCH_SIZE = StreamMQConstants.DEFAULT_BATCH_SIZE;
 
     /** txstate Hash 中目标 Topic 字段后缀 */
     private static final String FIELD_TARGET_SUFFIX = ".target";
     /** txstate Hash 中半消息 Stream Entry ID 字段后缀 */
     private static final String FIELD_HALF_ID_SUFFIX = ".halfId";
     /** 关闭调度线程池时的等待超时（秒） */
-    private static final long AWAIT_TERMINATION_SECONDS = StreamMqConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
+    private static final long AWAIT_TERMINATION_SECONDS = StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
 
     private final RedissonClient redisson;
     private final String namespace;
@@ -141,7 +142,7 @@ public class TransactionScanner {
     /**
      * 注册一条半消息，写入 half Stream + 状态 Hash + 回查 ZSet。
      *
-     * <p>由 {@code DefaultStreamMqTemplate.executeInTransaction} 在执行本地事务前调用。
+     * <p>由 {@code DefaultStreamMQTemplate.executeInTransaction} 在执行本地事务前调用。
      *
      * @param txId 事务 ID
      * @param txGroup 事务组名
@@ -185,6 +186,7 @@ public class TransactionScanner {
     /**
      * 启动调度器，开始周期扫描回查 ZSet。
      */
+    @Override
     public void start() {
         if (!running.compareAndSet(false, true)) {
             LOG.warn("TransactionScanner already started");
@@ -198,6 +200,7 @@ public class TransactionScanner {
     /**
      * 停止调度器。
      */
+    @Override
     public void stop() {
         if (!running.compareAndSet(true, false)) {
             return;
@@ -219,6 +222,7 @@ public class TransactionScanner {
      *
      * @return true 如果运行中
      */
+    @Override
     public boolean isRunning() {
         return running.get();
     }
@@ -228,7 +232,7 @@ public class TransactionScanner {
     /**
      * 显式标记事务为 COMMIT：将半消息转投到目标 Stream 并清理调度元数据。
      *
-     * <p>由 {@code DefaultStreamMqTemplate.executeInTransaction} 在本地事务返回 COMMIT 时调用。
+     * <p>由 {@code DefaultStreamMQTemplate.executeInTransaction} 在本地事务返回 COMMIT 时调用。
      *
      * @param txId 事务 ID
      * @param txGroup 事务组名
@@ -267,7 +271,7 @@ public class TransactionScanner {
     /**
      * 显式标记事务为 ROLLBACK：从 half Stream 删除半消息并清理调度元数据。
      *
-     * <p>由 {@code DefaultStreamMqTemplate.executeInTransaction} 在本地事务返回 ROLLBACK 时调用。
+     * <p>由 {@code DefaultStreamMQTemplate.executeInTransaction} 在本地事务返回 ROLLBACK 时调用。
      *
      * @param txId 事务 ID
      * @param txGroup 事务组名

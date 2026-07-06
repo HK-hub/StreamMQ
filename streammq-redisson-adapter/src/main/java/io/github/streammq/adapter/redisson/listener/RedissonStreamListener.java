@@ -2,12 +2,12 @@ package io.github.streammq.adapter.redisson.listener;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
-import io.github.streammq.core.StreamMqConstants;
-import io.github.streammq.core.exception.StreamMqBrokerException;
+import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.core.exception.StreamMQBrokerException;
 import io.github.streammq.core.listener.StreamMQListener;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
-import io.github.streammq.core.spi.MessageConverter;
+import io.github.streammq.core.converter.MessageConverter;
 import lombok.Builder;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
@@ -73,7 +73,7 @@ public class RedissonStreamListener implements StreamMQListener {
     private final AtomicBoolean groupCreated = new AtomicBoolean(false);
 
     /** batchSize 校验上界，对应 Redis Stream 单次 XREADGROUP 的合理上限 */
-    private static final int MAX_BATCH_SIZE = StreamMqConstants.MAX_BATCH_SIZE_LIMIT;
+    private static final int MAX_BATCH_SIZE = StreamMQConstants.MAX_BATCH_SIZE_LIMIT;
     /** BUSYGROUP 错误标识，用于判断消费者组已存在 */
     private static final String BUSYGROUP_MARKER = "BUSYGROUP";
 
@@ -181,7 +181,7 @@ public class RedissonStreamListener implements StreamMQListener {
         try {
             stream.ack(group, toStreamId(messageId));
         } catch (RuntimeException ex) {
-            throw new StreamMqBrokerException(
+            throw new StreamMQBrokerException(
                 "ack failed for topic " + topic + ", messageId=" + messageId, null, ex);
         }
     }
@@ -201,7 +201,7 @@ public class RedissonStreamListener implements StreamMQListener {
         try {
             stream.ack(group, streamIds);
         } catch (RuntimeException ex) {
-            throw new StreamMqBrokerException(
+            throw new StreamMQBrokerException(
                 "ackBatch failed for topic " + topic + ", size=" + messageIds.size(), null, ex);
         }
     }
@@ -245,7 +245,7 @@ public class RedissonStreamListener implements StreamMQListener {
             }
             return messages;
         } catch (RuntimeException ex) {
-            throw new StreamMqBrokerException(
+            throw new StreamMQBrokerException(
                 "readGroup failed for topic " + topic, null, ex);
         }
     }
@@ -295,7 +295,7 @@ public class RedissonStreamListener implements StreamMQListener {
                 } else {
                     // 其他错误重置标志位，允许下次重试
                     groupCreated.set(false);
-                    throw new StreamMqBrokerException(
+                    throw new StreamMQBrokerException(
                         "createGroup failed for topic " + topic + ", group " + group, null, ex);
                 }
             }

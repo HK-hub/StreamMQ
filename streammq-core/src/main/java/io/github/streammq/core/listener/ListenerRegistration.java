@@ -1,4 +1,4 @@
-package io.github.streammq.adapter.redisson.container;
+package io.github.streammq.core.listener;
 
 import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.ConsumeMode;
@@ -24,7 +24,7 @@ public class ListenerRegistration<T> {
 
     /** Listener 类型 */
     private final ListenerType type;
-    /** Consumer 实例（StreamMqConsumer / StreamMqAckConsumer / StreamMqOrderlyConsumer） */
+    /** Consumer 实例（StreamMessageConcurrentlyConsumer / StreamMessageOrderlyConsumer） */
     private final Object consumer;
     /** 主题 */
     private final String topic;

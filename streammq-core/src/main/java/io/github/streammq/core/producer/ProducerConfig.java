@@ -1,7 +1,7 @@
 package io.github.streammq.core.producer;
 
-import io.github.streammq.core.StreamMqConstants;
-import io.github.streammq.core.spi.MessageSerializer;
+import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.core.serializer.MessageSerializer;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NonNull;
@@ -34,13 +34,13 @@ public class ProducerConfig {
     @Builder.Default
     private final String namespace = "";
 
-    /** 发送超时毫秒（可选，默认 {@link StreamMqConstants#DEFAULT_SEND_TIMEOUT_MS}） */
+    /** 发送超时毫秒（可选，默认 {@link StreamMQConstants#DEFAULT_SEND_TIMEOUT_MS}） */
     @Builder.Default
-    private final long sendMessageTimeout = StreamMqConstants.DEFAULT_SEND_TIMEOUT_MS;
+    private final long sendMessageTimeout = StreamMQConstants.DEFAULT_SEND_TIMEOUT_MS;
 
-    /** Stream 最大长度，0 表示不限制（可选，默认 {@link StreamMqConstants#DEFAULT_STREAM_MAX_LEN}） */
+    /** Stream 最大长度，0 表示不限制（可选，默认 {@link StreamMQConstants#DEFAULT_STREAM_MAX_LEN}） */
     @Builder.Default
-    private final int streamMaxLen = StreamMqConstants.DEFAULT_STREAM_MAX_LEN;
+    private final int streamMaxLen = StreamMQConstants.DEFAULT_STREAM_MAX_LEN;
 
     /** 序列化器类（可选，为 null 表示使用全局配置） */
     private final Class<? extends MessageSerializer<?>> serializer;

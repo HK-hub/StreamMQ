@@ -1,10 +1,10 @@
 package io.github.streammq.adapter.redisson.producer;
 
-import io.github.streammq.core.StreamMqConstants;
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.StreamMessageProducer;
 import io.github.streammq.core.producer.StreamMessageProducerFactory;
-import io.github.streammq.core.spi.MessageConverter;
+import io.github.streammq.core.converter.MessageConverter;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RedissonClient;
@@ -39,10 +39,10 @@ public class RedissonStreamProducerFactory implements StreamMessageProducerFacto
     private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamProducerFactory.class);
 
     /** 默认发送超时（毫秒） */
-    public static final long DEFAULT_SEND_TIMEOUT_MILLIS = StreamMqConstants.DEFAULT_SEND_TIMEOUT_MS;
+    public static final long DEFAULT_SEND_TIMEOUT_MILLIS = StreamMQConstants.DEFAULT_SEND_TIMEOUT_MS;
 
     /** 默认 Stream 最大长度（0 = 不限制） */
-    public static final int DEFAULT_MAX_LEN = StreamMqConstants.DEFAULT_STREAM_MAX_LEN;
+    public static final int DEFAULT_MAX_LEN = StreamMQConstants.DEFAULT_STREAM_MAX_LEN;
 
     @NonNull
     private final RedissonClient redisson;

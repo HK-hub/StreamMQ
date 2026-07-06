@@ -1,6 +1,7 @@
 package io.github.streammq.adapter.redisson.container;
 
 import io.github.streammq.adapter.redisson.support.MdcKeys;
+import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.message.Message;
 import org.slf4j.MDC;
 

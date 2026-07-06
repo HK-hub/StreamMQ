@@ -3,7 +3,7 @@ package io.github.streammq.adapter.redisson.listener;
 import io.github.streammq.core.listener.ListenerConfig;
 import io.github.streammq.core.listener.StreamMQListener;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
-import io.github.streammq.core.spi.MessageConverter;
+import io.github.streammq.core.converter.MessageConverter;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RedissonClient;

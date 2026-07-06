@@ -3,13 +3,13 @@ package io.github.streammq.adapter.redisson.producer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.exception.ProducerTimeoutException;
-import io.github.streammq.core.exception.StreamMqBrokerException;
-import io.github.streammq.core.exception.StreamMqException;
+import io.github.streammq.core.exception.StreamMQBrokerException;
+import io.github.streammq.core.exception.StreamMQException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.producer.StreamMessageProducer;
-import io.github.streammq.core.spi.MessageConverter;
+import io.github.streammq.core.converter.MessageConverter;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NonNull;
@@ -128,10 +128,10 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             return new SendResult(messageId, message.getTopic(), message.getTag(), message.getBornTimestamp());
         } catch (ProducerTimeoutException ex) {
             throw ex;
-        } catch (StreamMqException ex) {
+        } catch (StreamMQException ex) {
             throw ex;
         } catch (RuntimeException ex) {
-            throw new StreamMqBrokerException(
+            throw new StreamMQBrokerException(
                 "syncSend failed for topic " + message.getTopic(), null, ex);
         }
     }
@@ -196,7 +196,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         try {
             batch.execute();
         } catch (RuntimeException ex) {
-            throw new StreamMqBrokerException(
+            throw new StreamMQBrokerException(
                 "syncSendBatch failed for topic " + firstTopic, null, ex);
         }
 
@@ -228,7 +228,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             level = DelayLevel.closestAbove(message.getDelayTimeMillis());
         }
         if (level == null) {
-            throw new StreamMqException("Delay message has no delayLevel or delayTimeMillis");
+            throw new StreamMQException("Delay message has no delayLevel or delayTimeMillis");
         }
 
         long deliverAt = now + level.toMillis();
@@ -253,7 +253,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             message.setMessageId(messageId);
             return new SendResult(messageId, message.getTopic(), message.getTag(), message.getBornTimestamp());
         } catch (RuntimeException ex) {
-            throw new StreamMqBrokerException(
+            throw new StreamMQBrokerException(
                 "sendDelayMessage failed for topic " + message.getTopic(), null, ex);
         }
     }
@@ -279,10 +279,10 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                 "syncSend timeout after " + timeoutMillis + "ms", streamKey, timeoutMillis);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
-            throw new StreamMqBrokerException("syncSend interrupted for stream " + streamKey, null, ex);
+            throw new StreamMQBrokerException("syncSend interrupted for stream " + streamKey, null, ex);
         } catch (ExecutionException ex) {
             Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
-            throw new StreamMqBrokerException("syncSend failed for stream " + streamKey, null, cause);
+            throw new StreamMQBrokerException("syncSend failed for stream " + streamKey, null, cause);
         }
     }
 

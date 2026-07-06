@@ -1,36 +1,62 @@
 package io.github.streammq.core.annotation;
 
-import io.github.streammq.core.StreamMqConstants;
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
 import io.github.streammq.core.enums.SelectorType;
-import io.github.streammq.core.spi.MessageConverter;
-import io.github.streammq.core.spi.MessageSerializer;
-import io.github.streammq.core.spi.RebalanceStrategy;
-import io.github.streammq.core.spi.RetryPolicy;
+import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.serializer.MessageSerializer;
+import io.github.streammq.core.policy.RebalanceStrategy;
+import io.github.streammq.core.policy.RetryPolicy;
 
 import java.lang.annotation.*;
 
 /**
- * StreamMQ 消费者注解（方法级），标注在 {@code StreamMqConsumer} / {@code StreamMqAckConsumer} 实现方法上。
+ * StreamMQ 消费者注解（类级），标注在 {@code StreamMessageConcurrentlyConsumer} /
+ * {@code StreamMessageOrderlyConsumer} 实现类上。
  *
- * <p>对齐 RocketMQ {@code @RocketMQMessageListener} 体验。
+ * <p>对齐 RocketMQ {@code @RocketMQMessageListener} 体验。本注解为统一入口，
+ * 通过 {@link #messageModel()} 区分并发 / 顺序消费，通过 {@link #dlqConsumerGroup()}
+ * 标识 DLQ 消费者。
  *
  * <p>使用示例：
  * <pre>{@code
+ * // 并发消费
  * @Component
- * @StreamMqConsumer(topic = "order-topic", consumerGroup = "order-consumer-group")
- * public class OrderConsumer implements StreamMqConsumer<Order> {
+ * @StreamMQConsumer(topic = "order-topic", consumerGroup = "order-cg")
+ * public class OrderConsumer implements StreamMessageConcurrentlyConsumer<Order> {
  *     @Override
- *     public Action onMessage(Message<Order> message, ConsumerContext context) {
+ *     public ConsumeAction onMessage(Message<Order> message, ConsumeContext context) {
  *         processOrder(message.getBody());
- *         return Action.SUCCESS;
+ *         return ConsumeAction.SUCCESS;
+ *     }
+ * }
+ *
+ * // 顺序消费
+ * @Component
+ * @StreamMQConsumer(topic = "order-topic", consumerGroup = "order-cg",
+ *                  messageModel = MessageModel.ORDERLY, shardCount = 8)
+ * public class OrderOrderlyConsumer implements StreamMessageOrderlyConsumer<Order> {
+ *     @Override
+ *     public OrderlyAction onMessage(Message<Order> message, ConsumeOrderlyContext context) {
+ *         processOrder(message.getBody());
+ *         return OrderlyAction.SUCCESS;
+ *     }
+ * }
+ *
+ * // DLQ 消费
+ * @Component
+ * @StreamMQConsumer(topic = "order-topic", consumerGroup = "order-cg",
+ *                  dlqConsumerGroup = "order-dlq-cg")
+ * public class OrderDlqHandler implements StreamMessageConcurrentlyConsumer<String> {
+ *     @Override
+ *     public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
+ *         handleDeadLetter(message);
+ *         return ConsumeAction.SUCCESS;
  *     }
  * }
  * }</pre>
- *
- * <p>注：本注解为类级别注解（与 RocketMQ 一致，标注在 Consumer 实现类上）。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -50,6 +76,9 @@ public @interface StreamMQConsumer {
     /**
      * 消费者组名（必填）。
      *
+     * <p>DLQ 模式下（{@link #dlqConsumerGroup()} 不为空时），本字段表示原始消费者组名，
+     * 用于构造 DLQ Stream Key。
+     *
      * @return 消费者组
      */
     String consumerGroup();
@@ -63,6 +92,10 @@ public @interface StreamMQConsumer {
 
     /**
      * 消息模型，默认 {@link MessageModel#CONCURRENT}。
+     *
+     * <p>设置为 {@link MessageModel#ORDERLY} 时表示顺序消费，需实现
+     * {@link io.github.streammq.core.consumer.StreamMessageOrderlyConsumer}，
+     * {@link #shardCount()} 生效。
      *
      * @return 消息模型
      */
@@ -87,21 +120,21 @@ public @interface StreamMQConsumer {
      *
      * @return 最大消费线程数
      */
-    int consumeThreadMax() default StreamMqConstants.DEFAULT_CONSUME_THREAD_MAX;
+    int consumeThreadMax() default StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX;
 
     /**
      * 最大重试次数，默认 16。
      *
      * @return 最大重试次数
      */
-    int maxReconsumeTimes() default StreamMqConstants.DEFAULT_MAX_RECONSUME_TIMES;
+    int maxReconsumeTimes() default StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
 
     /**
      * 单条消息消费超时（毫秒），默认 30000（30 秒）。
      *
      * @return 超时毫秒数
      */
-    long consumeTimeout() default StreamMqConstants.DEFAULT_CONSUME_TIMEOUT_MS;
+    long consumeTimeout() default StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS;
 
     /**
      * Tag 过滤表达式（SQL92 风格子集），默认 "*" 表示全部接收。
@@ -137,7 +170,7 @@ public @interface StreamMQConsumer {
      *
      * @return 拉取批量
      */
-    int pullBatchSize() default StreamMqConstants.DEFAULT_CONSUME_BATCH_SIZE;
+    int pullBatchSize() default StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE;
 
     /**
      * 每个消费者专属重试策略类，默认 {@link RetryPolicy} 表示使用全局策略。
@@ -194,7 +227,7 @@ public @interface StreamMQConsumer {
      *
      * @return 挂起毫秒数
      */
-    long suspendCurrentQueueTimeMillis() default StreamMqConstants.DEFAULT_SUSPEND_CURRENT_QUEUE_TIME_MS;
+    long suspendCurrentQueueTimeMillis() default StreamMQConstants.DEFAULT_SUSPEND_CURRENT_QUEUE_TIME_MS;
 
     /**
      * 是否启用消费，默认 true。
@@ -203,4 +236,43 @@ public @interface StreamMQConsumer {
      * @return true 启用，false 仅注册
      */
     boolean enable() default true;
+
+    /**
+     * 最大 shard 数（顺序消费分区数），默认 4。
+     *
+     * <p>仅当 {@link #messageModel()} = {@link MessageModel#ORDERLY} 时生效。
+     *
+     * @return shard 数
+     */
+    int shardCount() default StreamMQConstants.DEFAULT_SHARD_COUNT;
+
+    /**
+     * DLQ 消费者使用的消费者组名（可选，默认空字符串表示非 DLQ 消费者）。
+     *
+     * <p>当此字段不为空时，表示这是一个 DLQ（死信队列）消费者，从对应的死信 Stream 消费消息。
+     * 实际 DLQ 消费者组名：若此字段为空字符串则使用默认 {@code dlq-consumer-{consumerGroup}}，
+     * 但通常作为 DLQ 消费者时应显式指定此字段。
+     *
+     * <p>DLQ Stream Key 为 {@code streammq:{ns}:dlq:{topic}:{consumerGroup}}，
+     * 其中 {@code consumerGroup} 为原消费者的组名（即 {@link #consumerGroup()}）。
+     *
+     * @return DLQ 消费者组名，空字符串表示非 DLQ 消费者
+     */
+    String dlqConsumerGroup() default "";
+
+    /**
+     * DLQ 原始消费者组（仅 DLQ 模式下使用，默认空字符串）。
+     *
+     * <p>用于构造 DLQ Stream Key 的 group 段。若为空，则使用 {@link #consumerGroup()} 作为原始组名。
+     *
+     * @return DLQ 原始消费者组名
+     */
+    String dlqOriginalGroup() default "";
+
+    /**
+     * 消费者实例名（可选，默认空字符串表示自动生成）。
+     *
+     * @return 消费者实例名
+     */
+    String consumerName() default "";
 }

@@ -4,8 +4,8 @@ import io.github.streammq.core.message.BatchMessage;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.producer.SendCallback;
-import io.github.streammq.core.spi.MessageConverter;
-import io.github.streammq.core.spi.ProducerInterceptor;
+import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.transaction.TransactionExecutor;
 import io.github.streammq.core.transaction.TransactionCallback;
 
@@ -35,16 +35,16 @@ import java.util.concurrent.CompletableFuture;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public abstract class StreamMessageTemplate implements TransactionExecutor {
+public interface StreamMessageTemplate extends TransactionExecutor {
 
     /** 默认发送超时（毫秒） */
-    public static final long DEFAULT_SEND_TIMEOUT_MILLIS = 3000L;
+    long DEFAULT_SEND_TIMEOUT_MILLIS = 3000L;
 
     /** 默认同步发送重试次数 */
-    public static final int DEFAULT_SYNC_RETRY_TIMES = 2;
+    int DEFAULT_SYNC_RETRY_TIMES = 2;
 
     /** 默认异步发送重试次数（不重试） */
-    public static final int DEFAULT_ASYNC_RETRY_TIMES = 0;
+    int DEFAULT_ASYNC_RETRY_TIMES = 0;
 
     /**
      * 同步发送（默认超时、默认重试次数）。
@@ -52,9 +52,9 @@ public abstract class StreamMessageTemplate implements TransactionExecutor {
      * @param message 消息
      * @param <T> body 类型
      * @return 发送结果
-     * @throws io.github.streammq.core.exception.StreamMqException 发送失败
+     * @throws io.github.streammq.core.exception.StreamMQException 发送失败
      */
-    public abstract <T> SendResult syncSend(Message<T> message);
+    <T> SendResult syncSend(Message<T> message);
 
     /**
      * 同步发送（指定超时）。
@@ -65,7 +65,7 @@ public abstract class StreamMessageTemplate implements TransactionExecutor {
      * @return 发送结果
      * @throws io.github.streammq.core.exception.ProducerTimeoutException 超时
      */
-    public abstract <T> SendResult syncSend(Message<T> message, long timeoutMillis);
+    <T> SendResult syncSend(Message<T> message, long timeoutMillis);
 
     /**
      * 同步发送（指定超时与重试次数）。
@@ -77,7 +77,7 @@ public abstract class StreamMessageTemplate implements TransactionExecutor {
      * @return 发送结果
      * @throws io.github.streammq.core.exception.ProducerTimeoutException 重试后仍超时
      */
-    public abstract <T> SendResult syncSend(Message<T> message, long timeoutMillis, int retryTimes);
+    <T> SendResult syncSend(Message<T> message, long timeoutMillis, int retryTimes);
 
     /**
      * 异步发送（返回 {@link CompletableFuture}）。
@@ -86,7 +86,7 @@ public abstract class StreamMessageTemplate implements TransactionExecutor {
      * @param <T> body 类型
      * @return 异步结果
      */
-    public abstract <T> CompletableFuture<SendResult> asyncSend(Message<T> message);
+    <T> CompletableFuture<SendResult> asyncSend(Message<T> message);
 
     /**
      * 异步发送（回调通知）。
@@ -95,7 +95,7 @@ public abstract class StreamMessageTemplate implements TransactionExecutor {
      * @param callback 回调
      * @param <T> body 类型
      */
-    public abstract <T> void asyncSend(Message<T> message, SendCallback callback);
+    <T> void asyncSend(Message<T> message, SendCallback callback);
 
     /**
      * 异步发送（回调通知 + 指定超时）。
@@ -105,7 +105,7 @@ public abstract class StreamMessageTemplate implements TransactionExecutor {
      * @param timeoutMillis 超时毫秒数
      * @param <T> body 类型
      */
-    public abstract <T> void asyncSend(Message<T> message, SendCallback callback, long timeoutMillis);
+    <T> void asyncSend(Message<T> message, SendCallback callback, long timeoutMillis);
 
     /**
      * 单向发送：不等待响应，不抛异常。
@@ -113,7 +113,7 @@ public abstract class StreamMessageTemplate implements TransactionExecutor {
      * @param message 消息
      * @param <T> body 类型
      */
-    public abstract <T> void sendOneway(Message<T> message);
+    <T> void sendOneway(Message<T> message);
 
     /**
      * 批量发送。
@@ -123,40 +123,40 @@ public abstract class StreamMessageTemplate implements TransactionExecutor {
      * @return 每条消息的发送结果
      * @throws IllegalArgumentException 如果 batch 为空
      */
-    public abstract <T> List<SendResult> syncSendBatch(BatchMessage<T> batch);
+    <T> List<SendResult> syncSendBatch(BatchMessage<T> batch);
 
     /**
      * 返回消息转换器。
      *
      * @return 消息转换器
      */
-    public abstract MessageConverter getMessageConverter();
+    MessageConverter getMessageConverter();
 
     /**
      * 设置消息转换器。
      *
      * @param converter 消息转换器
      */
-    public abstract void setMessageConverter(MessageConverter converter);
+    void setMessageConverter(MessageConverter converter);
 
     /**
      * 返回生产者拦截器链（不可修改）。
      *
      * @return 拦截器列表
      */
-    public abstract List<ProducerInterceptor> getProducerInterceptors();
+    List<ProducerInterceptor> getProducerInterceptors();
 
     /**
      * 设置生产者拦截器链（覆盖现有）。
      *
      * @param interceptors 拦截器列表
      */
-    public abstract void setProducerInterceptors(List<ProducerInterceptor> interceptors);
+    void setProducerInterceptors(List<ProducerInterceptor> interceptors);
 
     /**
      * 添加单个生产者拦截器。
      *
      * @param interceptor 拦截器
      */
-    public abstract void addProducerInterceptor(ProducerInterceptor interceptor);
+    void addProducerInterceptor(ProducerInterceptor interceptor);
 }

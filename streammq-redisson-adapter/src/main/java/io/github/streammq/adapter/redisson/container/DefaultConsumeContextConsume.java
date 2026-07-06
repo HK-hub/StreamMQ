@@ -3,6 +3,7 @@ package io.github.streammq.adapter.redisson.container;
 import io.github.streammq.core.consumer.Acknowledgment;
 import io.github.streammq.core.consumer.ConsumeOrderlyContext;
 import io.github.streammq.core.enums.AcknowledgeMode;
+import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.listener.StreamMQListener;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
@@ -39,17 +40,20 @@ public class DefaultConsumeContextConsume implements ConsumeOrderlyContext {
     private final AtomicBoolean acked = new AtomicBoolean(false);
 
     /**
-     * 标记为已 ACK（由 {@link DefaultAcknowledgment#acknowledge()} 回调）。
+     * 标记为已 ACK（由 {@link DefaultAcknowledgment#acknowledge()} 回调，
+     * 或 {@link io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer#consumeMessage} 在 AUTO 模式 SUCCESS 时调用）。
      */
-    void markAcked() {
+    @Override
+    public void markAcked() {
         acked.set(true);
     }
 
     /**
      * 返回是否已 ACK。
      *
-     * @return true 如果已通过 {@link Acknowledgment#acknowledge()} 确认
+     * @return true 如果已通过 {@link Acknowledgment#acknowledge()} 或 {@link #markAcked()} 确认
      */
+    @Override
     public boolean isAcked() {
         return acked.get();
     }

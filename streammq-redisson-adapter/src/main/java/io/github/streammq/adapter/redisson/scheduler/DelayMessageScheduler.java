@@ -1,8 +1,9 @@
 package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
-import io.github.streammq.core.StreamMqConstants;
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.DelayLevel;
+import io.github.streammq.core.scheduler.StreamMQScheduler;
 import org.redisson.api.RBatch;
 import org.redisson.api.RMap;
 import org.redisson.api.RScoredSortedSet;
@@ -41,7 +42,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public class DelayMessageScheduler {
+public class DelayMessageScheduler implements StreamMQScheduler {
 
     private static final Logger LOG = LoggerFactory.getLogger(DelayMessageScheduler.class);
 
@@ -50,11 +51,11 @@ public class DelayMessageScheduler {
     /** payload Hash 中的投递时间字段名 */
     public static final String FIELD_DELIVER_AT = "deliverAt";
     /** 默认扫描间隔（毫秒） */
-    private static final long DEFAULT_SCAN_INTERVAL_MS = StreamMqConstants.DEFAULT_SCAN_INTERVAL_MS;
+    private static final long DEFAULT_SCAN_INTERVAL_MS = StreamMQConstants.DEFAULT_SCAN_INTERVAL_MS;
     /** 默认单次扫描批量 */
-    private static final int DEFAULT_BATCH_SIZE = StreamMqConstants.DEFAULT_BATCH_SIZE;
+    private static final int DEFAULT_BATCH_SIZE = StreamMQConstants.DEFAULT_BATCH_SIZE;
     /** 关闭调度线程池时的等待超时（秒） */
-    private static final long AWAIT_TERMINATION_SECONDS = StreamMqConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
+    private static final long AWAIT_TERMINATION_SECONDS = StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
 
     private final RedissonClient redisson;
     private final String namespace;
@@ -87,6 +88,7 @@ public class DelayMessageScheduler {
     /**
      * 启动调度器。
      */
+    @Override
     public void start() {
         if (!running.compareAndSet(false, true)) {
             LOG.warn("DelayMessageScheduler already started");
@@ -99,6 +101,7 @@ public class DelayMessageScheduler {
     /**
      * 停止调度器。
      */
+    @Override
     public void stop() {
         if (!running.compareAndSet(true, false)) {
             return;
@@ -217,6 +220,7 @@ public class DelayMessageScheduler {
      *
      * @return true 如果运行中
      */
+    @Override
     public boolean isRunning() {
         return running.get();
     }

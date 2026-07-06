@@ -1,6 +1,6 @@
 package io.github.streammq.core.annotation;
 
-import io.github.streammq.core.StreamMqConstants;
+import io.github.streammq.core.StreamMQConstants;
 
 import java.lang.annotation.*;
 
@@ -8,12 +8,12 @@ import java.lang.annotation.*;
  * StreamMQ 启用注解，标注在 Spring Boot 启动类上触发自动装配。
  *
  * <p>对齐 RocketMQ Spring Starter 的 {@code @EnableRocketMQ} 体验。
- * 通过 {@code @Import(StreamMqAutoConfiguration.class)} 触发装配。
+ * 通过 {@code @Import(StreamMQAutoConfiguration.class)} 触发装配。
  *
  * <p>使用示例：
  * <pre>{@code
  * @SpringBootApplication
- * @EnableStreamMq
+ * @EnableStreamMQ
  * public class OrderApplication {
  *     public static void main(String[] args) {
  *         SpringApplication.run(OrderApplication.class, args);
@@ -30,12 +30,12 @@ import java.lang.annotation.*;
 public @interface EnableStreamMQ {
 
     /**
-     * 启用模式，默认 {@link StreamMqConstants#MODE_STANDARD}。
-     * v1.0+ 支持 {@link StreamMqConstants#MODE_LITE}（轻量模式，不启用 Actuator 指标）。
+     * 启用模式，默认 {@link StreamMQConstants#MODE_STANDARD}。
+     * v1.0+ 支持 {@link StreamMQConstants#MODE_LITE}（轻量模式，不启用 Actuator 指标）。
      *
      * @return 模式字符串
      */
-    String mode() default StreamMqConstants.MODE_STANDARD;
+    String mode() default StreamMQConstants.MODE_STANDARD;
 
     /**
      * 全局追踪开关，默认 false。

@@ -11,7 +11,7 @@ import lombok.Getter;
  * @since 0.1.0
  */
 @Getter
-public class ProducerTimeoutException extends StreamMqException {
+public class ProducerTimeoutException extends StreamMQException {
 
     private static final long serialVersionUID = 1L;
 

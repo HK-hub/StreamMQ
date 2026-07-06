@@ -3,7 +3,8 @@ package io.github.streammq.spring.boot.autoconfigure;
 import io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
-import io.github.streammq.core.spi.MessageConverter;
+import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
@@ -50,7 +51,7 @@ public class StreamMQSchedulerAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(RetryScheduler.class)
     @ConditionalOnProperty(prefix = "streammq.retry", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public RetryScheduler streamMqRetryScheduler(RedissonClient redisson, StreamMQProperties properties) {
+    public RetryScheduler streamMQRetryScheduler(RedissonClient redisson, StreamMQProperties properties) {
         Duration interval = properties.getRetry().getScanInterval();
         int batchSize = properties.getRetry().getBatchSize();
         LOG.info("Creating RetryScheduler: scanInterval={}, batchSize={}", interval, batchSize);
@@ -68,7 +69,7 @@ public class StreamMQSchedulerAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(DelayMessageScheduler.class)
     @ConditionalOnProperty(prefix = "streammq.delay", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public DelayMessageScheduler streamMqDelayMessageScheduler(RedissonClient redisson,
+    public DelayMessageScheduler streamMQDelayMessageScheduler(RedissonClient redisson,
                                                                 StreamMQProperties properties) {
         Duration interval = properties.getDelay().getScanInterval();
         int batchSize = properties.getDelay().getBatchSize();
@@ -88,7 +89,7 @@ public class StreamMQSchedulerAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(TransactionScanner.class)
     @ConditionalOnProperty(prefix = "streammq.transaction", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public TransactionScanner streamMqTransactionScanner(RedissonClient redisson,
+    public TransactionScanner streamMQTransactionScanner(RedissonClient redisson,
                                                           MessageConverter messageConverter,
                                                           StreamMQProperties properties) {
         Duration interval = properties.getTransaction().getCheckInterval();
@@ -110,12 +111,12 @@ public class StreamMQSchedulerAutoConfiguration {
      * @return SmartLifecycle
      */
     @Bean
-    @ConditionalOnMissingBean(name = "streamMqSchedulerLifecycle")
-    public SmartLifecycle streamMqSchedulerLifecycle(
+    @ConditionalOnMissingBean(name = "streamMQSchedulerLifecycle")
+    public SmartLifecycle streamMQSchedulerLifecycle(
             org.springframework.beans.factory.ObjectProvider<RetryScheduler> retrySchedulerProvider,
             org.springframework.beans.factory.ObjectProvider<DelayMessageScheduler> delaySchedulerProvider,
             org.springframework.beans.factory.ObjectProvider<TransactionScanner> transactionScannerProvider) {
-        List<Object> schedulers = new ArrayList<>(3);
+        List<StreamMQScheduler> schedulers = new ArrayList<>(3);
         RetryScheduler retryScheduler = retrySchedulerProvider.getIfAvailable();
         if (retryScheduler != null) {
             schedulers.add(retryScheduler);
@@ -128,7 +129,7 @@ public class StreamMQSchedulerAutoConfiguration {
         if (scanner != null) {
             schedulers.add(scanner);
         }
-        LOG.info("Creating StreamMqSchedulerLifecycle with {} scheduler(s)", schedulers.size());
+        LOG.info("Creating StreamMQSchedulerLifecycle with {} scheduler(s)", schedulers.size());
         return new StreamMQSchedulerLifecycle(schedulers);
     }
 }

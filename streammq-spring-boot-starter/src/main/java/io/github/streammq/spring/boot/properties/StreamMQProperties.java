@@ -1,6 +1,6 @@
 package io.github.streammq.spring.boot.properties;
 
-import io.github.streammq.core.StreamMqConstants;
+import io.github.streammq.core.StreamMQConstants;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -76,7 +76,7 @@ public class StreamMQProperties {
     private String secretKey = "";
 
     /** 线程名前缀 */
-    private String threadNamePrefix = StreamMqConstants.THREAD_PREFIX;
+    private String threadNamePrefix = StreamMQConstants.THREAD_PREFIX;
 
     /** 全局追踪开关 */
     private boolean tracingEnabled = false;
@@ -95,11 +95,11 @@ public class StreamMQProperties {
     @Data
     public static class Producer {
         /** 默认生产者组名 */
-        private String group = StreamMqConstants.DEFAULT_PRODUCER_GROUP;
+        private String group = StreamMQConstants.DEFAULT_PRODUCER_GROUP;
         /** 默认发送超时（毫秒） */
-        private long sendMessageTimeout = StreamMqConstants.DEFAULT_SEND_TIMEOUT_MS;
+        private long sendMessageTimeout = StreamMQConstants.DEFAULT_SEND_TIMEOUT_MS;
         /** 默认同步发送重试次数 */
-        private int retryTimes = StreamMqConstants.DEFAULT_SYNC_RETRY_TIMES;
+        private int retryTimes = StreamMQConstants.DEFAULT_SYNC_RETRY_TIMES;
         /** Stream 最大长度（0 = 不限制） */
         private int streamMaxLen = 0;
         /** 序列化器实现类全限定名（默认 JacksonJsonSerializer） */
@@ -114,15 +114,15 @@ public class StreamMQProperties {
         /** 单次拉取阻塞超时 */
         private Duration pollTimeout = Duration.ofSeconds(1);
         /** 单次拉取批量大小 */
-        private int batchSize = StreamMqConstants.DEFAULT_CONSUME_BATCH_SIZE;
+        private int batchSize = StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE;
         /** 拉取间隔（毫秒），0=不间隔 */
         private long pullInterval = 0L;
         /** 暂停休眠间隔（毫秒） */
-        private long pausedSleepMillis = StreamMqConstants.DEFAULT_PAUSED_SLEEP_MS;
+        private long pausedSleepMillis = StreamMQConstants.DEFAULT_PAUSED_SLEEP_MS;
         /** Broker 异常退避间隔（毫秒） */
-        private long brokerErrorBackoffMillis = StreamMqConstants.DEFAULT_BROKER_ERROR_BACKOFF_MS;
+        private long brokerErrorBackoffMillis = StreamMQConstants.DEFAULT_BROKER_ERROR_BACKOFF_MS;
         /** 最大拉取批量上界 */
-        private int maxBatchSizeLimit = StreamMqConstants.MAX_BATCH_SIZE_LIMIT;
+        private int maxBatchSizeLimit = StreamMQConstants.MAX_BATCH_SIZE_LIMIT;
     }
 
     /**
@@ -135,11 +135,11 @@ public class StreamMQProperties {
         /** 重试策略实现类全限定名 */
         private String policy = "io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy";
         /** 默认最大重试次数 */
-        private int maxReconsumeTimes = StreamMqConstants.DEFAULT_MAX_RECONSUME_TIMES;
+        private int maxReconsumeTimes = StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
         /** 重试 ZSet 扫描间隔 */
         private Duration scanInterval = Duration.ofSeconds(1);
         /** 单次扫描批量 */
-        private int batchSize = StreamMqConstants.DEFAULT_BATCH_SIZE;
+        private int batchSize = StreamMQConstants.DEFAULT_BATCH_SIZE;
         /** 自定义重试延时数组（逗号分隔的毫秒值，如 1000,5000,10000） */
         private String delayArray = "";
     }
@@ -154,7 +154,7 @@ public class StreamMQProperties {
         /** 扫描间隔 */
         private Duration scanInterval = Duration.ofSeconds(1);
         /** 单次扫描批量 */
-        private int batchSize = StreamMqConstants.DEFAULT_BATCH_SIZE;
+        private int batchSize = StreamMQConstants.DEFAULT_BATCH_SIZE;
     }
 
     /**
@@ -165,11 +165,11 @@ public class StreamMQProperties {
         /** 事务消息功能开关 */
         private boolean enabled = true;
         /** 默认事务组名 */
-        private String defaultGroup = StreamMqConstants.DEFAULT_TX_GROUP;
+        private String defaultGroup = StreamMQConstants.DEFAULT_TX_GROUP;
         /** 事务回查间隔 */
-        private Duration checkInterval = Duration.ofMillis(StreamMqConstants.DEFAULT_CHECK_INTERVAL_MS);
+        private Duration checkInterval = Duration.ofMillis(StreamMQConstants.DEFAULT_CHECK_INTERVAL_MS);
         /** 最大回查次数 */
-        private int maxCheckTimes = StreamMqConstants.DEFAULT_MAX_CHECK_TIMES;
+        private int maxCheckTimes = StreamMQConstants.DEFAULT_MAX_CHECK_TIMES;
     }
 
     /**
@@ -189,7 +189,7 @@ public class StreamMQProperties {
         /** 重平衡策略类名 */
         private String strategy = "io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy";
         /** 虚拟节点数（仅一致性哈希策略生效） */
-        private int virtualNodes = StreamMqConstants.DEFAULT_VIRTUAL_NODES;
+        private int virtualNodes = StreamMQConstants.DEFAULT_VIRTUAL_NODES;
     }
 
     /**

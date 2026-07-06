@@ -4,9 +4,9 @@ package io.github.streammq.core;
  * StreamMQ 全局常量定义。
  * 集中管理跨模块共享的默认值、属性 key、Bean 名前缀、线程名前缀等常量。
  */
-public final class StreamMqConstants {
+public final class StreamMQConstants {
 
-    private StreamMqConstants() {}
+    private StreamMQConstants() {}
 
     // ==================== 默认值常量 ====================
     /** 默认发送超时（毫秒） */
@@ -75,7 +75,7 @@ public final class StreamMqConstants {
     public static final String THREAD_DELAY_SCHEDULER = "streammq-delay-scheduler";
 
     // ==================== Bean 名前缀 ====================
-    public static final String BEAN_PRODUCER_PREFIX = "streamMqTemplate-";
+    public static final String BEAN_PRODUCER_PREFIX = "streamMQTemplate-";
 
     // ==================== 默认组名 ====================
     public static final String DEFAULT_PRODUCER_GROUP = "default-producer";

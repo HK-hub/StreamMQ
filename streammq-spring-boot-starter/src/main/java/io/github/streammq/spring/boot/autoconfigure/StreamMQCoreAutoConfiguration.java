@@ -13,8 +13,13 @@ import io.github.streammq.adapter.redisson.trace.Slf4jTraceCollector;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.StreamMessageProducerFactory;
-import io.github.streammq.core.service.StreamMessageProducerService;
-import io.github.streammq.core.spi.*;
+import io.github.streammq.core.service.DefaultStreamMessageService;
+import io.github.streammq.core.service.StreamMessageService;
+import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.interceptor.TraceCollector;
+import io.github.streammq.core.policy.ManagementAuthenticator;
+import io.github.streammq.core.policy.RetryPolicy;
+import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import org.redisson.Redisson;
@@ -83,7 +88,7 @@ public class StreamMQCoreAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(MessageSerializer.class)
-    public MessageSerializer<?> streamMqMessageSerializer(StreamMQProperties properties) {
+    public MessageSerializer<?> streamMQMessageSerializer(StreamMQProperties properties) {
         String className = properties.getProducer().getSerializer();
         if (className == null || className.isEmpty()
             || JacksonJsonSerializer.class.getName().equals(className)) {
@@ -101,7 +106,7 @@ public class StreamMQCoreAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(MessageConverter.class)
-    public MessageConverter streamMqMessageConverter(MessageSerializer<?> serializer) {
+    public MessageConverter streamMQMessageConverter(MessageSerializer<?> serializer) {
         LOG.info("Using DefaultMessageConverter with serializer={}", serializer.getClass().getSimpleName());
         return new DefaultMessageConverter(serializer);
     }
@@ -114,7 +119,7 @@ public class StreamMQCoreAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(RetryPolicy.class)
-    public RetryPolicy streamMqRetryPolicy(StreamMQProperties properties) {
+    public RetryPolicy streamMQRetryPolicy(StreamMQProperties properties) {
         String className = properties.getRetry().getPolicy();
         LOG.info("Using RetryPolicy: {}", className);
         return instantiate(className, RetryPolicy.class);
@@ -129,7 +134,7 @@ public class StreamMQCoreAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(StreamMessageProducerFactory.class)
-    public StreamMessageProducerFactory streamMqProducerFactory(RedissonClient redisson, MessageConverter converter) {
+    public StreamMessageProducerFactory streamMQProducerFactory(RedissonClient redisson, MessageConverter converter) {
         LOG.info("Creating RedissonStreamProducerFactory");
         return new RedissonStreamProducerFactory(redisson, converter);
     }
@@ -143,13 +148,13 @@ public class StreamMQCoreAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(StreamMQListenerFactory.class)
-    public StreamMQListenerFactory streamMqListenerFactory(RedissonClient redisson, MessageConverter converter) {
+    public StreamMQListenerFactory streamMQListenerFactory(RedissonClient redisson, MessageConverter converter) {
         LOG.info("Creating RedissonStreamListenerFactory");
         return new RedissonStreamListenerFactory(redisson, converter);
     }
 
     /**
-     * 默认 StreamMqTemplate：基于 Redisson 实现。
+     * 默认 StreamMQTemplate：基于 Redisson 实现。
      *
      * @param producerFactory 生产者工厂
      * @param converter 消息转换器
@@ -158,7 +163,7 @@ public class StreamMQCoreAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(StreamMessageTemplate.class)
-    public StreamMessageTemplate streamMqTemplate(StreamMessageProducerFactory producerFactory,
+    public StreamMessageTemplate streamMQTemplate(StreamMessageProducerFactory producerFactory,
                                                      MessageConverter converter,
                                                      StreamMQProperties properties) {
         String defaultGroup = properties.getProducer().getGroup();
@@ -178,19 +183,20 @@ public class StreamMQCoreAutoConfiguration {
     }
 
     /**
-     * 注册 {@link StreamMessageProducerService}，封装 {@link StreamMessageTemplate} 提供更简洁的发送 API。
+     * 注册 {@link StreamMessageService}，封装 {@link StreamMessageTemplate} 提供更简洁的发送 API。
      *
-     * <p>用户可直接注入 {@link StreamMessageProducerService}，仅传入 topic 与 body 即可发送消息，
-     * 无需手动构造 {@code Message} 对象。
+     * <p>用户可直接注入 {@link StreamMessageService}，仅传入 topic 与 body 即可发送消息，
+     * 无需手动构造 {@code Message} 对象。遵循「依赖接口而非实现」原则，默认注册
+     * {@link DefaultStreamMessageService} 实现。
      *
-     * @param template StreamMq 模板
+     * @param template StreamMQ 模板
      * @return StreamMessageService 实例
      */
     @Bean
-    @ConditionalOnMissingBean
-    public StreamMessageProducerService streamMqService(StreamMessageTemplate template) {
+    @ConditionalOnMissingBean(StreamMessageService.class)
+    public StreamMessageService streamMQService(StreamMessageTemplate template) {
         LOG.info("Creating StreamMessageService wrapping {}", template.getClass().getSimpleName());
-        return new StreamMessageProducerService(template);
+        return new DefaultStreamMessageService(template);
     }
 
     // ===================== 内置策略 Bean =====================
@@ -206,7 +212,7 @@ public class StreamMQCoreAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(TraceCollector.class)
     @ConditionalOnProperty(prefix = "streammq.tracing", name = "enabled", havingValue = "false", matchIfMissing = true)
-    public TraceCollector streamMqNoopTraceCollector() {
+    public TraceCollector streamMQNoopTraceCollector() {
         LOG.info("Using NoopTraceCollector (tracing disabled)");
         return new NoopTraceCollector();
     }
@@ -222,7 +228,7 @@ public class StreamMQCoreAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(TraceCollector.class)
     @ConditionalOnProperty(prefix = "streammq.tracing", name = "enabled", havingValue = "true")
-    public TraceCollector streamMqSlf4jTraceCollector() {
+    public TraceCollector streamMQSlf4jTraceCollector() {
         LOG.info("Using Slf4jTraceCollector (tracing enabled)");
         return new Slf4jTraceCollector();
     }
@@ -237,7 +243,7 @@ public class StreamMQCoreAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(ManagementAuthenticator.class)
-    public ManagementAuthenticator streamMqManagementAuthenticator() {
+    public ManagementAuthenticator streamMQManagementAuthenticator() {
         LOG.info("Using DenyAllAuthenticator (security fallback)");
         return new DenyAllAuthenticator();
     }
@@ -251,7 +257,7 @@ public class StreamMQCoreAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(TraceContextProducerInterceptor.class)
     @ConditionalOnProperty(prefix = "streammq.tracing", name = "enabled", havingValue = "true")
-    public TraceContextProducerInterceptor streamMqTraceContextProducerInterceptor(TraceCollector traceCollector) {
+    public TraceContextProducerInterceptor streamMQTraceContextProducerInterceptor(TraceCollector traceCollector) {
         LOG.info("Using TraceContextProducerInterceptor (tracing enabled)");
         return new TraceContextProducerInterceptor(traceCollector);
     }
@@ -265,7 +271,7 @@ public class StreamMQCoreAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(TraceContextConsumerInterceptor.class)
     @ConditionalOnProperty(prefix = "streammq.tracing", name = "enabled", havingValue = "true")
-    public TraceContextConsumerInterceptor streamMqTraceContextConsumerInterceptor(TraceCollector traceCollector) {
+    public TraceContextConsumerInterceptor streamMQTraceContextConsumerInterceptor(TraceCollector traceCollector) {
         LOG.info("Using TraceContextConsumerInterceptor (tracing enabled)");
         return new TraceContextConsumerInterceptor(traceCollector);
     }

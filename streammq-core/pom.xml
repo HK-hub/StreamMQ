@@ -29,6 +29,14 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Redisson（provided：仅 ListenerRegistration / OrderlyShardLockManager SPI 引用 RLock，
+             由用户引入实际 Redisson 客户端，不强制传递依赖） -->
+        <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- 序列化默认实现（Jackson），optional 不强依赖传递 -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

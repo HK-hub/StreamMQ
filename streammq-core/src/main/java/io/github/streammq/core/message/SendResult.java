@@ -9,7 +9,7 @@ import lombok.NonNull;
 /**
  * 发送结果。
  *
- * <p>由 {@code StreamMqTemplate.syncSend} / {@code syncSendBatch} 返回，
+ * <p>由 {@code StreamMQTemplate.syncSend} / {@code syncSendBatch} 返回，
  * 封装消息 ID、状态、出生时间戳、Region 等信息。
  *
  * @author StreamMQ Contributors

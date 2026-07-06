@@ -1,6 +1,7 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
-import io.github.streammq.adapter.redisson.metrics.StreamMQMetrics;
+import io.github.streammq.adapter.redisson.metrics.MicrometerStreamMQMetrics;
+import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.micrometer.core.instrument.MeterRegistry;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -30,12 +31,12 @@ public class StreamMQMetricsAutoConfiguration {
      * 注册 StreamMQ 指标收集器。
      *
      * @param meterRegistry Micrometer 注册表（由 Spring Boot Actuator 自动提供）
-     * @return StreamMqMetrics 实例
+     * @return StreamMQMetrics 实例
      */
     @Bean
     @ConditionalOnBean(MeterRegistry.class)
     @ConditionalOnMissingBean(StreamMQMetrics.class)
-    public StreamMQMetrics streamMqMetrics(MeterRegistry meterRegistry) {
-        return new StreamMQMetrics(meterRegistry);
+    public StreamMQMetrics streamMQMetrics(MeterRegistry meterRegistry) {
+        return new MicrometerStreamMQMetrics(meterRegistry);
     }
 }

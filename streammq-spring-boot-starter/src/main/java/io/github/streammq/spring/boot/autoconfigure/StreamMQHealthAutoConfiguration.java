@@ -16,7 +16,7 @@ import org.springframework.context.annotation.Configuration;
 /**
  * 健康检查自动装配（条件装配：仅当 Actuator 在 classpath 时生效）。
  *
- * <p>注册 {@link StreamMqHealthIndicator}，对外暴露：
+ * <p>注册 {@link StreamMQHealthIndicator}，对外暴露：
  * <ul>
  *   <li>Redis 连接状态（基于 {@code RedissonClient} ping）</li>
  *   <li>Listener 容器运行状态</li>
@@ -45,17 +45,17 @@ public class StreamMQHealthAutoConfiguration {
      * @return HealthIndicator
      */
     @Bean
-    @ConditionalOnMissingBean(name = "streamMqHealthIndicator")
-    public HealthIndicator streamMqHealthIndicator(RedissonClient redisson,
+    @ConditionalOnMissingBean(name = "streamMQHealthIndicator")
+    public HealthIndicator streamMQHealthIndicator(RedissonClient redisson,
             org.springframework.beans.factory.ObjectProvider<DefaultStreamMQListenerContainer> listenerContainerProvider) {
-        LOG.info("Creating StreamMqHealthIndicator");
-        return new StreamMqHealthIndicator(redisson, listenerContainerProvider.getIfAvailable());
+        LOG.info("Creating StreamMQHealthIndicator");
+        return new StreamMQHealthIndicator(redisson, listenerContainerProvider.getIfAvailable());
     }
 
     /**
      * StreamMQ 健康检查实现。
      */
-    public static class StreamMqHealthIndicator implements HealthIndicator {
+    public static class StreamMQHealthIndicator implements HealthIndicator {
 
         private final RedissonClient redisson;
         private final DefaultStreamMQListenerContainer listenerContainer;
@@ -66,7 +66,7 @@ public class StreamMQHealthAutoConfiguration {
          * @param redisson Redisson 客户端
          * @param listenerContainer Listener 容器（可为 null，表示未装配）
          */
-        public StreamMqHealthIndicator(RedissonClient redisson,
+        public StreamMQHealthIndicator(RedissonClient redisson,
                                        DefaultStreamMQListenerContainer listenerContainer) {
             this.redisson = redisson;
             this.listenerContainer = listenerContainer;

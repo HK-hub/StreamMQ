@@ -17,8 +17,8 @@ import java.util.List;
  * <p>命名说明：对齐 RocketMQ 的 {@code PullConsumer}，
  * "监听"（Listen）Stream 获取消息的角色是 Listener，与业务消费回调（Consumer）分离：
  * <ul>
- *   <li>{@code StreamMqListener}（本接口）- 框架内部使用，PULL + ACK</li>
- *   <li>{@code StreamMqConsumer<T>} - 用户实现，onMessage 业务处理</li>
+ *   <li>{@code StreamMQListener}（本接口）- 框架内部使用，PULL + ACK</li>
+ *   <li>{@code StreamMessageConcurrentlyConsumer<T>} - 用户实现，onMessage 业务处理</li>
  * </ul>
  *
  * <p>实现类位于 {@code streammq-redisson-adapter} 模块。
@@ -49,7 +49,7 @@ public interface StreamMQListener {
      * 确认单条消息（从 PEL 中移除）。
      *
      * @param messageId 消息 ID
-     * @throws io.github.streammq.core.exception.StreamMqBrokerException 如果 XACK 失败
+     * @throws io.github.streammq.core.exception.StreamMQBrokerException 如果 XACK 失败
      */
     void ack(MessageId messageId);
 
@@ -57,7 +57,7 @@ public interface StreamMQListener {
      * 批量确认消息。
      *
      * @param messageIds 消息 ID 列表
-     * @throws io.github.streammq.core.exception.StreamMqBrokerException 如果 XACK 失败
+     * @throws io.github.streammq.core.exception.StreamMQBrokerException 如果 XACK 失败
      */
     void ackBatch(List<MessageId> messageIds);
 

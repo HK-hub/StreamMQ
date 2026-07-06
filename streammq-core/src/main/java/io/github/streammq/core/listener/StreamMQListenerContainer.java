@@ -1,9 +1,7 @@
 package io.github.streammq.core.listener;
 
 import io.github.streammq.core.annotation.StreamMQConsumer;
-import io.github.streammq.core.annotation.StreamMQOrderlyConsumer;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
-import io.github.streammq.core.consumer.StreamMessageManualAckConsumer;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
 
 import java.util.Collection;
@@ -18,6 +16,8 @@ import java.util.Collection;
  * 拉取到的消息分发给业务层实现的 {@link StreamMessageConcurrentlyConsumer}（消费者，onMessage 业务处理）。
  *
  * <p>注册 Consumer 时需提供注解元数据，框架据此创建对应的 Listener 与消费线程。
+ * 通过 {@link StreamMQConsumer#messageModel()} 区分并发 / 顺序消费，
+ * 通过 {@link StreamMQConsumer#dlqConsumerGroup()} 区分 DLQ 消费者。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -25,7 +25,10 @@ import java.util.Collection;
 public interface StreamMQListenerContainer {
 
     /**
-     * 注册一个并发消费 Consumer（自动 ACK）。
+     * 注册一个并发消费 Consumer（包含普通、DLQ 场景；通过 annotation 的 dlqConsumerGroup 区分）。
+     *
+     * <p>{@link StreamMQConsumer#acknowledgeMode()} 为 {@code MANUAL} 时表示手动 ACK 模式，
+     * 框架将忽略 {@code onMessage} 返回值，由 Consumer 通过 {@code context.acknowledge()} 控制 ACK。
      *
      * @param consumer Consumer 实例（{@link StreamMessageConcurrentlyConsumer}）
      * @param annotation 注解元数据（{@link StreamMQConsumer}）
@@ -35,24 +38,17 @@ public interface StreamMQListenerContainer {
                               StreamMQConsumer annotation);
 
     /**
-     * 注册一个手动 ACK Consumer（并发消费）。
-     *
-     * @param consumer Consumer 实例
-     * @param annotation 注解元数据
-     * @param <T> body 类型
-     */
-    <T> void registerAckConsumer(StreamMessageManualAckConsumer<T> consumer,
-                                 StreamMQConsumer annotation);
-
-    /**
      * 注册一个顺序消费 Consumer。
      *
+     * <p>{@link StreamMQConsumer#acknowledgeMode()} 为 {@code MANUAL} 时表示手动 ACK 模式，
+     * 框架将忽略 {@code onMessage} 返回值，由 Consumer 通过 {@code context.acknowledge()} 控制 ACK。
+     *
      * @param consumer Consumer 实例（{@link StreamMessageOrderlyConsumer}）
-     * @param annotation 顺序消费注解元数据
+     * @param annotation 注解元数据（{@link StreamMQConsumer}，需 {@code messageModel = ORDERLY}）
      * @param <T> body 类型
      */
     <T> void registerOrderlyConsumer(StreamMessageOrderlyConsumer<T> consumer,
-                                     StreamMQOrderlyConsumer annotation);
+                                     StreamMQConsumer annotation);
 
     /**
      * 返回所有已注册的 Consumer 元信息。
@@ -64,7 +60,7 @@ public interface StreamMQListenerContainer {
     /**
      * 启动所有 Listener。
      *
-     * @throws io.github.streammq.core.exception.StreamMqException 如果启动失败
+     * @throws io.github.streammq.core.exception.StreamMQException 如果启动失败
      */
     void start();
 

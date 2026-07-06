@@ -3,9 +3,9 @@ package io.github.streammq.spring.boot.it;
 import io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.annotation.StreamMQConsumer;
-import io.github.streammq.core.consumer.ConsumeConcurrentlyContext;
+import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
-import io.github.streammq.core.enums.Action;
+import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.message.SendResult;
@@ -33,7 +33,7 @@ import static org.awaitility.Awaitility.await;
  * Spring Boot 端到端集成测试。
  *
  * <p>启动完整的 Spring Boot 上下文,通过 {@link StreamMessageTemplate} 发送消息,
- * 由 {@code @StreamMqConsumer} 注解驱动的 Listener 自动消费,验证生产→存储→消费全链路。
+ * 由 {@code @StreamMQConsumer} 注解驱动的 Listener 自动消费,验证生产→存储→消费全链路。
  *
  * <p>覆盖场景:
  * <ul>
@@ -218,7 +218,7 @@ class SpringBootEndToEndIT {
     /**
      * 测试配置:注册端到端测试用 Listener Bean。
      *
-     * <p>namespace 由 {@link StreamMQCoreAutoConfiguration#streamMqTemplate} 自动注入
+     * <p>namespace 由 {@link StreamMQCoreAutoConfiguration#streamMQTemplate} 自动注入
      * (已修复:defaultProperties 含 namespace,Producer 与 ListenerContainer 使用相同 namespace)。
      */
     @TestConfiguration
@@ -232,7 +232,7 @@ class SpringBootEndToEndIT {
 
     /**
      * 端到端测试用 Listener,实现 {@link StreamMessageConcurrentlyConsumer} 接口,
-     * 标注 {@code @StreamMqConsumer} 注解,由 Spring 自动扫描注册。
+     * 标注 {@code @StreamMQConsumer} 注解,由 Spring 自动扫描注册。
      *
      * <p>使用 {@link ConcurrentLinkedQueue} 收集所有接收到的消息 body,线程安全。
      */
@@ -243,11 +243,11 @@ class SpringBootEndToEndIT {
         final ConcurrentLinkedQueue<String> receivedBodies = new ConcurrentLinkedQueue<>();
 
         @Override
-        public Action onMessage(Message<String> message, ConsumeConcurrentlyContext context) {
+        public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
             if (message.getBody() != null) {
                 receivedBodies.add(message.getBody());
             }
-            return Action.SUCCESS;
+            return ConsumeAction.SUCCESS;
         }
     }
 }

@@ -23,7 +23,7 @@ public interface StreamMessageProducer {
      *
      * @param message 消息
      * @return 发送结果
-     * @throws io.github.streammq.core.exception.StreamMqException 发送失败
+     * @throws io.github.streammq.core.exception.StreamMQException 发送失败
      */
     SendResult syncSend(Message<?> message);
 

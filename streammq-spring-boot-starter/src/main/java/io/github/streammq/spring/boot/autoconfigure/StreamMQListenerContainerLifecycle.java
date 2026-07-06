@@ -40,7 +40,7 @@ public class StreamMQListenerContainerLifecycle implements SmartLifecycle {
         if (running) {
             return;
         }
-        LOG.info("Starting StreamMqListenerContainer (SmartLifecycle phase={})", PHASE);
+        LOG.info("Starting StreamMQListenerContainer (SmartLifecycle phase={})", PHASE);
         listenerContainer.start();
         running = true;
     }
@@ -50,7 +50,7 @@ public class StreamMQListenerContainerLifecycle implements SmartLifecycle {
         if (!running) {
             return;
         }
-        LOG.info("Stopping StreamMqListenerContainer");
+        LOG.info("Stopping StreamMQListenerContainer");
         listenerContainer.stop();
         running = false;
     }

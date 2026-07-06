@@ -8,7 +8,7 @@ package io.github.streammq.core.exception;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public class StreamMqException extends RuntimeException {
+public class StreamMQException extends RuntimeException {
 
     private static final long serialVersionUID = 1L;
 
@@ -17,7 +17,7 @@ public class StreamMqException extends RuntimeException {
      *
      * @param message 错误信息
      */
-    public StreamMqException(String message) {
+    public StreamMQException(String message) {
         super(message);
     }
 
@@ -27,7 +27,7 @@ public class StreamMqException extends RuntimeException {
      * @param message 错误信息
      * @param cause 原始异常
      */
-    public StreamMqException(String message, Throwable cause) {
+    public StreamMQException(String message, Throwable cause) {
         super(message, cause);
     }
 }

@@ -1,5 +1,6 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
+import io.github.streammq.core.scheduler.StreamMQScheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,6 +18,8 @@ import java.util.Objects;
  *
  * <p>调度器实例本身不实现 SmartLifecycle，由本类统一管理，避免分散的 lifecycle bean。
  *
+ * <p>本类依赖 {@link StreamMQScheduler} 接口而非具体实现，遵循"依赖接口而非实现"原则。
+ *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
@@ -27,7 +30,7 @@ public class StreamMQSchedulerLifecycle implements SmartLifecycle {
     /** 启动相位：高于 Listener 容器（{@code Integer.MAX_VALUE - 200}） */
     public static final int PHASE = Integer.MAX_VALUE - 100;
 
-    private final List<Object> schedulers;
+    private final List<StreamMQScheduler> schedulers;
     private volatile boolean running = false;
 
     /**
@@ -35,7 +38,7 @@ public class StreamMQSchedulerLifecycle implements SmartLifecycle {
      *
      * @param schedulers 调度器列表（按启动顺序：先注册者先启动）
      */
-    public StreamMQSchedulerLifecycle(List<Object> schedulers) {
+    public StreamMQSchedulerLifecycle(List<StreamMQScheduler> schedulers) {
         this.schedulers = Objects.requireNonNull(schedulers, "schedulers");
     }
 
@@ -46,9 +49,9 @@ public class StreamMQSchedulerLifecycle implements SmartLifecycle {
         }
         LOG.info("Starting StreamMQ schedulers (phase={}, count={})", PHASE, schedulers.size());
         int failedCount = 0;
-        for (Object scheduler : schedulers) {
+        for (StreamMQScheduler scheduler : schedulers) {
             try {
-                invokeStart(scheduler);
+                scheduler.start();
             } catch (RuntimeException ex) {
                 failedCount++;
                 LOG.error("Failed to start scheduler {}: {}", scheduler.getClass().getSimpleName(), ex.getMessage(), ex);
@@ -70,9 +73,9 @@ public class StreamMQSchedulerLifecycle implements SmartLifecycle {
         LOG.info("Stopping StreamMQ schedulers");
         // 反向停止
         for (int i = schedulers.size() - 1; i >= 0; i--) {
-            Object scheduler = schedulers.get(i);
+            StreamMQScheduler scheduler = schedulers.get(i);
             try {
-                invokeStop(scheduler);
+                scheduler.stop();
             } catch (RuntimeException ex) {
                 LOG.error("Failed to stop scheduler {}: {}",
                     scheduler.getClass().getSimpleName(), ex.getMessage(), ex);
@@ -94,27 +97,5 @@ public class StreamMQSchedulerLifecycle implements SmartLifecycle {
     @Override
     public boolean isAutoStartup() {
         return true;
-    }
-
-    private static void invokeStart(Object scheduler) {
-        try {
-            var method = scheduler.getClass().getMethod("start");
-            method.setAccessible(true);
-            method.invoke(scheduler);
-        } catch (ReflectiveOperationException ex) {
-            throw new IllegalStateException(
-                "Scheduler " + scheduler.getClass().getName() + " has no start() method", ex);
-        }
-    }
-
-    private static void invokeStop(Object scheduler) {
-        try {
-            var method = scheduler.getClass().getMethod("stop");
-            method.setAccessible(true);
-            method.invoke(scheduler);
-        } catch (ReflectiveOperationException ex) {
-            throw new IllegalStateException(
-                "Scheduler " + scheduler.getClass().getName() + " has no stop() method", ex);
-        }
     }
 }

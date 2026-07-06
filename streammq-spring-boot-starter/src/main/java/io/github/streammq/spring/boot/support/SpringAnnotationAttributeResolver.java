@@ -1,5 +1,6 @@
 package io.github.streammq.spring.boot.support;
 
+import io.github.streammq.core.annotation.AnnotationAttributeResolver;
 import org.springframework.beans.factory.config.BeanExpressionContext;
 import org.springframework.beans.factory.config.BeanExpressionResolver;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
@@ -7,17 +8,21 @@ import org.springframework.context.ConfigurableApplicationContext;
 import org.springframework.core.env.Environment;
 
 /**
- * 注解属性解析器，支持 ${...} 属性占位符和 #{...} SpEL 表达式。
+ * 基于 Spring {@link ConfigurableApplicationContext} 的注解属性解析器实现，
+ * 支持 ${...} 属性占位符和 #{...} SpEL 表达式。
  *
- * <p>用于解析 @StreamMqConsumer、@StreamMqOrderlyConsumer 等注解中的
- * topic、consumerGroup、group、namespace、selectorExpression 等字符串属性，
+ * <p>用于解析 {@code @StreamMQConsumer}、{@code @StreamMQTransactionConsumer} 等注解中的
+ * topic、consumerGroup、namespace、selectorExpression 等字符串属性，
  * 使其支持通过配置文件动态指定。
+ *
+ * @author StreamMQ Contributors
+ * @since 0.1.0
  */
-public class AnnotationAttributeResolver {
+public class SpringAnnotationAttributeResolver implements AnnotationAttributeResolver {
     private final ConfigurableBeanFactory beanFactory;
     private final Environment environment;
 
-    public AnnotationAttributeResolver(ConfigurableApplicationContext applicationContext) {
+    public SpringAnnotationAttributeResolver(ConfigurableApplicationContext applicationContext) {
         this.beanFactory = applicationContext.getBeanFactory();
         this.environment = applicationContext.getEnvironment();
     }
@@ -25,9 +30,10 @@ public class AnnotationAttributeResolver {
     /**
      * 解析属性值，支持 ${...} 占位符和 #{...} SpEL 表达式。
      *
-     * @param value 原始值（可能包含 ${} 或 #{} 表达式）
-     * @return 解析后的值
+     * @param value 原始值（可能包含 {@code ${}} 或 {@code #{}} 表达式）
+     * @return 解析后的值；若入参为 {@code null} 或空串则原样返回
      */
+    @Override
     public String resolve(String value) {
         if (value == null || value.isEmpty()) {
             return value;

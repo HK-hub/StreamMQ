@@ -1,7 +1,7 @@
 package io.github.streammq.core.message;
 
 import io.github.streammq.core.enums.DelayLevel;
-import io.github.streammq.core.service.StreamMessageProducerService;
+import io.github.streammq.core.service.StreamMessageService;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -10,7 +10,7 @@ import java.util.Objects;
 /**
  * 消息元数据构造器，封装除 topic 和 body 之外的所有消息属性。
  *
- * <p>用于 {@link StreamMessageProducerService} 的 {@code send(topic, body, MessageMetadataBuilder)} 模式，
+ * <p>用于 {@link StreamMessageService} 的 {@code send(topic, body, MessageMetadataBuilder)} 模式，
  * 将 Tag、Keys、ShardingKey、延时、属性等参数统一封装，避免方法重载数量爆炸。
  *
  * <p>使用示例：

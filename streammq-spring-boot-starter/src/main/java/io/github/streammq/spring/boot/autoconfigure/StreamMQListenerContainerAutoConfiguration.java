@@ -2,8 +2,8 @@ package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
-import io.github.streammq.core.spi.MessageConverter;
-import io.github.streammq.core.spi.RetryPolicy;
+import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
@@ -50,13 +50,13 @@ public class StreamMQListenerContainerAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(DefaultStreamMQListenerContainer.class)
-    public DefaultStreamMQListenerContainer streamMqListenerContainer(RedissonClient redisson,
+    public DefaultStreamMQListenerContainer streamMQListenerContainer(RedissonClient redisson,
                                                                       StreamMQListenerFactory consumerFactory,
                                                                       MessageConverter messageConverter,
                                                                       RetryPolicy retryPolicy,
                                                                       StreamMQProperties properties) {
         String namespace = properties.getNamespace();
-        LOG.info("Creating DefaultStreamMqListenerContainer: namespace={}", namespace);
+        LOG.info("Creating DefaultStreamMQListenerContainer: namespace={}", namespace);
         return new DefaultStreamMQListenerContainer(
             redisson, consumerFactory, messageConverter, retryPolicy, namespace);
     }
@@ -69,7 +69,7 @@ public class StreamMQListenerContainerAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(StreamMQListenerRegistrar.class)
-    public StreamMQListenerRegistrar streamMqListenerRegistrar(DefaultStreamMQListenerContainer listenerContainer) {
+    public StreamMQListenerRegistrar streamMQListenerRegistrar(DefaultStreamMQListenerContainer listenerContainer) {
         return new StreamMQListenerRegistrar(listenerContainer);
     }
 
@@ -80,8 +80,8 @@ public class StreamMQListenerContainerAutoConfiguration {
      * @return 生命周期包装
      */
     @Bean
-    @ConditionalOnMissingBean(name = "streamMqListenerContainerLifecycle")
-    public StreamMQListenerContainerLifecycle streamMqListenerContainerLifecycle(
+    @ConditionalOnMissingBean(name = "streamMQListenerContainerLifecycle")
+    public StreamMQListenerContainerLifecycle streamMQListenerContainerLifecycle(
             DefaultStreamMQListenerContainer listenerContainer) {
         return new StreamMQListenerContainerLifecycle(listenerContainer);
     }

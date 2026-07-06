@@ -1,8 +1,8 @@
 package io.github.streammq.core.listener;
 
-import io.github.streammq.core.StreamMqConstants;
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
-import io.github.streammq.core.spi.MessageSerializer;
+import io.github.streammq.core.serializer.MessageSerializer;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NonNull;
@@ -46,17 +46,17 @@ public class ListenerConfig {
     @Builder.Default
     private final String namespace = "";
 
-    /** 每次拉取批量大小（可选，默认 {@link StreamMqConstants#DEFAULT_CONSUME_BATCH_SIZE}） */
+    /** 每次拉取批量大小（可选，默认 {@link StreamMQConstants#DEFAULT_CONSUME_BATCH_SIZE}） */
     @Builder.Default
-    private final int pullBatchSize = StreamMqConstants.DEFAULT_CONSUME_BATCH_SIZE;
+    private final int pullBatchSize = StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE;
 
-    /** 阻塞拉取超时毫秒（可选，默认 {@link StreamMqConstants#DEFAULT_PULL_BLOCK_TIMEOUT_MS}） */
+    /** 阻塞拉取超时毫秒（可选，默认 {@link StreamMQConstants#DEFAULT_PULL_BLOCK_TIMEOUT_MS}） */
     @Builder.Default
-    private final long pullBlockTimeoutMillis = StreamMqConstants.DEFAULT_PULL_BLOCK_TIMEOUT_MS;
+    private final long pullBlockTimeoutMillis = StreamMQConstants.DEFAULT_PULL_BLOCK_TIMEOUT_MS;
 
     /** 拉取间隔毫秒（可选，默认 0 表示不等待） */
     @Builder.Default
-    private final long pullIntervalMillis = StreamMqConstants.DEFAULT_PULL_INTERVAL_MS;
+    private final long pullIntervalMillis = StreamMQConstants.DEFAULT_PULL_INTERVAL_MS;
 
     /** 序列化器类（可选，为 null 表示使用全局配置） */
     private final Class<? extends MessageSerializer> serializer;
@@ -86,7 +86,7 @@ public class ListenerConfig {
      * 或 {@code bodyType} 指向的类在消费端不可加载时，使用此类型作为反序列化目标类型。
      *
      * <p>通常由容器在注册 Consumer 时通过 {@code io.github.streammq.core.util.BodyTypeResolver}
-     * 解析 {@code StreamMqConsumer<T>} 的泛型 T 自动填入，无需用户手动配置。
+     * 解析 {@code StreamMessageConcurrentlyConsumer<T>} 的泛型 T 自动填入，无需用户手动配置。
      *
      * <p>若此字段为 null 且 Stream Entry 缺失 {@code bodyType}，最终回退为 {@code String.class}，
      * 由消费者自行将字符串反序列化为目标类型（跨语言场景的推荐用法）。

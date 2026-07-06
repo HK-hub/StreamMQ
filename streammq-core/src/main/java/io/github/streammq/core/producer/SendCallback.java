@@ -5,7 +5,7 @@ import io.github.streammq.core.message.SendResult;
 /**
  * 异步发送回调。
  *
- * <p>用于 {@code StreamMqTemplate.asyncSend(message, callback)} 形式的异步发送。
+ * <p>用于 {@code StreamMQTemplate.asyncSend(message, callback)} 形式的异步发送。
  * 框架在发送完成（成功或失败）后调用对应方法。
  *
  * <p>使用示例：
