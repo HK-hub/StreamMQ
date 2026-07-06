@@ -4,43 +4,65 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
+import java.time.Duration;
+
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 各枚举类型完整性测试，覆盖 AcknowledgeMode / ConsumeAction / OrderlyAction / ConsumeMode / MessageModel / LocalTransactionState。
+ * 各枚举/动作类型完整性测试，覆盖 ConsumeAction / OrderlyAction / ConsumeMode / MessageModel / LocalTransactionState。
  */
-@DisplayName("核心枚举完整性测试")
+@DisplayName("核心枚举与动作类型完整性测试")
 class EnumsTest {
-
-    @Nested
-    @DisplayName("AcknowledgeMode")
-    class AcknowledgeModeTest {
-
-        @Test
-        @DisplayName("AcknowledgeMode 含 AUTO 与 MANUAL 两个值")
-        void containsAutoAndManual() {
-            assertThat(AcknowledgeMode.values())
-                .containsExactlyInAnyOrder(AcknowledgeMode.AUTO, AcknowledgeMode.MANUAL);
-        }
-    }
 
     @Nested
     @DisplayName("ConsumeAction")
     class ConsumeActionTest {
 
         @Test
-        @DisplayName("ConsumeAction 含 SUCCESS 与 RECONSUME_LATER")
-        void containsSuccessAndReconsumeLater() {
-            assertThat(ConsumeAction.values())
-                .contains(ConsumeAction.SUCCESS, ConsumeAction.RECONSUME_LATER);
+        @DisplayName("SUCCESS 与 RECONSUME_LATER 为单例常量，可 == 比较")
+        void successAndReconsumeLaterAreSingletons() {
+            assertThat(ConsumeAction.SUCCESS).isSameAs(ConsumeAction.SUCCESS);
+            assertThat(ConsumeAction.RECONSUME_LATER).isSameAs(ConsumeAction.RECONSUME_LATER);
+            assertThat(ConsumeAction.SUCCESS).isNotSameAs(ConsumeAction.RECONSUME_LATER);
         }
 
         @Test
-        @DisplayName("ConsumeAction 含全部 2 个值")
-        void hasAllTwoValues() {
-            assertThat(ConsumeAction.values()).hasSize(2);
-            assertThat(ConsumeAction.values())
-                .containsExactly(ConsumeAction.SUCCESS, ConsumeAction.RECONSUME_LATER);
+        @DisplayName("类型判断方法正确")
+        void typePredicates() {
+            assertThat(ConsumeAction.SUCCESS.isSuccess()).isTrue();
+            assertThat(ConsumeAction.SUCCESS.isReconsumeLater()).isFalse();
+            assertThat(ConsumeAction.RECONSUME_LATER.isReconsumeLater()).isTrue();
+            assertThat(ConsumeAction.RECONSUME_LATER.isSuccess()).isFalse();
+        }
+
+        @Test
+        @DisplayName("defer(Duration) 返回 DEFER 动作并携带延迟")
+        void deferCarriesDelay() {
+            ConsumeAction defer = ConsumeAction.defer(Duration.ofSeconds(30));
+            assertThat(defer.isDefer()).isTrue();
+            assertThat(defer.isSuccess()).isFalse();
+            assertThat(defer.getDeferDelay()).isEqualTo(Duration.ofSeconds(30));
+            assertThat(defer.type()).isEqualTo(ConsumeAction.Type.DEFER);
+        }
+
+        @Test
+        @DisplayName("defer 拒绝 null/非正延迟")
+        void deferRejectsInvalidDelay() {
+            assertThatThrownBy(() -> ConsumeAction.defer(null))
+                .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(() -> ConsumeAction.defer(Duration.ZERO))
+                .isInstanceOf(IllegalArgumentException.class);
+            assertThatThrownBy(() -> ConsumeAction.defer(Duration.ofMillis(-1)))
+                .isInstanceOf(IllegalArgumentException.class);
+        }
+
+        @Test
+        @DisplayName("name() 返回类型名称")
+        void nameReturnsTypeName() {
+            assertThat(ConsumeAction.SUCCESS.name()).isEqualTo("SUCCESS");
+            assertThat(ConsumeAction.RECONSUME_LATER.name()).isEqualTo("RECONSUME_LATER");
+            assertThat(ConsumeAction.defer(Duration.ofSeconds(1)).name()).isEqualTo("DEFER");
         }
     }
 
@@ -103,3 +125,4 @@ class EnumsTest {
         }
     }
 }
+

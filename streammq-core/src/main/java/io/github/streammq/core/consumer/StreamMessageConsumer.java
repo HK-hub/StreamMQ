@@ -1,13 +1,12 @@
 package io.github.streammq.core.consumer;
 
-import io.github.streammq.core.message.Message;
-
 /**
- * StreamMQ 消费者基类接口。
+ * StreamMQ 消费者回调根接口（所有消费者回调接口的公共父类型）。
  *
- * <p>所有 StreamMQ 消费者回调接口的根接口，统一消费入口为 {@link #consumeMessage}。
- * 子接口（{@link StreamMessageConcurrentlyConsumer} / {@link StreamMessageOrderlyConsumer}）
- * 通过 default 方法将自身 {@code onMessage} 委派到本方法。
+ * <p>子接口 {@link StreamMessageConcurrentlyConsumer}（并发消费）与
+ * {@link StreamMessageOrderlyConsumer}（顺序消费）分别定义 {@code onMessage} 方法，
+ * 返回 {@link io.github.streammq.core.enums.ConsumeAction} /
+ * {@link io.github.streammq.core.enums.OrderlyAction} 作为唯一消费结果表达。
  *
  * <p>框架内部以 {@link StreamMessageConsumer} 引用持有所有 Consumer 实例，
  * 便于在容器层面统一调度与扩展。
@@ -17,15 +16,4 @@ import io.github.streammq.core.message.Message;
  * @since 0.1.0
  */
 public interface StreamMessageConsumer<T> {
-
-    /**
-     * 处理单条消息（统一入口）。
-     *
-     * <p>由容器在拉取消息后调用，实现类内部决定是否 ACK、重试或挂起。
-     *
-     * @param message 消息载体
-     * @param context 消费上下文
-     * @throws Exception 业务异常，框架按 Consumer 类型转换为对应的失败动作
-     */
-    void consumeMessage(Message<T> message, ConsumeContext context) throws Exception;
 }

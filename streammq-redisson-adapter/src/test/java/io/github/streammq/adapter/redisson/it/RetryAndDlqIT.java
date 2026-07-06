@@ -79,7 +79,6 @@ class RetryAndDlqIT extends AbstractRedisIT {
                 case "consumerGroup" -> group;
                 case "consumeMode" -> ConsumeMode.CLUSTERING;
                 case "messageModel" -> MessageModel.CONCURRENT;
-                case "acknowledgeMode" -> AcknowledgeMode.AUTO;
                 case "maxReconsumeTimes" -> maxReconsumeTimes;
                 case "consumeThreadMin" -> 1;
                 case "consumeThreadMax" -> 64;

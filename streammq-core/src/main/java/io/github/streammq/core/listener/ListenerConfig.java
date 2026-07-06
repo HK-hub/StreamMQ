@@ -2,6 +2,7 @@ package io.github.streammq.core.listener;
 
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
+import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.serializer.MessageSerializer;
 import lombok.Builder;
 import lombok.Getter;
@@ -60,6 +61,16 @@ public class ListenerConfig {
 
     /** 序列化器类（可选，为 null 表示使用全局配置） */
     private final Class<? extends MessageSerializer> serializer;
+
+    /**
+     * 每个消费者专属消息转换器实例（可选，为 null 表示使用工厂全局转换器）。
+     *
+     * <p>由容器在注册时按注解 {@code messageConverter} / {@code serializer} 实例化，
+     * 传入工厂创建的 Listener 使用此转换器解码消息，实现 per-consumer 序列化策略。
+     *
+     * @return 消息转换器实例，可为 null
+     */
+    private final MessageConverter converter;
 
     /**
      * DLQ 模式标志（可选，默认 false）。

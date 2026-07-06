@@ -1,11 +1,10 @@
 package io.github.streammq.core.listener;
 
 import io.github.streammq.core.consumer.StreamMessageConsumer;
-import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.ConsumeMode;
-import io.github.streammq.core.enums.NackRetryMode;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.serializer.MessageSerializer;
+import io.github.streammq.core.policy.DlqFailureHandler;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
 import lombok.Getter;
@@ -22,7 +21,6 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
     private final String topic;
     private final String group;
     private final ConsumeMode consumeMode;
-    private final AcknowledgeMode ackMode;
     private final int maxReconsumeTimes;
     private final int shardCount;
     private final long consumeTimeoutMillis;
@@ -40,15 +38,13 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
     private final boolean enableMsgTrace;
     private final boolean dlqMode;
     private final Class<?> targetBodyType;
-    private final NackRetryMode nackRetryMode;
-    private final int fastRetryCount;
-    private final boolean fallbackToRetryZset;
+    private final Class<? extends DlqFailureHandler> dlqFailureHandler;
 
     @Setter
     private String namespace;
 
     public DefaultListenerRegistration(ListenerType type, StreamMessageConsumer<T> consumer, String topic, String group,
-                                       ConsumeMode consumeMode, AcknowledgeMode ackMode, int maxReconsumeTimes,
+                                       ConsumeMode consumeMode, int maxReconsumeTimes,
                                        int shardCount, long consumeTimeoutMillis, List<Lock> shardLocks,
                                        int pullBatchSize, long pullBlockTimeoutMillis, long pullIntervalMillis,
                                        String selectorExpression, Class<? extends MessageSerializer> serializer,
@@ -57,14 +53,13 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
                                        Class<? extends RebalanceStrategy> rebalanceStrategy,
                                        long suspendCurrentQueueTimeMillis, int streamMaxLen, boolean enableMsgTrace,
                                        boolean dlqMode, Class<?> targetBodyType,
-                                       NackRetryMode nackRetryMode, int fastRetryCount, boolean fallbackToRetryZset,
+                                       Class<? extends DlqFailureHandler> dlqFailureHandler,
                                        String namespace) {
         this.type = type;
         this.consumer = consumer;
         this.topic = topic;
         this.group = group;
         this.consumeMode = consumeMode;
-        this.ackMode = ackMode;
         this.maxReconsumeTimes = maxReconsumeTimes;
         this.shardCount = shardCount;
         this.consumeTimeoutMillis = consumeTimeoutMillis;
@@ -82,9 +77,7 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         this.enableMsgTrace = enableMsgTrace;
         this.dlqMode = dlqMode;
         this.targetBodyType = targetBodyType;
-        this.nackRetryMode = nackRetryMode;
-        this.fastRetryCount = fastRetryCount;
-        this.fallbackToRetryZset = fallbackToRetryZset;
+        this.dlqFailureHandler = dlqFailureHandler;
         this.namespace = namespace;
     }
 

@@ -1,6 +1,7 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
+import io.github.streammq.adapter.redisson.container.LogAndDropDlqFailureHandler;
 import io.github.streammq.adapter.redisson.interceptor.TraceContextConsumerInterceptor;
 import io.github.streammq.adapter.redisson.interceptor.TraceContextProducerInterceptor;
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
@@ -17,6 +18,7 @@ import io.github.streammq.core.service.DefaultStreamMessageService;
 import io.github.streammq.core.service.StreamMessageService;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.interceptor.TraceCollector;
+import io.github.streammq.core.policy.DlqFailureHandler;
 import io.github.streammq.core.policy.ManagementAuthenticator;
 import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.core.serializer.MessageSerializer;
@@ -123,6 +125,27 @@ public class StreamMQCoreAutoConfiguration {
         String className = properties.getRetry().getPolicy();
         LOG.info("Using RetryPolicy: {}", className);
         return instantiate(className, RetryPolicy.class);
+    }
+
+    /**
+     * 默认死信消费失败处理器：根据 {@code streammq.dlq.failure-handler} 配置加载。
+     *
+     * <p>死信消息消费失败时调用，默认 {@link LogAndDropDlqFailureHandler} 仅记录 ERROR 日志后丢弃。
+     * 用户可实现 {@link DlqFailureHandler} 接入告警/持久化，并注册为 Bean 或配置类全限定名覆盖。
+     *
+     * @param properties 配置
+     * @return 死信失败处理器
+     */
+    @Bean
+    @ConditionalOnMissingBean(DlqFailureHandler.class)
+    public DlqFailureHandler streamMQDlqFailureHandler(StreamMQProperties properties) {
+        String className = properties.getDlq().getFailureHandler();
+        if (className == null || className.isEmpty()
+            || LogAndDropDlqFailureHandler.class.getName().equals(className)) {
+            LOG.info("Using default LogAndDropDlqFailureHandler");
+            return new LogAndDropDlqFailureHandler();
+        }
+        return instantiate(className, DlqFailureHandler.class);
     }
 
     /**

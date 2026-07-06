@@ -27,8 +27,8 @@ public interface StreamMQListenerContainer {
     /**
      * 注册一个并发消费 Consumer（包含普通、DLQ 场景；通过 annotation 的 dlqMode 区分）。
      *
-     * <p>{@link StreamMQConsumer#acknowledgeMode()} 为 {@code MANUAL} 时表示手动 ACK 模式，
-     * 框架将忽略 {@code onMessage} 返回值，由 Consumer 通过 {@code context.acknowledge()} 控制 ACK。
+     * <p>消费结果由 {@code onMessage} 返回值（{@link io.github.streammq.core.enums.ConsumeAction}）唯一表达，
+     * 框架据此执行 ACK / 重试 / DLQ 路由。
      *
      * @param consumer Consumer 实例（{@link StreamMessageConcurrentlyConsumer}）
      * @param annotation 注解元数据（{@link StreamMQConsumer}）
@@ -40,8 +40,7 @@ public interface StreamMQListenerContainer {
     /**
      * 注册一个顺序消费 Consumer。
      *
-     * <p>{@link StreamMQConsumer#acknowledgeMode()} 为 {@code MANUAL} 时表示手动 ACK 模式，
-     * 框架将忽略 {@code onMessage} 返回值，由 Consumer 通过 {@code context.acknowledge()} 控制 ACK。
+     * <p>消费结果由 {@code onMessage} 返回值（{@link io.github.streammq.core.enums.OrderlyAction}）唯一表达。
      *
      * @param consumer Consumer 实例（{@link StreamMessageOrderlyConsumer}）
      * @param annotation 注解元数据（{@link StreamMQConsumer}，需 {@code messageModel = ORDERLY}）

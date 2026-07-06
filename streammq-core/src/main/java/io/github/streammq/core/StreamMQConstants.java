@@ -51,6 +51,9 @@ public final class StreamMQConstants {
     public static final long DEFAULT_SUSPEND_CURRENT_QUEUE_TIME_MS = 1000L;
     /** 默认 Stream 最大长度（0=不限制） */
     public static final int DEFAULT_STREAM_MAX_LEN = 0;
+    /** 默认死信消费失败处理器实现类全限定名 */
+    public static final String DEFAULT_DLQ_FAILURE_HANDLER =
+        "io.github.streammq.adapter.redisson.container.LogAndDropDlqFailureHandler";
 
     // ==================== 属性 Key 常量 ====================
     /** 属性 key：topic */

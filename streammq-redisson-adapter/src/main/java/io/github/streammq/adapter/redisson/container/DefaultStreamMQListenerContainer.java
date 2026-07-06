@@ -1,11 +1,13 @@
 package io.github.streammq.adapter.redisson.container;
 
+import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.annotation.StreamMQConsumer;
+import io.github.streammq.core.consumer.ConsumeContext;
+import io.github.streammq.core.consumer.ConsumeOrderlyContext;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
-import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.enums.InvokeTiming;
 import io.github.streammq.core.enums.OrderlyAction;
@@ -20,10 +22,14 @@ import io.github.streammq.core.interceptor.ConsumerInterceptorChain;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.listener.ListenerType;
+import io.github.streammq.core.policy.DlqFailureHandler;
 import io.github.streammq.core.policy.OrderlyShardLockManager;
 import io.github.streammq.core.policy.RetryAndDlqHandler;
 import io.github.streammq.core.policy.RetryPolicy;
+import io.github.streammq.core.policy.RebalanceStrategy;
+import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.util.BodyTypeResolver;
+import io.github.streammq.core.util.SpiResolver;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
@@ -43,18 +49,20 @@ import java.util.concurrent.locks.Lock;
  *   <li>注册并发 / 顺序 / DLQ Listener（统一通过 {@link StreamMQConsumer} 注解驱动）</li>
  *   <li>管理容器生命周期（start / stop / pause / resume）</li>
  *   <li>为每个 Listener 启动虚拟线程消费循环</li>
+ *   <li>按注解 per-consumer 实例化 {@link RetryPolicy} / {@link MessageConverter} /
+ *       {@link DlqFailureHandler} / {@link MessageSerializer} / {@link RebalanceStrategy}
+ *       并创建 per-consumer {@link RetryAndDlqHandler}，实现高度可配置</li>
  * </ul>
  *
- * <p>手动 ACK 模式由 {@link AcknowledgeMode#MANUAL} 配置驱动，
- * 不再单独设立 Listener 类型，仍走 {@link ListenerType#AUTO_ACK} 或 {@link ListenerType#ORDERLY} 分支。
+ * <p>消费结果统一由 {@code onMessage} 返回值（{@link ConsumeAction} / {@link OrderlyAction}）表达，
+ * 不再支持手动 ACK/nack/defer 调用，避免双模式冲突。
  *
  * <p>以下职责已委托给独立的策略类（组合模式）：
  * <ul>
  *   <li>{@link ConsumerInterceptorChain} - 拦截器链管理与执行</li>
- *   <li>{@link RetryAndDlqHandler} - ACK / 重试 / DLQ 路由</li>
+ *   <li>{@link RetryAndDlqHandler} - ACK / 重试 / DLQ 路由（per-consumer 实例）</li>
  *   <li>{@link OrderlyShardLockManager} - 顺序消费分片锁管理</li>
  *   <li>{@link ConsumerMdcTrace} - MDC 结构化日志上下文</li>
- *   <li>{@link DefaultConsumeContextConsume} / {@link DefaultAcknowledgment} - 消费上下文与 ACK 实现</li>
  * </ul>
  *
  * <p>线程安全：注册方法与生命周期方法均线程安全；消费循环在独立虚拟线程执行。
@@ -79,12 +87,20 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     private final RedissonClient redisson;
     private final StreamMQListenerFactory consumerFactory;
+    /** 全局消息转换器（per-consumer 未指定时的回退） */
     private final MessageConverter messageConverter;
+    /** 全局重试策略（per-consumer 未指定时的回退） */
     private final RetryPolicy retryPolicy;
+    /** 全局死信消费失败处理器（per-consumer 未指定时的回退） */
+    private final DlqFailureHandler dlqFailureHandler;
     private final String defaultNamespace;
 
     /** Listener 注册表 */
     private final ConcurrentMap<String, ListenerRegistration<?>> registrations = new ConcurrentHashMap<>();
+    /** per-consumer ACK/重试/DLQ 路由处理器（按注解实例化的策略组合） */
+    private final ConcurrentMap<String, RetryAndDlqHandler> perConsumerHandlers = new ConcurrentHashMap<>();
+    /** per-consumer 消息转换器（传给 Listener 工厂用于解码） */
+    private final ConcurrentMap<String, MessageConverter> perConsumerConverters = new ConcurrentHashMap<>();
     /** 消费线程池（虚拟线程） */
     private final ExecutorService consumeExecutor = Executors.newVirtualThreadPerTaskExecutor();
     /** 容器状态 */
@@ -96,18 +112,20 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     /** 策略类：拦截器链 */
     private final ConsumerInterceptorChain interceptorChain;
-    /** 策略类：ACK/重试/DLQ 路由 */
-    private final RetryAndDlqHandler retryDlqHandler;
+    /** 策略类：ACK/重试/DLQ 路由（per-consumer 关闭时的共享实例） */
+    private final RetryAndDlqHandler sharedRetryDlqHandler;
     /** 策略类：顺序消费分片锁 */
     private final OrderlyShardLockManager shardLockManager;
+    /** 是否启用 per-consumer 策略实例化（高级构造器注入自定义 handler 时关闭） */
+    private final boolean perConsumerEnabled;
 
     /**
-     * 构造容器（向后兼容：内部创建默认策略实现）。
+     * 构造容器（向后兼容：内部创建默认策略实现，per-consumer 启用）。
      *
      * @param redisson Redisson 客户端
      * @param consumerFactory 消费者工厂
-     * @param messageConverter 消息转换器
-     * @param retryPolicy 重试策略
+     * @param messageConverter 全局消息转换器
+     * @param retryPolicy 全局重试策略
      * @param defaultNamespace 默认命名空间（可为空字符串）
      */
     public DefaultStreamMQListenerContainer(RedissonClient redisson,
@@ -115,37 +133,61 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                             MessageConverter messageConverter,
                                             RetryPolicy retryPolicy,
                                             String defaultNamespace) {
+        this(redisson, consumerFactory, messageConverter, retryPolicy,
+            new LogAndDropDlqFailureHandler(), defaultNamespace);
+    }
+
+    /**
+     * 构造容器并注入全局死信消费失败处理器（per-consumer 启用）。
+     *
+     * @param redisson Redisson 客户端
+     * @param consumerFactory 消费者工厂
+     * @param messageConverter 全局消息转换器
+     * @param retryPolicy 全局重试策略
+     * @param dlqFailureHandler 全局死信消费失败处理器
+     * @param defaultNamespace 默认命名空间（可为空字符串）
+     */
+    public DefaultStreamMQListenerContainer(RedissonClient redisson,
+                                            StreamMQListenerFactory consumerFactory,
+                                            MessageConverter messageConverter,
+                                            RetryPolicy retryPolicy,
+                                            DlqFailureHandler dlqFailureHandler,
+                                            String defaultNamespace) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
         this.consumerFactory = Objects.requireNonNull(consumerFactory, "consumerFactory");
         this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
         this.retryPolicy = Objects.requireNonNull(retryPolicy, "retryPolicy");
+        this.dlqFailureHandler = Objects.requireNonNull(dlqFailureHandler, "dlqFailureHandler");
         this.defaultNamespace = defaultNamespace == null ? "" : defaultNamespace;
-        // 拦截器链创建一次，由容器字段与 RetryAndDlqHandler 共享同一实例
         DefaultConsumerInterceptorChain chain = new DefaultConsumerInterceptorChain();
         this.interceptorChain = chain;
         this.shardLockManager = new RedissonOrderlyShardLockManager(redisson);
-        this.retryDlqHandler = new DefaultRetryAndDlqHandler(redisson, messageConverter, retryPolicy, chain);
+        this.sharedRetryDlqHandler = new DefaultRetryAndDlqHandler(
+            redisson, messageConverter, retryPolicy, chain, dlqFailureHandler);
+        this.perConsumerEnabled = true;
     }
 
     /**
-     * 构造容器并注入自定义策略实现（依赖接口而非实现）。
+     * 构造容器并注入自定义策略实现（依赖接口而非实现，per-consumer 关闭，使用传入的共享 handler）。
      *
-     * <p>允许调用方提供自定义的拦截器链、ACK/重试/DLQ 路由处理器、顺序消费分片锁管理器，
-     * 三个策略均面向 core 模块接口编程，便于扩展与替换。
+     * <p>适用于需要完全自定义 ACK/重试/DLQ 路由的高级场景。此时 per-consumer 注解策略实例化关闭，
+     * 所有消费者共用传入的 {@code retryDlqHandler}。
      *
      * @param redisson Redisson 客户端
      * @param consumerFactory 消费者工厂
-     * @param messageConverter 消息转换器
-     * @param retryPolicy 重试策略
-     * @param defaultNamespace 默认命名空间（可为空字符串）
+     * @param messageConverter 全局消息转换器
+     * @param retryPolicy 全局重试策略（回退）
+     * @param dlqFailureHandler 全局死信失败处理器（回退）
+     * @param defaultNamespace 默认命名空间
      * @param interceptorChain 消费者拦截器链
-     * @param retryDlqHandler ACK/重试/DLQ 路由处理器
+     * @param retryDlqHandler 共享 ACK/重试/DLQ 路由处理器
      * @param shardLockManager 顺序消费分片锁管理器
      */
     public DefaultStreamMQListenerContainer(RedissonClient redisson,
                                             StreamMQListenerFactory consumerFactory,
                                             MessageConverter messageConverter,
                                             RetryPolicy retryPolicy,
+                                            DlqFailureHandler dlqFailureHandler,
                                             String defaultNamespace,
                                             ConsumerInterceptorChain interceptorChain,
                                             RetryAndDlqHandler retryDlqHandler,
@@ -154,10 +196,12 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         this.consumerFactory = Objects.requireNonNull(consumerFactory, "consumerFactory");
         this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
         this.retryPolicy = Objects.requireNonNull(retryPolicy, "retryPolicy");
+        this.dlqFailureHandler = Objects.requireNonNull(dlqFailureHandler, "dlqFailureHandler");
         this.defaultNamespace = defaultNamespace == null ? "" : defaultNamespace;
         this.interceptorChain = Objects.requireNonNull(interceptorChain, "interceptorChain");
-        this.retryDlqHandler = Objects.requireNonNull(retryDlqHandler, "retryDlqHandler");
+        this.sharedRetryDlqHandler = Objects.requireNonNull(retryDlqHandler, "retryDlqHandler");
         this.shardLockManager = Objects.requireNonNull(shardLockManager, "shardLockManager");
+        this.perConsumerEnabled = false;
     }
 
     // ===================== 消费者拦截器 =====================
@@ -196,7 +240,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .topic(annotation.topic())
             .group(effectiveGroup)
             .consumeMode(annotation.consumeMode())
-            .ackMode(annotation.acknowledgeMode())
             .maxReconsumeTimes(annotation.maxReconsumeTimes())
             .shardCount(0)
             .consumeTimeoutMillis(annotation.consumeTimeout())
@@ -214,19 +257,18 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .enableMsgTrace(annotation.enableMsgTrace())
             .dlqMode(dlqMode)
             .targetBodyType(bodyType)
-            .nackRetryMode(annotation.nackRetryMode())
-            .fastRetryCount(annotation.fastRetryCount())
-            .fallbackToRetryZset(annotation.fallbackToRetryZset())
+            .dlqFailureHandler(annotation.dlqFailureHandler())
             .namespace(annotation.namespace())
             .build();
         reg.resolveNamespace(defaultNamespace);
+        resolvePerConsumerSpi(reg);
         registrations.put(reg.key(), reg);
         if (dlqMode) {
-            LOG.info("Registered StreamMQ DLQ Consumer: topic={}, group={}, ackMode={}, bodyType={}",
-                annotation.topic(), effectiveGroup, annotation.acknowledgeMode(), bodyType);
+            LOG.info("Registered StreamMQ DLQ Consumer: topic={}, group={}, bodyType={}",
+                annotation.topic(), effectiveGroup, bodyType);
         } else {
-            LOG.info("Registered StreamMQ Consumer: topic={}, group={}, ackMode={}, bodyType={}",
-                annotation.topic(), effectiveGroup, annotation.acknowledgeMode(), bodyType);
+            LOG.info("Registered StreamMQ Consumer: topic={}, group={}, bodyType={}",
+                annotation.topic(), effectiveGroup, bodyType);
         }
     }
 
@@ -246,7 +288,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .topic(annotation.topic())
             .group(annotation.consumerGroup())
             .consumeMode(annotation.consumeMode())
-            .ackMode(annotation.acknowledgeMode())
             .maxReconsumeTimes(annotation.maxReconsumeTimes())
             .shardCount(shardCount)
             .consumeTimeoutMillis(annotation.consumeTimeout())
@@ -264,16 +305,88 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .enableMsgTrace(annotation.enableMsgTrace())
             .dlqMode(false)
             .targetBodyType(bodyType)
-            .nackRetryMode(annotation.nackRetryMode())
-            .fastRetryCount(annotation.fastRetryCount())
-            .fallbackToRetryZset(annotation.fallbackToRetryZset())
+            .dlqFailureHandler(annotation.dlqFailureHandler())
             .namespace(annotation.namespace())
             .build();
         reg.resolveNamespace(defaultNamespace);
+        resolvePerConsumerSpi(reg);
         registrations.put(reg.key(), reg);
-        LOG.info("Registered StreamMQ Orderly Consumer: topic={}, group={}, shardCount={}, ackMode={}, bodyType={}",
-            annotation.topic(), annotation.consumerGroup(), annotation.shardCount(),
-            annotation.acknowledgeMode(), bodyType);
+        LOG.info("Registered StreamMQ Orderly Consumer: topic={}, group={}, shardCount={}, bodyType={}",
+            annotation.topic(), annotation.consumerGroup(), annotation.shardCount(), bodyType);
+    }
+
+    /**
+     * 按注解 per-consumer 实例化 {@link RetryPolicy} / {@link DlqFailureHandler} /
+     * {@link MessageConverter} / {@link MessageSerializer}，并创建 per-consumer
+     * {@link DefaultRetryAndDlqHandler}，缓存到 {@link #perConsumerHandlers} 与
+     * {@link #perConsumerConverters}。
+     *
+     * <p>注解以 SPI 接口本身（如 {@code RetryPolicy.class}）作为"使用全局"的 marker；
+     * marker 时回退到容器全局实例，否则以无参构造器实例化自定义实现。
+     *
+     * @param reg Listener 注册信息
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private void resolvePerConsumerSpi(ListenerRegistration<?> reg) {
+        if (!perConsumerEnabled) {
+            return;
+        }
+        // 1. per-consumer 消息转换器（含 per-consumer 序列化器）
+        MessageConverter converter = resolveConverter(reg);
+        perConsumerConverters.put(reg.key(), converter);
+
+        // 2. per-consumer 重试策略
+        RetryPolicy policy = SpiResolver.resolveOrInstantiate(
+            (Class) reg.getRetryPolicy(), RetryPolicy.class, this.retryPolicy);
+
+        // 3. per-consumer 死信失败处理器
+        DlqFailureHandler dlqHandler = SpiResolver.resolveOrInstantiate(
+            reg.getDlqFailureHandler(), DlqFailureHandler.class, this.dlqFailureHandler);
+
+        // 4. per-consumer 路由处理器
+        RetryAndDlqHandler handler = new DefaultRetryAndDlqHandler(
+            redisson, converter, policy, interceptorChain, dlqHandler);
+        perConsumerHandlers.put(reg.key(), handler);
+
+        // 5. per-consumer 重平衡策略（实例化校验，运行期 Rebalance 模块启用后使用）
+        Class<? extends RebalanceStrategy> rebalanceClass = reg.getRebalanceStrategy();
+        if (rebalanceClass != null && rebalanceClass != RebalanceStrategy.class) {
+            try {
+                SpiResolver.resolveOrInstantiate((Class) rebalanceClass, RebalanceStrategy.class, null);
+            } catch (RuntimeException ex) {
+                LOG.warn("Failed to pre-instantiate rebalanceStrategy for {} ({}): {}",
+                    reg.key(), rebalanceClass.getName(), ex.getMessage());
+            }
+        }
+        LOG.debug("Resolved per-consumer SPI: key={}, retryPolicy={}, converter={}, dlqFailureHandler={}",
+            reg.key(), policy.name(), converter.getClass().getSimpleName(), dlqHandler.name());
+    }
+
+    /**
+     * 解析 per-consumer 消息转换器：
+     * <ul>
+     *   <li>注解指定自定义 {@code messageConverter} 类 → 无参实例化</li>
+     *   <li>注解指定自定义 {@code serializer} 类 → 实例化后包装为 {@link DefaultMessageConverter}</li>
+     *   <li>均为 marker → 回退全局转换器</li>
+     * </ul>
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private MessageConverter resolveConverter(ListenerRegistration<?> reg) {
+        Class<? extends MessageConverter> converterClass = reg.getMessageConverter();
+        Class<? extends MessageSerializer> serializerClass = reg.getSerializer();
+        if (converterClass != null && converterClass != MessageConverter.class) {
+            return SpiResolver.resolveOrInstantiate((Class) converterClass, MessageConverter.class, this.messageConverter);
+        }
+        if (serializerClass != null && serializerClass != MessageSerializer.class) {
+            try {
+                MessageSerializer<?> serializer = serializerClass.getDeclaredConstructor().newInstance();
+                return new DefaultMessageConverter(serializer);
+            } catch (ReflectiveOperationException e) {
+                throw new IllegalArgumentException("Failed to instantiate serializer " + serializerClass.getName()
+                    + " (requires public no-arg constructor)", e);
+            }
+        }
+        return this.messageConverter;
     }
 
     @Override
@@ -434,74 +547,58 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .namespace(reg.getNamespace())
             .dlqMode(reg.isDlqMode())
             .targetBodyType(reg.getTargetBodyType())
+            .converter(perConsumerEnabled ? perConsumerConverters.get(reg.key()) : null)
             .build();
         return consumerFactory.createListener(config);
     }
 
+    /**
+     * 处理单条消息：以 {@code onMessage} 返回值为唯一标准路由，无 MANUAL/AUTO 分支与安全网兜底，
+     * 避免手动 ACK 与返回值双模式冲突。
+     */
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void handleMessage(Message<?> message, ListenerRegistration reg, StreamMQListener listener) {
-        DefaultConsumeContextConsume ctx = new DefaultConsumeContextConsume(message, reg, listener, retryDlqHandler, redisson);
+        ConsumeContext ctx = new DefaultConsumeContextConsume(message, reg);
         ConsumerMdcTrace.inject(message, reg);
         ConsumeAction finalAction = ConsumeAction.RECONSUME_LATER;
+        RetryAndDlqHandler handler = perConsumerEnabled
+            ? perConsumerHandlers.get(reg.key()) : sharedRetryDlqHandler;
         try {
             if (!interceptorChain.applyBefore(message)) {
                 finalAction = ConsumeAction.SUCCESS;
-                retryDlqHandler.handleAction(ConsumeAction.SUCCESS, message, reg, listener);
+                handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
                 return;
             }
             try {
                 if (reg.getType() == ListenerType.ORDERLY) {
                     StreamMessageOrderlyConsumer orderly = (StreamMessageOrderlyConsumer) reg.getConsumer();
-                    OrderlyAction orderlyAction = shardLockManager.consumeWithShardLock(message, reg, ctx, orderly);
-                    if (reg.getAckMode() == AcknowledgeMode.MANUAL) {
-                        // MANUAL 模式：忽略 onMessage 返回值，通过 context.acknowledge() 控制
-                        if (ctx.isAcked()) {
-                            retryDlqHandler.handleAction(ConsumeAction.SUCCESS, message, reg, listener);
-                            finalAction = ConsumeAction.SUCCESS;
-                        } else {
-                            LOG.debug("Orderly MANUAL consumer exited without acknowledge, message stays in PEL: messageId={}",
-                                message.getMessageId());
-                            finalAction = ConsumeAction.RECONSUME_LATER;
-                        }
+                    OrderlyAction orderlyAction = shardLockManager.consumeWithShardLock(
+                        message, reg, (ConsumeOrderlyContext) ctx, orderly);
+                    if (orderlyAction == OrderlyAction.SUCCESS) {
+                        handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
+                        finalAction = ConsumeAction.SUCCESS;
                     } else {
-                        // AUTO 模式：根据 OrderlyAction 决定
-                        if (orderlyAction == OrderlyAction.SUCCESS) {
-                            retryDlqHandler.handleAction(ConsumeAction.SUCCESS, message, reg, listener);
-                            finalAction = ConsumeAction.SUCCESS;
-                        } else {
-                            // SUSPEND_CURRENT_QUEUE_A_MOMENT：不 ACK，消息留在 PEL 等待 XAUTOCLAIM
-                            LOG.debug("Suspend current shard (messageId={}): message stays in PEL",
-                                message.getMessageId());
-                            finalAction = ConsumeAction.RECONSUME_LATER;
-                        }
+                        // SUSPEND_CURRENT_QUEUE_A_MOMENT：不 ACK，消息留在 PEL 等待重新消费
+                        LOG.debug("Suspend current shard (messageId={}): message stays in PEL",
+                            message.getMessageId());
+                        finalAction = ConsumeAction.RECONSUME_LATER;
                     }
                 } else {
-                    // AUTO_ACK（并发消费）
+                    // 并发消费：以返回值为唯一标准
                     StreamMessageConcurrentlyConsumer consumer = (StreamMessageConcurrentlyConsumer) reg.getConsumer();
                     ConsumeAction action = consumer.onMessage(message, ctx);
-                    if (reg.getAckMode() == AcknowledgeMode.MANUAL) {
-                        // MANUAL 模式：忽略 onMessage 返回值，通过 context.acknowledge() 控制
-                        if (ctx.isAcked()) {
-                            retryDlqHandler.handleAction(ConsumeAction.SUCCESS, message, reg, listener);
-                            finalAction = ConsumeAction.SUCCESS;
-                        } else {
-                            LOG.debug("Concurrent MANUAL consumer exited without acknowledge, message will retry: messageId={}",
-                                message.getMessageId());
-                            retryDlqHandler.handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener);
-                            finalAction = ConsumeAction.RECONSUME_LATER;
-                        }
-                    } else {
-                        // AUTO 模式：根据 ConsumeAction 决定
-                        retryDlqHandler.handleAction(action, message, reg, listener);
-                        finalAction = action;
+                    if (action == null) {
+                        action = ConsumeAction.RECONSUME_LATER;
                     }
+                    handler.handleAction(action, message, reg, listener, null);
+                    finalAction = action;
                 }
             } catch (Exception ex) {
                 LOG.warn("Listener onMessage threw exception (topic={}, group={}, messageId={}): {}",
                     reg.getTopic(), reg.getGroup(), message.getMessageId(), ex.getMessage(), ex);
                 interceptorChain.notifyException(message, ex, InvokeTiming.EXECUTING);
                 finalAction = ConsumeAction.RECONSUME_LATER;
-                retryDlqHandler.handleAction(finalAction, message, reg, listener);
+                handler.handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener, ex);
             }
         } finally {
             interceptorChain.applyAfter(message, finalAction);

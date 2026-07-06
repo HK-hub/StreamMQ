@@ -86,7 +86,6 @@ class OrderlyMessageIT extends AbstractRedisIT {
                 case "consumerGroup" -> group;
                 case "consumeMode" -> ConsumeMode.CLUSTERING;
                 case "messageModel" -> MessageModel.ORDERLY;
-                case "acknowledgeMode" -> AcknowledgeMode.AUTO;
                 case "maxReconsumeTimes" -> maxReconsumeTime;
                 case "consumeThreadMin" -> 1;
                 case "consumeThreadMax" -> 1;

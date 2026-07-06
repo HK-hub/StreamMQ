@@ -1,11 +1,10 @@
 package io.github.streammq.core.listener;
 
 import io.github.streammq.core.consumer.StreamMessageConsumer;
-import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.ConsumeMode;
-import io.github.streammq.core.enums.NackRetryMode;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.serializer.MessageSerializer;
+import io.github.streammq.core.policy.DlqFailureHandler;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
 
@@ -35,8 +34,6 @@ public interface ListenerRegistration<T> {
     String getGroup();
 
     ConsumeMode getConsumeMode();
-
-    AcknowledgeMode getAckMode();
 
     int getMaxReconsumeTimes();
 
@@ -72,11 +69,7 @@ public interface ListenerRegistration<T> {
 
     Class<?> getTargetBodyType();
 
-    NackRetryMode getNackRetryMode();
-
-    int getFastRetryCount();
-
-    boolean isFallbackToRetryZset();
+    Class<? extends DlqFailureHandler> getDlqFailureHandler();
 
     String getNamespace();
 
@@ -92,7 +85,6 @@ public interface ListenerRegistration<T> {
         private String topic;
         private String group;
         private ConsumeMode consumeMode;
-        private AcknowledgeMode ackMode;
         private int maxReconsumeTimes;
         private int shardCount;
         private long consumeTimeoutMillis;
@@ -110,9 +102,7 @@ public interface ListenerRegistration<T> {
         private boolean enableMsgTrace;
         private boolean dlqMode;
         private Class<?> targetBodyType;
-        private NackRetryMode nackRetryMode;
-        private int fastRetryCount;
-        private boolean fallbackToRetryZset;
+        private Class<? extends DlqFailureHandler> dlqFailureHandler;
         private String namespace;
 
         public Builder<T> type(ListenerType type) {
@@ -137,11 +127,6 @@ public interface ListenerRegistration<T> {
 
         public Builder<T> consumeMode(ConsumeMode consumeMode) {
             this.consumeMode = consumeMode;
-            return this;
-        }
-
-        public Builder<T> ackMode(AcknowledgeMode ackMode) {
-            this.ackMode = ackMode;
             return this;
         }
 
@@ -230,18 +215,8 @@ public interface ListenerRegistration<T> {
             return this;
         }
 
-        public Builder<T> nackRetryMode(NackRetryMode nackRetryMode) {
-            this.nackRetryMode = nackRetryMode;
-            return this;
-        }
-
-        public Builder<T> fastRetryCount(int fastRetryCount) {
-            this.fastRetryCount = fastRetryCount;
-            return this;
-        }
-
-        public Builder<T> fallbackToRetryZset(boolean fallbackToRetryZset) {
-            this.fallbackToRetryZset = fallbackToRetryZset;
+        public Builder<T> dlqFailureHandler(Class<? extends DlqFailureHandler> dlqFailureHandler) {
+            this.dlqFailureHandler = dlqFailureHandler;
             return this;
         }
 
@@ -251,11 +226,11 @@ public interface ListenerRegistration<T> {
         }
 
         public ListenerRegistration<T> build() {
-            return new DefaultListenerRegistration<>(type, consumer, topic, group, consumeMode, ackMode,
-                maxReconsumeTimes, shardCount, consumeTimeoutMillis, shardLocks, pullBatchSize,
+            return new DefaultListenerRegistration<>(type, consumer, topic, group, consumeMode, maxReconsumeTimes,
+                shardCount, consumeTimeoutMillis, shardLocks, pullBatchSize,
                 pullBlockTimeoutMillis, pullIntervalMillis, selectorExpression, serializer, retryPolicy,
                 messageConverter, rebalanceStrategy, suspendCurrentQueueTimeMillis, streamMaxLen,
-                enableMsgTrace, dlqMode, targetBodyType, nackRetryMode, fastRetryCount, fallbackToRetryZset, namespace);
+                enableMsgTrace, dlqMode, targetBodyType, dlqFailureHandler, namespace);
         }
     }
 

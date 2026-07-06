@@ -1,7 +1,6 @@
 package io.github.streammq.spring.boot.properties;
 
 import io.github.streammq.core.StreamMQConstants;
-import io.github.streammq.core.enums.NackRetryMode;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -64,6 +63,9 @@ public class StreamMQProperties {
     /** 延时消息调度器配置 */
     private Delay delay = new Delay();
 
+    /** 死信队列配置 */
+    private Dlq dlq = new Dlq();
+
     /** 事务消息配置 */
     private Transaction transaction = new Transaction();
 
@@ -124,12 +126,15 @@ public class StreamMQProperties {
         private long brokerErrorBackoffMillis = StreamMQConstants.DEFAULT_BROKER_ERROR_BACKOFF_MS;
         /** 最大拉取批量上界 */
         private int maxBatchSizeLimit = StreamMQConstants.MAX_BATCH_SIZE_LIMIT;
-        /** nack 之后的默认重试模式 */
-        private NackRetryMode nackRetryMode = NackRetryMode.RETRY_ZSET;
-        /** STREAM_AUTO 模式下的默认快速重投次数 */
-        private int fastRetryCount = 3;
-        /** STREAM_AUTO 模式下，超过 fastRetryCount 后是否默认转入 RETRY_ZSET */
-        private boolean fallbackToRetryZset = true;
+    }
+
+    /**
+     * 死信队列配置。
+     */
+    @Data
+    public static class Dlq {
+        /** 死信消费失败处理器实现类全限定名（默认 LogAndDropDlqFailureHandler，仅记录 ERROR 日志后丢弃） */
+        private String failureHandler = StreamMQConstants.DEFAULT_DLQ_FAILURE_HANDLER;
     }
 
     /**

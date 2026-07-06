@@ -3,6 +3,7 @@ package io.github.streammq.spring.boot.autoconfigure;
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.policy.DlqFailureHandler;
 import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import org.redisson.api.RedissonClient;
@@ -51,14 +52,16 @@ public class StreamMQListenerContainerAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(DefaultStreamMQListenerContainer.class)
     public DefaultStreamMQListenerContainer streamMQListenerContainer(RedissonClient redisson,
-                                                                      StreamMQListenerFactory consumerFactory,
-                                                                      MessageConverter messageConverter,
-                                                                      RetryPolicy retryPolicy,
-                                                                      StreamMQProperties properties) {
+                                                                       StreamMQListenerFactory consumerFactory,
+                                                                       MessageConverter messageConverter,
+                                                                       RetryPolicy retryPolicy,
+                                                                       DlqFailureHandler dlqFailureHandler,
+                                                                       StreamMQProperties properties) {
         String namespace = properties.getNamespace();
-        LOG.info("Creating DefaultStreamMQListenerContainer: namespace={}", namespace);
+        LOG.info("Creating DefaultStreamMQListenerContainer: namespace={}, dlqFailureHandler={}",
+            namespace, dlqFailureHandler.name());
         return new DefaultStreamMQListenerContainer(
-            redisson, consumerFactory, messageConverter, retryPolicy, namespace);
+            redisson, consumerFactory, messageConverter, retryPolicy, dlqFailureHandler, namespace);
     }
 
     /**

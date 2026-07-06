@@ -1,27 +1,22 @@
 package io.github.streammq.adapter.redisson.container;
 
-import io.github.streammq.core.consumer.Acknowledgment;
 import io.github.streammq.core.consumer.ConsumeOrderlyContext;
-import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.listener.ListenerRegistration;
-import io.github.streammq.core.listener.StreamMQListener;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
-import io.github.streammq.core.policy.RetryAndDlqHandler;
 import lombok.RequiredArgsConstructor;
-import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.Duration;
 import java.util.Map;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * 默认 {@link ConsumeOrderlyContext} 实现，同时兼容普通消费场景。
  *
  * <p>由容器在 {@code handleMessage} 中创建，传给 Consumer 的 {@code onMessage} 方法。
- * 封装当前消息、注册信息、消费者实例，提供消息元数据访问与手动 ACK 能力。
+ * 封装当前消息与注册信息，提供消息元数据访问与顺序消费分片信息。
+ *
+ * <p>消费结果由 {@code onMessage} 返回值表达，本上下文不再提供手动 ACK/nack/defer 调用。
  *
  * <p>线程安全：每个 {@code handleMessage} 调用创建独立实例，无需考虑并发。
  *
@@ -38,29 +33,6 @@ public class DefaultConsumeContextConsume implements ConsumeOrderlyContext {
 
     private final Message<?> message;
     private final ListenerRegistration<?> registration;
-    private final StreamMQListener listener;
-    private final RetryAndDlqHandler retryDlqHandler;
-    private final RedissonClient redisson;
-    private final AtomicBoolean acked = new AtomicBoolean(false);
-
-    /**
-     * 标记为已 ACK（由 {@link DefaultAcknowledgment#acknowledge()} 回调，
-     * 或 {@link io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer#consumeMessage} 在 AUTO 模式 SUCCESS 时调用）。
-     */
-    @Override
-    public void markAcked() {
-        acked.set(true);
-    }
-
-    /**
-     * 返回是否已 ACK。
-     *
-     * @return true 如果已通过 {@link Acknowledgment#acknowledge()} 或 {@link #markAcked()} 确认
-     */
-    @Override
-    public boolean isAcked() {
-        return acked.get();
-    }
 
     @Override
     public String topic() {
@@ -100,21 +72,6 @@ public class DefaultConsumeContextConsume implements ConsumeOrderlyContext {
     @Override
     public String ext(String key) {
         return message.getProperties().get(key);
-    }
-
-    @Override
-    public AcknowledgeMode ackMode() {
-        return registration.getAckMode();
-    }
-
-    @Override
-    public Acknowledgment acknowledge() {
-        return new DefaultAcknowledgment(message, listener, this, registration, retryDlqHandler, redisson);
-    }
-
-    @Override
-    public void suspend(Duration duration) {
-        LOG.debug("Suspend requested (duration={}ms, messageId={})", duration.toMillis(), message.getMessageId());
     }
 
     @Override

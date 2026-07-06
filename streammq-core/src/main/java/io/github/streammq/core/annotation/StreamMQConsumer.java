@@ -1,13 +1,12 @@
 package io.github.streammq.core.annotation;
 
 import io.github.streammq.core.StreamMQConstants;
-import io.github.streammq.core.enums.AcknowledgeMode;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
-import io.github.streammq.core.enums.NackRetryMode;
 import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.serializer.MessageSerializer;
+import io.github.streammq.core.policy.DlqFailureHandler;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
 
@@ -100,13 +99,6 @@ public @interface StreamMQConsumer {
      * @return 消息模型
      */
     MessageModel messageModel() default MessageModel.CONCURRENT;
-
-    /**
-     * ACK 模式，默认 {@link AcknowledgeMode#AUTO}。
-     *
-     * @return ACK 模式
-     */
-    AcknowledgeMode acknowledgeMode() default AcknowledgeMode.AUTO;
 
     /**
      * 最小消费线程数，默认 1。
@@ -247,30 +239,14 @@ public @interface StreamMQConsumer {
     int shardCount() default StreamMQConstants.DEFAULT_SHARD_COUNT;
 
     /**
-     * nack 之后的重试模式，默认 {@link NackRetryMode#RETRY_ZSET}。
+     * 每个消费者专属死信消费失败处理器（默认 {@link DlqFailureHandler} 表示使用全局策略）。
      *
-     * <p>RETRY_ZSET：主动写入 retry ZSet + ACK（对齐 RocketMQ）
-     * <p>STREAM_AUTO：留 PEL 依赖 XAUTOCLAIM，超过 fastRetryCount 后可选转入 RETRY_ZSET
+     * <p>仅对 {@link #dlqMode()} 为 true 的消费者生效。当死信消息消费也失败时，
+     * 框架调用此处理器执行告警/持久化等逻辑，随后 ACK 丢弃，避免死信无限循环。
      *
-     * @return nack 重试模式
+     * @return 死信失败处理器类
      */
-    NackRetryMode nackRetryMode() default NackRetryMode.RETRY_ZSET;
-
-    /**
-     * STREAM_AUTO 模式下的快速重投次数（默认 3）。
-     * 超过此次数后，根据 fallbackToRetryZset 决定是否转入 RETRY_ZSET。
-     *
-     * @return 快速重投次数
-     */
-    int fastRetryCount() default 3;
-
-    /**
-     * STREAM_AUTO 模式下，超过 fastRetryCount 后是否转入 RETRY_ZSET（默认 true）。
-     * false 则继续留 PEL 直到 maxReconsumeTimes 后进 DLQ。
-     *
-     * @return true 转入 RETRY_ZSET，false 继续留 PEL
-     */
-    boolean fallbackToRetryZset() default true;
+    Class<? extends DlqFailureHandler> dlqFailureHandler() default DlqFailureHandler.class;
 
     /**
      * 是否为 DLQ（死信队列）消费者，默认 false。

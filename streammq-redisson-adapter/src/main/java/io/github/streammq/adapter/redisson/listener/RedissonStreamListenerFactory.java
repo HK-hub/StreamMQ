@@ -75,7 +75,7 @@ public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
             .topic(topic)
             .group(group)
             .consumerName(consumerName)
-            .converter(converter)
+            .converter(config.getConverter() != null ? config.getConverter() : converter)
             .dlqMode(config.isDlqMode())
             .targetBodyType(config.getTargetBodyType())
             .build();

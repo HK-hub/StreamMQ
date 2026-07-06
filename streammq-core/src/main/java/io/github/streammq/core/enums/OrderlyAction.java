@@ -12,8 +12,7 @@ package io.github.streammq.core.enums;
  * <p>当 Listener 抛出 {@link RuntimeException} 时，框架将其视为
  * {@link #SUSPEND_CURRENT_QUEUE_A_MOMENT}，避免顺序消息丢失。
  *
- * <p>在 {@code AcknowledgeMode.MANUAL} 模式下，本返回值被忽略，
- * 由 Consumer 通过 {@code context.acknowledge()} 显式控制 ACK。
+ * <p>顺序消费以返回值为唯一标准（与并发消费一致），框架不提供手动 ACK 调用。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
