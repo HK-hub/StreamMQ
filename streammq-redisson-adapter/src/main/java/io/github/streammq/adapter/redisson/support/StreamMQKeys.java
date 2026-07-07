@@ -163,10 +163,28 @@ public final class StreamMQKeys {
 
     /**
      * 重试队列 ZSet Key：{@code streammq:{ns}:retry:{topic}:{group}}。
+     * 用于调度延迟重试，score=nextRetryAt(ms)，member=msgId。
      */
     public static String retryZSet(String namespace, String topic, String group) {
         return prefix(namespace) + SEP + TYPE_RETRY + SEP + requireNonEmpty(topic, "topic")
             + SEP + requireNonEmpty(group, "group");
+    }
+
+    /**
+     * 重试消息 Stream Key：{@code streammq:{ns}:retry:msg:{topic}:{group}}（对齐 RocketMQ %RETRY%{group}%）。
+     *
+     * <p>并发消费失败的消息经 RetryScheduler 延迟后 XADD 到此 Stream（非原 topic Stream），
+     * 消费者同时订阅原 Stream 和此 retry Stream，实现 retry 与新消息隔离。
+     * 消费组与原 Stream 相同，retryTimes 字段递增标识重试次数。
+     *
+     * @param namespace 命名空间
+     * @param topic 原始主题
+     * @param group 消费者组名
+     * @return retry Stream Key
+     */
+    public static String retryStream(String namespace, String topic, String group) {
+        return prefix(namespace) + SEP + TYPE_RETRY + SEP + TYPE_MSG + SEP
+            + requireNonEmpty(topic, "topic") + SEP + requireNonEmpty(group, "group");
     }
 
     /**

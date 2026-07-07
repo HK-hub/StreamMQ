@@ -60,6 +60,8 @@ public class RedissonStreamListener implements StreamMQListener {
     private final @NonNull MessageConverter converter;
     /** DLQ 模式标志：true=从 DLQ Stream 消费死信消息 */
     private final boolean dlqMode;
+    /** Retry 模式标志：true=从 retry Stream 消费重试消息（对齐 RocketMQ %RETRY%{group}%） */
+    private final boolean retryMode;
     /**
      * 目标 body 类型（跨平台反序列化回退类型）。
      *
@@ -87,7 +89,7 @@ public class RedissonStreamListener implements StreamMQListener {
      */
     public RedissonStreamListener(@NonNull RedissonClient redisson, String namespace, @NonNull String topic,
                                    @NonNull String group, @NonNull String consumerName, @NonNull MessageConverter converter) {
-        this(redisson, namespace, topic, group, consumerName, converter, false, null);
+        this(redisson, namespace, topic, group, consumerName, converter, false, false, null);
     }
 
     /**
@@ -140,7 +142,7 @@ public class RedissonStreamListener implements StreamMQListener {
     @Builder
     public RedissonStreamListener(@NonNull RedissonClient redisson, String namespace, @NonNull String topic,
                                    @NonNull String group, @NonNull String consumerName, @NonNull MessageConverter converter,
-                                   boolean dlqMode, Class<?> targetBodyType) {
+                                   boolean dlqMode, boolean retryMode, Class<?> targetBodyType) {
         this.redisson = redisson;
         this.namespace = namespace == null ? "" : namespace;
         this.topic = topic;
@@ -148,6 +150,7 @@ public class RedissonStreamListener implements StreamMQListener {
         this.consumerName = consumerName;
         this.converter = converter;
         this.dlqMode = dlqMode;
+        this.retryMode = retryMode;
         this.targetBodyType = targetBodyType;
     }
 
@@ -318,9 +321,14 @@ public class RedissonStreamListener implements StreamMQListener {
     }
 
     private RStream<String, String> getStream() {
-        String streamKey = dlqMode
-            ? StreamMQKeys.dlqStream(namespace, group)
-            : StreamMQKeys.topicStream(namespace, topic);
+        String streamKey;
+        if (dlqMode) {
+            streamKey = StreamMQKeys.dlqStream(namespace, group);
+        } else if (retryMode) {
+            streamKey = StreamMQKeys.retryStream(namespace, topic, group);
+        } else {
+            streamKey = StreamMQKeys.topicStream(namespace, topic);
+        }
         return redisson.getStream(streamKey);
     }
 

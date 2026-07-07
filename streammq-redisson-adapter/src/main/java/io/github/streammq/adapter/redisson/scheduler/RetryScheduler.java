@@ -178,7 +178,7 @@ public class RetryScheduler implements StreamMQScheduler {
             return;
         }
 
-        String targetStreamKey = StreamMQKeys.topicStream(namespace, target.topic);
+        String targetStreamKey = StreamMQKeys.retryStream(namespace, target.topic, target.group);
         String dlqStreamKey = StreamMQKeys.dlqStream(namespace, target.group);
 
         for (String msgId : expired) {
@@ -227,11 +227,11 @@ public class RetryScheduler implements StreamMQScheduler {
                 LOG.info("Message entered DLQ: msgId={}, topic={}, group={}, retryCount={}",
                     msgId, target.topic, target.group, retryCount);
             } else {
-                // 转投到目标 Stream
+                // 转投到 retry Stream（非原 Stream，对齐 RocketMQ %RETRY%{group}%）
                 RStream<String, String> targetStream = redisson.getStream(targetStreamKey);
                 targetStream.add(StreamAddArgs.entries(fields));
                 if (LOG.isDebugEnabled()) {
-                    LOG.debug("Retry message transferred: msgId={}, topic={}, group={}, retryCount={}",
+                    LOG.debug("Retry message transferred to retry stream: msgId={}, topic={}, group={}, retryCount={}",
                         msgId, target.topic, target.group, retryCount);
                 }
             }

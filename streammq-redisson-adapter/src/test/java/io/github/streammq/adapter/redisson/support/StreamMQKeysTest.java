@@ -99,6 +99,20 @@ class StreamMQKeysTest {
     }
 
     @Test
+    @DisplayName("retryStream: 重试消息 Stream Key")
+    void retryStream() {
+        assertThat(StreamMQKeys.retryStream("ns", "topic", "group"))
+            .isEqualTo("streammq:ns:retry:msg:topic:group");
+    }
+
+    @Test
+    @DisplayName("retryStream: 空命名空间省略 ns 段")
+    void retryStreamEmptyNamespace() {
+        assertThat(StreamMQKeys.retryStream("", "topic", "group"))
+            .isEqualTo("streammq:retry:msg:topic:group");
+    }
+
+    @Test
     @DisplayName("retryTransferLock: 重试转移降级锁 Key")
     void retryTransferLock() {
         assertThat(StreamMQKeys.retryTransferLock("ns", "topic", "group"))

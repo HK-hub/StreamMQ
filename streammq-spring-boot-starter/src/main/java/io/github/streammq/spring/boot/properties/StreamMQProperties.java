@@ -154,6 +154,12 @@ public class StreamMQProperties {
         private int batchSize = StreamMQConstants.DEFAULT_BATCH_SIZE;
         /** 自定义重试延时数组（逗号分隔的毫秒值，如 1000,5000,10000） */
         private String delayArray = "";
+        /** retry Stream 最大长度（0=不限制），对齐 RocketMQ retry topic 容量控制 */
+        private int streamMaxLen = StreamMQConstants.DEFAULT_RETRY_STREAM_MAX_LEN;
+        /** PEL 认领扫描间隔（顺序消费专用，默认 5s） */
+        private Duration pelClaimScanInterval = Duration.ofMillis(StreamMQConstants.DEFAULT_PEL_CLAIM_SCAN_INTERVAL_MS);
+        /** PEL 认领空闲阈值（顺序消费专用，默认 30s） */
+        private long pelClaimMinIdleMs = StreamMQConstants.DEFAULT_PEL_CLAIM_MIN_IDLE_MS;
     }
 
     /**

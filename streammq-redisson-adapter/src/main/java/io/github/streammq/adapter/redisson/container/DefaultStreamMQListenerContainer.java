@@ -1,6 +1,7 @@
 package io.github.streammq.adapter.redisson.container;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
+import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.annotation.StreamMQConsumer;
@@ -417,6 +418,26 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             count, registrations.size() - count);
     }
 
+    /**
+     * 将所有已注册的顺序消费 Listener 的 (topic, group, maxReconsumeTimes) 注册到 {@link PelClaimScheduler}。
+     *
+     * <p>仅 ORDERLY 类型消费者需要 PEL 认领（并发消费者的重试走 retry stream）。
+     *
+     * @param scheduler PEL 认领调度器
+     */
+    public void registerPelClaimTargets(PelClaimScheduler scheduler) {
+        Objects.requireNonNull(scheduler, "scheduler");
+        int count = 0;
+        for (ListenerRegistration<?> reg : registrations.values()) {
+            if (reg.getType() == ListenerType.ORDERLY && !reg.isDlqMode()) {
+                scheduler.registerTarget(reg.getTopic(), reg.getGroup(), reg.getMaxReconsumeTimes());
+                count++;
+            }
+        }
+        LOG.info("Registered {} PelClaim targets ({} non-orderly skipped)",
+            count, registrations.size() - count);
+    }
+
     // ===================== 生命周期方法 =====================
 
     @Override
@@ -486,23 +507,32 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     private void doStartListeners() {
         for (ListenerRegistration<?> reg : registrations.values()) {
-            Future<?> future = consumeExecutor.submit(() -> consumeLoop(reg));
-            consumeFutures.put(reg.key(), future);
+            // 并发非 DLQ 消费者：双 listener（original + retry），对齐 RocketMQ 订阅 original + %RETRY%
+            if (reg.getType() == ListenerType.AUTO_ACK && !reg.isDlqMode()) {
+                Future<?> origFuture = consumeExecutor.submit(() -> consumeLoop(reg, false));
+                consumeFutures.put(reg.key(), origFuture);
+                Future<?> retryFuture = consumeExecutor.submit(() -> consumeLoop(reg, true));
+                consumeFutures.put(reg.key() + ":retry", retryFuture);
+            } else {
+                // 顺序消费 / DLQ 消费者：单 listener
+                Future<?> future = consumeExecutor.submit(() -> consumeLoop(reg, false));
+                consumeFutures.put(reg.key(), future);
+            }
         }
     }
 
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private void consumeLoop(ListenerRegistration reg) {
+    private void consumeLoop(ListenerRegistration reg, boolean retryMode) {
         StreamMQListener listener;
         try {
-            listener = createConsumerFor(reg);
+            listener = createConsumerFor(reg, retryMode);
         } catch (RuntimeException ex) {
-            LOG.error("Failed to create consumer for listener (topic={}, group={}): {}, listener will not consume",
-                reg.getTopic(), reg.getGroup(), ex.getMessage(), ex);
+            LOG.error("Failed to create consumer for listener (topic={}, group={}, retryMode={}): {}, listener will not consume",
+                reg.getTopic(), reg.getGroup(), retryMode, ex.getMessage(), ex);
             return;
         }
-        LOG.info("Consume loop started: topic={}, group={}, listener={}",
-            reg.getTopic(), reg.getGroup(), reg.getConsumer().getClass().getSimpleName());
+        LOG.info("Consume loop started: topic={}, group={}, retryMode={}, listener={}",
+            reg.getTopic(), reg.getGroup(), retryMode, reg.getConsumer().getClass().getSimpleName());
         try {
             while (state.get() == ContainerState.RUNNING) {
                 if (paused) {
@@ -535,17 +565,18 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 }
             }
         } finally {
-            LOG.info("Consume loop exited: topic={}, group={}", reg.getTopic(), reg.getGroup());
+            LOG.info("Consume loop exited: topic={}, group={}, retryMode={}", reg.getTopic(), reg.getGroup(), retryMode);
         }
     }
 
-    private StreamMQListener createConsumerFor(ListenerRegistration<?> reg) {
+    private StreamMQListener createConsumerFor(ListenerRegistration<?> reg, boolean retryMode) {
         ListenerConfig config = ListenerConfig.builder()
             .topic(reg.getTopic())
             .consumerGroup(reg.getGroup())
             .consumerName(reg.getGroup() + "-" + UUID.randomUUID().toString().substring(0, 8))
             .namespace(reg.getNamespace())
             .dlqMode(reg.isDlqMode())
+            .retryMode(retryMode)
             .targetBodyType(reg.getTargetBodyType())
             .converter(perConsumerEnabled ? perConsumerConverters.get(reg.key()) : null)
             .build();

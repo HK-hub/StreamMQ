@@ -222,6 +222,16 @@ public @interface StreamMQConsumer {
     long suspendCurrentQueueTimeMillis() default StreamMQConstants.DEFAULT_SUSPEND_CURRENT_QUEUE_TIME_MS;
 
     /**
+     * retry Stream 最大长度（0=不限制，per-topic 覆盖全局配置）。
+     *
+     * <p>仅对并发消费生效。retry Stream 是 {@code streammq:{ns}:retry:msg:{topic}:{group}}，
+     * 设置上限可防止重试消息无限堆积。
+     *
+     * @return retry Stream 最大长度
+     */
+    int retryStreamMaxLen() default StreamMQConstants.DEFAULT_RETRY_STREAM_MAX_LEN;
+
+    /**
      * 是否启用消费，默认 true。
      * 设置为 false 时仅注册但不启动 Consumer。
      *

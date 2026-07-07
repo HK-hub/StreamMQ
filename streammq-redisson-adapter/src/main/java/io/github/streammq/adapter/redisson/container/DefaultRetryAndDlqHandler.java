@@ -140,33 +140,17 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
     /**
      * 处理 RECONSUME_LATER：将消息写入 retry ZSet + payload Hash，并 ACK 原消息。
      *
-     * <p>流程：
-     * <ol>
-     *   <li>若 {@link RetryPolicy#shouldStopRetry} 返回 true 或 {@code retryCount >= maxReconsumeTimes}，路由到 DLQ</li>
-     *   <li>否则将 {@link Message} 转换回 Stream Entry 字段</li>
-     *   <li>调用 {@link RetryPolicy#nextRetryDelay} 计算下一次重试延迟</li>
-     *   <li>若延迟为 null（不再重试），路由到 DLQ Stream</li>
-     *   <li>否则写入 payload Hash + retry ZSet，ACK 原消息</li>
-     * </ol>
+     * <p>职责简化：仅计算延迟 + 写调度数据 + ACK。DLQ 判断统一由 {@link RetryScheduler#transferOne}
+     * 在重试到期转投时执行（retryCount >= maxReconsumeTimes → DLQ），避免双重判断。
+     *
+     * <p>唯一例外：{@link RetryPolicy#nextRetryDelay} 返回 null 表示策略明确要求不重试，
+     * 此时直接路由到 DLQ（不经过 RetryScheduler 调度）。
      */
     @Override
     public void handleReconsumeLater(Message<?> message, ListenerRegistration<?> reg,
                                      StreamMQListener listener, MessageId messageId) {
         try {
-            Map<String, String> fields = messageConverter.toStreamFields(message);
             int retryCount = message.getReconsumeTimes();
-            if (retryPolicy.shouldStopRetry(retryCount, message) || retryCount >= reg.getMaxReconsumeTimes()) {
-                LOG.warn("Retry stopped by policy/maxReconsumeTimes, routing to DLQ " +
-                        "(topic={}, group={}, messageId={}, retryCount={}, max={})",
-                    reg.getTopic(), reg.getGroup(), messageId, retryCount, reg.getMaxReconsumeTimes());
-                if (routeToDlq(message, reg, messageId, RetryScheduler.DLQ_REASON_MAX_RETRY)) {
-                    listener.ack(messageId);
-                } else {
-                    LOG.error("DLQ routing failed, message kept in PEL for re-delivery " +
-                        "(topic={}, group={}, messageId={})", reg.getTopic(), reg.getGroup(), messageId);
-                }
-                return;
-            }
             Duration delay = retryPolicy.nextRetryDelay(retryCount, message);
             if (delay == null) {
                 LOG.warn("RetryPolicy returned null delay, routing to DLQ " +
@@ -180,6 +164,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                 }
                 return;
             }
+            Map<String, String> fields = messageConverter.toStreamFields(message);
             scheduleRetry(message, reg, listener, messageId, fields, retryCount, delay);
         } catch (RuntimeException ex) {
             LOG.error("Failed to schedule retry for message (topic={}, group={}, messageId={}): {}",
@@ -190,27 +175,14 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
     /**
      * 处理 defer：将消息写入 retry ZSet + payload Hash（使用指定延迟），并 ACK 原消息。
      *
-     * <p>当重试次数达到 {@link ListenerRegistration#getMaxReconsumeTimes()} 或
-     * {@link RetryPolicy#shouldStopRetry} 返回 true 时路由到 DLQ Stream。
+     * <p>职责简化：仅使用业务指定延迟写调度数据 + ACK。DLQ 判断统一由 {@link RetryScheduler#transferOne}
+     * 在重试到期转投时执行。
      */
     @Override
     public void handleDefer(Message<?> message, ListenerRegistration<?> reg,
                             StreamMQListener listener, MessageId messageId, Duration delay) {
         try {
             int retryCount = message.getReconsumeTimes();
-            if (retryPolicy.shouldStopRetry(retryCount, message) || retryCount >= reg.getMaxReconsumeTimes()) {
-                LOG.warn("Defer stopped by policy/maxReconsumeTimes, routing to DLQ " +
-                        "(topic={}, group={}, messageId={}, retryCount={}, max={})",
-                    reg.getTopic(), reg.getGroup(), messageId, retryCount, reg.getMaxReconsumeTimes());
-                if (routeToDlq(message, reg, messageId, RetryScheduler.DLQ_REASON_MAX_RETRY)) {
-                    listener.ack(messageId);
-                } else {
-                    LOG.error("DLQ routing failed, message kept in PEL for re-delivery " +
-                        "(topic={}, group={}, messageId={})", reg.getTopic(), reg.getGroup(), messageId);
-                }
-                return;
-            }
-
             Map<String, String> fields = messageConverter.toStreamFields(message);
             scheduleRetry(message, reg, listener, messageId, fields, retryCount, delay);
         } catch (RuntimeException ex) {

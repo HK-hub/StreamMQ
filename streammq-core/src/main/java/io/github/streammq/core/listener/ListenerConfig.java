@@ -83,6 +83,16 @@ public class ListenerConfig {
     private final boolean dlqMode = false;
 
     /**
+     * Retry 模式标志（可选，默认 false）。
+     * 设置为 true 时，监听器从 retry Stream 消费重试消息，
+     * Stream Key 使用 {@code streammq:{ns}:retry:msg:{topic}:{consumerGroup}}（对齐 RocketMQ %RETRY%{group}%）。
+     *
+     * @return true 表示 retry 模式
+     */
+    @Builder.Default
+    private final boolean retryMode = false;
+
+    /**
      * 目标 body 类型（跨平台反序列化回退类型）。
      *
      * <p>当 Stream Entry 中不含 {@code bodyType} 字段（发送方非 StreamMQ SDK，如 Go/Python 直接写 Redis Stream），

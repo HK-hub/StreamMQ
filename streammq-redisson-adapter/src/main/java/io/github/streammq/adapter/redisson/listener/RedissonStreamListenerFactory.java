@@ -77,11 +77,12 @@ public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
             .consumerName(consumerName)
             .converter(config.getConverter() != null ? config.getConverter() : converter)
             .dlqMode(config.isDlqMode())
+            .retryMode(config.isRetryMode())
             .targetBodyType(config.getTargetBodyType())
             .build();
         listeners.put(listener, Boolean.TRUE);
-        LOG.debug("Listener created: topic={}, group={}, consumer={}, dlqMode={}",
-            topic, group, consumerName, config.isDlqMode());
+        LOG.debug("Listener created: topic={}, group={}, consumer={}, dlqMode={}, retryMode={}",
+            topic, group, consumerName, config.isDlqMode(), config.isRetryMode());
         return listener;
     }
 
