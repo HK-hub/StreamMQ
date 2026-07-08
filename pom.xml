@@ -17,11 +17,8 @@
     <modules>
         <module>streammq-bom</module>
         <module>streammq-core</module>
-        <module>streammq-redisson-adapter</module>
+        <module>streammq-redisson</module>
         <module>streammq-spring-boot-starter</module>
-        <module>streammq-native</module>
-        <module>streammq-kafka-compat</module>
-        <module>streammq-amqp-compat</module>
         <module>streammq-test</module>
         <module>streammq-samples</module>
     </modules>

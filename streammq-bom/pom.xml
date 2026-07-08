@@ -46,7 +46,7 @@
             </dependency>
             <dependency>
                 <groupId>io.github.streammq</groupId>
-                <artifactId>streammq-redisson-adapter</artifactId>
+                <artifactId>streammq-redisson</artifactId>
                 <version>${streammq.version}</version>
             </dependency>
             <dependency>
