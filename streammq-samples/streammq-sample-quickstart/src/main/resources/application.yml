@@ -4,8 +4,9 @@ spring:
 
 streammq:
   enabled: true
-  namespace: streammq
-  # 完整配置请参考 docs/03-functional-design.md 第 9 章
+  namespace: sample
+  producer:
+    group: default-producer-group
 
 # Redisson 配置（示例用单机），生产环境请使用集群配置
 redisson:

@@ -4,8 +4,14 @@ spring:
 
 streammq:
   enabled: true
-  namespace: streammq
-  # 完整配置请参考 docs/03-functional-design.md 第 9 章
+  namespace: sample
+  producer:
+    group: default-producer-group
+  # 事务消息回查配置
+  transaction:
+    check-interval-ms: 60000      # 回查间隔（毫秒），默认 60s
+    max-check-times: 15           # 最大回查次数
+    batch-size: 32                # 单次扫描批量
 
 # Redisson 配置（示例用单机），生产环境请使用集群配置
 redisson:
