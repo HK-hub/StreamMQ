@@ -11,7 +11,7 @@
         <relativePath>../pom.xml</relativePath>
     </parent>
 
-    <artifactId>streammq-redisson-adapter</artifactId>
+    <artifactId>streammq-redisson</artifactId>
     <name>StreamMQ Redisson Adapter</name>
     <description>StreamMQ Redisson 适配层：基于 RStream/RBatch/RSemaphore/RLock 实现 Core 层接口。</description>
 
