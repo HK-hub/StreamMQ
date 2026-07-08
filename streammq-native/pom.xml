@@ -25,6 +25,12 @@
             <artifactId>streammq-redisson-adapter</artifactId>
         </dependency>
 
+        <!-- Redisson 直接依赖：Native API 公开暴露 RedissonClient 类型 -->
+        <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

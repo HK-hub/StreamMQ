@@ -25,6 +25,18 @@
             <artifactId>streammq-redisson-adapter</artifactId>
         </dependency>
 
+        <!-- Redisson（AmqpConfig 直接引用 RedissonClient） -->
+        <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson</artifactId>
+        </dependency>
+
+        <!-- 日志门面（AmqpChannel 中使用 SLF4J） -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
