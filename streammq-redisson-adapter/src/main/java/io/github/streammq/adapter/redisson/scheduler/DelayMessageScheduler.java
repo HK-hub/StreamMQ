@@ -16,6 +16,7 @@ import java.util.Collection;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -63,6 +64,8 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     private final int batchSize;
     private final ScheduledExecutorService scanExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
+    /** 当前的扫描调度任务，stop 时取消以支持后续 restart */
+    private volatile ScheduledFuture<?> scanFuture;
 
     /**
      * 构造调度器。
@@ -94,26 +97,22 @@ public class DelayMessageScheduler implements StreamMQScheduler {
             LOG.warn("DelayMessageScheduler already started");
             return;
         }
-        scanExecutor.scheduleAtFixedRate(this::scanAllLevels, 0, scanIntervalMs, TimeUnit.MILLISECONDS);
+        scanFuture = scanExecutor.scheduleAtFixedRate(this::scanAllLevels, 0, scanIntervalMs, TimeUnit.MILLISECONDS);
         LOG.info("DelayMessageScheduler started, scanIntervalMs={}, batchSize={}", scanIntervalMs, batchSize);
     }
 
     /**
-     * 停止调度器。
+     * 停止调度器（取消扫描任务但保留线程池，支持后续 restart）。
      */
     @Override
     public void stop() {
         if (!running.compareAndSet(true, false)) {
             return;
         }
-        scanExecutor.shutdown();
-        try {
-            if (!scanExecutor.awaitTermination(AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
-                scanExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            scanExecutor.shutdownNow();
-            Thread.currentThread().interrupt();
+        ScheduledFuture<?> future = this.scanFuture;
+        if (future != null) {
+            future.cancel(false);
+            this.scanFuture = null;
         }
         LOG.info("DelayMessageScheduler stopped");
     }

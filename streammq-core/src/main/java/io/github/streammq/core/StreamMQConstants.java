@@ -57,6 +57,8 @@ public final class StreamMQConstants {
     public static final long DEFAULT_PEL_CLAIM_MIN_IDLE_MS = 30_000L;
     /** 默认 PEL 认领扫描间隔（毫秒） */
     public static final long DEFAULT_PEL_CLAIM_SCAN_INTERVAL_MS = 5_000L;
+    /** 默认背压队列容量（0=不启用背压） */
+    public static final int DEFAULT_INFLIGHT_CAPACITY = 0;
 
     // ==================== DLQ 配置默认值 ====================
     /** 默认 DLQ 失败策略实现类全限定名（LogAndDropDlqFailureStrategy） */

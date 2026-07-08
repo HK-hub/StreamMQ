@@ -48,6 +48,7 @@ public class StreamMQSchedulerLifecycle implements SmartLifecycle {
             return;
         }
         LOG.info("Starting StreamMQ schedulers (phase={}, count={})", PHASE, schedulers.size());
+        int totalCount = schedulers.size();
         int failedCount = 0;
         for (StreamMQScheduler scheduler : schedulers) {
             try {
@@ -57,12 +58,19 @@ public class StreamMQSchedulerLifecycle implements SmartLifecycle {
                 LOG.error("Failed to start scheduler {}: {}", scheduler.getClass().getSimpleName(), ex.getMessage(), ex);
             }
         }
-        if (failedCount > 0) {
-            LOG.warn("StreamMQ schedulers started with {} failure(s) out of {}, some features may not work",
-                failedCount, schedulers.size());
+        if (totalCount == 0) {
+            LOG.info("No StreamMQ schedulers to start, setting running=true (no-op)");
+            running = true;
+        } else if (failedCount >= totalCount) {
+            LOG.error("All {} StreamMQ scheduler(s) failed to start, not setting running=true", totalCount);
+            // 全部失败时不设 running，后续 stop 不会执行（状态保持一致）
+        } else {
+            if (failedCount > 0) {
+                LOG.warn("StreamMQ schedulers started with {} failure(s) out of {}, some features may not work",
+                    failedCount, totalCount);
+            }
+            running = true;
         }
-        // 即使部分调度器启动失败也设为 running，但记录警告
-        running = true;
     }
 
     @Override

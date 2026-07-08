@@ -77,6 +77,8 @@ public class RetryScheduler implements StreamMQScheduler {
     private final ScheduledExecutorService scanExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ConcurrentMap<String, RetryTarget> targets = new ConcurrentHashMap<>();
+    /** 当前的扫描调度任务，stop 时取消以支持后续 restart */
+    private volatile ScheduledFuture<?> scanFuture;
 
     /**
      * 构造调度器。
@@ -124,27 +126,23 @@ public class RetryScheduler implements StreamMQScheduler {
             LOG.warn("RetryScheduler already started");
             return;
         }
-        scanExecutor.scheduleAtFixedRate(this::scanAllTargets, 0, scanIntervalMs, TimeUnit.MILLISECONDS);
+        scanFuture = scanExecutor.scheduleAtFixedRate(this::scanAllTargets, 0, scanIntervalMs, TimeUnit.MILLISECONDS);
         LOG.info("RetryScheduler started, scanIntervalMs={}, batchSize={}, targets={}",
             scanIntervalMs, batchSize, targets.size());
     }
 
     /**
-     * 停止调度器。
+     * 停止调度器（取消扫描任务但保留线程池，支持后续 restart）。
      */
     @Override
     public void stop() {
         if (!running.compareAndSet(true, false)) {
             return;
         }
-        scanExecutor.shutdown();
-        try {
-            if (!scanExecutor.awaitTermination(AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
-                scanExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            scanExecutor.shutdownNow();
-            Thread.currentThread().interrupt();
+        ScheduledFuture<?> future = this.scanFuture;
+        if (future != null) {
+            future.cancel(false);
+            this.scanFuture = null;
         }
         LOG.info("RetryScheduler stopped");
     }

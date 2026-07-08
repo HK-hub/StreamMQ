@@ -53,6 +53,32 @@ public class StreamMQHealthAutoConfiguration {
     }
 
     /**
+     * 管理端点的后端逻辑 Bean（供 StreamMQActuatorEndpoint 使用）。
+     */
+    @Bean
+    @ConditionalOnMissingBean(name = "streamMQAdminEndpoint")
+    public StreamMQAdminEndpoint streamMQAdminEndpoint(RedissonClient redisson,
+            org.springframework.beans.factory.ObjectProvider<DefaultStreamMQListenerContainer> listenerContainerProvider,
+            io.github.streammq.spring.boot.properties.StreamMQProperties properties) {
+        LOG.info("Creating StreamMQAdminEndpoint");
+        return new StreamMQAdminEndpoint(redisson,
+            listenerContainerProvider.getIfAvailable(), properties.getNamespace());
+    }
+
+    /**
+     * Actuator 端点 Bean（注册到 /actuator/streammq）。
+     */
+    @Bean
+    @ConditionalOnMissingBean(name = "streamMQActuatorEndpoint")
+    @ConditionalOnClass(org.springframework.boot.actuate.endpoint.annotation.Endpoint.class)
+    public StreamMQActuatorEndpoint streamMQActuatorEndpoint(
+            StreamMQAdminEndpoint adminEndpoint,
+            org.springframework.beans.factory.ObjectProvider<HealthIndicator> healthIndicatorProvider) {
+        LOG.info("Creating StreamMQActuatorEndpoint");
+        return new StreamMQActuatorEndpoint(adminEndpoint, healthIndicatorProvider.getIfAvailable());
+    }
+
+    /**
      * StreamMQ 健康检查实现。
      */
     public static class StreamMQHealthIndicator implements HealthIndicator {

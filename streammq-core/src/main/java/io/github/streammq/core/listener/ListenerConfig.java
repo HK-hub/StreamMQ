@@ -107,4 +107,14 @@ public class ListenerConfig {
      * @return 目标 body 类型，可为 null
      */
     private final Class<?> targetBodyType;
+
+    /**
+     * 广播消费模式标志（可选，默认 false）。
+     * 设置为 true 时，每个消费者实例使用独立的消费者组名，
+     * 使得同一 Topic 的每条消息被所有消费者实例各自处理一次。
+     *
+     * @return true 表示广播模式
+     */
+    @Builder.Default
+    private final boolean broadcast = false;
 }

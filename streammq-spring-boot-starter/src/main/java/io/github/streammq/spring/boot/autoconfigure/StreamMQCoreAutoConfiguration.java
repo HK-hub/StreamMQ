@@ -6,6 +6,7 @@ import io.github.streammq.adapter.redisson.interceptor.TraceContextConsumerInter
 import io.github.streammq.adapter.redisson.interceptor.TraceContextProducerInterceptor;
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducerFactory;
+import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.adapter.redisson.security.DenyAllAuthenticator;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate;
@@ -35,6 +36,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -211,7 +213,8 @@ public class StreamMQCoreAutoConfiguration {
     @ConditionalOnMissingBean(StreamMessageTemplate.class)
     public StreamMessageTemplate streamMQTemplate(StreamMessageProducerFactory producerFactory,
                                                      MessageConverter converter,
-                                                     StreamMQProperties properties) {
+                                                     StreamMQProperties properties,
+                                                     ObjectProvider<TransactionScanner> transactionScannerProvider) {
         String defaultGroup = properties.getProducer().getGroup();
         String txGroup = properties.getTransaction().getDefaultGroup();
         // 注入 namespace / send-message-timeout / stream.max-len 到 defaultConfig,
@@ -224,8 +227,15 @@ public class StreamMQCoreAutoConfiguration {
             .build();
         LOG.info("Creating DefaultStreamMessageTemplate: defaultGroup={}, transactionGroup={}, namespace={}",
             defaultGroup, txGroup, properties.getNamespace());
-        return new DefaultStreamMessageTemplate(
+        DefaultStreamMessageTemplate template = new DefaultStreamMessageTemplate(
             producerFactory, defaultGroup, converter, defaultConfig, txGroup);
+        // 注入 TransactionScanner（如果可用），启用完整的半消息 + 回查事务流程
+        TransactionScanner scanner = transactionScannerProvider.getIfAvailable();
+        if (scanner != null) {
+            template.setTransactionScanner(scanner);
+            LOG.info("TransactionScanner injected into DefaultStreamMessageTemplate: full half-message flow enabled");
+        }
+        return template;
     }
 
     /**

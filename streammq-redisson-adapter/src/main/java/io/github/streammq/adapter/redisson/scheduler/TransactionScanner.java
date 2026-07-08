@@ -85,6 +85,8 @@ public class TransactionScanner implements StreamMQScheduler {
     private final ScheduledExecutorService scanExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ConcurrentMap<String, TransactionChecker<?>> checkerRegistry = new ConcurrentHashMap<>();
+    /** 当前的扫描调度任务，stop 时取消以支持后续 restart */
+    private volatile ScheduledFuture<?> scanFuture;
 
     /**
      * 构造调度器，使用默认参数。
@@ -192,27 +194,23 @@ public class TransactionScanner implements StreamMQScheduler {
             LOG.warn("TransactionScanner already started");
             return;
         }
-        scanExecutor.scheduleAtFixedRate(this::scanAllGroups, 0, checkIntervalMs, TimeUnit.MILLISECONDS);
+        scanFuture = scanExecutor.scheduleAtFixedRate(this::scanAllGroups, 0, checkIntervalMs, TimeUnit.MILLISECONDS);
         LOG.info("TransactionScanner started, checkIntervalMs={}, maxCheckTimes={}, batchSize={}, groups={}",
             checkIntervalMs, maxCheckTimes, batchSize, checkerRegistry.size());
     }
 
     /**
-     * 停止调度器。
+     * 停止调度器（取消扫描任务但保留线程池，支持后续 restart）。
      */
     @Override
     public void stop() {
         if (!running.compareAndSet(true, false)) {
             return;
         }
-        scanExecutor.shutdown();
-        try {
-            if (!scanExecutor.awaitTermination(AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
-                scanExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            scanExecutor.shutdownNow();
-            Thread.currentThread().interrupt();
+        ScheduledFuture<?> future = this.scanFuture;
+        if (future != null) {
+            future.cancel(false);
+            this.scanFuture = null;
         }
         LOG.info("TransactionScanner stopped");
     }

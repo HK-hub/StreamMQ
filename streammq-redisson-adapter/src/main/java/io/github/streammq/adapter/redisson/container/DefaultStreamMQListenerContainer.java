@@ -10,6 +10,7 @@ import io.github.streammq.core.consumer.ConsumeOrderlyContext;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
 import io.github.streammq.core.enums.ConsumeAction;
+import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.InvokeTiming;
 import io.github.streammq.core.enums.OrderlyAction;
 import io.github.streammq.core.exception.StreamMQBrokerException;
@@ -106,6 +107,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     private final ConcurrentMap<String, MessageConverter> perConsumerConverters = new ConcurrentHashMap<>();
     /** 消费线程池（虚拟线程） */
     private final ExecutorService consumeExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    /** 内部队列（背压控制：拉取与处理解耦） */
+    private final int inflightCapacity;
     /** 容器状态 */
     private final AtomicReference<ContainerState> state = new AtomicReference<>(ContainerState.INIT);
     /** 消费任务 Future 表 */
@@ -163,6 +166,23 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                             DlqFailureStrategy dlqFailureStrategy,
                                             DlqConfig dlqConfig,
                                             String defaultNamespace) {
+        this(redisson, consumerFactory, messageConverter, retryPolicy, dlqFailureHandler,
+            dlqFailureStrategy, dlqConfig, defaultNamespace,
+            StreamMQConstants.DEFAULT_INFLIGHT_CAPACITY);
+    }
+
+    /**
+     * 全参构造（含背压队列容量）。
+     */
+    public DefaultStreamMQListenerContainer(RedissonClient redisson,
+                                            StreamMQListenerFactory consumerFactory,
+                                            MessageConverter messageConverter,
+                                            RetryPolicy retryPolicy,
+                                            DlqFailureHandler dlqFailureHandler,
+                                            DlqFailureStrategy dlqFailureStrategy,
+                                            DlqConfig dlqConfig,
+                                            String defaultNamespace,
+                                            int inflightCapacity) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
         this.consumerFactory = Objects.requireNonNull(consumerFactory, "consumerFactory");
         this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
@@ -171,6 +191,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         this.dlqFailureStrategy = Objects.requireNonNull(dlqFailureStrategy, "dlqFailureStrategy");
         this.dlqConfig = Objects.requireNonNull(dlqConfig, "dlqConfig");
         this.defaultNamespace = defaultNamespace == null ? "" : defaultNamespace;
+        this.inflightCapacity = inflightCapacity > 0 ? inflightCapacity : StreamMQConstants.DEFAULT_INFLIGHT_CAPACITY;
         DefaultConsumerInterceptorChain chain = new DefaultConsumerInterceptorChain();
         this.interceptorChain = chain;
         this.shardLockManager = new RedissonOrderlyShardLockManager(redisson);
@@ -220,6 +241,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         this.sharedRetryDlqHandler = Objects.requireNonNull(retryDlqHandler, "retryDlqHandler");
         this.shardLockManager = Objects.requireNonNull(shardLockManager, "shardLockManager");
         this.perConsumerEnabled = false;
+        this.inflightCapacity = StreamMQConstants.DEFAULT_INFLIGHT_CAPACITY;
     }
 
     // ===================== 消费者拦截器 =====================
@@ -551,6 +573,19 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         }
         LOG.info("Consume loop started: topic={}, group={}, retryMode={}, listener={}",
             reg.getTopic(), reg.getGroup(), retryMode, reg.getConsumer().getClass().getSimpleName());
+
+        // 背压队列（inflightCapacity > 0 时启用）
+        final BlockingQueue<Message<?>> inflightQueue;
+        if (inflightCapacity > 0) {
+            inflightQueue = new LinkedBlockingQueue<>(inflightCapacity);
+            // 启动独立的处理线程
+            Thread.ofVirtual()
+                .name("streammq-process-" + reg.getTopic() + "-" + reg.getGroup())
+                .start(() -> processFromInflightQueue(reg, listener, inflightQueue));
+        } else {
+            inflightQueue = null;
+        }
+
         try {
             while (state.get() == ContainerState.RUNNING) {
                 if (paused) {
@@ -570,8 +605,16 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         if (state.get() != ContainerState.RUNNING) {
                             break;
                         }
-                        handleMessage(message, reg, listener);
+                        if (inflightQueue != null) {
+                            // 背压：队列满时阻塞等待
+                            inflightQueue.put(message);
+                        } else {
+                            processMessage(message, reg, listener);
+                        }
                     }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
                 } catch (StreamMQBrokerException ex) {
                     LOG.warn("Broker error in consume loop (topic={}, group={}): {}",
                         reg.getTopic(), reg.getGroup(), ex.getMessage());
@@ -587,7 +630,27 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         }
     }
 
+    /**
+     * 从背压队列中取出消息并处理（独立虚拟线程）。
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void processFromInflightQueue(ListenerRegistration reg, StreamMQListener listener,
+                                           BlockingQueue<Message<?>> inflightQueue) {
+        try {
+            while (state.get() == ContainerState.RUNNING) {
+                Message<?> message = inflightQueue.poll(1, TimeUnit.SECONDS);
+                if (message == null) {
+                    continue;
+                }
+                processMessage(message, reg, listener);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
     private StreamMQListener createConsumerFor(ListenerRegistration<?> reg, boolean retryMode) {
+        boolean broadcast = reg.getConsumeMode() == ConsumeMode.BROADCASTING;
         ListenerConfig config = ListenerConfig.builder()
             .topic(reg.getTopic())
             .consumerGroup(reg.getGroup())
@@ -595,6 +658,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .namespace(reg.getNamespace())
             .dlqMode(reg.isDlqMode())
             .retryMode(retryMode)
+            .broadcast(broadcast)
             .targetBodyType(reg.getTargetBodyType())
             .converter(perConsumerEnabled ? perConsumerConverters.get(reg.key()) : null)
             .build();
@@ -602,20 +666,25 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     }
 
     /**
-     * 处理单条消息：以 {@code onMessage} 返回值为唯一标准路由，无 MANUAL/AUTO 分支与安全网兜底，
-     * 避免手动 ACK 与返回值双模式冲突。
+     * 处理单条消息：支持消费超时取消，以 {@code onMessage} 返回值为路由标准。
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
-    private void handleMessage(Message<?> message, ListenerRegistration reg, StreamMQListener listener) {
+    private void processMessage(Message<?> message, ListenerRegistration reg, StreamMQListener listener) {
         ConsumeContext ctx = new DefaultConsumeContextConsume(message, reg);
         ConsumerMdcTrace.inject(message, reg);
         ConsumeAction finalAction = ConsumeAction.RECONSUME_LATER;
         RetryAndDlqHandler handler = perConsumerEnabled
             ? perConsumerHandlers.get(reg.key()) : sharedRetryDlqHandler;
+        long consumeTimeoutMs = reg.getConsumeTimeoutMillis();
         try {
             if (!interceptorChain.applyBefore(message)) {
                 finalAction = ConsumeAction.SUCCESS;
                 handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
+                return;
+            }
+            // 消费超时控制：使用 Future.get(timeout) 包裹 onMessage 调用
+            if (consumeTimeoutMs > 0 && reg.getType() != ListenerType.ORDERLY) {
+                processWithTimeout(message, reg, listener, ctx, handler);
                 return;
             }
             try {
@@ -627,13 +696,10 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
                         finalAction = ConsumeAction.SUCCESS;
                     } else {
-                        // SUSPEND_CURRENT_QUEUE_A_MOMENT：不 ACK，消息留在 PEL 等待重新消费
-                        LOG.debug("Suspend current shard (messageId={}): message stays in PEL",
-                            message.getMessageId());
+                        LOG.debug("Suspend current shard (messageId={}): message stays in PEL", message.getMessageId());
                         finalAction = ConsumeAction.RECONSUME_LATER;
                     }
                 } else {
-                    // 并发消费：以返回值为唯一标准
                     StreamMessageConcurrentlyConsumer consumer = (StreamMessageConcurrentlyConsumer) reg.getConsumer();
                     ConsumeAction action = consumer.onMessage(message, ctx);
                     if (action == null) {
@@ -652,6 +718,35 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         } finally {
             interceptorChain.applyAfter(message, finalAction);
             ConsumerMdcTrace.clear();
+        }
+    }
+
+    /**
+     * 使用 Future.get(timeout) 包裹 onMessage 调用，超时后取消并进入重试。
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void processWithTimeout(Message<?> message, ListenerRegistration reg, StreamMQListener listener,
+                                     ConsumeContext ctx, RetryAndDlqHandler handler) {
+        Future<ConsumeAction> future = consumeExecutor.submit(() -> {
+            StreamMessageConcurrentlyConsumer consumer = (StreamMessageConcurrentlyConsumer) reg.getConsumer();
+            return consumer.onMessage(message, ctx);
+        });
+        try {
+            ConsumeAction action = future.get(reg.getConsumeTimeoutMillis(), TimeUnit.MILLISECONDS);
+            if (action == null) {
+                action = ConsumeAction.RECONSUME_LATER;
+            }
+            handler.handleAction(action, message, reg, listener, null);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            LOG.warn("Consume timeout ({}ms) for message, cancelling and retrying: topic={}, group={}, messageId={}",
+                reg.getConsumeTimeoutMillis(), reg.getTopic(), reg.getGroup(), message.getMessageId());
+            handler.handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener, e);
+        } catch (ExecutionException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            handler.handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener, e);
         }
     }
 

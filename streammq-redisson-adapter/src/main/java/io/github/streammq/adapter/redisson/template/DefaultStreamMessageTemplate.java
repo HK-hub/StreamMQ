@@ -1,7 +1,9 @@
 package io.github.streammq.adapter.redisson.template;
 
+import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.adapter.redisson.support.MdcKeys;
 import io.github.streammq.core.enums.InvokeTiming;
+import io.github.streammq.core.enums.LocalTransactionState;
 import io.github.streammq.core.exception.StreamMQException;
 import io.github.streammq.core.exception.TransactionException;
 import io.github.streammq.core.message.*;
@@ -14,6 +16,7 @@ import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.core.transaction.TransactionCallback;
 import io.github.streammq.core.transaction.TransactionContext;
+import org.redisson.api.StreamMessageId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -53,6 +56,8 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     private final List<ProducerInterceptor> interceptors = new CopyOnWriteArrayList<>();
     private final ProducerConfig defaultConfig;
     private final String transactionGroup;
+    /** 事务扫描器（可选注入，用于半消息 + 回查的完整事务流程） */
+    private volatile TransactionScanner transactionScanner;
 
     /**
      * 构造 Template。
@@ -274,12 +279,17 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                 null, null);
         }
 
-        // 事务消息基础实现：先发送业务消息（视为半消息已 commit），再执行本地事务
-        // 完整的半消息 + 回查调度由 TransactionScanner (p6) 实现
-        // 当前简化版：发送消息 -> 执行本地事务 -> 根据 LocalTransactionState 决定 ACK 或回滚
         String transactionId = UUID.randomUUID().toString();
         message.setTransactionId(transactionId);
 
+        // 完整半消息流程：使用 TransactionScanner（如果已注入）
+        // 否则回退到简化实现（直接发送 + 本地事务，无回查保护）
+        TransactionScanner scanner = this.transactionScanner;
+        if (scanner != null) {
+            return executeInTransactionWithScanner(message, callback, transactionId, scanner);
+        }
+
+        // === 简化实现（向后兼容，TransactionScanner 未注入时使用） ===
         // 1. 先发送业务消息到目标 Stream
         SendResult sendResult = syncSend(message);
         if (!sendResult.isSuccess()) {
@@ -291,14 +301,11 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         TransactionContext ctx = new TransactionContext(
             transactionId, transactionGroup, defaultGroup,
             System.currentTimeMillis(), new ConcurrentHashMap<>());
-        io.github.streammq.core.enums.LocalTransactionState state;
+        LocalTransactionState state;
         try {
             state = callback.execute(message, ctx);
         } catch (Exception ex) {
-            // 本地事务异常：视为 ROLLBACK
             LOG.warn("Local transaction failed, txId={}: {}", transactionId, ex.getMessage(), ex);
-            // 注意：此处仅记录，不删除已发送的消息（简化实现）
-            // 完整实现需通过 TransactionScanner 进行回查
             throw new TransactionException("Local transaction execute failed",
                 transactionId, transactionGroup, ex);
         }
@@ -306,25 +313,127 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         // 3. 根据状态决定结果
         switch (state) {
             case COMMIT_MESSAGE:
-                // 消息已发送，无需额外操作
                 LOG.debug("Transaction committed: txId={}", transactionId);
                 return sendResult;
             case ROLLBACK_MESSAGE:
-                // 简化实现：记录日志，需人工或后续扫描清理（完整实现由 TransactionScanner 处理）
-                LOG.warn("Transaction rolled back: txId={}, message may need manual cleanup",
-                    transactionId);
+                LOG.warn("Transaction rolled back: txId={}, message may need manual cleanup", transactionId);
                 return new SendResult(sendResult.getMessageId(),
                     sendResult.getTopic(), sendResult.getTag(),
                     SendStatus.SEND_FAILED, sendResult.getBornTimestamp(),
                     null, "Transaction rolled back");
             case UNKNOW:
-                LOG.warn("Transaction state UNKNOWN: txId={}, will be checked later",
-                    transactionId);
+                LOG.warn("Transaction state UNKNOWN: txId={}, will be checked later", transactionId);
                 return sendResult;
             default:
                 throw new TransactionException("Unknown transaction state: " + state,
                     transactionId, transactionGroup);
         }
+    }
+
+    /**
+     * 使用 TransactionScanner 的完整半消息事务流程。
+     *
+     * <p>流程：
+     * <ol>
+     *   <li>将消息字段写入 half Stream（半消息），对消费者不可见</li>
+     *   <li>执行本地事务回调</li>
+     *   <li>根据本地事务结果：COMMIT → 转投到业务 Stream；ROLLBACK → 删除半消息；
+     *       UNKNOW → 保留半消息，等待 TransactionScanner 回查</li>
+     * </ol>
+     *
+     * @param message 消息
+     * @param callback 本地事务回调
+     * @param transactionId 事务 ID
+     * @param scanner 事务扫描器
+     * @param <T> 消息体类型
+     * @return 发送结果
+     */
+    private <T> SendResult executeInTransactionWithScanner(Message<T> message, TransactionCallback<T> callback,
+                                                            String transactionId, TransactionScanner scanner) {
+        // 1. 将消息转换为 Stream fields 并注册半消息
+        Map<String, String> fields = messageConverter.toStreamFields(message);
+        StreamMessageId halfId;
+        try {
+            halfId = scanner.registerHalfMessage(transactionId, transactionGroup,
+                message.getTopic(), fields);
+            LOG.debug("Half message registered: txId={}, txGroup={}, halfId={}",
+                transactionId, transactionGroup, halfId);
+        } catch (RuntimeException ex) {
+            throw new TransactionException("Half message register failed: " + ex.getMessage(),
+                transactionId, transactionGroup, ex);
+        }
+
+        // 2. 构造半消息发送结果
+        MessageId msgId = new MessageId(halfId.toString());
+        message.setMessageId(msgId);
+        SendResult halfResult = new SendResult(msgId, message.getTopic(), message.getTag(),
+            message.getBornTimestamp());
+
+        // 3. 执行本地事务
+        TransactionContext ctx = new TransactionContext(
+            transactionId, transactionGroup, defaultGroup,
+            System.currentTimeMillis(), new ConcurrentHashMap<>());
+        LocalTransactionState state;
+        try {
+            state = callback.execute(message, ctx);
+        } catch (Exception ex) {
+            LOG.warn("Local transaction failed, rolling back: txId={}: {}", transactionId, ex.getMessage(), ex);
+            try {
+                scanner.markRollback(transactionId, transactionGroup);
+            } catch (RuntimeException rollbackEx) {
+                LOG.error("Failed to rollback transaction after local tx failure: txId={}: {}",
+                    transactionId, rollbackEx.getMessage(), rollbackEx);
+            }
+            throw new TransactionException("Local transaction execute failed",
+                transactionId, transactionGroup, ex);
+        }
+
+        // 4. 根据状态决定 commit / rollback / unknown
+        switch (state) {
+            case COMMIT_MESSAGE:
+                try {
+                    scanner.markCommit(transactionId, transactionGroup);
+                    LOG.info("Transaction committed: txId={}, txGroup={}, targetTopic={}",
+                        transactionId, transactionGroup, message.getTopic());
+                } catch (RuntimeException ex) {
+                    LOG.error("Failed to commit transaction: txId={}: {}", transactionId, ex.getMessage(), ex);
+                    throw new TransactionException("Transaction commit failed: " + ex.getMessage(),
+                        transactionId, transactionGroup, ex);
+                }
+                return halfResult;
+            case ROLLBACK_MESSAGE:
+                try {
+                    scanner.markRollback(transactionId, transactionGroup);
+                    LOG.info("Transaction rolled back: txId={}, txGroup={}", transactionId, transactionGroup);
+                } catch (RuntimeException ex) {
+                    LOG.warn("Failed to rollback transaction: txId={}: {}", transactionId, ex.getMessage(), ex);
+                }
+                return new SendResult(msgId, message.getTopic(), message.getTag(),
+                    SendStatus.SEND_FAILED, message.getBornTimestamp(),
+                    null, "Transaction rolled back");
+            case UNKNOW:
+                // 保留半消息，等待 TransactionScanner 周期回查
+                LOG.info("Transaction state UNKNOW, waiting for check-back: txId={}, txGroup={}",
+                    transactionId, transactionGroup);
+                return halfResult;
+            default:
+                try {
+                    scanner.markRollback(transactionId, transactionGroup);
+                } catch (RuntimeException rollbackEx) {
+                    LOG.warn("Failed to rollback on unknown state: txId={}", transactionId);
+                }
+                throw new TransactionException("Unknown transaction state: " + state,
+                    transactionId, transactionGroup);
+        }
+    }
+
+    /**
+     * 设置事务扫描器（可选注入，启用完整的半消息 + 回查事务流程）。
+     *
+     * @param transactionScanner 事务扫描器，可为 null（回退到简化实现）
+     */
+    public void setTransactionScanner(TransactionScanner transactionScanner) {
+        this.transactionScanner = transactionScanner;
     }
 
     @Override
