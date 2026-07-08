@@ -3,7 +3,9 @@ package io.github.streammq.spring.boot.autoconfigure;
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.policy.DlqConfig;
 import io.github.streammq.core.policy.DlqFailureHandler;
+import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import org.redisson.api.RedissonClient;
@@ -56,12 +58,15 @@ public class StreamMQListenerContainerAutoConfiguration {
                                                                        MessageConverter messageConverter,
                                                                        RetryPolicy retryPolicy,
                                                                        DlqFailureHandler dlqFailureHandler,
+                                                                       DlqFailureStrategy dlqFailureStrategy,
+                                                                       DlqConfig dlqConfig,
                                                                        StreamMQProperties properties) {
         String namespace = properties.getNamespace();
-        LOG.info("Creating DefaultStreamMQListenerContainer: namespace={}, dlqFailureHandler={}",
-            namespace, dlqFailureHandler.name());
+        LOG.info("Creating DefaultStreamMQListenerContainer: namespace={}, dlqFailureStrategy={}",
+            namespace, dlqFailureStrategy.name());
         return new DefaultStreamMQListenerContainer(
-            redisson, consumerFactory, messageConverter, retryPolicy, dlqFailureHandler, namespace);
+            redisson, consumerFactory, messageConverter, retryPolicy,
+            dlqFailureHandler, dlqFailureStrategy, dlqConfig, namespace);
     }
 
     /**

@@ -2,6 +2,7 @@ package io.github.streammq.adapter.redisson.container;
 
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.interceptor.ConsumerInterceptorChain;
 import io.github.streammq.core.listener.ListenerRegistration;
@@ -9,7 +10,11 @@ import io.github.streammq.core.listener.StreamMQListener;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.policy.DlqConfig;
+import io.github.streammq.core.policy.DlqFailureContext;
+import io.github.streammq.core.policy.DlqFailureDecision;
 import io.github.streammq.core.policy.DlqFailureHandler;
+import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RetryAndDlqHandler;
 import io.github.streammq.core.policy.RetryPolicy;
 import lombok.NonNull;
@@ -29,28 +34,15 @@ import java.util.Map;
 /**
  * ACK / 重试 / DLQ 路由处理器默认实现（策略类）。
  *
- * <p>封装消息消费后的动作路由逻辑（消费结果以 {@link ConsumeAction} 返回值为唯一标准）：
+ * <p>封装消息消费后的动作路由逻辑。DLQ 消费失败时，
+ * 使用 {@link DlqFailureStrategy} 决策 drop / retry / secondaryDlq 三种去向。
+ *
+ * <p>内置策略：
  * <ul>
- *   <li>{@link ConsumeAction#SUCCESS} - ACK 消息（从 PEL 移除）</li>
- *   <li>{@link ConsumeAction#RECONSUME_LATER} - 写入 retry ZSet + payload Hash 后 ACK 原消息；
- *       DLQ 模式下调用 {@link DlqFailureHandler} 后 ACK 丢弃，避免死信消息无限循环</li>
- *   <li>{@code ConsumeAction.defer(Duration)} - 使用指定延迟写入 retry ZSet + payload Hash 后 ACK；
- *       DLQ 模式下同 RECONSUME_LATER 处理（调用 DlqFailureHandler 后丢弃）</li>
+ *   <li>{@link LogAndDropDlqFailureStrategy} - 始终丢弃（默认）</li>
+ *   <li>{@link LimitedRetryDlqFailureStrategy} - 有限次重试后丢弃</li>
+ *   <li>{@link SecondaryDlqFailureStrategy} - 有限次重试后转投二级死信</li>
  * </ul>
- *
- * <p>顺序消费的 {@link io.github.streammq.core.enums.OrderlyAction#SUSPEND_CURRENT_QUEUE_A_MOMENT}
- * 由容器直接处理（消息留在 PEL），不进入本处理器。
- *
- * <p>重试终止路由（任一条件命中即进 DLQ）：
- * <ul>
- *   <li>{@link RetryPolicy#shouldStopRetry} 返回 true</li>
- *   <li>{@code retryCount >= reg.getMaxReconsumeTimes()}</li>
- *   <li>{@link RetryPolicy#nextRetryDelay} 返回 null</li>
- * </ul>
- *
- * <p>设计模式：策略模式，将 ACK/重试/DLQ 路由逻辑从容器中分离。
- * 本实例持有的 {@link RetryPolicy} / {@link MessageConverter} / {@link DlqFailureHandler}
- * 可为 per-consumer 实例（由容器在注册时按注解实例化），实现高度可配置。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -60,7 +52,6 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
 
     private static final Logger LOG = LoggerFactory.getLogger(DefaultRetryAndDlqHandler.class);
 
-    /** DLQ Stream Entry 字段：原始消息 ID */
     private static final String FIELD_ORIGINAL_MESSAGE_ID = "originalMessageId";
 
     @NonNull
@@ -73,16 +64,11 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
     private final ConsumerInterceptorChain interceptorChain;
     @NonNull
     private final DlqFailureHandler dlqFailureHandler;
+    @NonNull
+    private final DlqFailureStrategy dlqFailureStrategy;
+    @NonNull
+    private final DlqConfig dlqConfig;
 
-    /**
-     * 根据消费动作路由消息。
-     *
-     * @param action 消费动作（null 视为 RECONSUME_LATER）
-     * @param message 消息
-     * @param reg Listener 注册信息
-     * @param listener 监听器实例
-     * @param cause 失败原因；返回 RECONSUME_LATER/DEFER 时为 null，抛出异常时为该异常
-     */
     @Override
     public void handleAction(ConsumeAction action, Message<?> message, ListenerRegistration<?> reg,
                              StreamMQListener listener, Throwable cause) {
@@ -95,57 +81,133 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             action = ConsumeAction.RECONSUME_LATER;
         }
         if (action.isSuccess()) {
-            try {
-                listener.ack(messageId);
-            } catch (RuntimeException ex) {
-                LOG.warn("ACK failed (messageId={}): {}", messageId, ex.getMessage(), ex);
-            }
+            try { listener.ack(messageId); } catch (RuntimeException ex) {
+                LOG.warn("ACK failed (messageId={}): {}", messageId, ex.getMessage(), ex); }
             return;
         }
         if (action.isDefer()) {
             if (reg.isDlqMode()) {
-                handleDlqFailure(message, reg, listener, messageId, cause);
+                handleDlqFailureWithStrategy(message, reg, listener, messageId, cause);
             } else {
                 handleDefer(message, reg, listener, messageId, action.getDeferDelay());
             }
             return;
         }
-        // RECONSUME_LATER
         if (reg.isDlqMode()) {
-            handleDlqFailure(message, reg, listener, messageId, cause);
+            handleDlqFailureWithStrategy(message, reg, listener, messageId, cause);
         } else {
             handleReconsumeLater(message, reg, listener, messageId);
         }
     }
 
     /**
-     * DLQ 消费失败处理：调用 {@link DlqFailureHandler} 后 ACK 丢弃，避免死信无限循环。
+     * DLQ 消费失败处理（基于策略决策）。
+     *
+     * <p>流程：
+     * <ol>
+     *   <li>从消息中解析 dlqRetryCount</li>
+     *   <li>构造 {@link DlqFailureContext} 传给策略</li>
+     *   <li>执行策略返回的决策（drop/retry/secondaryDlq）</li>
+     * </ol>
      */
-    private void handleDlqFailure(Message<?> message, ListenerRegistration<?> reg,
-                                  StreamMQListener listener, MessageId messageId, Throwable cause) {
+    private void handleDlqFailureWithStrategy(Message<?> message, ListenerRegistration<?> reg,
+                                              StreamMQListener listener, MessageId messageId, Throwable cause) {
         try {
-            dlqFailureHandler.handleFailure(message, reg, cause);
+            Map<String, String> fields = messageConverter.toStreamFields(message);
+            int dlqRetryCount = parseDlqRetryCount(fields);
+            String dlqReason = fields.getOrDefault(RetryScheduler.FIELD_DLQ_REASON, "unknown");
+            String originalMsgId = fields.getOrDefault(FIELD_ORIGINAL_MESSAGE_ID, messageId.getStreamEntryId());
+
+            DlqFailureContext ctx = new DefaultDlqFailureContext(
+                dlqRetryCount, dlqReason, reg.getTopic(), originalMsgId,
+                cause, fields, dlqConfig.getMaxDlqRetryAttempts(), dlqConfig.getDlqRetryDelayMs());
+
+            DlqFailureDecision decision = dlqFailureStrategy.decide(message, ctx);
+            if (decision == null) { decision = DlqFailureDecision.drop(); }
+
+            // backward compat: notify old handler
+            notifyOldHandler(message, reg, cause);
+
+            // dispatch decision
+            switch (decision.type()) {
+                case RETRY -> scheduleDlqRetry(message, reg, listener, messageId, fields, dlqRetryCount, decision.retryDelay());
+                case SECONDARY_DLQ -> {
+                    routeToSecondaryDlq(message, reg, messageId, fields);
+                    listener.ack(messageId);
+                }
+                default -> {
+                    LOG.warn("DLQ message dropped (topic={}, group={}, messageId={}, dlqRetryCount={})",
+                        reg.getTopic(), reg.getGroup(), messageId, dlqRetryCount);
+                    listener.ack(messageId);
+                }
+            }
         } catch (RuntimeException ex) {
-            LOG.warn("DlqFailureHandler {} threw, proceeding to drop: {}", dlqFailureHandler.name(), ex.getMessage(), ex);
-        }
-        try {
-            listener.ack(messageId);
-            LOG.warn("DLQ message dropped after failure handler (topic={}, group={}, messageId={})",
-                reg.getTopic(), reg.getGroup(), messageId);
-        } catch (RuntimeException ex) {
-            LOG.warn("ACK failed for DLQ message (messageId={}): {}", messageId, ex.getMessage(), ex);
+            LOG.error("DLQ failure strategy error, falling back to drop (topic={}, group={}, messageId={}): {}",
+                reg.getTopic(), reg.getGroup(), messageId, ex.getMessage(), ex);
+            try { listener.ack(messageId); } catch (RuntimeException ackEx) {
+                LOG.warn("Fallback ACK failed: {}", ackEx.getMessage()); }
         }
     }
 
-    /**
-     * 处理 RECONSUME_LATER：将消息写入 retry ZSet + payload Hash，并 ACK 原消息。
-     *
-     * <p>职责简化：仅计算延迟 + 写调度数据 + ACK。DLQ 判断统一由 {@link RetryScheduler#transferOne}
-     * 在重试到期转投时执行（retryCount >= maxReconsumeTimes → DLQ），避免双重判断。
-     *
-     * <p>唯一例外：{@link RetryPolicy#nextRetryDelay} 返回 null 表示策略明确要求不重试，
-     * 此时直接路由到 DLQ（不经过 RetryScheduler 调度）。
-     */
+    private void notifyOldHandler(Message<?> message, ListenerRegistration<?> reg, Throwable cause) {
+        try {
+            dlqFailureHandler.handleFailure(message, reg, cause);
+        } catch (RuntimeException ex) {
+            LOG.warn("DlqFailureHandler {} threw: {}", dlqFailureHandler.name(), ex.getMessage());
+        }
+    }
+
+    /** 将 DLQ 消息写入 retry ZSet（以哨兵 topic 标识，RetryScheduler 检测后 XADD 回 DLQ Stream） */
+    private void scheduleDlqRetry(Message<?> message, ListenerRegistration<?> reg, StreamMQListener listener,
+                                  MessageId messageId, Map<String, String> fields, int dlqRetryCount, Duration delay) {
+        long nextRetryAt = System.currentTimeMillis() + delay.toMillis();
+        String msgIdStr = messageId.getStreamEntryId();
+        String payloadKey = StreamMQKeys.delayPayloadHash(reg.getNamespace(), msgIdStr);
+        int newDlqRetryCount = dlqRetryCount + 1;
+        Map<String, String> payload = new HashMap<>(fields.size() + 3);
+        payload.putAll(fields);
+        payload.put(RetryScheduler.FIELD_RETRY_COUNT, Integer.toString(newDlqRetryCount));
+        payload.put(RetryScheduler.FIELD_TARGET_TOPIC, StreamMQConstants.DLQ_RETRY_TARGET_TOPIC_SENTINEL);
+        RMap<String, String> payloadMap = redisson.getMap(payloadKey);
+        payloadMap.putAll(payload);
+
+        String retryKey = StreamMQKeys.retryZSet(reg.getNamespace(), reg.getTopic(), reg.getGroup());
+        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
+        zset.add(nextRetryAt, msgIdStr);
+
+        LOG.info("DLQ retry scheduled: topic={}, group={}, dlqRetryCount={}/{}, delayMs={}",
+            reg.getTopic(), reg.getGroup(), newDlqRetryCount, dlqConfig.getMaxDlqRetryAttempts(), delay.toMillis());
+        listener.ack(messageId);
+    }
+
+    /** 路由到二级死信队列 */
+    private void routeToSecondaryDlq(Message<?> message, ListenerRegistration<?> reg,
+                                      MessageId messageId, Map<String, String> fields) {
+        try {
+            fields.put(RetryScheduler.FIELD_DLQ_REASON, "secondaryDlq");
+            fields.put(FIELD_ORIGINAL_MESSAGE_ID, messageId.getStreamEntryId());
+            String dlq2Key = StreamMQKeys.secondaryDlqStream(reg.getNamespace(), reg.getGroup(),
+                dlqConfig.getSecondaryDlqKeyPrefix());
+            RStream<String, String> dlq2Stream = redisson.getStream(dlq2Key);
+            dlq2Stream.add(StreamAddArgs.entries(fields));
+            LOG.warn("Message routed to secondary DLQ: topic={}, group={}, messageId={}, dlq2Key={}",
+                reg.getTopic(), reg.getGroup(), messageId, dlq2Key);
+        } catch (RuntimeException ex) {
+            LOG.error("Failed to route to secondary DLQ, falling back to drop (messageId={}): {}",
+                messageId, ex.getMessage(), ex);
+        }
+    }
+
+    private int parseDlqRetryCount(Map<String, String> fields) {
+        String v = fields.get(StreamMQConstants.FIELD_DLQ_RETRY_COUNT);
+        if (v != null && !v.isEmpty()) {
+            try { return Integer.parseInt(v); } catch (NumberFormatException ignored) {}
+        }
+        return 0;
+    }
+
+    // ===================== 原方法（不变） =====================
+
     @Override
     public void handleReconsumeLater(Message<?> message, ListenerRegistration<?> reg,
                                      StreamMQListener listener, MessageId messageId) {
@@ -172,12 +234,6 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         }
     }
 
-    /**
-     * 处理 defer：将消息写入 retry ZSet + payload Hash（使用指定延迟），并 ACK 原消息。
-     *
-     * <p>职责简化：仅使用业务指定延迟写调度数据 + ACK。DLQ 判断统一由 {@link RetryScheduler#transferOne}
-     * 在重试到期转投时执行。
-     */
     @Override
     public void handleDefer(Message<?> message, ListenerRegistration<?> reg,
                             StreamMQListener listener, MessageId messageId, Duration delay) {
@@ -191,9 +247,6 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         }
     }
 
-    /**
-     * 写入 retry ZSet + payload Hash 并 ACK 原消息。
-     */
     private void scheduleRetry(Message<?> message, ListenerRegistration<?> reg, StreamMQListener listener,
                                MessageId messageId, Map<String, String> fields, int retryCount, Duration delay) {
         long nextRetryAt = System.currentTimeMillis() + delay.toMillis();
@@ -218,15 +271,6 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         listener.ack(messageId);
     }
 
-    /**
-     * 将消息路由到 DLQ Stream。
-     *
-     * @param message 原始消息
-     * @param reg Listener 注册信息
-     * @param messageId 消息 ID
-     * @param reason 进入 DLQ 的原因
-     * @return true 表示 DLQ 写入成功；false 表示失败，调用方不应 ACK
-     */
     @Override
     public boolean routeToDlq(Message<?> message, ListenerRegistration<?> reg,
                              MessageId messageId, String reason) {

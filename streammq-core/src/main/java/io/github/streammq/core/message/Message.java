@@ -75,6 +75,7 @@ public final class Message<T> implements Serializable {
     private int reconsumeTimes;
 
     /** 事务 ID（仅事务消息） */
+    @Getter
     private String transactionId;
 
     /**

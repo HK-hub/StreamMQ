@@ -57,9 +57,32 @@ public final class StreamMQConstants {
     public static final long DEFAULT_PEL_CLAIM_MIN_IDLE_MS = 30_000L;
     /** 默认 PEL 认领扫描间隔（毫秒） */
     public static final long DEFAULT_PEL_CLAIM_SCAN_INTERVAL_MS = 5_000L;
-    /** 默认死信消费失败处理器实现类全限定名 */
+
+    // ==================== DLQ 配置默认值 ====================
+    /** 默认 DLQ 失败策略实现类全限定名（LogAndDropDlqFailureStrategy） */
+    public static final String DEFAULT_DLQ_FAILURE_STRATEGY =
+        "io.github.streammq.adapter.redisson.container.LogAndDropDlqFailureStrategy";
+    /** 已废弃（保留兼容）：默认死信消费失败处理器实现类全限定名 */
     public static final String DEFAULT_DLQ_FAILURE_HANDLER =
         "io.github.streammq.adapter.redisson.container.LogAndDropDlqFailureHandler";
+    /** DLQ 消费失败后的最大重试次数 */
+    public static final int DEFAULT_DLQ_MAX_RETRY_ATTEMPTS = 3;
+    /** DLQ 消费重试延迟（毫秒） */
+    public static final long DEFAULT_DLQ_RETRY_DELAY_MS = 10_000L;
+    /** 是否启用二级死信队列 */
+    public static final boolean DEFAULT_SECONDARY_DLQ_ENABLED = false;
+    /** 二级死信 Stream Key 前缀段 */
+    public static final String DEFAULT_SECONDARY_DLQ_KEY_PREFIX = "dlq2";
+    /** DLQ 告警阈值 */
+    public static final int DEFAULT_DLQ_ALERT_THRESHOLD = 1;
+    /** DLQ 重试退避倍数 */
+    public static final double DEFAULT_DLQ_RETRY_BACKOFF_MULTIPLIER = 1.0;
+    /** DLQ 重试延迟上限（毫秒） */
+    public static final long DEFAULT_DLQ_RETRY_MAX_DELAY_MS = 300_000L;
+    /** DLQ 消息重试计数字段名（Stream Entry fields） */
+    public static final String FIELD_DLQ_RETRY_COUNT = "__dlqRetryCount";
+    /** DLQ 重试目标 topic 哨兵值（RetryScheduler 检测到此值时 XADD 到 dlqStream 而非 retryStream） */
+    public static final String DLQ_RETRY_TARGET_TOPIC_SENTINEL = "__dlq__";
 
     // ==================== 属性 Key 常量 ====================
     /** 属性 key：topic */

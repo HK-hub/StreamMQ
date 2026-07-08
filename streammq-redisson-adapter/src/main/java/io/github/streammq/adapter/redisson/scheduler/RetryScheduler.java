@@ -201,6 +201,10 @@ public class RetryScheduler implements StreamMQScheduler {
                 return;
             }
 
+            // 检查是否为 DLQ 重试哨兵
+            String targetTopic = fields.get(FIELD_TARGET_TOPIC);
+            boolean isDlqRetry = io.github.streammq.core.StreamMQConstants.DLQ_RETRY_TARGET_TOPIC_SENTINEL.equals(targetTopic);
+
             int retryCount = 0;
             String retryCountStr = fields.get(FIELD_RETRY_COUNT);
             if (retryCountStr != null && !retryCountStr.isEmpty()) {
@@ -214,25 +218,36 @@ public class RetryScheduler implements StreamMQScheduler {
             fields.remove(FIELD_RETRY_COUNT);
             fields.remove(FIELD_TARGET_TOPIC);
 
-            // 递增 retryTimes 字段（用于消费端 reconsumeTimes）
-            int newRetryTimes = retryCount + 1;
-            fields.put(DefaultMessageConverter.FIELD_RETRY_TIMES, Integer.toString(newRetryTimes));
-
-            if (retryCount >= target.maxReconsumeTimes) {
-                // 进入 DLQ
-                fields.put(FIELD_DLQ_REASON, DLQ_REASON_MAX_RETRY);
-                fields.put(FIELD_ORIGINAL_RETRY_COUNT, Integer.toString(retryCount));
+            if (isDlqRetry) {
+                // DLQ 重试 → XADD 回 DLQ Stream，保留 dlqRetryCount
+                fields.remove(io.github.streammq.core.StreamMQConstants.FIELD_DLQ_RETRY_COUNT);
+                fields.put(io.github.streammq.core.StreamMQConstants.FIELD_DLQ_RETRY_COUNT,
+                    Integer.toString(retryCount));
                 RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
                 dlqStream.add(StreamAddArgs.entries(fields));
-                LOG.info("Message entered DLQ: msgId={}, topic={}, group={}, retryCount={}",
-                    msgId, target.topic, target.group, retryCount);
+                LOG.info("DLQ retry transferred: msgId={}, group={}, dlqRetryCount={}",
+                    msgId, target.group, retryCount);
             } else {
-                // 转投到 retry Stream（非原 Stream，对齐 RocketMQ %RETRY%{group}%）
-                RStream<String, String> targetStream = redisson.getStream(targetStreamKey);
-                targetStream.add(StreamAddArgs.entries(fields));
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("Retry message transferred to retry stream: msgId={}, topic={}, group={}, retryCount={}",
+                // 递增 retryTimes 字段（用于消费端 reconsumeTimes）
+                int newRetryTimes = retryCount + 1;
+                fields.put(DefaultMessageConverter.FIELD_RETRY_TIMES, Integer.toString(newRetryTimes));
+
+                if (retryCount >= target.maxReconsumeTimes) {
+                    // 进入 DLQ
+                    fields.put(FIELD_DLQ_REASON, DLQ_REASON_MAX_RETRY);
+                    fields.put(FIELD_ORIGINAL_RETRY_COUNT, Integer.toString(retryCount));
+                    RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
+                    dlqStream.add(StreamAddArgs.entries(fields));
+                    LOG.info("Message entered DLQ: msgId={}, topic={}, group={}, retryCount={}",
                         msgId, target.topic, target.group, retryCount);
+                } else {
+                    // 转投到 retry Stream（非原 Stream，对齐 RocketMQ %RETRY%{group}%）
+                    RStream<String, String> targetStream = redisson.getStream(targetStreamKey);
+                    targetStream.add(StreamAddArgs.entries(fields));
+                    if (LOG.isDebugEnabled()) {
+                        LOG.debug("Retry message transferred to retry stream: msgId={}, topic={}, group={}, retryCount={}",
+                            msgId, target.topic, target.group, retryCount);
+                    }
                 }
             }
 

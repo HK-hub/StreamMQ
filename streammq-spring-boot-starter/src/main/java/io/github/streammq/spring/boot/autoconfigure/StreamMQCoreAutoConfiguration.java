@@ -18,7 +18,9 @@ import io.github.streammq.core.service.DefaultStreamMessageService;
 import io.github.streammq.core.service.StreamMessageService;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.interceptor.TraceCollector;
+import io.github.streammq.core.policy.DlqConfig;
 import io.github.streammq.core.policy.DlqFailureHandler;
+import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.ManagementAuthenticator;
 import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.core.serializer.MessageSerializer;
@@ -128,24 +130,45 @@ public class StreamMQCoreAutoConfiguration {
     }
 
     /**
-     * 默认死信消费失败处理器：根据 {@code streammq.dlq.failure-handler} 配置加载。
-     *
-     * <p>死信消息消费失败时调用，默认 {@link LogAndDropDlqFailureHandler} 仅记录 ERROR 日志后丢弃。
-     * 用户可实现 {@link DlqFailureHandler} 接入告警/持久化，并注册为 Bean 或配置类全限定名覆盖。
-     *
-     * @param properties 配置
-     * @return 死信失败处理器
+     * DLQ 配置 Bean（从 properties 读取，供全局和 per-consumer 策略使用）。
+     */
+    @Bean
+    @ConditionalOnMissingBean(DlqConfig.class)
+    public DlqConfig streamMQDlqConfig(StreamMQProperties properties) {
+        StreamMQProperties.Dlq dlqProps = properties.getDlq();
+        LOG.info("Creating DlqConfig: strategy={}, maxDlqRetryAttempts={}, secondaryDlqEnabled={}",
+            dlqProps.getFailureStrategy(), dlqProps.getMaxDlqRetryAttempts(), dlqProps.isSecondaryDlqEnabled());
+        return DlqConfig.builder()
+            .failureStrategyClass(dlqProps.getFailureStrategy())
+            .maxDlqRetryAttempts(dlqProps.getMaxDlqRetryAttempts())
+            .dlqRetryDelayMs(dlqProps.getDlqRetryDelayMs())
+            .secondaryDlqEnabled(dlqProps.isSecondaryDlqEnabled())
+            .secondaryDlqKeyPrefix(dlqProps.getSecondaryDlqKeyPrefix())
+            .dlqAlertThreshold(dlqProps.getAlertThreshold())
+            .dlqRetryBackoffMultiplier(dlqProps.getRetryBackoffMultiplier())
+            .dlqRetryMaxDelayMs(dlqProps.getRetryMaxDelayMs())
+            .build();
+    }
+
+    /**
+     * 全局 DLQ 消费失败处理策略 Bean。
+     */
+    @Bean
+    @ConditionalOnMissingBean(DlqFailureStrategy.class)
+    public DlqFailureStrategy streamMQDlqFailureStrategy(DlqConfig dlqConfig) {
+        String className = dlqConfig.getFailureStrategyClass();
+        LOG.info("Using DlqFailureStrategy: {}", className);
+        return instantiate(className, DlqFailureStrategy.class);
+    }
+
+    /**
+     * 默认死信消费失败处理器（保留兼容旧版 {@link DlqFailureHandler}）。
      */
     @Bean
     @ConditionalOnMissingBean(DlqFailureHandler.class)
-    public DlqFailureHandler streamMQDlqFailureHandler(StreamMQProperties properties) {
-        String className = properties.getDlq().getFailureHandler();
-        if (className == null || className.isEmpty()
-            || LogAndDropDlqFailureHandler.class.getName().equals(className)) {
-            LOG.info("Using default LogAndDropDlqFailureHandler");
-            return new LogAndDropDlqFailureHandler();
-        }
-        return instantiate(className, DlqFailureHandler.class);
+    public DlqFailureHandler streamMQDlqFailureHandler() {
+        LOG.info("Using default LogAndDropDlqFailureHandler (backward compat)");
+        return new LogAndDropDlqFailureHandler();
     }
 
     /**

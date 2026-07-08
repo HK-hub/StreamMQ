@@ -197,6 +197,19 @@ public final class StreamMQKeys {
     }
 
     /**
+     * 二级死信队列 Stream Key：{@code streammq:{ns}:{prefix}:{group}}。
+     * 当 DLQ 消费重试耗尽时（配合 {@code SecondaryDlqFailureStrategy}），消息转投到此 Stream。
+     *
+     * @param namespace 命名空间
+     * @param group 消费者组名
+     * @param prefix 二级 DLQ 前缀段（默认 "dlq2"）
+     * @return 二级 DLQ Stream Key
+     */
+    public static String secondaryDlqStream(String namespace, String group, String prefix) {
+        return prefix(namespace) + SEP + requireNonEmpty(prefix, "prefix") + SEP + requireNonEmpty(group, "group");
+    }
+
+    /**
      * 重试转移降级锁 Key：{@code streammq:{ns}:retry:{topic}:{group}:transfer:lock}。
      */
     public static String retryTransferLock(String namespace, String topic, String group) {

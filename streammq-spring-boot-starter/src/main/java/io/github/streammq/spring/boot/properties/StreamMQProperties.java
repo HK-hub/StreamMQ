@@ -133,8 +133,22 @@ public class StreamMQProperties {
      */
     @Data
     public static class Dlq {
-        /** 死信消费失败处理器实现类全限定名（默认 LogAndDropDlqFailureHandler，仅记录 ERROR 日志后丢弃） */
-        private String failureHandler = StreamMQConstants.DEFAULT_DLQ_FAILURE_HANDLER;
+        /** 死信消费失败处理策略实现类全限定名（默认 LogAndDropDlqFailureStrategy） */
+        private String failureStrategy = StreamMQConstants.DEFAULT_DLQ_FAILURE_STRATEGY;
+        /** DLQ 消费失败后的最大重试次数（默认 3） */
+        private int maxDlqRetryAttempts = StreamMQConstants.DEFAULT_DLQ_MAX_RETRY_ATTEMPTS;
+        /** DLQ 消费重试延迟（毫秒，默认 10000） */
+        private long dlqRetryDelayMs = StreamMQConstants.DEFAULT_DLQ_RETRY_DELAY_MS;
+        /** 是否启用二级死信队列（默认 false） */
+        private boolean secondaryDlqEnabled = StreamMQConstants.DEFAULT_SECONDARY_DLQ_ENABLED;
+        /** 二级死信 Stream Key 前缀段（默认 "dlq2"） */
+        private String secondaryDlqKeyPrefix = StreamMQConstants.DEFAULT_SECONDARY_DLQ_KEY_PREFIX;
+        /** 告警阈值（默认 1） */
+        private int alertThreshold = StreamMQConstants.DEFAULT_DLQ_ALERT_THRESHOLD;
+        /** 重试退避倍数（默认 1.0 = 固定延迟） */
+        private double retryBackoffMultiplier = StreamMQConstants.DEFAULT_DLQ_RETRY_BACKOFF_MULTIPLIER;
+        /** 重试延迟上限（毫秒，默认 300000） */
+        private long retryMaxDelayMs = StreamMQConstants.DEFAULT_DLQ_RETRY_MAX_DELAY_MS;
     }
 
     /**

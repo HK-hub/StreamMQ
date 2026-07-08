@@ -23,7 +23,9 @@ import io.github.streammq.core.interceptor.ConsumerInterceptorChain;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.listener.ListenerType;
+import io.github.streammq.core.policy.DlqConfig;
 import io.github.streammq.core.policy.DlqFailureHandler;
+import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.OrderlyShardLockManager;
 import io.github.streammq.core.policy.RetryAndDlqHandler;
 import io.github.streammq.core.policy.RetryPolicy;
@@ -119,15 +121,13 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     private final OrderlyShardLockManager shardLockManager;
     /** 是否启用 per-consumer 策略实例化（高级构造器注入自定义 handler 时关闭） */
     private final boolean perConsumerEnabled;
+    /** 全局 DLQ 失败策略 */
+    private final DlqFailureStrategy dlqFailureStrategy;
+    /** 全局 DLQ 配置 */
+    private final DlqConfig dlqConfig;
 
     /**
      * 构造容器（向后兼容：内部创建默认策略实现，per-consumer 启用）。
-     *
-     * @param redisson Redisson 客户端
-     * @param consumerFactory 消费者工厂
-     * @param messageConverter 全局消息转换器
-     * @param retryPolicy 全局重试策略
-     * @param defaultNamespace 默认命名空间（可为空字符串）
      */
     public DefaultStreamMQListenerContainer(RedissonClient redisson,
                                             StreamMQListenerFactory consumerFactory,
@@ -135,18 +135,12 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                             RetryPolicy retryPolicy,
                                             String defaultNamespace) {
         this(redisson, consumerFactory, messageConverter, retryPolicy,
-            new LogAndDropDlqFailureHandler(), defaultNamespace);
+            new LogAndDropDlqFailureHandler(), new LogAndDropDlqFailureStrategy(),
+            DlqConfig.builder().build(), defaultNamespace);
     }
 
     /**
      * 构造容器并注入全局死信消费失败处理器（per-consumer 启用）。
-     *
-     * @param redisson Redisson 客户端
-     * @param consumerFactory 消费者工厂
-     * @param messageConverter 全局消息转换器
-     * @param retryPolicy 全局重试策略
-     * @param dlqFailureHandler 全局死信消费失败处理器
-     * @param defaultNamespace 默认命名空间（可为空字符串）
      */
     public DefaultStreamMQListenerContainer(RedissonClient redisson,
                                             StreamMQListenerFactory consumerFactory,
@@ -154,17 +148,34 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                             RetryPolicy retryPolicy,
                                             DlqFailureHandler dlqFailureHandler,
                                             String defaultNamespace) {
+        this(redisson, consumerFactory, messageConverter, retryPolicy, dlqFailureHandler,
+            new LogAndDropDlqFailureStrategy(), DlqConfig.builder().build(), defaultNamespace);
+    }
+
+    /**
+     * 构造容器并注入全局 DLQ 策略与配置（per-consumer 启用）。
+     */
+    public DefaultStreamMQListenerContainer(RedissonClient redisson,
+                                            StreamMQListenerFactory consumerFactory,
+                                            MessageConverter messageConverter,
+                                            RetryPolicy retryPolicy,
+                                            DlqFailureHandler dlqFailureHandler,
+                                            DlqFailureStrategy dlqFailureStrategy,
+                                            DlqConfig dlqConfig,
+                                            String defaultNamespace) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
         this.consumerFactory = Objects.requireNonNull(consumerFactory, "consumerFactory");
         this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
         this.retryPolicy = Objects.requireNonNull(retryPolicy, "retryPolicy");
         this.dlqFailureHandler = Objects.requireNonNull(dlqFailureHandler, "dlqFailureHandler");
+        this.dlqFailureStrategy = Objects.requireNonNull(dlqFailureStrategy, "dlqFailureStrategy");
+        this.dlqConfig = Objects.requireNonNull(dlqConfig, "dlqConfig");
         this.defaultNamespace = defaultNamespace == null ? "" : defaultNamespace;
         DefaultConsumerInterceptorChain chain = new DefaultConsumerInterceptorChain();
         this.interceptorChain = chain;
         this.shardLockManager = new RedissonOrderlyShardLockManager(redisson);
         this.sharedRetryDlqHandler = new DefaultRetryAndDlqHandler(
-            redisson, messageConverter, retryPolicy, chain, dlqFailureHandler);
+            redisson, messageConverter, retryPolicy, chain, dlqFailureHandler, dlqFailureStrategy, dlqConfig);
         this.perConsumerEnabled = true;
     }
 
@@ -179,6 +190,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      * @param messageConverter 全局消息转换器
      * @param retryPolicy 全局重试策略（回退）
      * @param dlqFailureHandler 全局死信失败处理器（回退）
+     * @param dlqFailureStrategy 全局 DLQ 失败策略（回退）
+     * @param dlqConfig 全局 DLQ 配置（回退）
      * @param defaultNamespace 默认命名空间
      * @param interceptorChain 消费者拦截器链
      * @param retryDlqHandler 共享 ACK/重试/DLQ 路由处理器
@@ -189,6 +202,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                             MessageConverter messageConverter,
                                             RetryPolicy retryPolicy,
                                             DlqFailureHandler dlqFailureHandler,
+                                            DlqFailureStrategy dlqFailureStrategy,
+                                            DlqConfig dlqConfig,
                                             String defaultNamespace,
                                             ConsumerInterceptorChain interceptorChain,
                                             RetryAndDlqHandler retryDlqHandler,
@@ -198,6 +213,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
         this.retryPolicy = Objects.requireNonNull(retryPolicy, "retryPolicy");
         this.dlqFailureHandler = Objects.requireNonNull(dlqFailureHandler, "dlqFailureHandler");
+        this.dlqFailureStrategy = Objects.requireNonNull(dlqFailureStrategy, "dlqFailureStrategy");
+        this.dlqConfig = Objects.requireNonNull(dlqConfig, "dlqConfig");
         this.defaultNamespace = defaultNamespace == null ? "" : defaultNamespace;
         this.interceptorChain = Objects.requireNonNull(interceptorChain, "interceptorChain");
         this.sharedRetryDlqHandler = Objects.requireNonNull(retryDlqHandler, "retryDlqHandler");
@@ -346,7 +363,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
         // 4. per-consumer 路由处理器
         RetryAndDlqHandler handler = new DefaultRetryAndDlqHandler(
-            redisson, converter, policy, interceptorChain, dlqHandler);
+            redisson, converter, policy, interceptorChain, dlqHandler,
+            this.dlqFailureStrategy, this.dlqConfig);
         perConsumerHandlers.put(reg.key(), handler);
 
         // 5. per-consumer 重平衡策略（实例化校验，运行期 Rebalance 模块启用后使用）
