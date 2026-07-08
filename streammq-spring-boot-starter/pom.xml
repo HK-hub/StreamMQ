@@ -25,7 +25,7 @@
         <!-- Redisson Adapter -->
         <dependency>
             <groupId>io.github.streammq</groupId>
-            <artifactId>streammq-redisson-adapter</artifactId>
+            <artifactId>streammq-redisson</artifactId>
         </dependency>
 
         <!-- Spring Boot Autoconfigure（自动装配必需） -->
