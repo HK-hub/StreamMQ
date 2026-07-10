@@ -28,6 +28,7 @@ import io.github.streammq.core.interceptor.ConsumerInterceptor;
 import io.github.streammq.core.interceptor.ConsumerInterceptorChain;
 import io.github.streammq.core.listener.*;
 import io.github.streammq.core.message.Message;
+import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.policy.*;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.util.BodyTypeResolver;
@@ -120,6 +121,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 消费者过滤器解析器（用于从容器中获取 per-consumer 过滤器实例） */
     private volatile ConsumerFilterResolver filterResolver;
 
+    /** 指标收集器（可选注入，用于记录消费指标，null 时为 no-op） */
+    private volatile StreamMQMetrics metrics;
+
     /** 策略类：拦截器链 */
     private final ConsumerInterceptorChain interceptorChain;
 
@@ -130,6 +134,39 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      */
     public void setFilterResolver(ConsumerFilterResolver filterResolver) {
         this.filterResolver = filterResolver;
+    }
+
+    /**
+     * 设置指标收集器，用于记录消费指标。
+     *
+     * @param metrics 指标收集器，可为 null（禁用指标）
+     */
+    public void setMetrics(StreamMQMetrics metrics) {
+        this.metrics = metrics;
+    }
+
+    /**
+     * 设置 ACK/重试/DLQ 处理器的指标收集器。
+     *
+     * <p>将指标收集器传播到共享 {@link DefaultRetryAndDlqHandler} 以及所有已创建的
+     * per-consumer 处理器；后续通过注解新注册的 per-consumer 处理器也会在
+     * {@link #resolvePerConsumerSpi} 中自动注入当前指标收集器。
+     *
+     * @param metrics 指标收集器，可为 null
+     */
+    public void setHandlerMetrics(StreamMQMetrics metrics) {
+        this.metrics = metrics;
+        if (metrics == null) {
+            return;
+        }
+        if (sharedRetryDlqHandler instanceof DefaultRetryAndDlqHandler drh) {
+            drh.setMetrics(metrics);
+        }
+        for (RetryAndDlqHandler handler : perConsumerHandlers.values()) {
+            if (handler instanceof DefaultRetryAndDlqHandler drh) {
+                drh.setMetrics(metrics);
+            }
+        }
     }
 
     /** 策略类：ACK/重试/DLQ 路由（per-consumer 关闭时的共享实例） */
@@ -438,6 +475,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         RetryAndDlqHandler handler = new DefaultRetryAndDlqHandler(
             redisson, converter, policy, interceptorChain, dlqStrategy,
             this.dlqConfig);
+        if (this.metrics != null && handler instanceof DefaultRetryAndDlqHandler drh) {
+            drh.setMetrics(this.metrics);
+        }
         perConsumerHandlers.put(reg.key(), handler);
 
         // 5. per-consumer 重平衡策略（实例化校验，运行期 Rebalance 模块启用后使用）
@@ -770,6 +810,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         RetryAndDlqHandler handler = perConsumerEnabled
             ? perConsumerHandlers.get(reg.key()) : sharedRetryDlqHandler;
         long consumeTimeoutMs = reg.getConsumeTimeoutMillis();
+        long consumeStart = System.nanoTime();
+        boolean recordedByTimeout = false;
         try {
             // 消费者过滤器检查（全局 + per-consumer + selectorExpression）
             if (!acceptMessage(message, reg)) {
@@ -786,7 +828,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             }
             // 消费超时控制：使用 Future.get(timeout) 包裹 onMessage 调用
             if (consumeTimeoutMs > 0 && reg.getType() != ListenerType.ORDERLY) {
-                processWithTimeout(message, reg, listener, ctx, handler);
+                processWithTimeout(message, reg, listener, ctx, handler, consumeStart);
+                recordedByTimeout = true;
                 return;
             }
             try {
@@ -820,6 +863,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         } finally {
             interceptorChain.applyAfter(message, finalAction, ctx);
             ConsumerMdcTrace.clear();
+            if (!recordedByTimeout) {
+                recordConsumeMetrics(reg, consumeStart, finalAction.isSuccess());
+            }
         }
     }
 
@@ -828,7 +874,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void processWithTimeout(Message<?> message, ListenerRegistration reg, StreamMQListener listener,
-                                     ConsumeContext ctx, RetryAndDlqHandler handler) {
+                                     ConsumeContext ctx, RetryAndDlqHandler handler, long consumeStart) {
         Future<ConsumeAction> future = consumeExecutor.submit(() -> {
             StreamMessageConcurrentlyConsumer consumer = (StreamMessageConcurrentlyConsumer) reg.getConsumer();
             return consumer.onMessage(message, ctx);
@@ -839,16 +885,37 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 action = ConsumeAction.RECONSUME_LATER;
             }
             handler.handleAction(action, message, reg, listener, null);
+            recordConsumeMetrics(reg, consumeStart, action.isSuccess());
         } catch (TimeoutException e) {
             future.cancel(true);
             LOG.warn("Consume timeout ({}ms) for message, cancelling and retrying: topic={}, group={}, messageId={}",
                 reg.getConsumeTimeoutMillis(), reg.getTopic(), reg.getGroup(), message.getMessageId());
             handler.handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener, e);
+            recordConsumeMetrics(reg, consumeStart, false);
         } catch (ExecutionException | InterruptedException e) {
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
             handler.handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener, e);
+            recordConsumeMetrics(reg, consumeStart, false);
+        }
+    }
+
+    /**
+     * 记录消费指标（null 安全，指标异常不影响业务主流程）。
+     *
+     * @param reg        Listener 注册信息
+     * @param startNanos 消费起始时间（{@link System#nanoTime()}）
+     * @param success    是否消费成功
+     */
+    private void recordConsumeMetrics(ListenerRegistration<?> reg, long startNanos, boolean success) {
+        if (metrics != null) {
+            try {
+                metrics.recordConsume(reg.getTopic(), reg.getGroup(), success,
+                    Duration.ofNanos(System.nanoTime() - startNanos));
+            } catch (Exception ignored) {
+                // 指标收集失败不得影响业务主流程
+            }
         }
     }
 

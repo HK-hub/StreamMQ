@@ -3,7 +3,9 @@ package io.github.streammq.adapter.redisson.scheduler;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.DelayLevel;
+import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
+import lombok.Setter;
 import org.redisson.api.RBatch;
 import org.redisson.api.RMap;
 import org.redisson.api.RScoredSortedSet;
@@ -66,6 +68,10 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     private final AtomicBoolean running = new AtomicBoolean(false);
     /** 当前的扫描调度任务，stop 时取消以支持后续 restart */
     private volatile ScheduledFuture<?> scanFuture;
+
+    /** 指标收集器（可选注入，用于记录延时投递指标，null 时为 no-op） */
+    @Setter
+    private volatile StreamMQMetrics metrics;
 
     /**
      * 构造调度器。
@@ -188,6 +194,8 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 batch.<String, String>getMap(payloadKey).deleteAsync();
                 transferred++;
 
+                recordDelayMetrics(level.name());
+
                 // 批量达到阈值时执行
                 if (transferred >= batchSize) {
                     executeBatch(batch);
@@ -259,6 +267,8 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 batch.<String, String>getMap(payloadKey).deleteAsync();
                 transferred++;
 
+                recordDelayMetrics("custom");
+
                 if (transferred >= batchSize) {
                     executeBatch(batch);
                     batch = null;
@@ -285,6 +295,21 @@ public class DelayMessageScheduler implements StreamMQScheduler {
             batch.execute();
         } catch (RuntimeException ex) {
             LOG.error("Delay batch execute failed: {}", ex.getMessage(), ex);
+        }
+    }
+
+    /**
+     * 记录延时投递指标（null 安全，指标异常不影响业务主流程）。
+     *
+     * @param level 延时等级
+     */
+    private void recordDelayMetrics(String level) {
+        if (metrics != null) {
+            try {
+                metrics.recordDelayDelivery(level);
+            } catch (Exception ignored) {
+                // 指标收集失败不得影响业务主流程
+            }
         }
     }
 

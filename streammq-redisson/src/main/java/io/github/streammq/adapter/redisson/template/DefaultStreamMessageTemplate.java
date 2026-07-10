@@ -12,6 +12,7 @@ import io.github.streammq.core.filter.ProducerFilter;
 import io.github.streammq.core.filter.ProducerFilterChain;
 import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.message.*;
+import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.SendCallback;
 import io.github.streammq.core.producer.StreamMessageProducer;
@@ -25,6 +26,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 
+import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -69,6 +71,10 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
      */
     @Setter
     private volatile TransactionScanner transactionScanner;
+
+    /** 指标收集器（可选注入，用于记录发送指标，null 时为 no-op） */
+    @Setter
+    private volatile StreamMQMetrics metrics;
 
     /**
      * 构造 Template。
@@ -152,11 +158,13 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
 
             // 3. 委派 Producer 发送（含重试）
             StreamMessageProducer producer = resolveProducer(message.getTopic());
+            long sendStart = System.nanoTime();
             StreamMQException lastError = null;
             for (int attempt = 0; attempt <= retryTimes; attempt++) {
                 try {
                     SendResult result = producer.syncSend(message, timeoutMillis);
                     applyInterceptorsAfter(message, result);
+                    recordSendMetrics(message.getTopic(), result.isSuccess(), sendStart);
                     return result;
                 } catch (StreamMQException ex) {
                     lastError = ex;
@@ -165,10 +173,12 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                         attempt + 1, retryTimes + 1, message.getTopic(), ex.getMessage(), ex);
                 } catch (RuntimeException ex) {
                     notifyProducerException(message, ex, InvokeTiming.EXECUTING);
+                    recordSendMetrics(message.getTopic(), false, sendStart);
                     throw ex;
                 }
             }
             applyInterceptorsAfter(message, buildFailedResult(message, lastError));
+            recordSendMetrics(message.getTopic(), false, sendStart);
             throw lastError != null ? lastError
                 : new StreamMQException("syncSend failed for unknown reason: " + message.getTopic());
         } finally {
@@ -189,13 +199,16 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                     new StreamMQException("Aborted by interceptor"));
             }
             StreamMessageProducer producer = resolveProducer(message.getTopic());
+            long sendStart = System.nanoTime();
             return producer.asyncSend(message).whenComplete((result, ex) -> {
                 if (ex == null) {
                     applyInterceptorsAfter(message, result);
+                    recordSendMetrics(message.getTopic(), result != null && result.isSuccess(), sendStart);
                 } else {
                     Exception e = ex instanceof Exception ? (Exception) ex
                         : new StreamMQException("async send failed", ex);
                     notifyProducerException(message, e, InvokeTiming.EXECUTING);
+                    recordSendMetrics(message.getTopic(), false, sendStart);
                 }
             });
         } finally {
@@ -485,6 +498,23 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     }
 
     // ===================== 内部方法 =====================
+
+    /**
+     * 记录发送指标（null 安全，指标异常不影响业务主流程）。
+     *
+     * @param topic       消息主题
+     * @param success     是否发送成功
+     * @param startNanos  发送起始时间（{@link System#nanoTime()}）
+     */
+    private void recordSendMetrics(String topic, boolean success, long startNanos) {
+        if (metrics != null) {
+            try {
+                metrics.recordSend(topic, success, Duration.ofNanos(System.nanoTime() - startNanos));
+            } catch (Exception ignored) {
+                // 指标收集失败不得影响业务主流程
+            }
+        }
+    }
 
     /**
      * 执行 before 拦截器链。

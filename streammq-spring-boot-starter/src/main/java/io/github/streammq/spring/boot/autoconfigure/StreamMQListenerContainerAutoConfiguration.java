@@ -5,6 +5,7 @@ import io.github.streammq.core.filter.ConsumerFilter;
 import io.github.streammq.core.interceptor.ConsumerInterceptor;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.policy.DlqConfig;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
@@ -65,6 +66,7 @@ public class StreamMQListenerContainerAutoConfiguration {
                                                                        StreamMQProperties properties,
                                                                        ObjectProvider<ConsumerInterceptor> consumerInterceptorProvider,
                                                                        ObjectProvider<ConsumerFilter> consumerFilterProvider,
+                                                                       ObjectProvider<StreamMQMetrics> metricsProvider,
                                                                        ApplicationContext applicationContext) {
         String namespace = properties.getNamespace();
         LOG.info("Creating DefaultStreamMQListenerContainer: namespace={}, dlqFailureStrategy={}",
@@ -80,6 +82,14 @@ public class StreamMQListenerContainerAutoConfiguration {
                 return null;
             }
         });
+
+        // 注入指标收集器：消费指标记录在容器，重试 / 死信指标传播到内部 DefaultRetryAndDlqHandler
+        StreamMQMetrics metrics = metricsProvider.getIfAvailable();
+        if (metrics != null) {
+            container.setMetrics(metrics);
+            container.setHandlerMetrics(metrics);
+            LOG.info("StreamMQMetrics injected into DefaultStreamMQListenerContainer: consume/retry/dlq metrics enabled");
+        }
 
         java.util.List<ConsumerInterceptor> interceptors = consumerInterceptorProvider.stream().toList();
         if (!interceptors.isEmpty()) {

@@ -18,6 +18,7 @@ import io.github.streammq.core.service.DefaultStreamMessageService;
 import io.github.streammq.core.service.StreamMessageService;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.interceptor.TraceCollector;
+import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.policy.DlqConfig;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.ManagementAuthenticator;
@@ -202,7 +203,8 @@ public class StreamMQCoreAutoConfiguration {
     public StreamMessageTemplate streamMQTemplate(StreamMessageProducerFactory producerFactory,
                                                      MessageConverter converter,
                                                      StreamMQProperties properties,
-                                                     ObjectProvider<TransactionScanner> transactionScannerProvider) {
+                                                     ObjectProvider<TransactionScanner> transactionScannerProvider,
+                                                     ObjectProvider<StreamMQMetrics> metricsProvider) {
         String defaultGroup = properties.getProducer().getGroup();
         String txGroup = properties.getTransaction().getDefaultGroup();
         // 注入 namespace / send-message-timeout / stream.max-len 到 defaultConfig,
@@ -222,6 +224,12 @@ public class StreamMQCoreAutoConfiguration {
         if (scanner != null) {
             template.setTransactionScanner(scanner);
             LOG.info("TransactionScanner injected into DefaultStreamMessageTemplate: full half-message flow enabled");
+        }
+        // 注入指标收集器（如果可用），启用发送指标埋点
+        StreamMQMetrics metrics = metricsProvider.getIfAvailable();
+        if (metrics != null) {
+            template.setMetrics(metrics);
+            LOG.info("StreamMQMetrics injected into DefaultStreamMessageTemplate: send metrics enabled");
         }
         return template;
     }

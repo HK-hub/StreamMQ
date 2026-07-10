@@ -4,12 +4,14 @@ import io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -51,10 +53,12 @@ public class StreamMQSchedulerAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(RetryScheduler.class)
     @ConditionalOnProperty(prefix = "streammq.retry", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public RetryScheduler streamMQRetryScheduler(RedissonClient redisson, StreamMQProperties properties) {
+    public RetryScheduler streamMQRetryScheduler(RedissonClient redisson, StreamMQProperties properties,
+                                                   ObjectProvider<StreamMQMetrics> metricsProvider) {
         Duration interval = properties.getRetry().getScanInterval();
         int batchSize = properties.getRetry().getBatchSize();
         LOG.info("Creating RetryScheduler: scanInterval={}, batchSize={}", interval, batchSize);
+        // RetryScheduler 当前未暴露指标埋点接口；重试指标由 DefaultRetryAndDlqHandler 在调度重试时记录。
         return new RetryScheduler(redisson, properties.getNamespace(),
             interval.toMillis(), batchSize);
     }
@@ -70,12 +74,19 @@ public class StreamMQSchedulerAutoConfiguration {
     @ConditionalOnMissingBean(DelayMessageScheduler.class)
     @ConditionalOnProperty(prefix = "streammq.delay", name = "enabled", havingValue = "true", matchIfMissing = true)
     public DelayMessageScheduler streamMQDelayMessageScheduler(RedissonClient redisson,
-                                                                StreamMQProperties properties) {
+                                                                StreamMQProperties properties,
+                                                                ObjectProvider<StreamMQMetrics> metricsProvider) {
         Duration interval = properties.getDelay().getScanInterval();
         int batchSize = properties.getDelay().getBatchSize();
         LOG.info("Creating DelayMessageScheduler: scanInterval={}, batchSize={}", interval, batchSize);
-        return new DelayMessageScheduler(redisson, properties.getNamespace(),
+        DelayMessageScheduler scheduler = new DelayMessageScheduler(redisson, properties.getNamespace(),
             interval.toMillis(), batchSize);
+        StreamMQMetrics metrics = metricsProvider.getIfAvailable();
+        if (metrics != null) {
+            scheduler.setMetrics(metrics);
+            LOG.info("StreamMQMetrics injected into DelayMessageScheduler: delay delivery metrics enabled");
+        }
+        return scheduler;
     }
 
     /**
@@ -91,12 +102,19 @@ public class StreamMQSchedulerAutoConfiguration {
     @ConditionalOnProperty(prefix = "streammq.transaction", name = "enabled", havingValue = "true", matchIfMissing = true)
     public TransactionScanner streamMQTransactionScanner(RedissonClient redisson,
                                                           MessageConverter messageConverter,
-                                                          StreamMQProperties properties) {
+                                                          StreamMQProperties properties,
+                                                          ObjectProvider<StreamMQMetrics> metricsProvider) {
         Duration interval = properties.getTransaction().getCheckInterval();
         int maxCheck = properties.getTransaction().getMaxCheckTimes();
         LOG.info("Creating TransactionScanner: checkInterval={}, maxCheckTimes={}", interval, maxCheck);
-        return new TransactionScanner(redisson, properties.getNamespace(), messageConverter,
+        TransactionScanner scanner = new TransactionScanner(redisson, properties.getNamespace(), messageConverter,
             interval.toMillis(), maxCheck, TransactionScanner.DEFAULT_BATCH_SIZE);
+        StreamMQMetrics metrics = metricsProvider.getIfAvailable();
+        if (metrics != null) {
+            scanner.setMetrics(metrics);
+            LOG.info("StreamMQMetrics injected into TransactionScanner: transaction metrics enabled");
+        }
+        return scanner;
     }
 
     /**

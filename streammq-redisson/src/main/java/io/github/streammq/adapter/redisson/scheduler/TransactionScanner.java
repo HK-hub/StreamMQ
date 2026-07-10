@@ -6,9 +6,11 @@ import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.LocalTransactionState;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.core.transaction.TransactionChecker;
 import io.github.streammq.core.transaction.TransactionContext;
+import lombok.Setter;
 import org.redisson.api.*;
 import org.redisson.api.stream.StreamAddArgs;
 import org.slf4j.Logger;
@@ -87,6 +89,10 @@ public class TransactionScanner implements StreamMQScheduler {
     private final ConcurrentMap<String, TransactionChecker<?>> checkerRegistry = new ConcurrentHashMap<>();
     /** 当前的扫描调度任务，stop 时取消以支持后续 restart */
     private volatile ScheduledFuture<?> scanFuture;
+
+    /** 指标收集器（可选注入，用于记录事务指标，null 时为 no-op） */
+    @Setter
+    private volatile StreamMQMetrics metrics;
 
     /**
      * 构造调度器，使用默认参数。
@@ -263,6 +269,8 @@ public class TransactionScanner implements StreamMQScheduler {
         removeCheckEntry(txId, txGroup);
         cleanupTerminalState(stateMap, txId);
 
+        recordTransactionCommitMetrics(txGroup);
+
         LOG.info("Transaction committed: txId={}, txGroup={}, targetTopic={}", txId, txGroup, targetTopic);
     }
 
@@ -302,6 +310,8 @@ public class TransactionScanner implements StreamMQScheduler {
         stateMap.put(txId, STATE_ROLLBACK);
         removeCheckEntry(txId, txGroup);
         cleanupTerminalState(stateMap, txId);
+
+        recordTransactionRollbackMetrics(txGroup);
 
         LOG.info("Transaction rolled back: txId={}, txGroup={}", txId, txGroup);
     }
@@ -396,6 +406,8 @@ public class TransactionScanner implements StreamMQScheduler {
                 txId, ex.getMessage(), ex);
             state = LocalTransactionState.UNKNOW;
         }
+
+        recordTransactionCheckMetrics(txGroup, state.name());
 
         // 读取回查次数
         int checkCount = getCheckCount(txId, txGroup);
@@ -561,5 +573,53 @@ public class TransactionScanner implements StreamMQScheduler {
         long timestamp = Long.parseLong(halfIdStr.substring(0, dashIdx));
         long sequence = Long.parseLong(halfIdStr.substring(dashIdx + 1));
         return new StreamMessageId(timestamp, sequence);
+    }
+
+    // ===================== 指标收集 =====================
+
+    /**
+     * 记录事务提交指标（null 安全，指标异常不影响业务主流程）。
+     *
+     * @param txGroup 事务组名
+     */
+    private void recordTransactionCommitMetrics(String txGroup) {
+        if (metrics != null) {
+            try {
+                metrics.recordTransactionCommit(txGroup);
+            } catch (Exception ignored) {
+                // 指标收集失败不得影响业务主流程
+            }
+        }
+    }
+
+    /**
+     * 记录事务回滚指标（null 安全，指标异常不影响业务主流程）。
+     *
+     * @param txGroup 事务组名
+     */
+    private void recordTransactionRollbackMetrics(String txGroup) {
+        if (metrics != null) {
+            try {
+                metrics.recordTransactionRollback(txGroup);
+            } catch (Exception ignored) {
+                // 指标收集失败不得影响业务主流程
+            }
+        }
+    }
+
+    /**
+     * 记录事务回查指标（null 安全，指标异常不影响业务主流程）。
+     *
+     * @param txGroup 事务组名
+     * @param result  回查结果
+     */
+    private void recordTransactionCheckMetrics(String txGroup, String result) {
+        if (metrics != null) {
+            try {
+                metrics.recordTransactionCheck(txGroup, result);
+            } catch (Exception ignored) {
+                // 指标收集失败不得影响业务主流程
+            }
+        }
     }
 }

@@ -14,6 +14,7 @@ import io.github.streammq.core.listener.StreamMQListener;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.policy.DlqConfig;
 import io.github.streammq.core.policy.DlqFailureContext;
 import io.github.streammq.core.policy.DlqFailureDecision;
@@ -22,6 +23,7 @@ import io.github.streammq.core.policy.RetryAndDlqHandler;
 import io.github.streammq.core.policy.RetryPolicy;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
+import lombok.Setter;
 import org.redisson.api.RMap;
 import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RStream;
@@ -69,6 +71,10 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
     private final DlqFailureStrategy dlqFailureStrategy;
     @NonNull
     private final DlqConfig dlqConfig;
+
+    /** 指标收集器（可选注入，用于记录重试 / 死信指标，null 时为 no-op） */
+    @Setter
+    private volatile StreamMQMetrics metrics;
 
     @Override
     public void handleAction(ConsumeAction action, Message<?> message, ListenerRegistration<?> reg,
@@ -257,6 +263,8 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
         zset.add(nextRetryAt, msgIdStr);
 
+        recordRetryMetrics(reg.getTopic(), reg.getGroup());
+
         if (LOG.isDebugEnabled()) {
             LOG.debug("Message scheduled for retry: topic={}, group={}, messageId={}, " +
                     "retryCount={}, delayMs={}, nextRetryAt={}",
@@ -277,11 +285,46 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             dlqStream.add(StreamAddArgs.entries(fields));
             LOG.info("Message routed to DLQ: topic={}, group={}, messageId={}, reason={}",
                 reg.getTopic(), reg.getGroup(), messageId, reason);
+            recordDlqMetrics(reg.getTopic(), reg.getGroup());
             return true;
         } catch (RuntimeException ex) {
             LOG.error("Failed to route message to DLQ (topic={}, group={}, messageId={}): {}",
                 reg.getTopic(), reg.getGroup(), messageId, ex.getMessage(), ex);
             return false;
+        }
+    }
+
+    // ===================== 指标收集 =====================
+
+    /**
+     * 记录重试指标（null 安全，指标异常不影响业务主流程）。
+     *
+     * @param topic 消息主题
+     * @param group 消费者组
+     */
+    private void recordRetryMetrics(String topic, String group) {
+        if (metrics != null) {
+            try {
+                metrics.recordRetry(topic, group);
+            } catch (Exception ignored) {
+                // 指标收集失败不得影响业务主流程
+            }
+        }
+    }
+
+    /**
+     * 记录死信指标（null 安全，指标异常不影响业务主流程）。
+     *
+     * @param topic 消息主题
+     * @param group 消费者组
+     */
+    private void recordDlqMetrics(String topic, String group) {
+        if (metrics != null) {
+            try {
+                metrics.recordDlq(topic, group);
+            } catch (Exception ignored) {
+                // 指标收集失败不得影响业务主流程
+            }
         }
     }
 }

@@ -5,10 +5,16 @@ import io.github.streammq.core.StreamMQConstants;
 import java.lang.annotation.*;
 
 /**
- * StreamMQ 启用注解，标注在 Spring Boot 启动类上触发自动装配。
+ * StreamMQ 启用注解，标注在 Spring Boot 启动类上显式声明使用 StreamMQ。
  *
  * <p>对齐 RocketMQ Spring Starter 的 {@code @EnableRocketMQ} 体验。
- * 通过 {@code @Import(StreamMQAutoConfiguration.class)} 触发装配。
+ *
+ * <p><b>自动装配触发方式</b>：当 {@code streammq-spring-boot-starter} 在 classpath 时，
+ * Spring Boot 通过 {@code META-INF/spring/AutoConfiguration.imports} 自动装配
+ * {@code StreamMQAutoConfiguration}，无需手动 {@code @Import}。
+ * 本注解作为显式标记与配置属性载体（{@link #mode()} / {@link #tracingEnabled()} /
+ * {@link #scanBasePackages()}），供 starter 中的
+ * {@code StreamMQListenerRegistrar} 等组件读取以调整行为。
  *
  * <p>使用示例：
  * <pre>{@code
