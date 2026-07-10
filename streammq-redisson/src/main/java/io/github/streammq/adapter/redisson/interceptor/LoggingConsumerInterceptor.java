@@ -4,6 +4,7 @@ import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.enums.InvokeTiming;
 import io.github.streammq.core.interceptor.ConsumerInterceptor;
 import io.github.streammq.core.message.Message;
+import io.github.streammq.core.consumer.ConsumeContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,25 +33,32 @@ public class LoggingConsumerInterceptor implements ConsumerInterceptor {
     private static final Logger LOG = LoggerFactory.getLogger(LoggingConsumerInterceptor.class);
 
     @Override
-    public boolean beforeConsume(Message<?> message) {
+    public boolean beforeConsume(Message<?> message, ConsumeContext context) {
         Objects.requireNonNull(message, "message");
-        LOG.info("[ConsumerLog] beforeConsume topic={}, keys={}", message.getTopic(), message.getKeys());
+        LOG.info("[ConsumerLog] beforeConsume topic={}, keys={}, group={}",
+            message.getTopic(), message.getKeys(),
+            context != null ? context.consumerGroup() : null);
         return true;
     }
 
     @Override
-    public void afterConsume(Message<?> message, ConsumeAction action) {
+    public void afterConsume(Message<?> message, ConsumeAction action, ConsumeContext context) {
         Objects.requireNonNull(message, "message");
         Objects.requireNonNull(action, "action");
-        LOG.info("[ConsumerLog] afterConsume topic={}, action={}", message.getTopic(), action);
+        LOG.info("[ConsumerLog] afterConsume topic={}, action={}, group={}, reconsumeTimes={}",
+            message.getTopic(), action,
+            context != null ? context.consumerGroup() : null,
+            context != null ? context.reconsumeTimes() : 0);
     }
 
     @Override
-    public void onException(Message<?> message, Exception exception, InvokeTiming timing) {
-        LOG.error("[ConsumerLog] onException topic={}, keys={}, timing={}",
+    public void onException(Message<?> message, Exception exception, InvokeTiming timing, ConsumeContext context) {
+        LOG.error("[ConsumerLog] onException topic={}, keys={}, timing={}, group={}",
             message != null ? message.getTopic() : null,
             message != null ? message.getKeys() : null,
-            timing, exception);
+            timing,
+            context != null ? context.consumerGroup() : null,
+            exception);
     }
 
     @Override

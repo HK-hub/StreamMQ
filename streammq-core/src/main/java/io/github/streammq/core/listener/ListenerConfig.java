@@ -8,6 +8,8 @@ import lombok.Builder;
 import lombok.Getter;
 import lombok.NonNull;
 
+import java.util.Objects;
+
 /**
  * 监听器配置，替代弱类型 {@code Map<String, Object>} 的强类型值对象。
  *
@@ -117,4 +119,109 @@ public class ListenerConfig {
      */
     @Builder.Default
     private final boolean broadcast = false;
+
+    @lombok.Builder.Default
+    private final int maxReconsumeTimes = StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
+
+    @lombok.Builder.Default
+    private final long consumeTimeoutMillis = StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS;
+
+    @lombok.Builder.Default
+    private final int consumeThreadMin = 1;
+
+    @lombok.Builder.Default
+    private final int consumeThreadMax = StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX;
+
+    @lombok.Builder.Default
+    private final long suspendCurrentQueueTimeMillis = StreamMQConstants.DEFAULT_SUSPEND_CURRENT_QUEUE_TIME_MS;
+
+    @lombok.Builder.Default
+    private final int shardCount = StreamMQConstants.DEFAULT_SHARD_COUNT;
+
+    @lombok.Builder.Default
+    private final int streamMaxLen = StreamMQConstants.DEFAULT_STREAM_MAX_LEN;
+
+    @lombok.Builder.Default
+    private final boolean enableMsgTrace = false;
+
+    /**
+     * Builder 自定义验证。
+     * <p>验证规则：
+     * <ul>
+     *   <li>topic 不能为空</li>
+     *   <li>consumerGroup 不能为空</li>
+     *   <li>pullBatchSize 必须 > 0</li>
+     *   <li>consumeThreadMin 必须 >= 1</li>
+     *   <li>consumeThreadMax 必须 >= consumeThreadMin</li>
+     *   <li>maxReconsumeTimes 必须 >= 0</li>
+     *   <li>shardCount 必须 >= 1（顺序消费时）</li>
+     * </ul>
+     */
+    @lombok.Builder
+    public ListenerConfig(String topic, String consumerGroup, String consumerName, String namespace,
+                          int pullBatchSize, long pullBlockTimeoutMillis, long pullIntervalMillis,
+                          Class<? extends MessageSerializer> serializer, MessageConverter converter,
+                          boolean dlqMode, boolean retryMode, Class<?> targetBodyType, boolean broadcast,
+                          int maxReconsumeTimes, long consumeTimeoutMillis, int consumeThreadMin,
+                          int consumeThreadMax, long suspendCurrentQueueTimeMillis, int shardCount,
+                          int streamMaxLen, boolean enableMsgTrace) {
+        this.topic = Objects.requireNonNull(topic, "topic must not be null");
+        this.consumerGroup = Objects.requireNonNull(consumerGroup, "consumerGroup must not be null");
+        if (topic.trim().isEmpty()) {
+            throw new IllegalArgumentException("topic must not be empty");
+        }
+        if (consumerGroup.trim().isEmpty()) {
+            throw new IllegalArgumentException("consumerGroup must not be empty");
+        }
+        if (pullBatchSize <= 0) {
+            throw new IllegalArgumentException("pullBatchSize must be > 0, got: " + pullBatchSize);
+        }
+        if (consumeThreadMin < 1) {
+            throw new IllegalArgumentException("consumeThreadMin must be >= 1, got: " + consumeThreadMin);
+        }
+        if (consumeThreadMax < consumeThreadMin) {
+            throw new IllegalArgumentException(
+                "consumeThreadMax must be >= consumeThreadMin, got: max=" + consumeThreadMax
+                    + ", min=" + consumeThreadMin);
+        }
+        if (maxReconsumeTimes < 0) {
+            throw new IllegalArgumentException("maxReconsumeTimes must be >= 0, got: " + maxReconsumeTimes);
+        }
+        if (shardCount < 1) {
+            throw new IllegalArgumentException("shardCount must be >= 1, got: " + shardCount);
+        }
+        if (consumeTimeoutMillis < 0) {
+            throw new IllegalArgumentException("consumeTimeoutMillis must be >= 0, got: " + consumeTimeoutMillis);
+        }
+        if (pullBlockTimeoutMillis < 0) {
+            throw new IllegalArgumentException("pullBlockTimeoutMillis must be >= 0, got: " + pullBlockTimeoutMillis);
+        }
+        if (pullIntervalMillis < 0) {
+            throw new IllegalArgumentException("pullIntervalMillis must be >= 0, got: " + pullIntervalMillis);
+        }
+        if (suspendCurrentQueueTimeMillis < 0) {
+            throw new IllegalArgumentException(
+                "suspendCurrentQueueTimeMillis must be >= 0, got: " + suspendCurrentQueueTimeMillis);
+        }
+
+        this.consumerName = consumerName;
+        this.namespace = namespace == null ? "" : namespace;
+        this.pullBatchSize = pullBatchSize;
+        this.pullBlockTimeoutMillis = pullBlockTimeoutMillis;
+        this.pullIntervalMillis = pullIntervalMillis;
+        this.serializer = serializer;
+        this.converter = converter;
+        this.dlqMode = dlqMode;
+        this.retryMode = retryMode;
+        this.targetBodyType = targetBodyType;
+        this.broadcast = broadcast;
+        this.maxReconsumeTimes = maxReconsumeTimes;
+        this.consumeTimeoutMillis = consumeTimeoutMillis;
+        this.consumeThreadMin = consumeThreadMin;
+        this.consumeThreadMax = consumeThreadMax;
+        this.suspendCurrentQueueTimeMillis = suspendCurrentQueueTimeMillis;
+        this.shardCount = shardCount;
+        this.streamMaxLen = streamMaxLen;
+        this.enableMsgTrace = enableMsgTrace;
+    }
 }

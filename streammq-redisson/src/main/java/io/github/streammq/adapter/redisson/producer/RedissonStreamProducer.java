@@ -224,13 +224,43 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         long now = System.currentTimeMillis();
 
         DelayLevel level = message.getDelayLevel();
-        if (level == null && message.getDelayTimeMillis() != null) {
-            level = DelayLevel.closestAbove(message.getDelayTimeMillis());
+        Long delayTimeMillis = message.getDelayTimeMillis();
+
+        // V1.0+: 任意延时优先使用 custom ZSet，不转换为 DelayLevel
+        if (level == null && delayTimeMillis != null && delayTimeMillis > 0) {
+            // 使用 custom ZSet 支持任意延时
+            long deliverAt = now + delayTimeMillis;
+            String zsetKey = StreamMQKeys.delayCustomZSet(namespace);
+            String payloadHashKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
+
+            Map<String, String> fields = converter.toStreamFields(message);
+            fields.put(FIELD_TARGET_TOPIC, message.getTopic());
+            fields.put(FIELD_DELIVER_AT, Long.toString(deliverAt));
+
+            try {
+                RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
+                zset.add(deliverAt, msgId);
+
+                RMap<String, String> payloadMap = redisson.getMap(payloadHashKey);
+                payloadMap.putAll(fields);
+
+                LOG.debug("Custom delay message queued: msgId={}, delayMs={}, deliverAt={}, topic={}",
+                    msgId, delayTimeMillis, deliverAt, message.getTopic());
+
+                MessageId messageId = new MessageId(now + "-" + Math.abs(msgId.hashCode()));
+                message.setMessageId(messageId);
+                return new SendResult(messageId, message.getTopic(), message.getTag(), message.getBornTimestamp());
+            } catch (RuntimeException ex) {
+                throw new StreamMQBrokerException(
+                    "sendDelayMessage (custom) failed for topic " + message.getTopic(), null, ex);
+            }
         }
+
         if (level == null) {
             throw new StreamMQException("Delay message has no delayLevel or delayTimeMillis");
         }
 
+        // 原有 DelayLevel 逻辑保持不变
         long deliverAt = now + level.toMillis();
         String zsetKey = StreamMQKeys.delayZSet(namespace, level.name());
         String payloadHashKey = StreamMQKeys.delayPayloadHash(namespace, msgId);

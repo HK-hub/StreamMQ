@@ -15,7 +15,7 @@ import java.time.Duration;
  * <ul>
  *   <li>{@link ConsumeAction#SUCCESS} - ACK 消息（从 PEL 移除）</li>
  *   <li>{@link ConsumeAction#RECONSUME_LATER} - 写入 retry ZSet + payload Hash 后 ACK 原消息；
- *       DLQ 模式下调用 {@link DlqFailureHandler} 后 ACK 丢弃，避免死信消息无限循环</li>
+ *       DLQ 模式下调用 {@link DlqFailureStrategy} 后 ACK 丢弃，避免死信消息无限循环</li>
  *   <li>{@code ConsumeAction.defer(Duration)} - 使用指定延迟写入 retry ZSet + payload Hash 后 ACK；
  *       DLQ 模式下同 RECONSUME_LATER 处理</li>
  * </ul>

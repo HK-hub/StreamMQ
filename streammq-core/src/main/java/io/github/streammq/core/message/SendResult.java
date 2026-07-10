@@ -1,10 +1,11 @@
 package io.github.streammq.core.message;
 
-import java.io.Serializable;
-import java.util.Objects;
-
 import lombok.Getter;
 import lombok.NonNull;
+
+import java.io.Serial;
+import java.io.Serializable;
+import java.util.Objects;
 
 /**
  * 发送结果。
@@ -18,6 +19,7 @@ import lombok.NonNull;
 @Getter
 public final class SendResult implements Serializable {
 
+    @Serial
     private static final long serialVersionUID = 1L;
 
     /** 消息 ID（对应 Redis Stream Entry ID） */

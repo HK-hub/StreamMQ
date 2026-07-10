@@ -2,9 +2,11 @@ package io.github.streammq.core.listener;
 
 import io.github.streammq.core.consumer.StreamMessageConsumer;
 import io.github.streammq.core.enums.ConsumeMode;
+import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.filter.ConsumerFilter;
 import io.github.streammq.core.serializer.MessageSerializer;
-import io.github.streammq.core.policy.DlqFailureHandler;
+import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
 
@@ -69,7 +71,11 @@ public interface ListenerRegistration<T> {
 
     Class<?> getTargetBodyType();
 
-    Class<? extends DlqFailureHandler> getDlqFailureHandler();
+    Class<? extends DlqFailureStrategy> getDlqFailureStrategy();
+
+    Class<? extends ConsumerFilter>[] getConsumerFilter();
+
+    SelectorType getSelectorType();
 
     String getNamespace();
 
@@ -102,7 +108,9 @@ public interface ListenerRegistration<T> {
         private boolean enableMsgTrace;
         private boolean dlqMode;
         private Class<?> targetBodyType;
-        private Class<? extends DlqFailureHandler> dlqFailureHandler;
+        private Class<? extends DlqFailureStrategy> dlqFailureStrategy;
+        private Class<? extends ConsumerFilter>[] consumerFilter;
+        private SelectorType selectorType;
         private String namespace;
 
         public Builder<T> type(ListenerType type) {
@@ -215,8 +223,18 @@ public interface ListenerRegistration<T> {
             return this;
         }
 
-        public Builder<T> dlqFailureHandler(Class<? extends DlqFailureHandler> dlqFailureHandler) {
-            this.dlqFailureHandler = dlqFailureHandler;
+        public Builder<T> dlqFailureStrategy(Class<? extends DlqFailureStrategy> dlqFailureStrategy) {
+            this.dlqFailureStrategy = dlqFailureStrategy;
+            return this;
+        }
+
+        public Builder<T> consumerFilter(Class<? extends ConsumerFilter>[] consumerFilter) {
+            this.consumerFilter = consumerFilter;
+            return this;
+        }
+
+        public Builder<T> selectorType(SelectorType selectorType) {
+            this.selectorType = selectorType;
             return this;
         }
 
@@ -230,7 +248,7 @@ public interface ListenerRegistration<T> {
                 shardCount, consumeTimeoutMillis, shardLocks, pullBatchSize,
                 pullBlockTimeoutMillis, pullIntervalMillis, selectorExpression, serializer, retryPolicy,
                 messageConverter, rebalanceStrategy, suspendCurrentQueueTimeMillis, streamMaxLen,
-                enableMsgTrace, dlqMode, targetBodyType, dlqFailureHandler, namespace);
+                enableMsgTrace, dlqMode, targetBodyType, dlqFailureStrategy, consumerFilter, selectorType, namespace);
         }
     }
 

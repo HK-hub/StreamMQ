@@ -6,7 +6,8 @@ import io.github.streammq.core.enums.MessageModel;
 import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.serializer.MessageSerializer;
-import io.github.streammq.core.policy.DlqFailureHandler;
+import io.github.streammq.core.filter.ConsumerFilter;
+import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
 
@@ -249,14 +250,25 @@ public @interface StreamMQConsumer {
     int shardCount() default StreamMQConstants.DEFAULT_SHARD_COUNT;
 
     /**
-     * 每个消费者专属死信消费失败处理器（默认 {@link DlqFailureHandler} 表示使用全局策略）。
+     * 每个消费者专属死信消费失败策略（默认 {@link DlqFailureStrategy} 表示使用全局策略）。
      *
      * <p>仅对 {@link #dlqMode()} 为 true 的消费者生效。当死信消息消费也失败时，
-     * 框架调用此处理器执行告警/持久化等逻辑，随后 ACK 丢弃，避免死信无限循环。
+     * 框架调用此策略决策 drop/retry/secondaryDlq。
      *
-     * @return 死信失败处理器类
+     * @return 死信失败策略类
      */
-    Class<? extends DlqFailureHandler> dlqFailureHandler() default DlqFailureHandler.class;
+    Class<? extends DlqFailureStrategy> dlqFailureStrategy() default DlqFailureStrategy.class;
+
+    /**
+     * 每个消费者专属过滤器（默认 {@link ConsumerFilter} 表示使用全局过滤器）。
+     *
+     * <p>过滤器从 Spring 容器中获取实例，支持多个过滤器（逗号分隔）。
+     * 过滤器执行顺序：先执行 {@link #selectorExpression()} 对应的内置过滤器（order = -1），
+     * 再按 {@link ConsumerFilter#order()} 升序执行自定义过滤器。
+     *
+     * @return 过滤器类
+     */
+    Class<? extends ConsumerFilter>[] consumerFilter() default {};
 
     /**
      * 是否为 DLQ（死信队列）消费者，默认 false。

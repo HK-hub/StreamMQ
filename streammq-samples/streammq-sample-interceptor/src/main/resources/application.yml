@@ -1,0 +1,14 @@
+spring:
+  application:
+    name: streammq-sample-interceptor
+
+streammq:
+  enabled: true
+  namespace: sample
+  producer:
+    group: interceptor-producer-group
+
+redisson:
+  singleServerConfig:
+    address: "redis://127.0.0.1:6379"
+    database: 0

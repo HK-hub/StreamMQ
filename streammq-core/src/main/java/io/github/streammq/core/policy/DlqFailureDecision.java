@@ -8,7 +8,7 @@ import java.util.Objects;
  *
  * <p>三种内置决策：
  * <ul>
- *   <li>{@link #drop()} - ACK 丢弃（调用 {@link DlqFailureHandler} 后）</li>
+ *   <li>{@link #drop()} - ACK 丢弃（调用 {@link DlqFailureStrategy} 后）</li>
  *   <li>{@link #retry(Duration)} - 按指定延迟重试（写入 retry ZSet，到期后重新投递到 DLQ Stream）</li>
  *   <li>{@link #secondaryDlq()} - 转投到二级死信队列（实现多级 DLQ 归档）</li>
  * </ul>
@@ -33,7 +33,7 @@ public final class DlqFailureDecision {
         this.retryDelay = retryDelay;
     }
 
-    /** 丢弃（ACK 后由 DlqFailureHandler 记录日志/告警） */
+    /** 丢弃（ACK 后由 DlqFailureStrategy 记录日志/告警） */
     public static DlqFailureDecision drop() {
         return new DlqFailureDecision(Type.DROP, null);
     }

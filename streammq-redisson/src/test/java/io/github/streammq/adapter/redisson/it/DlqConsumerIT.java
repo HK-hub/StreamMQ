@@ -13,9 +13,11 @@ import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.converter.MessageConverter;
-import io.github.streammq.core.policy.DlqFailureHandler;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.policy.RebalanceStrategy;
+import io.github.streammq.core.policy.DlqFailureStrategy;
+import io.github.streammq.core.policy.DlqFailureDecision;
+import io.github.streammq.core.policy.DlqFailureContext;
 import io.github.streammq.core.policy.RetryPolicy;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -238,32 +240,37 @@ class DlqConsumerIT extends AbstractRedisIT {
     }
 
     @Test
-    @DisplayName("DLQ 消费者消费失败后调用 DlqFailureHandler 并丢弃：消息从 DLQ PEL 移除，不进入重试循环")
+    @DisplayName("DLQ 消费者消费失败后调用 DlqFailureStrategy 并丢弃：消息从 DLQ PEL 移除，不进入重试循环")
     void dlqConsumer_consumeFailure_dropsMessage() {
         String topic = "dlq-drop-topic";
         String group = "dlq-drop-group";
 
         RetryPolicy noRetryPolicy = new NoRetryPolicy();
         RedissonStreamListenerFactory consumerFactory = new RedissonStreamListenerFactory(redisson, converter);
-        // 自定义死信失败处理器，记录调用
         java.util.concurrent.atomic.AtomicReference<Message<?>> handledMessage = new java.util.concurrent.atomic.AtomicReference<>();
         java.util.concurrent.atomic.AtomicReference<Throwable> handledCause = new java.util.concurrent.atomic.AtomicReference<>();
-        DlqFailureHandler recordingHandler = new DlqFailureHandler() {
+        DlqFailureStrategy recordingStrategy = new DlqFailureStrategy() {
             @Override
-            public void handleFailure(Message<?> message, ListenerRegistration<?> reg, Throwable cause) {
+            public DlqFailureDecision decide(Message<?> message, DlqFailureContext ctx) {
                 handledMessage.set(message);
-                handledCause.set(cause);
+                handledCause.set(ctx.lastFailureCause());
+                return DlqFailureDecision.drop();
+            }
+
+            @Override
+            public String name() {
+                return "recording-strategy";
             }
         };
         DefaultStreamMQListenerContainer container =
-            new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, noRetryPolicy, recordingHandler, namespace);
+            new DefaultStreamMQListenerContainer(redisson, consumerFactory, converter, noRetryPolicy, recordingStrategy, namespace);
 
         // 业务消费者：始终失败
         container.registerConsumer(
             (msg, ctx) -> { throw new RuntimeException("fail"); },
             mkListenerAnnotation(topic, group, 0));
 
-        // DLQ 消费者：也始终失败（应被直接丢弃，并触发 DlqFailureHandler）
+        // DLQ 消费者：也始终失败（应被直接丢弃，并触发 DlqFailureStrategy）
         java.util.concurrent.atomic.AtomicInteger dlqAttempts = new java.util.concurrent.atomic.AtomicInteger(0);
         container.registerConsumer(
             (StreamMessageConcurrentlyConsumer<String>) (msg, ctx) -> {
@@ -285,7 +292,7 @@ class DlqConsumerIT extends AbstractRedisIT {
             // 等待 DLQ 消费者被调用至少一次
             await().atMost(20, TimeUnit.SECONDS).until(() -> dlqAttempts.get() >= 1);
 
-            // DlqFailureHandler 应被调用，cause 为消费异常
+            // DlqFailureStrategy 应被调用，cause 为消费异常
             await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
                 assertThat(handledMessage.get()).isNotNull();
                 assertThat(handledCause.get()).isInstanceOf(RuntimeException.class);

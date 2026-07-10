@@ -37,9 +37,9 @@ public class DelayMessageProducer {
      *
      * <p>DelayLevel 支持 18 级固定延时：
      * <ul>
-     *   <li>LEVEL_1 ~ LEVEL_6: 1s, 5s, 10s, 30s, 1m, 2m</li>
-     *   <li>LEVEL_7 ~ LEVEL_12: 3m, 4m, 5m, 6m, 7m, 8m</li>
-     *   <li>LEVEL_13 ~ LEVEL_18: 9m, 10m, 20m, 30m, 1h, 2h</li>
+     *   <li>SECOND_1 / SECOND_5 / SECOND_10 / SECOND_30: 1s, 5s, 10s, 30s</li>
+     *   <li>MINUTE_1 ~ MINUTE_10: 1m, 2m, 3m, 4m, 5m, 6m, 7m, 8m, 9m, 10m</li>
+     *   <li>MINUTE_20 / MINUTE_30 / HOUR_1 / HOUR_2: 20m, 30m, 1h, 2h</li>
      * </ul>
      *
      * @param orderId 订单 ID
@@ -101,7 +101,7 @@ public class DelayMessageProducer {
      * @return 发送结果
      */
     public SendResult sendOrderTimeoutReminder(String orderId, String content) {
-        return sendFixedDelayMessage(orderId, content, DelayLevel.LEVEL_17);
+        return sendFixedDelayMessage(orderId, content, DelayLevel.MINUTE_30);
     }
 
     /**

@@ -133,13 +133,6 @@ public interface StreamMessageTemplate extends TransactionExecutor {
     MessageConverter getMessageConverter();
 
     /**
-     * 设置消息转换器。
-     *
-     * @param converter 消息转换器
-     */
-    void setMessageConverter(MessageConverter converter);
-
-    /**
      * 返回生产者拦截器链（不可修改）。
      *
      * @return 拦截器列表
@@ -159,4 +152,11 @@ public interface StreamMessageTemplate extends TransactionExecutor {
      * @param interceptor 拦截器
      */
     void addProducerInterceptor(ProducerInterceptor interceptor);
+
+    /**
+     * 添加单个生产者过滤器（发送前过滤）。
+     *
+     * @param filter 过滤器
+     */
+    void addProducerFilter(io.github.streammq.core.filter.ProducerFilter filter);
 }

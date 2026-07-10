@@ -16,35 +16,55 @@
     <description>StreamMQ 测试支持：Embedded Redis、Testcontainers 集成、断言工具、Mock 工具、测试 Listener 等。</description>
 
     <dependencies>
+        <!-- StreamMQ Core -->
         <dependency>
             <groupId>io.github.streammq</groupId>
             <artifactId>streammq-core</artifactId>
         </dependency>
 
-        <!-- JUnit 5 主依赖（test scope 但本模块对外发布为 test-jar 供其他模块使用） -->
+        <!-- SLF4J（编译期需要） -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency>
+
+        <!-- Redisson（测试基类需要创建 RedissonClient） -->
+        <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- 以下依赖在本模块为 compile scope，因为 src/main/java 中的测试工具类需要使用 -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
+            <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
+            <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
+            <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>
+            <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers</artifactId>
+            <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>com.redis</groupId>
             <artifactId>testcontainers-redis</artifactId>
+            <scope>compile</scope>
         </dependency>
     </dependencies>
 

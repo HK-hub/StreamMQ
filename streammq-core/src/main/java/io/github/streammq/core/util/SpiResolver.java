@@ -3,7 +3,7 @@ package io.github.streammq.core.util;
 /**
  * SPI 实例解析工具：按注解中声明的实现类无参实例化，未声明（marker）时回退到全局默认实例。
  *
- * <p>用于 per-consumer 策略实例化，如 {@code RetryPolicy} / {@code DlqFailureHandler} /
+ * <p>用于 per-consumer 策略实例化，如 {@code RetryPolicy} / {@code DlqFailureStrategy} /
  * {@code MessageSerializer} / {@code RebalanceStrategy} 等。
  *
  * <p>约定：注解属性以 SPI 接口本身（如 {@code RetryPolicy.class}）作为"使用全局"的 marker。

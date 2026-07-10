@@ -14,13 +14,15 @@
     <artifactId>streammq-samples</artifactId>
     <packaging>pom</packaging>
     <name>StreamMQ Samples</name>
-    <description>StreamMQ 示例聚合模块，含 QuickStart / 事务 / 延时 / 顺序 四个示例。</description>
+    <description>StreamMQ 示例聚合模块，含 QuickStart / 事务 / 延时 / 顺序 / 死信队列 / 拦截器 六个示例。</description>
 
     <modules>
         <module>streammq-sample-quickstart</module>
         <module>streammq-sample-transaction</module>
         <module>streammq-sample-delay</module>
         <module>streammq-sample-orderly</module>
+        <module>streammq-sample-dlq</module>
+        <module>streammq-sample-interceptor</module>
     </modules>
 
     <dependencies>

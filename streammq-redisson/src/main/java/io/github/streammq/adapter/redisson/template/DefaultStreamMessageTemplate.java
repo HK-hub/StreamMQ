@@ -1,21 +1,25 @@
 package io.github.streammq.adapter.redisson.template;
 
+import io.github.streammq.adapter.redisson.filter.DefaultProducerFilterChain;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.adapter.redisson.support.MdcKeys;
+import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.enums.InvokeTiming;
 import io.github.streammq.core.enums.LocalTransactionState;
 import io.github.streammq.core.exception.StreamMQException;
 import io.github.streammq.core.exception.TransactionException;
+import io.github.streammq.core.filter.ProducerFilter;
+import io.github.streammq.core.filter.ProducerFilterChain;
+import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.message.*;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.SendCallback;
 import io.github.streammq.core.producer.StreamMessageProducer;
 import io.github.streammq.core.producer.StreamMessageProducerFactory;
-import io.github.streammq.core.converter.MessageConverter;
-import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.core.transaction.TransactionCallback;
 import io.github.streammq.core.transaction.TransactionContext;
+import lombok.Setter;
 import org.redisson.api.StreamMessageId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,9 +58,16 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     private final String defaultGroup;
     private final MessageConverter messageConverter;
     private final List<ProducerInterceptor> interceptors = new CopyOnWriteArrayList<>();
+    private final ProducerFilterChain producerFilterChain = new DefaultProducerFilterChain();
     private final ProducerConfig defaultConfig;
     private final String transactionGroup;
-    /** 事务扫描器（可选注入，用于半消息 + 回查的完整事务流程） */
+
+    /** 事务扫描器（可选注入，用于半消息 + 回查的完整事务流程）
+     * -- SETTER --
+     *  设置事务扫描器（可选注入，启用完整的半消息 + 回查事务流程）。
+     * transactionScanner 事务扫描器，可为 null（回退到简化实现）
+     */
+    @Setter
     private volatile TransactionScanner transactionScanner;
 
     /**
@@ -128,7 +139,18 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                 return aborted;
             }
 
-            // 2. 委派 Producer 发送（含重试）
+            // 2. 生产者过滤器检查
+            if (!producerFilterChain.accept(message)) {
+                // 被过滤器拒绝
+                SendResult filtered = new SendResult(
+                    new MessageId(System.currentTimeMillis() + "-0"),
+                    message.getTopic(), message.getTag(), SendStatus.SEND_FAILED,
+                    message.getBornTimestamp(), null, "Filtered by producer filter");
+                applyInterceptorsAfter(message, filtered);
+                return filtered;
+            }
+
+            // 3. 委派 Producer 发送（含重试）
             StreamMessageProducer producer = resolveProducer(message.getTopic());
             StreamMQException lastError = null;
             for (int attempt = 0; attempt <= retryTimes; attempt++) {
@@ -427,24 +449,9 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         }
     }
 
-    /**
-     * 设置事务扫描器（可选注入，启用完整的半消息 + 回查事务流程）。
-     *
-     * @param transactionScanner 事务扫描器，可为 null（回退到简化实现）
-     */
-    public void setTransactionScanner(TransactionScanner transactionScanner) {
-        this.transactionScanner = transactionScanner;
-    }
-
     @Override
     public MessageConverter getMessageConverter() {
         return messageConverter;
-    }
-
-    @Override
-    public void setMessageConverter(MessageConverter converter) {
-        throw new UnsupportedOperationException(
-            "DefaultStreamMessageTemplate does not support changing converter after construction");
     }
 
     @Override
@@ -593,5 +600,10 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
             message.getBornTimestamp(),
             null,
             error != null ? error.getMessage() : "unknown error");
+    }
+
+    @Override
+    public void addProducerFilter(ProducerFilter filter) {
+        producerFilterChain.addFilter(filter);
     }
 }

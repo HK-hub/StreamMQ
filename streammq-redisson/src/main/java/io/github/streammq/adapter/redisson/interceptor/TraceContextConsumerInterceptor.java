@@ -4,6 +4,7 @@ import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.interceptor.ConsumerInterceptor;
 import io.github.streammq.core.interceptor.TraceCollector;
+import io.github.streammq.core.consumer.ConsumeContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -51,7 +52,7 @@ public class TraceContextConsumerInterceptor implements ConsumerInterceptor {
     }
 
     @Override
-    public boolean beforeConsume(Message<?> message) {
+    public boolean beforeConsume(Message<?> message, ConsumeContext context) {
         Objects.requireNonNull(message, "message");
         String traceId = message.getUserProperties().get(TRACE_ID_KEY);
         if (traceId != null) {
@@ -62,7 +63,7 @@ public class TraceContextConsumerInterceptor implements ConsumerInterceptor {
     }
 
     @Override
-    public void afterConsume(Message<?> message, ConsumeAction action) {
+    public void afterConsume(Message<?> message, ConsumeAction action, ConsumeContext context) {
         Long start = consumeStartTimestamp.get();
         consumeStartTimestamp.remove();
         String traceId = MDC.get(MDC_TRACE_ID_KEY);
@@ -82,9 +83,9 @@ public class TraceContextConsumerInterceptor implements ConsumerInterceptor {
                     message.getTopic(),
                     message.getTag(),
                     message.getMessageId(),
-                    null,
-                    null,
-                    message.getReconsumeTimes(),
+                    context != null ? context.consumerGroup() : null,
+                    context != null ? context.consumerName() : null,
+                    context != null ? context.reconsumeTimes() : message.getReconsumeTimes(),
                     success,
                     duration,
                     traceId,

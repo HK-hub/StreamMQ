@@ -3,6 +3,7 @@ package io.github.streammq.core.interceptor;
 import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.enums.InvokeTiming;
 import io.github.streammq.core.message.Message;
+import io.github.streammq.core.consumer.ConsumeContext;
 
 import java.util.Collection;
 import java.util.List;
@@ -44,17 +45,19 @@ public interface ConsumerInterceptorChain {
      * 执行 beforeConsume 拦截器链。
      *
      * @param message 待消费消息
+     * @param context 消费上下文
      * @return true 全部通过，false 任一拦截器拒绝
      */
-    boolean applyBefore(Message<?> message);
+    boolean applyBefore(Message<?> message, ConsumeContext context);
 
     /**
      * 执行 afterConsume 拦截器链。
      *
      * @param message 已消费消息
      * @param action 消费动作
+     * @param context 消费上下文
      */
-    void applyAfter(Message<?> message, ConsumeAction action);
+    void applyAfter(Message<?> message, ConsumeAction action, ConsumeContext context);
 
     /**
      * 通知所有拦截器发生异常。
@@ -62,8 +65,9 @@ public interface ConsumerInterceptorChain {
      * @param message 消息
      * @param ex 异常
      * @param timing 触发时机（BEFORE/EXECUTING/AFTER）
+     * @param context 消费上下文
      */
-    void notifyException(Message<?> message, Exception ex, InvokeTiming timing);
+    void notifyException(Message<?> message, Exception ex, InvokeTiming timing, ConsumeContext context);
 
     /**
      * 返回当前已注册的拦截器列表（按 order 升序）。

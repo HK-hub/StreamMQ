@@ -1,7 +1,7 @@
 package io.github.streammq.sample.delay;
 
 import io.github.streammq.core.annotation.StreamMQConsumer;
-import io.github.streammq.core.consumer.ConsumeAction;
+import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.message.Message;

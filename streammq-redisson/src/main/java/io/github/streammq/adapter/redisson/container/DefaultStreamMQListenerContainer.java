@@ -1,6 +1,14 @@
 package io.github.streammq.adapter.redisson.container;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
+import io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy;
+import io.github.streammq.adapter.redisson.filter.DefaultConsumerFilterChain;
+import io.github.streammq.adapter.redisson.filter.SimpleSqlSelectorFilter;
+import io.github.streammq.adapter.redisson.filter.SimpleTagSelectorFilter;
+import io.github.streammq.adapter.redisson.handler.DefaultRetryAndDlqHandler;
+import io.github.streammq.adapter.redisson.interceptor.DefaultConsumerInterceptorChain;
+import io.github.streammq.adapter.redisson.lock.RedissonOrderlyShardLockManager;
+import io.github.streammq.adapter.redisson.manager.RedissonConsumerGroupManager;
 import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.core.StreamMQConstants;
@@ -9,28 +17,18 @@ import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.consumer.ConsumeOrderlyContext;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
-import io.github.streammq.core.enums.ConsumeAction;
-import io.github.streammq.core.enums.ConsumeMode;
-import io.github.streammq.core.enums.InvokeTiming;
-import io.github.streammq.core.enums.OrderlyAction;
+import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.enums.*;
 import io.github.streammq.core.exception.StreamMQBrokerException;
-import io.github.streammq.core.listener.ListenerConfig;
-import io.github.streammq.core.listener.StreamMQListener;
-import io.github.streammq.core.listener.StreamMQListenerContainer;
-import io.github.streammq.core.listener.StreamMQListenerFactory;
-import io.github.streammq.core.message.Message;
+import io.github.streammq.core.filter.ConsumerFilter;
+import io.github.streammq.core.filter.ConsumerFilterChain;
+import io.github.streammq.core.filter.ConsumerFilterResolver;
+import io.github.streammq.core.filter.ExpressionSelectorFilter;
 import io.github.streammq.core.interceptor.ConsumerInterceptor;
 import io.github.streammq.core.interceptor.ConsumerInterceptorChain;
-import io.github.streammq.core.converter.MessageConverter;
-import io.github.streammq.core.listener.ListenerRegistration;
-import io.github.streammq.core.listener.ListenerType;
-import io.github.streammq.core.policy.DlqConfig;
-import io.github.streammq.core.policy.DlqFailureHandler;
-import io.github.streammq.core.policy.DlqFailureStrategy;
-import io.github.streammq.core.policy.OrderlyShardLockManager;
-import io.github.streammq.core.policy.RetryAndDlqHandler;
-import io.github.streammq.core.policy.RetryPolicy;
-import io.github.streammq.core.policy.RebalanceStrategy;
+import io.github.streammq.core.listener.*;
+import io.github.streammq.core.message.Message;
+import io.github.streammq.core.policy.*;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.util.BodyTypeResolver;
 import io.github.streammq.core.util.SpiResolver;
@@ -54,7 +52,7 @@ import java.util.concurrent.locks.Lock;
  *   <li>管理容器生命周期（start / stop / pause / resume）</li>
  *   <li>为每个 Listener 启动虚拟线程消费循环</li>
  *   <li>按注解 per-consumer 实例化 {@link RetryPolicy} / {@link MessageConverter} /
- *       {@link DlqFailureHandler} / {@link MessageSerializer} / {@link RebalanceStrategy}
+ *       {@link DlqFailureStrategy} / {@link MessageSerializer} / {@link RebalanceStrategy}
  *       并创建 per-consumer {@link RetryAndDlqHandler}，实现高度可配置</li>
  * </ul>
  *
@@ -95,9 +93,11 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     private final MessageConverter messageConverter;
     /** 全局重试策略（per-consumer 未指定时的回退） */
     private final RetryPolicy retryPolicy;
-    /** 全局死信消费失败处理器（per-consumer 未指定时的回退） */
-    private final DlqFailureHandler dlqFailureHandler;
+    /** 全局死信消费失败策略（per-consumer 未指定时的回退） */
+    private final DlqFailureStrategy globalDlqFailureStrategy;
     private final String defaultNamespace;
+    /** 全局消费者过滤器链 */
+    private final ConsumerFilterChain consumerFilterChain = new DefaultConsumerFilterChain();
 
     /** Listener 注册表 */
     private final ConcurrentMap<String, ListenerRegistration<?>> registrations = new ConcurrentHashMap<>();
@@ -105,6 +105,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     private final ConcurrentMap<String, RetryAndDlqHandler> perConsumerHandlers = new ConcurrentHashMap<>();
     /** per-consumer 消息转换器（传给 Listener 工厂用于解码） */
     private final ConcurrentMap<String, MessageConverter> perConsumerConverters = new ConcurrentHashMap<>();
+    /** per-consumer 过滤器链缓存（key: reg.key()，value: 预构建的过滤器列表） */
+    private final ConcurrentMap<String, List<ConsumerFilter>> perConsumerFilters = new ConcurrentHashMap<>();
     /** 消费线程池（虚拟线程） */
     private final ExecutorService consumeExecutor = Executors.newVirtualThreadPerTaskExecutor();
     /** 内部队列（背压控制：拉取与处理解耦） */
@@ -115,13 +117,27 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     private final ConcurrentMap<String, Future<?>> consumeFutures = new ConcurrentHashMap<>();
     /** 暂停标志 */
     private volatile boolean paused = false;
+    /** 消费者过滤器解析器（用于从容器中获取 per-consumer 过滤器实例） */
+    private volatile ConsumerFilterResolver filterResolver;
 
     /** 策略类：拦截器链 */
     private final ConsumerInterceptorChain interceptorChain;
+
+    /**
+     * 设置消费者过滤器解析器，用于从容器中获取 per-consumer 过滤器实例。
+     *
+     * @param filterResolver 过滤器解析器
+     */
+    public void setFilterResolver(ConsumerFilterResolver filterResolver) {
+        this.filterResolver = filterResolver;
+    }
+
     /** 策略类：ACK/重试/DLQ 路由（per-consumer 关闭时的共享实例） */
     private final RetryAndDlqHandler sharedRetryDlqHandler;
     /** 策略类：顺序消费分片锁 */
     private final OrderlyShardLockManager shardLockManager;
+    /** 策略类：消费者组管理器（per-group 实例，管理心跳与重平衡） */
+    private final ConcurrentMap<String, ConsumerGroupManager> consumerGroupManagers = new ConcurrentHashMap<>();
     /** 是否启用 per-consumer 策略实例化（高级构造器注入自定义 handler 时关闭） */
     private final boolean perConsumerEnabled;
     /** 全局 DLQ 失败策略 */
@@ -138,21 +154,21 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                             RetryPolicy retryPolicy,
                                             String defaultNamespace) {
         this(redisson, consumerFactory, messageConverter, retryPolicy,
-            new LogAndDropDlqFailureHandler(), new LogAndDropDlqFailureStrategy(),
+            new LogAndDropDlqFailureStrategy(),
             DlqConfig.builder().build(), defaultNamespace);
     }
 
     /**
-     * 构造容器并注入全局死信消费失败处理器（per-consumer 启用）。
+     * 构造容器并注入全局死信消费失败策略（per-consumer 启用）。
      */
     public DefaultStreamMQListenerContainer(RedissonClient redisson,
                                             StreamMQListenerFactory consumerFactory,
                                             MessageConverter messageConverter,
                                             RetryPolicy retryPolicy,
-                                            DlqFailureHandler dlqFailureHandler,
+                                            DlqFailureStrategy dlqFailureStrategy,
                                             String defaultNamespace) {
-        this(redisson, consumerFactory, messageConverter, retryPolicy, dlqFailureHandler,
-            new LogAndDropDlqFailureStrategy(), DlqConfig.builder().build(), defaultNamespace);
+        this(redisson, consumerFactory, messageConverter, retryPolicy, dlqFailureStrategy,
+            DlqConfig.builder().build(), defaultNamespace);
     }
 
     /**
@@ -162,12 +178,11 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                             StreamMQListenerFactory consumerFactory,
                                             MessageConverter messageConverter,
                                             RetryPolicy retryPolicy,
-                                            DlqFailureHandler dlqFailureHandler,
                                             DlqFailureStrategy dlqFailureStrategy,
                                             DlqConfig dlqConfig,
                                             String defaultNamespace) {
-        this(redisson, consumerFactory, messageConverter, retryPolicy, dlqFailureHandler,
-            dlqFailureStrategy, dlqConfig, defaultNamespace,
+        this(redisson, consumerFactory, messageConverter, retryPolicy, dlqFailureStrategy,
+            dlqConfig, defaultNamespace,
             StreamMQConstants.DEFAULT_INFLIGHT_CAPACITY);
     }
 
@@ -178,7 +193,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                             StreamMQListenerFactory consumerFactory,
                                             MessageConverter messageConverter,
                                             RetryPolicy retryPolicy,
-                                            DlqFailureHandler dlqFailureHandler,
                                             DlqFailureStrategy dlqFailureStrategy,
                                             DlqConfig dlqConfig,
                                             String defaultNamespace,
@@ -187,7 +201,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         this.consumerFactory = Objects.requireNonNull(consumerFactory, "consumerFactory");
         this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
         this.retryPolicy = Objects.requireNonNull(retryPolicy, "retryPolicy");
-        this.dlqFailureHandler = Objects.requireNonNull(dlqFailureHandler, "dlqFailureHandler");
+        this.globalDlqFailureStrategy = Objects.requireNonNull(dlqFailureStrategy, "dlqFailureStrategy");
         this.dlqFailureStrategy = Objects.requireNonNull(dlqFailureStrategy, "dlqFailureStrategy");
         this.dlqConfig = Objects.requireNonNull(dlqConfig, "dlqConfig");
         this.defaultNamespace = defaultNamespace == null ? "" : defaultNamespace;
@@ -196,7 +210,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         this.interceptorChain = chain;
         this.shardLockManager = new RedissonOrderlyShardLockManager(redisson);
         this.sharedRetryDlqHandler = new DefaultRetryAndDlqHandler(
-            redisson, messageConverter, retryPolicy, chain, dlqFailureHandler, dlqFailureStrategy, dlqConfig);
+            redisson, messageConverter, retryPolicy, chain, dlqFailureStrategy, dlqConfig);
         this.perConsumerEnabled = true;
     }
 
@@ -222,7 +236,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                             StreamMQListenerFactory consumerFactory,
                                             MessageConverter messageConverter,
                                             RetryPolicy retryPolicy,
-                                            DlqFailureHandler dlqFailureHandler,
                                             DlqFailureStrategy dlqFailureStrategy,
                                             DlqConfig dlqConfig,
                                             String defaultNamespace,
@@ -233,7 +246,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         this.consumerFactory = Objects.requireNonNull(consumerFactory, "consumerFactory");
         this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
         this.retryPolicy = Objects.requireNonNull(retryPolicy, "retryPolicy");
-        this.dlqFailureHandler = Objects.requireNonNull(dlqFailureHandler, "dlqFailureHandler");
+        this.globalDlqFailureStrategy = Objects.requireNonNull(dlqFailureStrategy, "dlqFailureStrategy");
         this.dlqFailureStrategy = Objects.requireNonNull(dlqFailureStrategy, "dlqFailureStrategy");
         this.dlqConfig = Objects.requireNonNull(dlqConfig, "dlqConfig");
         this.defaultNamespace = defaultNamespace == null ? "" : defaultNamespace;
@@ -262,6 +275,40 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      */
     public void addConsumerInterceptors(Collection<ConsumerInterceptor> interceptors) {
         interceptorChain.addInterceptors(interceptors);
+    }
+
+    // ===================== 消息过滤器 =====================
+
+    /**
+     * 添加单个消费者过滤器（全局维度，消费前过滤）。
+     *
+     * @param filter 过滤器实例
+     */
+    public void addConsumerFilter(ConsumerFilter filter) {
+        consumerFilterChain.addFilter(filter);
+        rebuildConsumerFilterCache();
+    }
+
+    /**
+     * 批量添加消费者过滤器（全局维度）。
+     *
+     * @param filters 过滤器集合
+     */
+    public void addConsumerFilters(Collection<ConsumerFilter> filters) {
+        consumerFilterChain.addFilters(filters);
+        rebuildConsumerFilterCache();
+    }
+
+    /**
+     * 重建所有已注册 listener 的消费者过滤器缓存。
+     * 当全局过滤器变更时调用，确保缓存的过滤器链包含最新的全局过滤器。
+     */
+    private void rebuildConsumerFilterCache() {
+        for (ListenerRegistration<?> reg : registrations.values()) {
+            List<ConsumerFilter> filters = buildConsumerFilters(reg);
+            perConsumerFilters.put(reg.key(), filters);
+        }
+        LOG.debug("Rebuilt consumer filter cache for {} registrations", registrations.size());
     }
 
     // ===================== 注册方法 =====================
@@ -297,7 +344,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .enableMsgTrace(annotation.enableMsgTrace())
             .dlqMode(dlqMode)
             .targetBodyType(bodyType)
-            .dlqFailureHandler(annotation.dlqFailureHandler())
+            .dlqFailureStrategy(annotation.dlqFailureStrategy())
+            .consumerFilter(annotation.consumerFilter())
+            .selectorType(annotation.selectorType())
             .namespace(annotation.namespace())
             .build();
         reg.resolveNamespace(defaultNamespace);
@@ -345,7 +394,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .enableMsgTrace(annotation.enableMsgTrace())
             .dlqMode(false)
             .targetBodyType(bodyType)
-            .dlqFailureHandler(annotation.dlqFailureHandler())
+            .dlqFailureStrategy(annotation.dlqFailureStrategy())
+            .consumerFilter(annotation.consumerFilter())
+            .selectorType(annotation.selectorType())
             .namespace(annotation.namespace())
             .build();
         reg.resolveNamespace(defaultNamespace);
@@ -356,7 +407,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     }
 
     /**
-     * 按注解 per-consumer 实例化 {@link RetryPolicy} / {@link DlqFailureHandler} /
+     * 按注解 per-consumer 实例化 {@link RetryPolicy} / {@link DlqFailureStrategy} /
      * {@link MessageConverter} / {@link MessageSerializer}，并创建 per-consumer
      * {@link DefaultRetryAndDlqHandler}，缓存到 {@link #perConsumerHandlers} 与
      * {@link #perConsumerConverters}。
@@ -379,14 +430,14 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         RetryPolicy policy = SpiResolver.resolveOrInstantiate(
             (Class) reg.getRetryPolicy(), RetryPolicy.class, this.retryPolicy);
 
-        // 3. per-consumer 死信失败处理器
-        DlqFailureHandler dlqHandler = SpiResolver.resolveOrInstantiate(
-            reg.getDlqFailureHandler(), DlqFailureHandler.class, this.dlqFailureHandler);
+        // 3. per-consumer 死信失败策略
+        DlqFailureStrategy dlqStrategy = SpiResolver.resolveOrInstantiate(
+            reg.getDlqFailureStrategy(), DlqFailureStrategy.class, this.globalDlqFailureStrategy);
 
         // 4. per-consumer 路由处理器
         RetryAndDlqHandler handler = new DefaultRetryAndDlqHandler(
-            redisson, converter, policy, interceptorChain, dlqHandler,
-            this.dlqFailureStrategy, this.dlqConfig);
+            redisson, converter, policy, interceptorChain, dlqStrategy,
+            this.dlqConfig);
         perConsumerHandlers.put(reg.key(), handler);
 
         // 5. per-consumer 重平衡策略（实例化校验，运行期 Rebalance 模块启用后使用）
@@ -399,8 +450,31 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                     reg.key(), rebalanceClass.getName(), ex.getMessage());
             }
         }
-        LOG.debug("Resolved per-consumer SPI: key={}, retryPolicy={}, converter={}, dlqFailureHandler={}",
-            reg.key(), policy.name(), converter.getClass().getSimpleName(), dlqHandler.name());
+
+        // 6. per-consumer 过滤器链（预构建并缓存，避免每次消息处理时重复创建）
+        List<ConsumerFilter> filters = buildConsumerFilters(reg);
+        perConsumerFilters.put(reg.key(), filters);
+
+        LOG.debug("Resolved per-consumer SPI: key={}, retryPolicy={}, converter={}, dlqFailureStrategy={}, filters={}",
+            reg.key(), policy.name(), converter.getClass().getSimpleName(), dlqStrategy.name(),
+            filters.stream().map(ConsumerFilter::name).toList());
+    }
+
+    /**
+     * 解析 per-consumer 重平衡策略实例。
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private RebalanceStrategy resolveRebalanceStrategy(ListenerRegistration<?> reg) {
+        Class<? extends RebalanceStrategy> rebalanceClass = reg.getRebalanceStrategy();
+        if (rebalanceClass == null || rebalanceClass == RebalanceStrategy.class) {
+            return new io.github.streammq.adapter.redisson.rebalance.AverageRebalanceStrategy();
+        }
+        try {
+            return SpiResolver.resolveOrInstantiate((Class) rebalanceClass, RebalanceStrategy.class, null);
+        } catch (RuntimeException ex) {
+            LOG.warn("Failed to instantiate rebalanceStrategy for {}, using default: {}", reg.key(), ex.getMessage());
+            return new io.github.streammq.adapter.redisson.rebalance.AverageRebalanceStrategy();
+        }
     }
 
     /**
@@ -487,6 +561,17 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         }
         LOG.info("Starting ListenerContainer with {} registration(s)", registrations.size());
         state.set(ContainerState.RUNNING);
+        // 注册所有消费者组的 ConsumerGroupManager
+        for (ListenerRegistration<?> reg : registrations.values()) {
+            if (!reg.isDlqMode()) {
+                String instanceId = reg.getGroup() + "-" + UUID.randomUUID().toString().substring(0, 8);
+                ConsumerGroupManager cgm = new RedissonConsumerGroupManager(
+                    redisson, reg.getNamespace(), reg.getGroup(), instanceId,
+                    resolveRebalanceStrategy(reg));
+                cgm.register();
+                consumerGroupManagers.put(reg.key(), cgm);
+            }
+        }
         doStartListeners();
         LOG.info("ListenerContainer started, state=RUNNING");
     }
@@ -499,6 +584,15 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         }
         state.set(ContainerState.STOPPING);
         LOG.info("Stopping ListenerContainer...");
+        // 注销所有消费者组管理器
+        for (ConsumerGroupManager cgm : consumerGroupManagers.values()) {
+            try {
+                cgm.unregister();
+            } catch (RuntimeException ex) {
+                LOG.warn("Failed to unregister ConsumerGroupManager: {}", ex.getMessage());
+            }
+        }
+        consumerGroupManagers.clear();
         for (Future<?> future : consumeFutures.values()) {
             future.cancel(true);
         }
@@ -677,7 +771,15 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             ? perConsumerHandlers.get(reg.key()) : sharedRetryDlqHandler;
         long consumeTimeoutMs = reg.getConsumeTimeoutMillis();
         try {
-            if (!interceptorChain.applyBefore(message)) {
+            // 消费者过滤器检查（全局 + per-consumer + selectorExpression）
+            if (!acceptMessage(message, reg)) {
+                LOG.debug("Message filtered: topic={}, tag={}", message.getTopic(), message.getTag());
+                finalAction = ConsumeAction.SUCCESS;
+                handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
+                return;
+            }
+
+            if (!interceptorChain.applyBefore(message, ctx)) {
                 finalAction = ConsumeAction.SUCCESS;
                 handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
                 return;
@@ -711,12 +813,12 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             } catch (Exception ex) {
                 LOG.warn("Listener onMessage threw exception (topic={}, group={}, messageId={}): {}",
                     reg.getTopic(), reg.getGroup(), message.getMessageId(), ex.getMessage(), ex);
-                interceptorChain.notifyException(message, ex, InvokeTiming.EXECUTING);
+                interceptorChain.notifyException(message, ex, InvokeTiming.EXECUTING, ctx);
                 finalAction = ConsumeAction.RECONSUME_LATER;
                 handler.handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener, ex);
             }
         } finally {
-            interceptorChain.applyAfter(message, finalAction);
+            interceptorChain.applyAfter(message, finalAction, ctx);
             ConsumerMdcTrace.clear();
         }
     }
@@ -755,6 +857,107 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         if (current != ContainerState.INIT) {
             throw new IllegalStateException("Cannot register listener after container started: " + current);
         }
+    }
+
+    /**
+     * 构建 per-consumer 过滤器链（在注册时调用一次，缓存结果）。
+     *
+     * <p>执行顺序：
+     * <ol>
+     *   <li>selectorExpression（SimpleTagSelectorFilter / SimpleSqlSelectorFilter，order = -1）- 最先执行</li>
+     *   <li>全局过滤器（顺序由 order 决定）</li>
+     *   <li>per-consumer 过滤器（顺序由 order 决定，从 Spring 容器获取）</li>
+     * </ol>
+     *
+     * @param reg Listener 注册信息
+     * @return 预构建的过滤器列表
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private List<ConsumerFilter> buildConsumerFilters(ListenerRegistration<?> reg) {
+        List<ConsumerFilter> allFilters = new ArrayList<>();
+
+        String selectorExpression = reg.getSelectorExpression();
+        if (selectorExpression != null && !selectorExpression.isEmpty() && !"*".equals(selectorExpression)) {
+            SelectorType selectorType = reg.getSelectorType();
+            ExpressionSelectorFilter selectorFilter = switch (selectorType) {
+                case TAG -> new SimpleTagSelectorFilter(selectorExpression);
+                case SQL92 -> new SimpleSqlSelectorFilter(selectorExpression);
+            };
+            allFilters.add(selectorFilter);
+            LOG.debug("Built selector filter for {}: type={}, expression={}",
+                reg.key(), selectorType, selectorExpression);
+        }
+
+        allFilters.addAll(consumerFilterChain.getFilters());
+
+        Class<? extends ConsumerFilter>[] perConsumerFilterClasses =
+            (Class<? extends ConsumerFilter>[]) reg.getConsumerFilter();
+        if (perConsumerFilterClasses != null && perConsumerFilterClasses.length > 0) {
+            for (Class<? extends ConsumerFilter> filterClass : perConsumerFilterClasses) {
+                ConsumerFilter filter = resolveConsumerFilter(filterClass);
+                if (filter != null) {
+                    allFilters.add(filter);
+                    LOG.debug("Added per-consumer filter for {}: {}", reg.key(), filter.name());
+                }
+            }
+        }
+
+        allFilters.sort(Comparator.comparingInt(ConsumerFilter::order));
+
+        return Collections.unmodifiableList(allFilters);
+    }
+
+    /**
+     * 解析 per-consumer 过滤器：优先通过 filterResolver 获取，回退到反射实例化。
+     *
+     * @param filterClass 过滤器类
+     * @return 过滤器实例，可为 null
+     */
+    private ConsumerFilter resolveConsumerFilter(Class<? extends ConsumerFilter> filterClass) {
+        if (filterClass == null || filterClass == ConsumerFilter.class) {
+            return null;
+        }
+
+        ConsumerFilterResolver resolver = this.filterResolver;
+        if (resolver != null) {
+            ConsumerFilter filter = resolver.resolve(filterClass);
+            if (filter != null) {
+                return filter;
+            }
+            LOG.debug("Filter {} not resolved by filterResolver, trying reflection", filterClass.getName());
+        }
+
+        try {
+            return filterClass.getDeclaredConstructor().newInstance();
+        } catch (ReflectiveOperationException e) {
+            LOG.warn("Failed to instantiate per-consumer filter {}: {}",
+                filterClass.getName(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 判断消息是否应该被消费：使用预缓存的过滤器链。
+     *
+     * @param message 消息
+     * @param reg     注册信息
+     * @return true 表示消息通过所有过滤器，应该被消费
+     */
+    private boolean acceptMessage(Message<?> message, ListenerRegistration<?> reg) {
+        List<ConsumerFilter> filters = perConsumerFilters.get(reg.key());
+        if (filters == null || filters.isEmpty()) {
+            return true;
+        }
+
+        for (ConsumerFilter filter : filters) {
+            if (!filter.accept(message)) {
+                LOG.debug("Message rejected by filter: {} (topic={}, tag={})",
+                    filter.name(), message.getTopic(), message.getTag());
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static void sleepQuietly(long millis) {

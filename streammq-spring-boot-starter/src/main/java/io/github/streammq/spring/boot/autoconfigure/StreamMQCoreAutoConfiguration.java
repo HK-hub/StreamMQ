@@ -1,7 +1,6 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
-import io.github.streammq.adapter.redisson.container.LogAndDropDlqFailureHandler;
 import io.github.streammq.adapter.redisson.interceptor.TraceContextConsumerInterceptor;
 import io.github.streammq.adapter.redisson.interceptor.TraceContextProducerInterceptor;
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
@@ -20,7 +19,6 @@ import io.github.streammq.core.service.StreamMessageService;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.interceptor.TraceCollector;
 import io.github.streammq.core.policy.DlqConfig;
-import io.github.streammq.core.policy.DlqFailureHandler;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.ManagementAuthenticator;
 import io.github.streammq.core.policy.RetryPolicy;
@@ -161,16 +159,6 @@ public class StreamMQCoreAutoConfiguration {
         String className = dlqConfig.getFailureStrategyClass();
         LOG.info("Using DlqFailureStrategy: {}", className);
         return instantiate(className, DlqFailureStrategy.class);
-    }
-
-    /**
-     * 默认死信消费失败处理器（保留兼容旧版 {@link DlqFailureHandler}）。
-     */
-    @Bean
-    @ConditionalOnMissingBean(DlqFailureHandler.class)
-    public DlqFailureHandler streamMQDlqFailureHandler() {
-        LOG.info("Using default LogAndDropDlqFailureHandler (backward compat)");
-        return new LogAndDropDlqFailureHandler();
     }
 
     /**

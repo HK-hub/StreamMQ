@@ -1,16 +1,18 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
+import io.github.streammq.core.filter.ConsumerFilter;
+import io.github.streammq.core.interceptor.ConsumerInterceptor;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.policy.DlqConfig;
-import io.github.streammq.core.policy.DlqFailureHandler;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationContext;
 
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -18,6 +20,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.beans.factory.ObjectProvider;
 
 /**
  * Listener 容器自动装配：注册 {@link DefaultStreamMQListenerContainer}、
@@ -57,16 +60,42 @@ public class StreamMQListenerContainerAutoConfiguration {
                                                                        StreamMQListenerFactory consumerFactory,
                                                                        MessageConverter messageConverter,
                                                                        RetryPolicy retryPolicy,
-                                                                       DlqFailureHandler dlqFailureHandler,
                                                                        DlqFailureStrategy dlqFailureStrategy,
                                                                        DlqConfig dlqConfig,
-                                                                       StreamMQProperties properties) {
+                                                                       StreamMQProperties properties,
+                                                                       ObjectProvider<ConsumerInterceptor> consumerInterceptorProvider,
+                                                                       ObjectProvider<ConsumerFilter> consumerFilterProvider,
+                                                                       ApplicationContext applicationContext) {
         String namespace = properties.getNamespace();
         LOG.info("Creating DefaultStreamMQListenerContainer: namespace={}, dlqFailureStrategy={}",
             namespace, dlqFailureStrategy.name());
-        return new DefaultStreamMQListenerContainer(
+        DefaultStreamMQListenerContainer container = new DefaultStreamMQListenerContainer(
             redisson, consumerFactory, messageConverter, retryPolicy,
-            dlqFailureHandler, dlqFailureStrategy, dlqConfig, namespace);
+            dlqFailureStrategy, dlqConfig, namespace);
+
+        container.setFilterResolver(filterClass -> {
+            try {
+                return applicationContext.getBean(filterClass);
+            } catch (org.springframework.beans.factory.NoSuchBeanDefinitionException e) {
+                return null;
+            }
+        });
+
+        java.util.List<ConsumerInterceptor> interceptors = consumerInterceptorProvider.stream().toList();
+        if (!interceptors.isEmpty()) {
+            LOG.info("Registering {} ConsumerInterceptor(s): {}", interceptors.size(),
+                interceptors.stream().map(ConsumerInterceptor::name).toList());
+            container.addConsumerInterceptors(interceptors);
+        }
+
+        java.util.List<ConsumerFilter> filters = consumerFilterProvider.stream().toList();
+        if (!filters.isEmpty()) {
+            LOG.info("Registering {} ConsumerFilter(s): {}", filters.size(),
+                filters.stream().map(ConsumerFilter::name).toList());
+            container.addConsumerFilters(filters);
+        }
+
+        return container;
     }
 
     /**

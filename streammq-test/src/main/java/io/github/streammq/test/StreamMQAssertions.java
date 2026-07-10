@@ -23,7 +23,7 @@ public final class StreamMQAssertions {
         return new SendResultAssert(actual);
     }
 
-    public static MessageAssert<?> assertThat(Message<?> actual) {
+    public static <T> MessageAssert<T> assertThat(Message<T> actual) {
         return new MessageAssert<>(actual);
     }
 

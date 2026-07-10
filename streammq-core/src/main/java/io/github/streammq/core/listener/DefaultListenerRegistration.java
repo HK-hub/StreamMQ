@@ -2,9 +2,11 @@ package io.github.streammq.core.listener;
 
 import io.github.streammq.core.consumer.StreamMessageConsumer;
 import io.github.streammq.core.enums.ConsumeMode;
+import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.filter.ConsumerFilter;
 import io.github.streammq.core.serializer.MessageSerializer;
-import io.github.streammq.core.policy.DlqFailureHandler;
+import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
 import lombok.Getter;
@@ -38,7 +40,9 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
     private final boolean enableMsgTrace;
     private final boolean dlqMode;
     private final Class<?> targetBodyType;
-    private final Class<? extends DlqFailureHandler> dlqFailureHandler;
+    private final Class<? extends DlqFailureStrategy> dlqFailureStrategy;
+    private final Class<? extends ConsumerFilter>[] consumerFilter;
+    private final SelectorType selectorType;
 
     @Setter
     private String namespace;
@@ -53,7 +57,9 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
                                        Class<? extends RebalanceStrategy> rebalanceStrategy,
                                        long suspendCurrentQueueTimeMillis, int streamMaxLen, boolean enableMsgTrace,
                                        boolean dlqMode, Class<?> targetBodyType,
-                                       Class<? extends DlqFailureHandler> dlqFailureHandler,
+                                       Class<? extends DlqFailureStrategy> dlqFailureStrategy,
+                                       Class<? extends ConsumerFilter>[] consumerFilter,
+                                       SelectorType selectorType,
                                        String namespace) {
         this.type = type;
         this.consumer = consumer;
@@ -77,7 +83,9 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         this.enableMsgTrace = enableMsgTrace;
         this.dlqMode = dlqMode;
         this.targetBodyType = targetBodyType;
-        this.dlqFailureHandler = dlqFailureHandler;
+        this.dlqFailureStrategy = dlqFailureStrategy;
+        this.consumerFilter = consumerFilter;
+        this.selectorType = selectorType;
         this.namespace = namespace;
     }
 

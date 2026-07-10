@@ -128,6 +128,12 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 LOG.warn("scanExpired failed for level {}: {}", level, ex.getMessage(), ex);
             }
         }
+        // V1.0+: 扫描自定义延时 ZSet（任意延时）
+        try {
+            scanExpiredCustom();
+        } catch (RuntimeException ex) {
+            LOG.warn("scanExpiredCustom failed: {}", ex.getMessage(), ex);
+        }
     }
 
     /**
@@ -197,6 +203,74 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                     LOG.warn("Re-added msgId={} to delay ZSet for retry", msgId);
                 } catch (RuntimeException reAddEx) {
                     LOG.error("CRITICAL: Failed to re-add msgId={} to delay ZSet, message may be lost: {}",
+                        msgId, reAddEx.getMessage(), reAddEx);
+                }
+            }
+        }
+        if (batch != null) {
+            executeBatch(batch);
+        }
+    }
+
+    /**
+     * 扫描自定义延时 ZSet 的到期消息并转投（v1.0+ 任意延时支持）。
+     */
+    void scanExpiredCustom() {
+        String zsetKey = StreamMQKeys.delayCustomZSet(namespace);
+        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
+        long now = System.currentTimeMillis();
+
+        Collection<String> expired = zset.valueRange(0, true, now, true, 0, batchSize - 1);
+        if (expired.isEmpty()) {
+            return;
+        }
+
+        int transferred = 0;
+        RBatch batch = null;
+        for (String msgId : expired) {
+            boolean acquired = zset.remove(msgId);
+            if (!acquired) {
+                continue;
+            }
+            try {
+                String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
+                RMap<String, String> payloadMap = redisson.getMap(payloadKey);
+                Map<String, String> fields = payloadMap.readAllMap();
+                if (fields == null || fields.isEmpty()) {
+                    LOG.warn("Delay payload not found for msgId={}, may have been processed", msgId);
+                    continue;
+                }
+
+                String targetTopic = fields.get(FIELD_TARGET_TOPIC);
+                if (targetTopic == null || targetTopic.isEmpty()) {
+                    LOG.warn("Delay message has no targetTopic, skip: msgId={}", msgId);
+                    continue;
+                }
+
+                fields.remove(FIELD_TARGET_TOPIC);
+                fields.remove(FIELD_DELIVER_AT);
+
+                if (batch == null) {
+                    batch = redisson.createBatch();
+                }
+                String targetStreamKey = StreamMQKeys.topicStream(namespace, targetTopic);
+                StreamAddArgs<String, String> args = StreamAddArgs.entries(fields);
+                batch.<String, String>getStream(targetStreamKey).addAsync(args);
+                batch.<String, String>getMap(payloadKey).deleteAsync();
+                transferred++;
+
+                if (transferred >= batchSize) {
+                    executeBatch(batch);
+                    batch = null;
+                    transferred = 0;
+                }
+            } catch (RuntimeException ex) {
+                LOG.error("Failed to transfer custom delay message msgId={}: {}", msgId, ex.getMessage(), ex);
+                try {
+                    zset.add(System.currentTimeMillis(), msgId);
+                    LOG.warn("Re-added msgId={} to custom delay ZSet for retry", msgId);
+                } catch (RuntimeException reAddEx) {
+                    LOG.error("CRITICAL: Failed to re-add msgId={} to custom delay ZSet, message may be lost: {}",
                         msgId, reAddEx.getMessage(), reAddEx);
                 }
             }

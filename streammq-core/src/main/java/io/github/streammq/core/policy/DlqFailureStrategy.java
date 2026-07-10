@@ -3,20 +3,16 @@ package io.github.streammq.core.policy;
 import io.github.streammq.core.message.Message;
 
 /**
- * DLQ 消费失败处理策略 SPI（替代旧版 {@link DlqFailureHandler}，增加决策能力）。
+ * DLQ 消费失败处理策略 SPI。
  *
  * <p>当 {@code dlqMode=true} 的消费者消费死信消息失败（抛出异常或返回非 SUCCESS）时，
  * 框架构造 {@link DlqFailureContext} 并调用本接口的 {@link #decide} 方法。
  * 策略根据上下文信息返回 {@link DlqFailureDecision}：
  * <ul>
- *   <li>{@link DlqFailureDecision#drop()} - 丢弃消息（框架调用 {@link DlqFailureHandler#handleFailure} 后 ACK）</li>
+ *   <li>{@link DlqFailureDecision#drop()} - 丢弃消息（框架 ACK 后由策略记录日志/告警）</li>
  *   <li>{@link DlqFailureDecision#retry(java.time.Duration)} - 按指定延迟重试本 DLQ 消息</li>
  *   <li>{@link DlqFailureDecision#secondaryDlq()} - 转投到二级死信队列</li>
  * </ul>
- *
- * <p>与旧版 {@link DlqFailureHandler} 的区别：
- * {@link DlqFailureHandler} 仅被动通知，消息总是被丢弃；
- * 本接口主动返回决策，可控制 drop/retry/secondaryDlq 三种去向。
  *
  * <p>内置策略（参见 {@code streammq-redisson-adapter} 模块）：
  * <ul>

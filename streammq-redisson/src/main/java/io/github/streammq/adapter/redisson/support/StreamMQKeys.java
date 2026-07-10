@@ -228,6 +228,18 @@ public final class StreamMQKeys {
     }
 
     /**
+     * 自定义延时 ZSet Key（v1.0+ 任意延时）：{@code streammq:{ns}:delay:custom}。
+     *
+     * <p>用于支持 {@code delayTimeMillis} 任意延时，不依赖固定 {@link io.github.streammq.core.enums.DelayLevel}。
+     *
+     * @param namespace 命名空间
+     * @return ZSet Key
+     */
+    public static String delayCustomZSet(String namespace) {
+        return prefix(namespace) + SEP + TYPE_DELAY + SEP + "custom";
+    }
+
+    /**
      * 延时消息 payload Hash Key：{@code streammq:{ns}:delay:payload:{msgId}}。
      *
      * @param namespace 命名空间

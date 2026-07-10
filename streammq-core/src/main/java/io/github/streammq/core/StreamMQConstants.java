@@ -63,10 +63,7 @@ public final class StreamMQConstants {
     // ==================== DLQ 配置默认值 ====================
     /** 默认 DLQ 失败策略实现类全限定名（LogAndDropDlqFailureStrategy） */
     public static final String DEFAULT_DLQ_FAILURE_STRATEGY =
-        "io.github.streammq.adapter.redisson.container.LogAndDropDlqFailureStrategy";
-    /** 已废弃（保留兼容）：默认死信消费失败处理器实现类全限定名 */
-    public static final String DEFAULT_DLQ_FAILURE_HANDLER =
-        "io.github.streammq.adapter.redisson.container.LogAndDropDlqFailureHandler";
+        "io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy";
     /** DLQ 消费失败后的最大重试次数 */
     public static final int DEFAULT_DLQ_MAX_RETRY_ATTEMPTS = 3;
     /** DLQ 消费重试延迟（毫秒） */

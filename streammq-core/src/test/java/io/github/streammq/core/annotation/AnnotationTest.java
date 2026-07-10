@@ -2,7 +2,7 @@ package io.github.streammq.core.annotation;
 
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
-import io.github.streammq.core.policy.DlqFailureHandler;
+import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.serializer.MessageSerializer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -64,10 +64,10 @@ class AnnotationTest {
         }
 
         @Test
-        @DisplayName("dlqFailureHandler 默认 DlqFailureHandler.class（marker）")
-        void dlqFailureHandlerDefault() {
+        @DisplayName("dlqFailureStrategy 默认 DlqFailureStrategy.class（marker）")
+        void dlqFailureStrategyDefault() {
             StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
-            assertThat(ann.dlqFailureHandler()).isEqualTo(DlqFailureHandler.class);
+            assertThat(ann.dlqFailureStrategy()).isEqualTo(DlqFailureStrategy.class);
         }
 
         @Test

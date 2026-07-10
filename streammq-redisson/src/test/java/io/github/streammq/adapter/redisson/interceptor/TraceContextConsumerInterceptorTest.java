@@ -22,13 +22,6 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/**
- * {@link TraceContextConsumerInterceptor} 单元测试，覆盖 MDC 注入/移除、
- * 追踪上报、isEnabled 跳过、order/name 与异常场景。
- *
- * @author StreamMQ Contributors
- * @since 0.1.0
- */
 @DisplayName("TraceContextConsumerInterceptor 追踪上下文消费者拦截器测试")
 class TraceContextConsumerInterceptorTest {
 
@@ -47,7 +40,7 @@ class TraceContextConsumerInterceptorTest {
         msg.setBody("hello");
         msg.putUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, "trace-abc");
 
-        boolean result = interceptor.beforeConsume(msg);
+        boolean result = interceptor.beforeConsume(msg, null);
 
         assertThat(result).isTrue();
         assertThat(MDC.get(TraceContextConsumerInterceptor.MDC_TRACE_ID_KEY)).isEqualTo("trace-abc");
@@ -62,7 +55,7 @@ class TraceContextConsumerInterceptorTest {
         Message<String> msg = new Message<>();
         msg.setBody("hello");
 
-        interceptor.beforeConsume(msg);
+        interceptor.beforeConsume(msg, null);
 
         assertThat(MDC.get(TraceContextConsumerInterceptor.MDC_TRACE_ID_KEY)).isNull();
     }
@@ -72,7 +65,7 @@ class TraceContextConsumerInterceptorTest {
     void beforeConsumeNullMessage() {
         TraceContextConsumerInterceptor interceptor =
                 new TraceContextConsumerInterceptor(new NoopTraceCollector());
-        assertThatThrownBy(() -> interceptor.beforeConsume(null))
+        assertThatThrownBy(() -> interceptor.beforeConsume(null, null))
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("message");
     }
@@ -91,12 +84,11 @@ class TraceContextConsumerInterceptorTest {
         msg.putUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, "trace-1");
         msg.setReconsumeTimes(2);
 
-        interceptor.beforeConsume(msg);
+        interceptor.beforeConsume(msg, null);
         assertThat(MDC.get(TraceContextConsumerInterceptor.MDC_TRACE_ID_KEY)).isEqualTo("trace-1");
 
-        interceptor.afterConsume(msg, ConsumeAction.SUCCESS);
+        interceptor.afterConsume(msg, ConsumeAction.SUCCESS, null);
 
-        // MDC 中 traceId 已被移除
         assertThat(MDC.get(TraceContextConsumerInterceptor.MDC_TRACE_ID_KEY)).isNull();
 
         ArgumentCaptor<TraceCollector.ConsumeTraceContext> captor =
@@ -124,8 +116,8 @@ class TraceContextConsumerInterceptorTest {
         msg.setMessageId(new MessageId("1-0"));
         msg.putUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, "trace-1");
 
-        interceptor.beforeConsume(msg);
-        interceptor.afterConsume(msg, ConsumeAction.RECONSUME_LATER);
+        interceptor.beforeConsume(msg, null);
+        interceptor.afterConsume(msg, ConsumeAction.RECONSUME_LATER, null);
 
         ArgumentCaptor<TraceCollector.ConsumeTraceContext> captor =
                 ArgumentCaptor.forClass(TraceCollector.ConsumeTraceContext.class);
@@ -143,11 +135,10 @@ class TraceContextConsumerInterceptorTest {
 
         Message<String> msg = new Message<>();
         msg.putUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, "trace-1");
-        interceptor.beforeConsume(msg);
-        interceptor.afterConsume(msg, ConsumeAction.SUCCESS);
+        interceptor.beforeConsume(msg, null);
+        interceptor.afterConsume(msg, ConsumeAction.SUCCESS, null);
 
         verify(collector, never()).recordConsume(any(TraceCollector.ConsumeTraceContext.class));
-        // 即使未启用，MDC 中的 traceId 仍被移除
         assertThat(MDC.get(TraceContextConsumerInterceptor.MDC_TRACE_ID_KEY)).isNull();
     }
 
@@ -161,9 +152,8 @@ class TraceContextConsumerInterceptorTest {
 
         Message<String> msg = new Message<>();
         msg.putUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, "trace-1");
-        interceptor.beforeConsume(msg);
-        // 不应抛异常
-        interceptor.afterConsume(msg, ConsumeAction.SUCCESS);
+        interceptor.beforeConsume(msg, null);
+        interceptor.afterConsume(msg, ConsumeAction.SUCCESS, null);
         assertThat(MDC.get(TraceContextConsumerInterceptor.MDC_TRACE_ID_KEY)).isNull();
     }
 
@@ -176,7 +166,7 @@ class TraceContextConsumerInterceptorTest {
 
         Message<String> msg = new Message<>();
         msg.setTopic("topic-1");
-        interceptor.afterConsume(msg, ConsumeAction.SUCCESS);
+        interceptor.afterConsume(msg, ConsumeAction.SUCCESS, null);
 
         ArgumentCaptor<TraceCollector.ConsumeTraceContext> captor =
                 ArgumentCaptor.forClass(TraceCollector.ConsumeTraceContext.class);

@@ -2,6 +2,7 @@ package io.github.streammq.core.message;
 
 import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.service.StreamMessageService;
+import lombok.Getter;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -32,14 +33,42 @@ import java.util.Objects;
  */
 public final class MessageMetadataBuilder {
 
+    /**
+     * @return Tag
+     */
+    @Getter
     private String tag;
+    /**
+     * @return Keys
+     */
+    @Getter
     private String keys;
+    /**
+     * @return 分片 Key
+     */
+    @Getter
     private String shardingKey;
     private final Map<String, String> properties = new LinkedHashMap<>();
     private final Map<String, String> userProperties = new LinkedHashMap<>();
+    /**
+     * @return 延时级别
+     */
+    @Getter
     private DelayLevel delayLevel;
+    /**
+     * @return 自定义延时时间（毫秒），null 表示未设置
+     */
+    @Getter
     private Long delayTimeMillis;
+    /**
+     * @return 消息生成时间戳，null 表示未设置
+     */
+    @Getter
     private Long bornTimestamp;
+    /**
+     * @return 消息来源主机
+     */
+    @Getter
     private String bornHost;
 
     private MessageMetadataBuilder() {
@@ -186,21 +215,6 @@ public final class MessageMetadataBuilder {
 
     // ===================== Getter =====================
 
-    /** @return Tag */
-    public String getTag() {
-        return tag;
-    }
-
-    /** @return Keys */
-    public String getKeys() {
-        return keys;
-    }
-
-    /** @return 分片 Key */
-    public String getShardingKey() {
-        return shardingKey;
-    }
-
     /** @return 系统属性（不可修改） */
     public Map<String, String> getProperties() {
         return Map.copyOf(properties);
@@ -209,26 +223,6 @@ public final class MessageMetadataBuilder {
     /** @return 用户属性（不可修改） */
     public Map<String, String> getUserProperties() {
         return Map.copyOf(userProperties);
-    }
-
-    /** @return 延时级别 */
-    public DelayLevel getDelayLevel() {
-        return delayLevel;
-    }
-
-    /** @return 自定义延时时间（毫秒），null 表示未设置 */
-    public Long getDelayTimeMillis() {
-        return delayTimeMillis;
-    }
-
-    /** @return 消息生成时间戳，null 表示未设置 */
-    public Long getBornTimestamp() {
-        return bornTimestamp;
-    }
-
-    /** @return 消息来源主机 */
-    public String getBornHost() {
-        return bornHost;
     }
 
     // ===================== 应用到 MessageBuilder =====================

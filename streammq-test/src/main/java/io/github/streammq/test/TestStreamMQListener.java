@@ -1,7 +1,6 @@
 package io.github.streammq.test;
 
-import io.github.streammq.core.annotation.StreamMQConsumer;
-import io.github.streammq.core.consumer.ConsumeAction;
+import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.message.Message;
@@ -97,6 +96,9 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
             exceptions.clear();
         }
         latch = null;
+        nextAction = ConsumeAction.SUCCESS;
+        shouldFail = false;
+        failAfterCount = Integer.MAX_VALUE;
     }
 
     public void setNextAction(ConsumeAction action) {

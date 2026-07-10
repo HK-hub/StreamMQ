@@ -1,0 +1,16 @@
+spring:
+  application:
+    name: streammq-sample-dlq
+
+streammq:
+  enabled: true
+  namespace: sample
+  producer:
+    group: dlq-producer-group
+  consumer:
+    max-reconsume-times: 3
+
+redisson:
+  singleServerConfig:
+    address: "redis://127.0.0.1:6379"
+    database: 0

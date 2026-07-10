@@ -24,13 +24,13 @@ import java.lang.annotation.*;
  *
  * // 2. 有限重试策略：DLQ 失败最多重试 3 次，每次间隔 10s
  * @StreamMQDlqConsumer(consumerGroup = "order-cg",
- *     failureStrategy = "io.github.streammq.adapter.redisson.container.LimitedRetryDlqFailureStrategy",
+ *     failureStrategy = "io.github.streammq.adapter.redisson.dlq.LimitedRetryDlqFailureStrategy",
  *     maxDlqRetryAttempts = 3, dlqRetryDelayMs = 10_000)
  * public class MyDlqConsumer extends AbstractDlqMessageConsumer<Order> { ... }
  *
  * // 3. 二级死信策略：DLQ 失败重试 3 次后转投二级死信
  * @StreamMQDlqConsumer(consumerGroup = "order-cg",
- *     failureStrategy = "io.github.streammq.adapter.redisson.container.SecondaryDlqFailureStrategy",
+ *     failureStrategy = "io.github.streammq.adapter.redisson.dlq.SecondaryDlqFailureStrategy",
  *     secondaryDlqEnabled = true)
  * public class MyDlqConsumer extends AbstractDlqMessageConsumer<Order> { ... }
  * }</pre>
