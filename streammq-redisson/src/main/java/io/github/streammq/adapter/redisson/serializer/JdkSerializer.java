@@ -45,13 +45,13 @@ public class JdkSerializer<T extends Serializable> implements MessageSerializer<
     @SuppressWarnings("unchecked")
     public <R> R deserialize(byte[] bytes, Class<R> type) throws SerializationException {
         Objects.requireNonNull(type, "type");
-        if (bytes == null || bytes.length == 0) {
+        if (Objects.isNull(bytes) || bytes.length == 0) {
             return null;
         }
         try (ByteArrayInputStream bis = new ByteArrayInputStream(bytes);
              ObjectInputStream ois = new ObjectInputStream(bis)) {
             Object obj = ois.readObject();
-            if (obj != null && !type.isInstance(obj)) {
+            if (Objects.nonNull(obj) && !type.isInstance(obj)) {
                 throw new SerializationException(
                     "JDK deserialize type mismatch: expected " + type.getName()
                         + ", got " + obj.getClass().getName());

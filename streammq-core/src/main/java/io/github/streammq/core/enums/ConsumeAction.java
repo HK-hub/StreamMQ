@@ -149,6 +149,6 @@ public final class ConsumeAction {
 
     @Override
     public String toString() {
-        return deferDelay != null ? "ConsumeAction{" + type + ", defer=" + deferDelay + "}" : "ConsumeAction{" + type + "}";
+        return Objects.nonNull(deferDelay) ? "ConsumeAction{" + type + ", defer=" + deferDelay + "}" : "ConsumeAction{" + type + "}";
     }
 }

@@ -32,7 +32,9 @@ import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.policy.*;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.util.BodyTypeResolver;
+import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.SpiResolver;
+import io.github.streammq.core.util.StringUtils;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
@@ -156,7 +158,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      */
     public void setHandlerMetrics(StreamMQMetrics metrics) {
         this.metrics = metrics;
-        if (metrics == null) {
+        if (Objects.isNull(metrics)) {
             return;
         }
         if (sharedRetryDlqHandler instanceof DefaultRetryAndDlqHandler drh) {
@@ -241,7 +243,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         this.globalDlqFailureStrategy = Objects.requireNonNull(dlqFailureStrategy, "dlqFailureStrategy");
         this.dlqFailureStrategy = Objects.requireNonNull(dlqFailureStrategy, "dlqFailureStrategy");
         this.dlqConfig = Objects.requireNonNull(dlqConfig, "dlqConfig");
-        this.defaultNamespace = defaultNamespace == null ? "" : defaultNamespace;
+        this.defaultNamespace = Objects.isNull(defaultNamespace) ? "" : defaultNamespace;
         this.inflightCapacity = inflightCapacity > 0 ? inflightCapacity : StreamMQConstants.DEFAULT_INFLIGHT_CAPACITY;
         DefaultConsumerInterceptorChain chain = new DefaultConsumerInterceptorChain();
         this.interceptorChain = chain;
@@ -261,7 +263,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      * @param consumerFactory 消费者工厂
      * @param messageConverter 全局消息转换器
      * @param retryPolicy 全局重试策略（回退）
-     * @param dlqFailureHandler 全局死信失败处理器（回退）
      * @param dlqFailureStrategy 全局 DLQ 失败策略（回退）
      * @param dlqConfig 全局 DLQ 配置（回退）
      * @param defaultNamespace 默认命名空间
@@ -286,7 +287,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         this.globalDlqFailureStrategy = Objects.requireNonNull(dlqFailureStrategy, "dlqFailureStrategy");
         this.dlqFailureStrategy = Objects.requireNonNull(dlqFailureStrategy, "dlqFailureStrategy");
         this.dlqConfig = Objects.requireNonNull(dlqConfig, "dlqConfig");
-        this.defaultNamespace = defaultNamespace == null ? "" : defaultNamespace;
+        this.defaultNamespace = Objects.isNull(defaultNamespace) ? "" : defaultNamespace;
         this.interceptorChain = Objects.requireNonNull(interceptorChain, "interceptorChain");
         this.sharedRetryDlqHandler = Objects.requireNonNull(retryDlqHandler, "retryDlqHandler");
         this.shardLockManager = Objects.requireNonNull(shardLockManager, "shardLockManager");
@@ -406,7 +407,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         int shardCount = annotation.shardCount();
         RLock[] shardLockArray = shardLockManager.createShardLocks(defaultNamespace, annotation.topic(),
             annotation.consumerGroup(), annotation.namespace(), shardCount);
-        List<Lock> shardLocks = shardLockArray != null ? Arrays.asList(shardLockArray) : null;
+        List<Lock> shardLocks = Objects.nonNull(shardLockArray) ? Arrays.asList(shardLockArray) : null;
         Class<?> bodyType = BodyTypeResolver.resolve(consumer);
         ListenerRegistration<T> reg = ListenerRegistration.<T>builder()
             .type(ListenerType.ORDERLY)
@@ -475,14 +476,14 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         RetryAndDlqHandler handler = new DefaultRetryAndDlqHandler(
             redisson, converter, policy, interceptorChain, dlqStrategy,
             this.dlqConfig);
-        if (this.metrics != null && handler instanceof DefaultRetryAndDlqHandler drh) {
+        if (Objects.nonNull(this.metrics) && handler instanceof DefaultRetryAndDlqHandler drh) {
             drh.setMetrics(this.metrics);
         }
         perConsumerHandlers.put(reg.key(), handler);
 
         // 5. per-consumer 重平衡策略（实例化校验，运行期 Rebalance 模块启用后使用）
         Class<? extends RebalanceStrategy> rebalanceClass = reg.getRebalanceStrategy();
-        if (rebalanceClass != null && rebalanceClass != RebalanceStrategy.class) {
+        if (Objects.nonNull(rebalanceClass) && rebalanceClass != RebalanceStrategy.class) {
             try {
                 SpiResolver.resolveOrInstantiate((Class) rebalanceClass, RebalanceStrategy.class, null);
             } catch (RuntimeException ex) {
@@ -506,7 +507,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     @SuppressWarnings({"unchecked", "rawtypes"})
     private RebalanceStrategy resolveRebalanceStrategy(ListenerRegistration<?> reg) {
         Class<? extends RebalanceStrategy> rebalanceClass = reg.getRebalanceStrategy();
-        if (rebalanceClass == null || rebalanceClass == RebalanceStrategy.class) {
+        if (Objects.isNull(rebalanceClass) || rebalanceClass == RebalanceStrategy.class) {
             return new io.github.streammq.adapter.redisson.rebalance.AverageRebalanceStrategy();
         }
         try {
@@ -529,10 +530,10 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     private MessageConverter resolveConverter(ListenerRegistration<?> reg) {
         Class<? extends MessageConverter> converterClass = reg.getMessageConverter();
         Class<? extends MessageSerializer> serializerClass = reg.getSerializer();
-        if (converterClass != null && converterClass != MessageConverter.class) {
+        if (Objects.nonNull(converterClass) && converterClass != MessageConverter.class) {
             return SpiResolver.resolveOrInstantiate((Class) converterClass, MessageConverter.class, this.messageConverter);
         }
-        if (serializerClass != null && serializerClass != MessageSerializer.class) {
+        if (Objects.nonNull(serializerClass) && serializerClass != MessageSerializer.class) {
             try {
                 MessageSerializer<?> serializer = serializerClass.getDeclaredConstructor().newInstance();
                 return new DefaultMessageConverter(serializer);
@@ -549,7 +550,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         List<ConsumerMetadata> list = new ArrayList<>(registrations.size());
         for (ListenerRegistration<?> reg : registrations.values()) {
             list.add(new ConsumerMetadata(reg.getTopic(), reg.getGroup(), reg.getConsumer().getClass(),
-                reg.getTargetBodyType() != null ? reg.getTargetBodyType() : Object.class));
+                Objects.nonNull(reg.getTargetBodyType()) ? reg.getTargetBodyType() : Object.class));
         }
         return Collections.unmodifiableList(list);
     }
@@ -729,7 +730,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 try {
                     List<Message<?>> messages = listener.pullBlock(reg.getPullBatchSize(),
                         Duration.ofMillis(reg.getPullBlockTimeoutMillis()));
-                    if (messages == null || messages.isEmpty()) {
+                    if (CollectionUtils.isEmpty(messages)) {
                         if (reg.getPullIntervalMillis() > 0) {
                             sleepQuietly(reg.getPullIntervalMillis());
                         }
@@ -739,7 +740,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         if (state.get() != ContainerState.RUNNING) {
                             break;
                         }
-                        if (inflightQueue != null) {
+                        if (Objects.nonNull(inflightQueue)) {
                             // 背压：队列满时阻塞等待
                             inflightQueue.put(message);
                         } else {
@@ -773,7 +774,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         try {
             while (state.get() == ContainerState.RUNNING) {
                 Message<?> message = inflightQueue.poll(1, TimeUnit.SECONDS);
-                if (message == null) {
+                if (Objects.isNull(message)) {
                     continue;
                 }
                 processMessage(message, reg, listener);
@@ -847,7 +848,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 } else {
                     StreamMessageConcurrentlyConsumer consumer = (StreamMessageConcurrentlyConsumer) reg.getConsumer();
                     ConsumeAction action = consumer.onMessage(message, ctx);
-                    if (action == null) {
+                    if (Objects.isNull(action)) {
                         action = ConsumeAction.RECONSUME_LATER;
                     }
                     handler.handleAction(action, message, reg, listener, null);
@@ -881,7 +882,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         });
         try {
             ConsumeAction action = future.get(reg.getConsumeTimeoutMillis(), TimeUnit.MILLISECONDS);
-            if (action == null) {
+            if (Objects.isNull(action)) {
                 action = ConsumeAction.RECONSUME_LATER;
             }
             handler.handleAction(action, message, reg, listener, null);
@@ -909,12 +910,13 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      * @param success    是否消费成功
      */
     private void recordConsumeMetrics(ListenerRegistration<?> reg, long startNanos, boolean success) {
-        if (metrics != null) {
+        if (Objects.nonNull(metrics)) {
             try {
                 metrics.recordConsume(reg.getTopic(), reg.getGroup(), success,
                     Duration.ofNanos(System.nanoTime() - startNanos));
             } catch (Exception ignored) {
                 // 指标收集失败不得影响业务主流程
+                LOG.debug("Metrics collection failed", ignored);
             }
         }
     }
@@ -944,7 +946,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         List<ConsumerFilter> allFilters = new ArrayList<>();
 
         String selectorExpression = reg.getSelectorExpression();
-        if (selectorExpression != null && !selectorExpression.isEmpty() && !"*".equals(selectorExpression)) {
+        if (StringUtils.isNotEmpty(selectorExpression) && !"*".equals(selectorExpression)) {
             SelectorType selectorType = reg.getSelectorType();
             ExpressionSelectorFilter selectorFilter = switch (selectorType) {
                 case TAG -> new SimpleTagSelectorFilter(selectorExpression);
@@ -959,10 +961,10 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
         Class<? extends ConsumerFilter>[] perConsumerFilterClasses =
             (Class<? extends ConsumerFilter>[]) reg.getConsumerFilter();
-        if (perConsumerFilterClasses != null && perConsumerFilterClasses.length > 0) {
+        if (Objects.nonNull(perConsumerFilterClasses) && perConsumerFilterClasses.length > 0) {
             for (Class<? extends ConsumerFilter> filterClass : perConsumerFilterClasses) {
                 ConsumerFilter filter = resolveConsumerFilter(filterClass);
-                if (filter != null) {
+                if (Objects.nonNull(filter)) {
                     allFilters.add(filter);
                     LOG.debug("Added per-consumer filter for {}: {}", reg.key(), filter.name());
                 }
@@ -981,14 +983,14 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      * @return 过滤器实例，可为 null
      */
     private ConsumerFilter resolveConsumerFilter(Class<? extends ConsumerFilter> filterClass) {
-        if (filterClass == null || filterClass == ConsumerFilter.class) {
+        if (Objects.isNull(filterClass) || filterClass == ConsumerFilter.class) {
             return null;
         }
 
         ConsumerFilterResolver resolver = this.filterResolver;
-        if (resolver != null) {
+        if (Objects.nonNull(resolver)) {
             ConsumerFilter filter = resolver.resolve(filterClass);
-            if (filter != null) {
+            if (Objects.nonNull(filter)) {
                 return filter;
             }
             LOG.debug("Filter {} not resolved by filterResolver, trying reflection", filterClass.getName());
@@ -1012,7 +1014,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      */
     private boolean acceptMessage(Message<?> message, ListenerRegistration<?> reg) {
         List<ConsumerFilter> filters = perConsumerFilters.get(reg.key());
-        if (filters == null || filters.isEmpty()) {
+        if (CollectionUtils.isEmpty(filters)) {
             return true;
         }
 

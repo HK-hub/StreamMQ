@@ -90,6 +90,9 @@ public class StreamMQProperties {
     /** 追踪配置 */
     private Tracing tracing = new Tracing();
 
+    /** 追踪存储与查询配置（v1.0+） */
+    private Trace trace = new Trace();
+
     // ===================== 子配置 =====================
 
     /**
@@ -107,6 +110,8 @@ public class StreamMQProperties {
         private int streamMaxLen = 0;
         /** 序列化器实现类全限定名（默认 JacksonJsonSerializer） */
         private String serializer = "io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer";
+        /** 消息体压缩阈值（字节），body 超过此值时触发压缩，0 = 禁用（默认禁用） */
+        private int compressThreshold = 0;
     }
 
     /**
@@ -233,5 +238,19 @@ public class StreamMQProperties {
         private String collector = "io.github.streammq.adapter.redisson.trace.NoopTraceCollector";
         /** 追踪日志 Topic（仅 Slf4jTraceCollector 生效） */
         private String traceTopic = "";
+    }
+
+    /**
+     * 追踪存储与查询配置（v1.0+）。
+     *
+     * <p>与 {@link Tracing} 区别：Tracing 控制日志级别的追踪输出，
+     * Trace 控制追踪数据的持久化存储与查询能力。
+     */
+    @Data
+    public static class Trace {
+        /** 是否启用追踪存储与查询服务 */
+        private boolean enabled = false;
+        /** 追踪存储方式（{@code redis} 启用 Redis Stream 存储，其他值禁用） */
+        private String storage = "none";
     }
 }

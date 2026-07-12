@@ -4,6 +4,7 @@ import io.github.streammq.core.filter.TagSelectorFilter;
 
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -33,7 +34,7 @@ public class SimpleTagSelectorFilter extends TagSelectorFilter {
         Set<String> andSet = new HashSet<>();
         String single = null;
 
-        String expr = selectorExpression == null ? "" : selectorExpression.trim();
+        String expr = Objects.isNull(selectorExpression) ? "" : selectorExpression.trim();
         if (!WILD_CARD.equals(expr) && !expr.isEmpty()) {
             if (expr.contains("||")) {
                 String[] parts = expr.split("\\|\\|");
@@ -59,15 +60,15 @@ public class SimpleTagSelectorFilter extends TagSelectorFilter {
     protected boolean matchTag(String tag) {
         String trimmedTag = tag.trim();
 
-        if (singleTag != null) {
+        if (Objects.nonNull(singleTag)) {
             return singleTag.equals(trimmedTag);
         }
 
-        if (orTags != null) {
+        if (Objects.nonNull(orTags)) {
             return orTags.contains(trimmedTag);
         }
 
-        if (andTags != null) {
+        if (Objects.nonNull(andTags)) {
             return andTags.size() == 1 && andTags.contains(trimmedTag);
         }
 

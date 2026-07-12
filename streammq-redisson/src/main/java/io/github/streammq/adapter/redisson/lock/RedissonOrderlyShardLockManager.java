@@ -7,11 +7,13 @@ import io.github.streammq.core.enums.OrderlyAction;
 import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.policy.OrderlyShardLockManager;
+import io.github.streammq.core.util.StringUtils;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 
+import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -46,7 +48,7 @@ public class RedissonOrderlyShardLockManager implements OrderlyShardLockManager 
         if (shardCount <= 0) {
             return null;
         }
-        String namespace = (ns == null || ns.isEmpty()) ? defaultNs : ns;
+        String namespace = StringUtils.isEmpty(ns) ? defaultNs : ns;
         RLock[] locks = new RLock[shardCount];
         for (int i = 0; i < shardCount; i++) {
             String lockKey = StreamMQKeys.shardLock(namespace, topic, group, i);
@@ -71,11 +73,11 @@ public class RedissonOrderlyShardLockManager implements OrderlyShardLockManager 
     @Override
     public OrderlyAction consumeWithShardLock(Message<?> message, ListenerRegistration reg,
                                                                      ConsumeOrderlyContext ctx, StreamMessageOrderlyConsumer orderly) throws Exception {
-        if (reg.getShardLocks() == null || reg.getShardCount() <= 0) {
+        if (Objects.isNull(reg.getShardLocks()) || reg.getShardCount() <= 0) {
             return orderly.onMessage(message, ctx);
         }
         String shardingKey = message.getShardingKey();
-        if (shardingKey == null) {
+        if (Objects.isNull(shardingKey)) {
             shardingKey = "";
         }
         int shardIndex = Math.abs(shardingKey.hashCode()) % reg.getShardCount();

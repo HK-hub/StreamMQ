@@ -160,7 +160,7 @@ public final class MessageMetadataBuilder {
      * @return this
      */
     public MessageMetadataBuilder properties(Map<String, String> properties) {
-        if (properties != null) {
+        if (Objects.nonNull(properties)) {
             this.properties.putAll(properties);
         }
         return this;
@@ -185,7 +185,7 @@ public final class MessageMetadataBuilder {
      * @return this
      */
     public MessageMetadataBuilder userProperties(Map<String, String> userProperties) {
-        if (userProperties != null) {
+        if (Objects.nonNull(userProperties)) {
             this.userProperties.putAll(userProperties);
         }
         return this;
@@ -235,19 +235,19 @@ public final class MessageMetadataBuilder {
      */
     public <T> void applyTo(MessageBuilder<T> builder) {
         Objects.requireNonNull(builder, "builder");
-        if (tag != null) {
+        if (Objects.nonNull(tag)) {
             builder.tag(tag);
         }
-        if (keys != null) {
+        if (Objects.nonNull(keys)) {
             builder.keys(keys);
         }
-        if (shardingKey != null) {
+        if (Objects.nonNull(shardingKey)) {
             builder.shardingKey(shardingKey);
         }
-        if (delayLevel != null) {
+        if (Objects.nonNull(delayLevel)) {
             builder.delayLevel(delayLevel);
         }
-        if (delayTimeMillis != null) {
+        if (Objects.nonNull(delayTimeMillis)) {
             builder.delayTimeMillis(delayTimeMillis);
         }
         if (!properties.isEmpty()) {
@@ -258,10 +258,10 @@ public final class MessageMetadataBuilder {
                 builder.userProperty(entry.getKey(), entry.getValue());
             }
         }
-        if (bornTimestamp != null) {
+        if (Objects.nonNull(bornTimestamp)) {
             builder.bornTimestamp(bornTimestamp);
         }
-        if (bornHost != null) {
+        if (Objects.nonNull(bornHost)) {
             builder.bornHost(bornHost);
         }
     }
@@ -272,6 +272,6 @@ public final class MessageMetadataBuilder {
      * @return true 如果设置了 delayLevel 或 delayTimeMillis
      */
     public boolean hasDelay() {
-        return delayLevel != null || delayTimeMillis != null;
+        return Objects.nonNull(delayLevel) || Objects.nonNull(delayTimeMillis);
     }
 }

@@ -97,8 +97,8 @@ public final class SendResult implements Serializable {
             + ", tag='" + tag + '\''
             + ", sendStatus=" + sendStatus
             + ", bornTimestamp=" + bornTimestamp
-            + (regionId != null ? ", regionId='" + regionId + '\'' : "")
-            + (errorMessage != null ? ", errorMessage='" + errorMessage + '\'' : "")
+            + (Objects.nonNull(regionId) ? ", regionId='" + regionId + '\'' : "")
+            + (Objects.nonNull(errorMessage) ? ", errorMessage='" + errorMessage + '\'' : "")
             + '}';
     }
 }

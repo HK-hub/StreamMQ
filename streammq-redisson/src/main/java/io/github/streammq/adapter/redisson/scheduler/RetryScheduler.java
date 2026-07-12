@@ -4,6 +4,8 @@ import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
+import io.github.streammq.core.util.CollectionUtils;
+import io.github.streammq.core.util.StringUtils;
 import org.redisson.api.RMap;
 import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RStream;
@@ -91,7 +93,7 @@ public class RetryScheduler implements StreamMQScheduler {
     public RetryScheduler(RedissonClient redisson, String namespace,
                           long scanIntervalMs, int batchSize) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
-        this.namespace = namespace == null ? "" : namespace;
+        this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
         this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
         this.scanExecutor = new ScheduledThreadPoolExecutor(1, r -> {
@@ -140,7 +142,7 @@ public class RetryScheduler implements StreamMQScheduler {
             return;
         }
         ScheduledFuture<?> future = this.scanFuture;
-        if (future != null) {
+        if (Objects.nonNull(future)) {
             future.cancel(false);
             this.scanFuture = null;
         }
@@ -194,7 +196,7 @@ public class RetryScheduler implements StreamMQScheduler {
         try {
             RMap<String, String> payloadMap = redisson.getMap(payloadKey);
             Map<String, String> fields = payloadMap.readAllMap();
-            if (fields == null || fields.isEmpty()) {
+            if (CollectionUtils.isEmpty(fields)) {
                 LOG.warn("Retry payload not found for msgId={}, may have been processed", msgId);
                 return;
             }
@@ -205,10 +207,11 @@ public class RetryScheduler implements StreamMQScheduler {
 
             int retryCount = 0;
             String retryCountStr = fields.get(FIELD_RETRY_COUNT);
-            if (retryCountStr != null && !retryCountStr.isEmpty()) {
+            if (StringUtils.isNotEmpty(retryCountStr)) {
                 try {
                     retryCount = Integer.parseInt(retryCountStr);
                 } catch (NumberFormatException ignored) {
+                    LOG.debug("Failed to parse retry count: {}", retryCountStr);
                 }
             }
 

@@ -5,6 +5,8 @@ import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
+import io.github.streammq.core.util.CollectionUtils;
+import io.github.streammq.core.util.StringUtils;
 import lombok.Setter;
 import org.redisson.api.RBatch;
 import org.redisson.api.RMap;
@@ -84,7 +86,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     public DelayMessageScheduler(RedissonClient redisson, String namespace,
                                  long scanIntervalMs, int batchSize) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
-        this.namespace = namespace == null ? "" : namespace;
+        this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
         this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
         this.scanExecutor = new ScheduledThreadPoolExecutor(1, r -> {
@@ -116,7 +118,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
             return;
         }
         ScheduledFuture<?> future = this.scanFuture;
-        if (future != null) {
+        if (Objects.nonNull(future)) {
             future.cancel(false);
             this.scanFuture = null;
         }
@@ -170,13 +172,13 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
                 RMap<String, String> payloadMap = redisson.getMap(payloadKey);
                 Map<String, String> fields = payloadMap.readAllMap();
-                if (fields == null || fields.isEmpty()) {
+                if (CollectionUtils.isEmpty(fields)) {
                     LOG.warn("Delay payload not found for msgId={}, may have been processed", msgId);
                     continue;
                 }
 
                 String targetTopic = fields.get(FIELD_TARGET_TOPIC);
-                if (targetTopic == null || targetTopic.isEmpty()) {
+                if (StringUtils.isEmpty(targetTopic)) {
                     LOG.warn("Delay message has no targetTopic, skip: msgId={}", msgId);
                     continue;
                 }
@@ -185,7 +187,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 fields.remove(FIELD_TARGET_TOPIC);
                 fields.remove(FIELD_DELIVER_AT);
 
-                if (batch == null) {
+                if (Objects.isNull(batch)) {
                     batch = redisson.createBatch();
                 }
                 String targetStreamKey = StreamMQKeys.topicStream(namespace, targetTopic);
@@ -215,7 +217,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 }
             }
         }
-        if (batch != null) {
+        if (Objects.nonNull(batch)) {
             executeBatch(batch);
         }
     }
@@ -244,13 +246,13 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
                 RMap<String, String> payloadMap = redisson.getMap(payloadKey);
                 Map<String, String> fields = payloadMap.readAllMap();
-                if (fields == null || fields.isEmpty()) {
+                if (CollectionUtils.isEmpty(fields)) {
                     LOG.warn("Delay payload not found for msgId={}, may have been processed", msgId);
                     continue;
                 }
 
                 String targetTopic = fields.get(FIELD_TARGET_TOPIC);
-                if (targetTopic == null || targetTopic.isEmpty()) {
+                if (StringUtils.isEmpty(targetTopic)) {
                     LOG.warn("Delay message has no targetTopic, skip: msgId={}", msgId);
                     continue;
                 }
@@ -258,7 +260,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 fields.remove(FIELD_TARGET_TOPIC);
                 fields.remove(FIELD_DELIVER_AT);
 
-                if (batch == null) {
+                if (Objects.isNull(batch)) {
                     batch = redisson.createBatch();
                 }
                 String targetStreamKey = StreamMQKeys.topicStream(namespace, targetTopic);
@@ -285,7 +287,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 }
             }
         }
-        if (batch != null) {
+        if (Objects.nonNull(batch)) {
             executeBatch(batch);
         }
     }
@@ -304,11 +306,12 @@ public class DelayMessageScheduler implements StreamMQScheduler {
      * @param level 延时等级
      */
     private void recordDelayMetrics(String level) {
-        if (metrics != null) {
+        if (Objects.nonNull(metrics)) {
             try {
                 metrics.recordDelayDelivery(level);
             } catch (Exception ignored) {
                 // 指标收集失败不得影响业务主流程
+                LOG.debug("Metrics collection failed", ignored);
             }
         }
     }

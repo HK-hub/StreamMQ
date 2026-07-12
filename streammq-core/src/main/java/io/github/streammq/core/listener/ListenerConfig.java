@@ -205,7 +205,7 @@ public class ListenerConfig {
         }
 
         this.consumerName = consumerName;
-        this.namespace = namespace == null ? "" : namespace;
+        this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.pullBatchSize = pullBatchSize;
         this.pullBlockTimeoutMillis = pullBlockTimeoutMillis;
         this.pullIntervalMillis = pullIntervalMillis;

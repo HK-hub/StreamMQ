@@ -196,6 +196,34 @@ class StreamMQKeysTest {
             .isEqualTo("streammq:ns:meta:stats:group:topic");
     }
 
+    @Test
+    @DisplayName("metaConfig: 消费组配置 Hash Key")
+    void metaConfig() {
+        assertThat(StreamMQKeys.metaConfig("ns", "group"))
+            .isEqualTo("streammq:ns:meta:config:group");
+    }
+
+    @Test
+    @DisplayName("metaConfig: 空命名空间省略 ns 段")
+    void metaConfigEmptyNamespace() {
+        assertThat(StreamMQKeys.metaConfig("", "group"))
+            .isEqualTo("streammq:meta:config:group");
+    }
+
+    @Test
+    @DisplayName("traceStream: 追踪数据 Stream Key")
+    void traceStream() {
+        assertThat(StreamMQKeys.traceStream("ns", "20260710"))
+            .isEqualTo("streammq:ns:trace:20260710");
+    }
+
+    @Test
+    @DisplayName("traceStream: 空命名空间省略 ns 段")
+    void traceStreamEmptyNamespace() {
+        assertThat(StreamMQKeys.traceStream("", "20260710"))
+            .isEqualTo("streammq:trace:20260710");
+    }
+
     @Nested
     @DisplayName("参数校验 requireNonEmpty")
     class RequireNonEmptyTests {
@@ -246,6 +274,38 @@ class StreamMQKeysTest {
             assertThatThrownBy(() -> StreamMQKeys.halfStream("ns", ""))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("txGroup");
+        }
+
+        @Test
+        @DisplayName("metaConfig: group 为 null 抛出 NullPointerException")
+        void metaConfigGroupNull() {
+            assertThatThrownBy(() -> StreamMQKeys.metaConfig("ns", null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("group");
+        }
+
+        @Test
+        @DisplayName("metaConfig: group 为空字符串抛出 IllegalArgumentException")
+        void metaConfigGroupEmpty() {
+            assertThatThrownBy(() -> StreamMQKeys.metaConfig("ns", ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("group");
+        }
+
+        @Test
+        @DisplayName("traceStream: date 为 null 抛出 NullPointerException")
+        void traceStreamDateNull() {
+            assertThatThrownBy(() -> StreamMQKeys.traceStream("ns", null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("date");
+        }
+
+        @Test
+        @DisplayName("traceStream: date 为空字符串抛出 IllegalArgumentException")
+        void traceStreamDateEmpty() {
+            assertThatThrownBy(() -> StreamMQKeys.traceStream("ns", ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("date");
         }
     }
 
@@ -397,6 +457,20 @@ class StreamMQKeysTest {
         void metaStatsEquivalence() {
             assertThat(StreamMQKeys.metaStats(null, "group", "topic"))
                 .isEqualTo(StreamMQKeys.metaStats("", "group", "topic"));
+        }
+
+        @Test
+        @DisplayName("metaConfig: null 与空字符串结果一致")
+        void metaConfigEquivalence() {
+            assertThat(StreamMQKeys.metaConfig(null, "group"))
+                .isEqualTo(StreamMQKeys.metaConfig("", "group"));
+        }
+
+        @Test
+        @DisplayName("traceStream: null 与空字符串结果一致")
+        void traceStreamEquivalence() {
+            assertThat(StreamMQKeys.traceStream(null, "20260710"))
+                .isEqualTo(StreamMQKeys.traceStream("", "20260710"));
         }
     }
 }

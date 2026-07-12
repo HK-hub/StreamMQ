@@ -4,6 +4,8 @@ import io.github.streammq.core.message.Message;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Objects;
+
 /**
  * {@link DlqFailureStrategy} 抽象基类，提供日志、告警判断等公共逻辑。
  *
@@ -21,7 +23,7 @@ public abstract class AbstractDlqFailureStrategy implements DlqFailureStrategy {
     protected final DlqConfig config;
 
     protected AbstractDlqFailureStrategy(DlqConfig config) {
-        this.config = config != null ? config : DlqConfig.builder().build();
+        this.config = Objects.nonNull(config) ? config : DlqConfig.builder().build();
     }
 
     @Override
@@ -29,11 +31,11 @@ public abstract class AbstractDlqFailureStrategy implements DlqFailureStrategy {
         log.warn("DLQ consume failed: topic={}, group={}, dlqAttempts={}/{}, reason={}, cause={}",
             context.originalTopic(), context.dlqReason(),
             context.dlqAttempts(), context.maxDlqRetryAttempts(),
-            context.dlqReason(), context.lastFailureCause() != null
+            context.dlqReason(), Objects.nonNull(context.lastFailureCause())
                 ? context.lastFailureCause().getMessage() : "returned non-SUCCESS");
 
         DlqFailureDecision decision = doDecide(message, context);
-        if (decision == null) {
+        if (Objects.isNull(decision)) {
             decision = DlqFailureDecision.drop();
         }
 

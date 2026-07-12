@@ -1,5 +1,6 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
+import io.github.streammq.core.util.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.actuate.endpoint.annotation.*;
@@ -57,7 +58,7 @@ public class StreamMQActuatorEndpoint {
 
     @WriteOperation
     public Map<String, Object> requeueDlq(@Selector String group, String messageId, String targetTopic) {
-        if (targetTopic == null || targetTopic.isEmpty()) {
+        if (StringUtils.isEmpty(targetTopic)) {
             throw new IllegalArgumentException("targetTopic is required");
         }
         return adminEndpoint.requeueDlq(group, messageId, targetTopic);
@@ -76,5 +77,33 @@ public class StreamMQActuatorEndpoint {
     @ReadOperation
     public Map<String, Object> stats(@Selector String group, @Selector String topic) {
         return adminEndpoint.getStats(group, topic);
+    }
+
+    @WriteOperation
+    public Map<String, Object> ackPending(@Selector String group, @Selector String topic, String messageId) {
+        return adminEndpoint.ackPending(group, topic, messageId);
+    }
+
+    @WriteOperation
+    public Map<String, Object> triggerRebalance(@Selector String group) {
+        return adminEndpoint.triggerRebalance(group);
+    }
+
+    @WriteOperation
+    public Map<String, Object> createTopic(String topic) {
+        if (StringUtils.isEmpty(topic)) {
+            throw new IllegalArgumentException("topic is required");
+        }
+        return adminEndpoint.createTopic(topic);
+    }
+
+    @DeleteOperation
+    public Map<String, Object> deleteTopic(@Selector String topic) {
+        return adminEndpoint.deleteTopic(topic);
+    }
+
+    @WriteOperation
+    public Map<String, Object> updateGroupConfig(@Selector String group, Map<String, String> config) {
+        return adminEndpoint.updateGroupConfig(group, config);
     }
 }

@@ -49,8 +49,8 @@ public class LoggingProducerInterceptor implements ProducerInterceptor {
     @Override
     public void onException(Message<?> message, Exception exception, InvokeTiming timing) {
         LOG.error("[ProducerLog] onException topic={}, keys={}, timing={}",
-            message != null ? message.getTopic() : null,
-            message != null ? message.getKeys() : null,
+            Objects.nonNull(message) ? message.getTopic() : null,
+            Objects.nonNull(message) ? message.getKeys() : null,
             timing, exception);
     }
 

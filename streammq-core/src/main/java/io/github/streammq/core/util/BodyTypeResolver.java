@@ -5,6 +5,7 @@ import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
 
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
+import java.util.Objects;
 
 /**
  * 解析 Consumer 实现类的泛型 body 类型 T。
@@ -37,14 +38,14 @@ public final class BodyTypeResolver {
      * @return 泛型 T 对应的 Class，解析失败返回 {@code null}
      */
     public static Class<?> resolve(Object consumer) {
-        if (consumer == null) {
+        if (Objects.isNull(consumer)) {
             return null;
         }
         Class<?> clazz = consumer.getClass();
         // 遍历类层次结构（包括父类），查找实现了 StreamMQ Consumer 接口的泛型声明
-        for (Class<?> c = clazz; c != null && c != Object.class; c = c.getSuperclass()) {
+        for (Class<?> c = clazz; Objects.nonNull(c) && c != Object.class; c = c.getSuperclass()) {
             Class<?> resolved = resolveFromInterfaces(c);
-            if (resolved != null) {
+            if (Objects.nonNull(resolved)) {
                 return resolved;
             }
         }

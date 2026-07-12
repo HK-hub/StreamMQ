@@ -47,7 +47,7 @@ public class DefaultProducerFilterChain implements ProducerFilterChain {
 
     @Override
     public void addFilters(Collection<ProducerFilter> filters) {
-        if (filters != null) {
+        if (Objects.nonNull(filters)) {
             for (ProducerFilter filter : filters) {
                 addFilter(filter);
             }

@@ -37,6 +37,7 @@ import org.springframework.context.annotation.Import;
 @ConditionalOnProperty(prefix = "streammq", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass({RedissonClient.class, StreamMessageTemplate.class})
 @Import({
+    StreamMQTraceAutoConfiguration.class,
     StreamMQCoreAutoConfiguration.class,
     StreamMQSchedulerAutoConfiguration.class,
     StreamMQListenerContainerAutoConfiguration.class,

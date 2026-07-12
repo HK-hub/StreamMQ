@@ -98,7 +98,7 @@ public final class MessageBuilder<T> {
      * @return this
      */
     public MessageBuilder<T> tag(String tag) {
-        this.tag = tag == null ? null : tag.trim();
+        this.tag = Objects.isNull(tag) ? null : tag.trim();
         return this;
     }
 
@@ -181,7 +181,7 @@ public final class MessageBuilder<T> {
      * @return this
      */
     public MessageBuilder<T> properties(Map<String, String> properties) {
-        if (properties != null) {
+        if (Objects.nonNull(properties)) {
             this.properties.putAll(properties);
         }
         return this;
@@ -293,7 +293,7 @@ public final class MessageBuilder<T> {
             throw new IllegalArgumentException("topic must not be empty");
         }
         long ts = bornTimestamp > 0 ? bornTimestamp : System.currentTimeMillis();
-        String host = bornHost != null ? bornHost : "unknown";
+        String host = Objects.nonNull(bornHost) ? bornHost : "unknown";
         return new Message<>(topic, tag, keys, shardingKey, properties, userProperties,
             body, delayLevel, delayTimeMillis, ts, host, transactionId);
     }

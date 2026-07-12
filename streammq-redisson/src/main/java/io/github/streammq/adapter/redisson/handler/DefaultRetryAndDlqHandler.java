@@ -21,6 +21,7 @@ import io.github.streammq.core.policy.DlqFailureDecision;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RetryAndDlqHandler;
 import io.github.streammq.core.policy.RetryPolicy;
+import io.github.streammq.core.util.StringUtils;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
@@ -35,6 +36,7 @@ import org.slf4j.LoggerFactory;
 import java.time.Duration;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * ACK / 重试 / DLQ 路由处理器默认实现（策略类）。
@@ -80,11 +82,11 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
     public void handleAction(ConsumeAction action, Message<?> message, ListenerRegistration<?> reg,
                              StreamMQListener listener, Throwable cause) {
         MessageId messageId = message.getMessageId();
-        if (messageId == null) {
+        if (Objects.isNull(messageId)) {
             LOG.warn("Message has no messageId, cannot ack/retry: topic={}, group={}", reg.getTopic(), reg.getGroup());
             return;
         }
-        if (action == null) {
+        if (Objects.isNull(action)) {
             action = ConsumeAction.RECONSUME_LATER;
         }
         if (action.isSuccess()) {
@@ -130,7 +132,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                 cause, fields, dlqConfig.getMaxDlqRetryAttempts(), dlqConfig.getDlqRetryDelayMs());
 
             DlqFailureDecision decision = dlqFailureStrategy.decide(message, ctx);
-            if (decision == null) { decision = DlqFailureDecision.drop(); }
+            if (Objects.isNull(decision)) { decision = DlqFailureDecision.drop(); }
 
             
 
@@ -200,8 +202,8 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
 
     private int parseDlqRetryCount(Map<String, String> fields) {
         String v = fields.get(StreamMQConstants.FIELD_DLQ_RETRY_COUNT);
-        if (v != null && !v.isEmpty()) {
-            try { return Integer.parseInt(v); } catch (NumberFormatException ignored) {}
+        if (StringUtils.isNotEmpty(v)) {
+            try { return Integer.parseInt(v); } catch (NumberFormatException ignored) { LOG.debug("Failed to parse DLQ retry count: {}", v); }
         }
         return 0;
     }
@@ -214,7 +216,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         try {
             int retryCount = message.getReconsumeTimes();
             Duration delay = retryPolicy.nextRetryDelay(retryCount, message);
-            if (delay == null) {
+            if (Objects.isNull(delay)) {
                 LOG.warn("RetryPolicy returned null delay, routing to DLQ " +
                         "(topic={}, group={}, messageId={}, retryCount={})",
                     reg.getTopic(), reg.getGroup(), messageId, retryCount);
@@ -303,11 +305,12 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
      * @param group 消费者组
      */
     private void recordRetryMetrics(String topic, String group) {
-        if (metrics != null) {
+        if (Objects.nonNull(metrics)) {
             try {
                 metrics.recordRetry(topic, group);
             } catch (Exception ignored) {
                 // 指标收集失败不得影响业务主流程
+                LOG.debug("Metrics collection failed", ignored);
             }
         }
     }
@@ -319,11 +322,12 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
      * @param group 消费者组
      */
     private void recordDlqMetrics(String topic, String group) {
-        if (metrics != null) {
+        if (Objects.nonNull(metrics)) {
             try {
                 metrics.recordDlq(topic, group);
             } catch (Exception ignored) {
                 // 指标收集失败不得影响业务主流程
+                LOG.debug("Metrics collection failed", ignored);
             }
         }
     }

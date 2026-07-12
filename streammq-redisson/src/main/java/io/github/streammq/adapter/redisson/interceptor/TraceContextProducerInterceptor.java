@@ -52,7 +52,7 @@ public class TraceContextProducerInterceptor implements ProducerInterceptor {
         Objects.requireNonNull(message, "message");
         // 如果消息没有 traceId，生成 UUID 作为 traceId
         Map<String, String> userProps = message.getUserProperties();
-        if (userProps.get(TRACE_ID_KEY) == null) {
+        if (Objects.isNull(userProps.get(TRACE_ID_KEY))) {
             message.putUserProperty(TRACE_ID_KEY, UUID.randomUUID().toString());
         }
         sendStartTimestamp.set(System.currentTimeMillis());
@@ -66,13 +66,13 @@ public class TraceContextProducerInterceptor implements ProducerInterceptor {
         if (!traceCollector.isEnabled()) {
             return;
         }
-        long duration = start != null ? System.currentTimeMillis() - start : 0L;
+        long duration = Objects.nonNull(start) ? System.currentTimeMillis() - start : 0L;
         String traceId = message.getUserProperties().get(TRACE_ID_KEY);
         Map<String, String> attributes = new HashMap<>(2);
-        if (result.getErrorMessage() != null) {
+        if (Objects.nonNull(result.getErrorMessage())) {
             attributes.put("errorMessage", result.getErrorMessage());
         }
-        if (result.getRegionId() != null) {
+        if (Objects.nonNull(result.getRegionId())) {
             attributes.put("regionId", result.getRegionId());
         }
         try {

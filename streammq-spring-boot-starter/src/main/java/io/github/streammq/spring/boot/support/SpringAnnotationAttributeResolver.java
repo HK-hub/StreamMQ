@@ -1,6 +1,7 @@
 package io.github.streammq.spring.boot.support;
 
 import io.github.streammq.core.annotation.AnnotationAttributeResolver;
+import io.github.streammq.core.util.StringUtils;
 import org.springframework.beans.factory.config.BeanExpressionContext;
 import org.springframework.beans.factory.config.BeanExpressionResolver;
 import org.springframework.beans.factory.config.ConfigurableBeanFactory;
@@ -35,7 +36,7 @@ public class SpringAnnotationAttributeResolver implements AnnotationAttributeRes
      */
     @Override
     public String resolve(String value) {
-        if (value == null || value.isEmpty()) {
+        if (StringUtils.isEmpty(value)) {
             return value;
         }
         // 先解析 ${} 占位符

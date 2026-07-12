@@ -124,7 +124,7 @@ public final class BatchMessage<T> {
          * @return this
          */
         public Builder<T> addAll(List<Message<T>> messages) {
-            if (messages != null) {
+            if (Objects.nonNull(messages)) {
                 for (Message<T> m : messages) {
                     add(m);
                 }

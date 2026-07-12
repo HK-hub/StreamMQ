@@ -148,7 +148,7 @@ class OrderlyMessageIT extends AbstractRedisIT {
         container.start();
 
         RedissonStreamProducer producer =
-            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
+            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
         try {
             producer.syncSend(MessageBuilder.<String>withTopic(topic)
                 .tag("t1")
@@ -197,7 +197,7 @@ class OrderlyMessageIT extends AbstractRedisIT {
         container.start();
 
         RedissonStreamProducer producer =
-            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
+            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
         try {
             // 按顺序发送 5 条消息
             for (int i = 0; i < 5; i++) {
@@ -245,7 +245,7 @@ class OrderlyMessageIT extends AbstractRedisIT {
         container.start();
 
         RedissonStreamProducer producer =
-            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
+            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
         try {
             producer.syncSend(MessageBuilder.<String>withTopic(topic)
                 .body("suspend-body")
@@ -302,7 +302,7 @@ class OrderlyMessageIT extends AbstractRedisIT {
             assertThat(container.getState()).isEqualTo(ContainerState.RUNNING);
 
             RedissonStreamProducer producer =
-                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
+                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
             try {
                 producer.syncSend(MessageBuilder.<String>withTopic(topic).body("lc-body").build());
 

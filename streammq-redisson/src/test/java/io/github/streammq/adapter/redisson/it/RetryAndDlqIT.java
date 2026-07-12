@@ -138,7 +138,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
 
         try {
             RedissonStreamProducer producer =
-                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
+                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("retry-test").build());
             producer.close();
 
@@ -184,7 +184,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
 
         try {
             RedissonStreamProducer producer =
-                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
+                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("redeliver-body").build());
             producer.close();
 
@@ -227,7 +227,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
 
         try {
             RedissonStreamProducer producer =
-                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
+                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("dlq-bound").build());
             producer.close();
 
@@ -262,7 +262,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
 
         try {
             RedissonStreamProducer producer =
-                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
+                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("to-dlq").build());
             producer.close();
 
@@ -311,7 +311,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
 
         try {
             RedissonStreamProducer producer =
-                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
+                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("dlq-fail").build());
             producer.close();
 
@@ -345,7 +345,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
 
         try {
             RedissonStreamProducer producer =
-                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0);
+                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("payload-test").build());
             producer.close();
 

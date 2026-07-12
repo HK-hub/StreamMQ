@@ -6,6 +6,7 @@ import io.protostuff.ProtostuffIOUtil;
 import io.protostuff.Schema;
 import io.protostuff.runtime.RuntimeSchema;
 
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -28,7 +29,7 @@ public class ProtostuffSerializer<T> implements MessageSerializer<T> {
 
     @Override
     public byte[] serialize(T object, Class<T> type) {
-        if (object == null) {
+        if (Objects.isNull(object)) {
             return new byte[0];
         }
         @SuppressWarnings("unchecked")
@@ -43,7 +44,7 @@ public class ProtostuffSerializer<T> implements MessageSerializer<T> {
 
     @Override
     public <R> R deserialize(byte[] bytes, Class<R> type) {
-        if (bytes == null || bytes.length == 0) {
+        if (Objects.isNull(bytes) || bytes.length == 0) {
             return null;
         }
         @SuppressWarnings("unchecked")

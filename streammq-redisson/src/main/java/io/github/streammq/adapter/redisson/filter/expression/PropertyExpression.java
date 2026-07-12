@@ -1,6 +1,7 @@
 package io.github.streammq.adapter.redisson.filter.expression;
 
 import io.github.streammq.core.message.Message;
+import io.github.streammq.core.util.StringUtils;
 import lombok.Getter;
 
 /**
@@ -24,7 +25,7 @@ public class PropertyExpression implements Expression {
     @Override
     public boolean evaluate(Message<?> message) {
         String value = message.getProperties().get(propertyName);
-        return value != null && !value.isEmpty();
+        return StringUtils.isNotEmpty(value);
     }
 
     /**

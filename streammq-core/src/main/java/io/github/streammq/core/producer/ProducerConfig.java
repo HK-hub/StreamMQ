@@ -42,6 +42,10 @@ public class ProducerConfig {
     @Builder.Default
     private final int streamMaxLen = StreamMQConstants.DEFAULT_STREAM_MAX_LEN;
 
+    /** 压缩阈值（字节），body 字节数超过此值时触发压缩，0 = 禁用（默认禁用） */
+    @Builder.Default
+    private final int compressThreshold = 0;
+
     /** 序列化器类（可选，为 null 表示使用全局配置） */
     private final Class<? extends MessageSerializer<?>> serializer;
 }

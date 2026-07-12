@@ -8,6 +8,8 @@ import io.github.streammq.core.listener.StreamMQListener;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.util.CollectionUtils;
+import io.github.streammq.core.util.StringUtils;
 import lombok.Builder;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
@@ -25,6 +27,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -51,6 +55,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class RedissonStreamListener implements StreamMQListener {
 
     private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamListener.class);
+
+    /** Class.forName 缓存，避免每条消息重复类加载查找（正结果缓存，负结果不缓存） */
+    private static final ConcurrentMap<String, Class<?>> CLASS_CACHE = new ConcurrentHashMap<>();
 
     private final @NonNull RedissonClient redisson;
     private final String namespace;
@@ -146,7 +153,7 @@ public class RedissonStreamListener implements StreamMQListener {
                                    @NonNull String group, @NonNull String consumerName, @NonNull MessageConverter converter,
                                    boolean dlqMode, boolean retryMode, boolean broadcast, Class<?> targetBodyType) {
         this.redisson = redisson;
-        this.namespace = namespace == null ? "" : namespace;
+        this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.topic = topic;
         this.group = group;
         this.consumerName = consumerName;
@@ -229,7 +236,7 @@ public class RedissonStreamListener implements StreamMQListener {
     private List<Message<?>> doRead(int batchSize, Duration timeout) {
         RStream<String, String> stream = getStream();
         StreamReadGroupArgs args;
-        if (timeout != null && !timeout.isZero() && !timeout.isNegative()) {
+        if (Objects.nonNull(timeout) && !timeout.isZero() && !timeout.isNegative()) {
             args = StreamReadGroupArgs.neverDelivered().count(batchSize).timeout(timeout);
         } else {
             args = StreamReadGroupArgs.neverDelivered().count(batchSize);
@@ -237,7 +244,7 @@ public class RedissonStreamListener implements StreamMQListener {
         String effectiveGroup = getEffectiveGroup();
         try {
             Map<StreamMessageId, Map<String, String>> result = stream.readGroup(effectiveGroup, consumerName, args);
-            if (result == null || result.isEmpty()) {
+            if (CollectionUtils.isEmpty(result)) {
                 return List.of();
             }
             List<Message<?>> messages = new ArrayList<>(result.size());
@@ -260,23 +267,22 @@ public class RedissonStreamListener implements StreamMQListener {
         //   3. bodyType（Stream Entry 中的完整类名字段）
         //   4. String.class（最终回退，由消费者自行反序列化）
         Class<?> bodyType = targetBodyType;
-        if (bodyType == null) {
+        if (Objects.isNull(bodyType)) {
             String simpleTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE_NAME);
-            if (simpleTypeName != null && !simpleTypeName.isEmpty()) {
+            if (StringUtils.isNotEmpty(simpleTypeName)) {
                 bodyType = findClassBySimpleName(simpleTypeName);
             }
         }
-        if (bodyType == null) {
+        if (Objects.isNull(bodyType)) {
             String fullTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE);
-            if (fullTypeName != null && !fullTypeName.isEmpty()) {
-                try {
-                    bodyType = Class.forName(fullTypeName, false, Thread.currentThread().getContextClassLoader());
-                } catch (ClassNotFoundException ex) {
+            if (StringUtils.isNotEmpty(fullTypeName)) {
+                bodyType = findClassBySimpleName(fullTypeName);
+                if (Objects.isNull(bodyType)) {
                     LOG.warn("Body type class not found by full name, fallback to String: {}", fullTypeName);
                 }
             }
         }
-        if (bodyType == null) {
+        if (Objects.isNull(bodyType)) {
             bodyType = String.class;
         }
         Message<?> message = converter.fromStreamFields(fields, (Class) bodyType);
@@ -286,12 +292,18 @@ public class RedissonStreamListener implements StreamMQListener {
     }
 
     private Class<?> findClassBySimpleName(String simpleName) {
+        Class<?> cached = CLASS_CACHE.get(simpleName);
+        if (Objects.nonNull(cached)) {
+            return cached;
+        }
         try {
             ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
-            if (classLoader == null) {
+            if (Objects.isNull(classLoader)) {
                 classLoader = getClass().getClassLoader();
             }
-            return Class.forName(simpleName, false, classLoader);
+            Class<?> clazz = Class.forName(simpleName, false, classLoader);
+            CLASS_CACHE.put(simpleName, clazz);
+            return clazz;
         } catch (ClassNotFoundException e) {
             LOG.debug("Body type class not found by simple name '{}', will try full name or fallback", simpleName);
             return null;
@@ -315,7 +327,7 @@ public class RedissonStreamListener implements StreamMQListener {
             } catch (RuntimeException ex) {
                 // BUSYGROUP 表示 group 已存在，属于正常情况
                 String msg = ex.getMessage();
-                if (msg != null && msg.contains(BUSYGROUP_MARKER)) {
+                if (Objects.nonNull(msg) && msg.contains(BUSYGROUP_MARKER)) {
                     LOG.debug("Consumer group already exists: topic={}, group={}", topic, effectiveGroup);
                 } else {
                     // 其他错误重置标志位，允许下次重试

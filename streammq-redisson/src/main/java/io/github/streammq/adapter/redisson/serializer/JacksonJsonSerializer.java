@@ -54,21 +54,21 @@ public class JacksonJsonSerializer<T> implements MessageSerializer<T> {
 
     @Override
     public byte[] serialize(T object, Class<T> type) throws SerializationException {
-        if (object == null) {
+        if (Objects.isNull(object)) {
             return new byte[0];
         }
         try {
             return mapper.writeValueAsBytes(object);
         } catch (JsonProcessingException ex) {
             throw new SerializationException(
-                "Jackson serialize failed for type " + (type != null ? type.getName() : "null"), ex);
+                "Jackson serialize failed for type " + (Objects.nonNull(type) ? type.getName() : "null"), ex);
         }
     }
 
     @Override
     public <R> R deserialize(byte[] bytes, Class<R> type) throws SerializationException {
         Objects.requireNonNull(type, "type");
-        if (bytes == null || bytes.length == 0) {
+        if (Objects.isNull(bytes) || bytes.length == 0) {
             return null;
         }
         try {

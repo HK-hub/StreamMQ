@@ -9,6 +9,7 @@ import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.serializer.MessageSerializer;
+import io.github.streammq.core.util.StringUtils;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -101,25 +102,25 @@ public class CompactMessageConverter implements MessageConverter {
         Objects.requireNonNull(message, "message");
         Map<String, String> fields = new HashMap<>(16);
 
-        if (message.getTopic() != null) {
+        if (Objects.nonNull(message.getTopic())) {
             fields.put(FIELD_TOPIC, message.getTopic());
         }
 
         Object body = message.getBody();
-        if (body != null) {
+        if (Objects.nonNull(body)) {
             Class<?> bodyType = body.getClass();
             byte[] bodyBytes = serializer.serialize(body, (Class<Object>) (Class) bodyType);
             fields.put(FIELD_BODY, Base64.getEncoder().encodeToString(bodyBytes));
             fields.put(FIELD_BODY_TYPE, bodyType.getName());
         }
 
-        if (message.getTag() != null) {
+        if (Objects.nonNull(message.getTag())) {
             fields.put(FIELD_TAG, message.getTag());
         }
-        if (message.getKeys() != null) {
+        if (Objects.nonNull(message.getKeys())) {
             fields.put(FIELD_KEYS, message.getKeys());
         }
-        if (message.getShardingKey() != null) {
+        if (Objects.nonNull(message.getShardingKey())) {
             fields.put(FIELD_SHARDING_KEY, message.getShardingKey());
         }
 
@@ -143,16 +144,16 @@ public class CompactMessageConverter implements MessageConverter {
 
         fields.put(FIELD_BORN_TS, Long.toString(message.getBornTimestamp()));
 
-        if (message.getBornHost() != null) {
+        if (Objects.nonNull(message.getBornHost())) {
             fields.put(FIELD_BORN_HOST, message.getBornHost());
         }
-        if (message.getDelayLevel() != null) {
+        if (Objects.nonNull(message.getDelayLevel())) {
             fields.put(FIELD_DELAY_LEVEL, message.getDelayLevel().name());
         }
-        if (message.getDelayTimeMillis() != null) {
+        if (Objects.nonNull(message.getDelayTimeMillis())) {
             fields.put(FIELD_DELAY_TIME_MILLIS, Long.toString(message.getDelayTimeMillis()));
         }
-        if (message.getTransactionId() != null) {
+        if (Objects.nonNull(message.getTransactionId())) {
             fields.put(FIELD_TX_ID, message.getTransactionId());
         }
 
@@ -172,7 +173,7 @@ public class CompactMessageConverter implements MessageConverter {
         }
 
         String bodyStr = fields.get(FIELD_BODY);
-        if (bodyStr != null && !bodyStr.isEmpty()) {
+        if (StringUtils.isNotEmpty(bodyStr)) {
             T body = deserializeBody(bodyStr, fields.get(FIELD_BODY_TYPE), targetType);
             message.setBody(body);
         }
@@ -194,7 +195,7 @@ public class CompactMessageConverter implements MessageConverter {
         }
 
         String sysPropsJson = fields.get(FIELD_PROPS);
-        if (sysPropsJson != null && !sysPropsJson.isEmpty()) {
+        if (StringUtils.isNotEmpty(sysPropsJson)) {
             try {
                 Map<String, String> props = propsMapper.readValue(sysPropsJson,
                     new TypeReference<Map<String, String>>() {
@@ -206,7 +207,7 @@ public class CompactMessageConverter implements MessageConverter {
         }
 
         String userPropsJson = fields.get(FIELD_USER_PROPS);
-        if (userPropsJson != null && !userPropsJson.isEmpty()) {
+        if (StringUtils.isNotEmpty(userPropsJson)) {
             try {
                 Map<String, String> props = propsMapper.readValue(userPropsJson,
                     new TypeReference<Map<String, String>>() {
@@ -218,7 +219,7 @@ public class CompactMessageConverter implements MessageConverter {
         }
 
         String bornTs = fields.get(FIELD_BORN_TS);
-        if (bornTs != null && !bornTs.isEmpty()) {
+        if (StringUtils.isNotEmpty(bornTs)) {
             try {
                 message.setBornTimestamp(Long.parseLong(bornTs));
             } catch (NumberFormatException ex) {
@@ -227,7 +228,7 @@ public class CompactMessageConverter implements MessageConverter {
         }
 
         String delayLevelStr = fields.get(FIELD_DELAY_LEVEL);
-        if (delayLevelStr != null && !delayLevelStr.isEmpty()) {
+        if (StringUtils.isNotEmpty(delayLevelStr)) {
             try {
                 message.setDelayLevel(DelayLevel.valueOf(delayLevelStr));
             } catch (IllegalArgumentException ex) {
@@ -236,7 +237,7 @@ public class CompactMessageConverter implements MessageConverter {
         }
 
         String delayTimeMillisStr = fields.get(FIELD_DELAY_TIME_MILLIS);
-        if (delayTimeMillisStr != null && !delayTimeMillisStr.isEmpty()) {
+        if (StringUtils.isNotEmpty(delayTimeMillisStr)) {
             try {
                 message.setDelayTimeMillis(Long.parseLong(delayTimeMillisStr));
             } catch (NumberFormatException ex) {
@@ -259,7 +260,7 @@ public class CompactMessageConverter implements MessageConverter {
     @SuppressWarnings("unchecked")
     private <T> T deserializeBody(String bodyStr, String bodyTypeField, Class<T> targetType) {
         // SDK 路径：bodyType 字段存在 → body 为 Base64 编码的序列化字节
-        if (bodyTypeField != null && !bodyTypeField.isEmpty()) {
+        if (StringUtils.isNotEmpty(bodyTypeField)) {
             byte[] bodyBytes = Base64.getDecoder().decode(bodyStr);
             return serializer.deserialize(bodyBytes, targetType);
         }

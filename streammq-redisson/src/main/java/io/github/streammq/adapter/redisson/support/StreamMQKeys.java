@@ -1,5 +1,7 @@
 package io.github.streammq.adapter.redisson.support;
 
+import io.github.streammq.core.util.StringUtils;
+
 import java.util.Objects;
 
 /**
@@ -68,6 +70,8 @@ public final class StreamMQKeys {
     public static final String TYPE_SHARDLOCK = "shardlock";
     /** 元数据类型段 */
     public static final String TYPE_META = "meta";
+    /** 追踪类型段 */
+    public static final String TYPE_TRACE = "trace";
 
     // ==================== Key 后缀段（suffix segment） ====================
     /** 实例列表后缀 */
@@ -92,6 +96,8 @@ public final class StreamMQKeys {
     public static final String SEG_OFFSET = "offset";
     /** 统计后缀 */
     public static final String SEG_STATS = "stats";
+    /** 配置后缀 */
+    public static final String SEG_CONFIG = "config";
 
     private StreamMQKeys() {
     }
@@ -104,7 +110,7 @@ public final class StreamMQKeys {
      * @return 前缀段
      */
     public static String prefix(String namespace) {
-        if (namespace == null || namespace.isEmpty()) {
+        if (StringUtils.isEmpty(namespace)) {
             return PREFIX;
         }
         return PREFIX + SEP + namespace;
@@ -315,6 +321,34 @@ public final class StreamMQKeys {
     public static String metaStats(String namespace, String group, String topic) {
         return prefix(namespace) + SEP + TYPE_META + SEP + SEG_STATS + SEP
             + requireNonEmpty(group, "group") + SEP + requireNonEmpty(topic, "topic");
+    }
+
+    /**
+     * 消费组配置 Hash Key：{@code streammq:{ns}:meta:config:{group}}。
+     *
+     * <p>用于存储消费组的可变配置（如并发度、重试次数等），通过管理端点动态更新。
+     *
+     * @param namespace 命名空间
+     * @param group 消费者组名
+     * @return 配置 Hash Key
+     */
+    public static String metaConfig(String namespace, String group) {
+        return prefix(namespace) + SEP + TYPE_META + SEP + SEG_CONFIG + SEP
+            + requireNonEmpty(group, "group");
+    }
+
+    /**
+     * 追踪数据 Stream Key：{@code streammq:{ns}:trace:{date}}。
+     *
+     * <p>按日期分片存储追踪记录，date 格式为 {@code yyyyMMdd}。
+     * 便于按天查询与过期清理。
+     *
+     * @param namespace 命名空间
+     * @param date 日期字符串（格式 yyyyMMdd）
+     * @return 追踪 Stream Key
+     */
+    public static String traceStream(String namespace, String date) {
+        return prefix(namespace) + SEP + TYPE_TRACE + SEP + requireNonEmpty(date, "date");
     }
 
     private static String requireNonEmpty(String value, String name) {

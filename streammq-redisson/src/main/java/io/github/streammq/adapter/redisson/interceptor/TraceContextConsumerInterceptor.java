@@ -55,7 +55,7 @@ public class TraceContextConsumerInterceptor implements ConsumerInterceptor {
     public boolean beforeConsume(Message<?> message, ConsumeContext context) {
         Objects.requireNonNull(message, "message");
         String traceId = message.getUserProperties().get(TRACE_ID_KEY);
-        if (traceId != null) {
+        if (Objects.nonNull(traceId)) {
             MDC.put(MDC_TRACE_ID_KEY, traceId);
         }
         consumeStartTimestamp.set(System.currentTimeMillis());
@@ -73,7 +73,7 @@ public class TraceContextConsumerInterceptor implements ConsumerInterceptor {
         if (!traceCollector.isEnabled()) {
             return;
         }
-        long duration = start != null ? System.currentTimeMillis() - start : 0L;
+        long duration = Objects.nonNull(start) ? System.currentTimeMillis() - start : 0L;
         boolean success = action == ConsumeAction.SUCCESS;
         Map<String, String> attributes = new HashMap<>(2);
         attributes.put("action", action.name());
@@ -83,9 +83,9 @@ public class TraceContextConsumerInterceptor implements ConsumerInterceptor {
                     message.getTopic(),
                     message.getTag(),
                     message.getMessageId(),
-                    context != null ? context.consumerGroup() : null,
-                    context != null ? context.consumerName() : null,
-                    context != null ? context.reconsumeTimes() : message.getReconsumeTimes(),
+                    Objects.nonNull(context) ? context.consumerGroup() : null,
+                    Objects.nonNull(context) ? context.consumerName() : null,
+                    Objects.nonNull(context) ? context.reconsumeTimes() : message.getReconsumeTimes(),
                     success,
                     duration,
                     traceId,

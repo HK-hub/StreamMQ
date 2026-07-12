@@ -37,7 +37,7 @@ public class LoggingConsumerInterceptor implements ConsumerInterceptor {
         Objects.requireNonNull(message, "message");
         LOG.info("[ConsumerLog] beforeConsume topic={}, keys={}, group={}",
             message.getTopic(), message.getKeys(),
-            context != null ? context.consumerGroup() : null);
+            Objects.nonNull(context) ? context.consumerGroup() : null);
         return true;
     }
 
@@ -47,17 +47,17 @@ public class LoggingConsumerInterceptor implements ConsumerInterceptor {
         Objects.requireNonNull(action, "action");
         LOG.info("[ConsumerLog] afterConsume topic={}, action={}, group={}, reconsumeTimes={}",
             message.getTopic(), action,
-            context != null ? context.consumerGroup() : null,
-            context != null ? context.reconsumeTimes() : 0);
+            Objects.nonNull(context) ? context.consumerGroup() : null,
+            Objects.nonNull(context) ? context.reconsumeTimes() : 0);
     }
 
     @Override
     public void onException(Message<?> message, Exception exception, InvokeTiming timing, ConsumeContext context) {
         LOG.error("[ConsumerLog] onException topic={}, keys={}, timing={}, group={}",
-            message != null ? message.getTopic() : null,
-            message != null ? message.getKeys() : null,
+            Objects.nonNull(message) ? message.getTopic() : null,
+            Objects.nonNull(message) ? message.getKeys() : null,
             timing,
-            context != null ? context.consumerGroup() : null,
+            Objects.nonNull(context) ? context.consumerGroup() : null,
             exception);
     }
 

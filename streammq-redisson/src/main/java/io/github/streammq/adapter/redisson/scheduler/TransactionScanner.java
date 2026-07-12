@@ -10,6 +10,8 @@ import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.core.transaction.TransactionChecker;
 import io.github.streammq.core.transaction.TransactionContext;
+import io.github.streammq.core.util.CollectionUtils;
+import io.github.streammq.core.util.StringUtils;
 import lombok.Setter;
 import org.redisson.api.*;
 import org.redisson.api.stream.StreamAddArgs;
@@ -57,6 +59,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class TransactionScanner implements StreamMQScheduler {
 
     private static final Logger LOG = LoggerFactory.getLogger(TransactionScanner.class);
+
+    /** Class.forName 缓存，避免重复类加载查找 */
+    private static final ConcurrentMap<String, Class<?>> CLASS_CACHE = new ConcurrentHashMap<>();
 
     /** 事务状态字段值 */
     public static final String STATE_PREPARE = "PREPARE";
@@ -119,7 +124,7 @@ public class TransactionScanner implements StreamMQScheduler {
     public TransactionScanner(RedissonClient redisson, String namespace, MessageConverter messageConverter,
                               long checkIntervalMs, int maxCheckTimes, int batchSize) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
-        this.namespace = namespace == null ? "" : namespace;
+        this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
         this.checkIntervalMs = checkIntervalMs > 0 ? checkIntervalMs : DEFAULT_CHECK_INTERVAL_MS;
         this.maxCheckTimes = maxCheckTimes > 0 ? maxCheckTimes : DEFAULT_MAX_CHECK_TIMES;
@@ -214,7 +219,7 @@ public class TransactionScanner implements StreamMQScheduler {
             return;
         }
         ScheduledFuture<?> future = this.scanFuture;
-        if (future != null) {
+        if (Objects.nonNull(future)) {
             future.cancel(false);
             this.scanFuture = null;
         }
@@ -256,7 +261,7 @@ public class TransactionScanner implements StreamMQScheduler {
 
         String targetTopic = stateMap.get(txId + FIELD_TARGET_SUFFIX);
         String halfIdStr = stateMap.get(txId + FIELD_HALF_ID_SUFFIX);
-        if (targetTopic == null || halfIdStr == null) {
+        if (Objects.isNull(targetTopic) || Objects.isNull(halfIdStr)) {
             LOG.warn("markCommit missing target/halfId in txstate: txId={}, txGroup={}", txId, txGroup);
             return;
         }
@@ -295,7 +300,7 @@ public class TransactionScanner implements StreamMQScheduler {
         }
 
         String halfIdStr = stateMap.get(txId + FIELD_HALF_ID_SUFFIX);
-        if (halfIdStr != null) {
+        if (Objects.nonNull(halfIdStr)) {
             // XDEL 半消息
             String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
             RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
@@ -377,7 +382,7 @@ public class TransactionScanner implements StreamMQScheduler {
             return;
         }
         // 无 checker 视为回查失败 → ROLLBACK
-        if (checker == null) {
+        if (Objects.isNull(checker)) {
             LOG.warn("No TransactionChecker registered for txGroup={}, force rollback: txId={}", txGroup, txId);
             markRollback(txId, txGroup);
             return;
@@ -387,7 +392,7 @@ public class TransactionScanner implements StreamMQScheduler {
         String halfIdStr = stateMap.get(txId + FIELD_HALF_ID_SUFFIX);
         String targetTopic = stateMap.get(txId + FIELD_TARGET_SUFFIX);
         Message<?> halfMessage = readHalfMessage(txGroup, halfIdStr, targetTopic);
-        if (halfMessage == null) {
+        if (Objects.isNull(halfMessage)) {
             LOG.warn("Half message not found in half stream, force rollback: txId={}, halfId={}", txId, halfIdStr);
             markRollback(txId, txGroup);
             return;
@@ -447,7 +452,7 @@ public class TransactionScanner implements StreamMQScheduler {
 
         // 读取半消息（使用 range 读取指定 ID 的单条 entry）
         Map<StreamMessageId, Map<String, String>> entries = halfStream.range(1, halfId, halfId);
-        if (entries == null || entries.isEmpty()) {
+        if (CollectionUtils.isEmpty(entries)) {
             LOG.warn("Half message not found, cannot publish: txGroup={}, halfId={}", txGroup, halfIdStr);
             return;
         }
@@ -473,14 +478,14 @@ public class TransactionScanner implements StreamMQScheduler {
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     private Message<?> readHalfMessage(String txGroup, String halfIdStr, String targetTopic) {
-        if (halfIdStr == null) {
+        if (Objects.isNull(halfIdStr)) {
             return null;
         }
         String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
         RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
         StreamMessageId halfId = parseStreamId(halfIdStr);
         Map<StreamMessageId, Map<String, String>> entries = halfStream.range(1, halfId, halfId);
-        if (entries == null || entries.isEmpty()) {
+        if (CollectionUtils.isEmpty(entries)) {
             return null;
         }
         Map.Entry<StreamMessageId, Map<String, String>> entry = entries.entrySet().iterator().next();
@@ -489,12 +494,16 @@ public class TransactionScanner implements StreamMQScheduler {
         // 解析 bodyType 反序列化 body
         String bodyTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE);
         Class<?> bodyType = Object.class;
-        if (bodyTypeName != null && !bodyTypeName.isEmpty()) {
-            try {
-                bodyType = Class.forName(bodyTypeName, false, Thread.currentThread().getContextClassLoader());
-            } catch (ClassNotFoundException ex) {
-                LOG.warn("Body type class not found in transaction scanner, fallback to Object: {}", bodyTypeName);
-                bodyType = Object.class;
+        if (StringUtils.isNotEmpty(bodyTypeName)) {
+            bodyType = CLASS_CACHE.get(bodyTypeName);
+            if (Objects.isNull(bodyType)) {
+                try {
+                    bodyType = Class.forName(bodyTypeName, false, Thread.currentThread().getContextClassLoader());
+                    CLASS_CACHE.put(bodyTypeName, bodyType);
+                } catch (ClassNotFoundException ex) {
+                    LOG.warn("Body type class not found in transaction scanner, fallback to Object: {}", bodyTypeName);
+                    bodyType = Object.class;
+                }
             }
         }
         Message<?> message = messageConverter.fromStreamFields(fields, (Class) bodyType);
@@ -528,7 +537,7 @@ public class TransactionScanner implements StreamMQScheduler {
     private int getCheckCount(String txId, String txGroup) {
         String counterKey = StreamMQKeys.transactionCheckCounter(namespace, txGroup);
         String countStr = redisson.<String, String>getMap(counterKey).get(txId);
-        if (countStr == null || countStr.isEmpty()) {
+        if (StringUtils.isEmpty(countStr)) {
             return 0;
         }
         try {
@@ -549,7 +558,7 @@ public class TransactionScanner implements StreamMQScheduler {
         RMap<String, String> counterMap = redisson.getMap(counterKey);
         String current = counterMap.get(txId);
         int newVal = 1;
-        if (current != null && !current.isEmpty()) {
+        if (StringUtils.isNotEmpty(current)) {
             try {
                 newVal = Integer.parseInt(current) + 1;
             } catch (NumberFormatException ex) {
@@ -583,11 +592,12 @@ public class TransactionScanner implements StreamMQScheduler {
      * @param txGroup 事务组名
      */
     private void recordTransactionCommitMetrics(String txGroup) {
-        if (metrics != null) {
+        if (Objects.nonNull(metrics)) {
             try {
                 metrics.recordTransactionCommit(txGroup);
             } catch (Exception ignored) {
                 // 指标收集失败不得影响业务主流程
+                LOG.debug("Metrics collection failed", ignored);
             }
         }
     }
@@ -598,11 +608,12 @@ public class TransactionScanner implements StreamMQScheduler {
      * @param txGroup 事务组名
      */
     private void recordTransactionRollbackMetrics(String txGroup) {
-        if (metrics != null) {
+        if (Objects.nonNull(metrics)) {
             try {
                 metrics.recordTransactionRollback(txGroup);
             } catch (Exception ignored) {
                 // 指标收集失败不得影响业务主流程
+                LOG.debug("Metrics collection failed", ignored);
             }
         }
     }
@@ -614,11 +625,12 @@ public class TransactionScanner implements StreamMQScheduler {
      * @param result  回查结果
      */
     private void recordTransactionCheckMetrics(String txGroup, String result) {
-        if (metrics != null) {
+        if (Objects.nonNull(metrics)) {
             try {
                 metrics.recordTransactionCheck(txGroup, result);
             } catch (Exception ignored) {
                 // 指标收集失败不得影响业务主流程
+                LOG.debug("Metrics collection failed", ignored);
             }
         }
     }

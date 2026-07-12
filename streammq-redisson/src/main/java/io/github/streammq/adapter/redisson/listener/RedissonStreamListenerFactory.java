@@ -4,6 +4,7 @@ import io.github.streammq.core.listener.ListenerConfig;
 import io.github.streammq.core.listener.StreamMQListener;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.util.StringUtils;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RedissonClient;
@@ -53,19 +54,19 @@ public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
         }
         Objects.requireNonNull(config, "config");
         String topic = config.getTopic();
-        if (topic == null || topic.isEmpty()) {
+        if (StringUtils.isEmpty(topic)) {
             throw new IllegalArgumentException("Missing required property: topic");
         }
         String group = config.getConsumerGroup();
-        if (group == null || group.isEmpty()) {
+        if (StringUtils.isEmpty(group)) {
             throw new IllegalArgumentException("Missing required property: consumerGroup");
         }
         String consumerName = config.getConsumerName();
-        if (consumerName == null || consumerName.isEmpty()) {
+        if (StringUtils.isEmpty(consumerName)) {
             consumerName = group + "-" + UUID.randomUUID().toString().substring(0, 8);
         }
         String namespace = config.getNamespace();
-        if (namespace == null) {
+        if (Objects.isNull(namespace)) {
             namespace = "";
         }
 
@@ -75,7 +76,7 @@ public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
             .topic(topic)
             .group(group)
             .consumerName(consumerName)
-            .converter(config.getConverter() != null ? config.getConverter() : converter)
+            .converter(Objects.nonNull(config.getConverter()) ? config.getConverter() : converter)
             .dlqMode(config.isDlqMode())
             .retryMode(config.isRetryMode())
             .broadcast(config.isBroadcast())

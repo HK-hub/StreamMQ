@@ -70,7 +70,7 @@ public final class DlqFailureDecision {
 
     @Override
     public String toString() {
-        return retryDelay != null ? "DlqFailureDecision{" + type + ", delay=" + retryDelay + "}"
+        return Objects.nonNull(retryDelay) ? "DlqFailureDecision{" + type + ", delay=" + retryDelay + "}"
             : "DlqFailureDecision{" + type + "}";
     }
 }

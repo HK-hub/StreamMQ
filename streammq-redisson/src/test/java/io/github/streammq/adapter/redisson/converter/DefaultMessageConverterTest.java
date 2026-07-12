@@ -2,12 +2,15 @@ package io.github.streammq.adapter.redisson.converter;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.streammq.adapter.redisson.compression.GzipCompressionCodec;
+import io.github.streammq.core.compression.CompressionCodec;
 import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
@@ -322,5 +325,125 @@ class DefaultMessageConverterTest {
         Message<String> msg = converter.fromStreamFields(fields, String.class);
 
         assertThat(msg.getBody()).isEqualTo("hi");
+    }
+
+    // ===================== 压缩/解压测试 =====================
+
+    @Test
+    @DisplayName("压缩消息往返：序列化 → 手动压缩 → 解压 → 反序列化（SDK 路径）")
+    void compressedBodyRoundTripSdkPath() {
+        CompressionCodec codec = new GzipCompressionCodec();
+        DefaultMessageConverter compressedConverter = new DefaultMessageConverter(serializer);
+        compressedConverter.setCompressionCodec(codec);
+
+        Message<String> msg = new Message<>();
+        msg.setBody("hello compression world");
+        msg.setTag("vip");
+        msg.setBornTimestamp(123456789L);
+
+        // 序列化为 Stream Fields
+        Map<String, String> fields = compressedConverter.toStreamFields(msg);
+
+        // 手动压缩 body（模拟 Producer 的 applyCompression 逻辑）
+        String bodyStr = fields.get(DefaultMessageConverter.FIELD_BODY);
+        byte[] bodyBytes = Base64.getDecoder().decode(bodyStr);
+        byte[] compressed = codec.compress(bodyBytes);
+        fields.put(DefaultMessageConverter.FIELD_BODY, Base64.getEncoder().encodeToString(compressed));
+        fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
+
+        // 反序列化（应自动解压）
+        Message<String> restored = compressedConverter.fromStreamFields(fields, String.class);
+
+        assertThat(restored.getBody()).isEqualTo("hello compression world");
+        assertThat(restored.getTag()).isEqualTo("vip");
+        assertThat(restored.getBornTimestamp()).isEqualTo(123456789L);
+    }
+
+    @Test
+    @DisplayName("compressed=true 但未配置 CompressionCodec 抛出 SerializationException")
+    void compressedWithoutCodec() {
+        Message<String> msg = new Message<>();
+        msg.setBody("hello");
+        msg.setBornTimestamp(1L);
+
+        Map<String, String> fields = converter.toStreamFields(msg);
+        // 标记为压缩但不实际压缩，验证未配置 codec 时的异常
+        fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
+
+        assertThatThrownBy(() -> converter.fromStreamFields(fields, String.class))
+            .isInstanceOf(SerializationException.class)
+            .hasMessageContaining("CompressionCodec");
+    }
+
+    @Test
+    @DisplayName("未压缩消息不受 CompressionCodec 影响")
+    void uncompressedMessageWithCodec() {
+        CompressionCodec codec = new GzipCompressionCodec();
+        DefaultMessageConverter compressedConverter = new DefaultMessageConverter(serializer);
+        compressedConverter.setCompressionCodec(codec);
+
+        Message<String> msg = new Message<>();
+        msg.setBody("no compression here");
+        msg.setBornTimestamp(1L);
+
+        Map<String, String> fields = compressedConverter.toStreamFields(msg);
+        // 不设置 compressed=true，即使配置了 codec 也不应解压
+        Message<String> restored = compressedConverter.fromStreamFields(fields, String.class);
+
+        assertThat(restored.getBody()).isEqualTo("no compression here");
+    }
+
+    @Test
+    @DisplayName("压缩消息往返：跨平台路径（bodyType 缺失 + String body）")
+    void compressedBodyCrossPlatformStringPath() {
+        CompressionCodec codec = new GzipCompressionCodec();
+        DefaultMessageConverter compressedConverter = new DefaultMessageConverter(serializer);
+        compressedConverter.setCompressionCodec(codec);
+
+        // 模拟跨平台场景：原始 body 为字符串，压缩后 Base64 编码
+        String rawBody = "{\"name\":\"Alice\",\"age\":30}";
+        byte[] rawBytes = rawBody.getBytes(StandardCharsets.UTF_8);
+        byte[] compressed = codec.compress(rawBytes);
+
+        Map<String, String> fields = new HashMap<>();
+        fields.put(DefaultMessageConverter.FIELD_BODY, Base64.getEncoder().encodeToString(compressed));
+        fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
+        fields.put("bornTs", "1");
+        // 不设置 bodyType → 走跨平台路径
+
+        Message<String> msg = compressedConverter.fromStreamFields(fields, String.class);
+
+        assertThat(msg.getBody()).isEqualTo(rawBody);
+    }
+
+    @Test
+    @DisplayName("压缩消息往返：跨平台路径（bodyType 缺失 + POJO body）")
+    void compressedBodyCrossPlatformPojoPath() {
+        CompressionCodec codec = new GzipCompressionCodec();
+        DefaultMessageConverter compressedConverter = new DefaultMessageConverter(serializer);
+        compressedConverter.setCompressionCodec(codec);
+
+        // 模拟跨平台场景：JSON body 压缩后 Base64 编码
+        String rawJson = "{\"name\":\"Bob\",\"age\":25}";
+        byte[] rawBytes = rawJson.getBytes(StandardCharsets.UTF_8);
+        byte[] compressed = codec.compress(rawBytes);
+
+        Map<String, String> fields = new HashMap<>();
+        fields.put(DefaultMessageConverter.FIELD_BODY, Base64.getEncoder().encodeToString(compressed));
+        fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
+        fields.put("bornTs", "1");
+        // 不设置 bodyType → 走跨平台路径
+
+        Message<UserDto> msg = compressedConverter.fromStreamFields(fields, UserDto.class);
+
+        assertThat(msg.getBody()).isNotNull();
+        assertThat(msg.getBody().getName()).isEqualTo("Bob");
+        assertThat(msg.getBody().getAge()).isEqualTo(25);
+    }
+
+    @Test
+    @DisplayName("FIELD_COMPRESSED 常量值为 compressed")
+    void fieldCompressedConstant() {
+        assertThat(DefaultMessageConverter.FIELD_COMPRESSED).isEqualTo("compressed");
     }
 }

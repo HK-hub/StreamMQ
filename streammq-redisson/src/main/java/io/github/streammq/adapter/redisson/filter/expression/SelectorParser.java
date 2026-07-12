@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -38,7 +39,7 @@ public class SelectorParser {
     private int pos;
 
     public SelectorParser(String expression) {
-        this.expression = expression != null ? expression.trim() : "";
+        this.expression = Objects.nonNull(expression) ? expression.trim() : "";
         this.pos = 0;
     }
 
@@ -102,7 +103,7 @@ public class SelectorParser {
         }
 
         String identifier = tryParseIdentifier();
-        if (identifier != null) {
+        if (Objects.nonNull(identifier)) {
             skipWhitespace();
             return parseComparison(identifier);
         }
@@ -153,10 +154,10 @@ public class SelectorParser {
             pos++;
         }
 
-        if (compareType != null) {
+        if (Objects.nonNull(compareType)) {
             skipWhitespace();
             ConstantExpression constant = parseConstant();
-            if (constant != null) {
+            if (Objects.nonNull(constant)) {
                 return new CompareExpression(
                     new PropertyExpression(identifier),
                     constant,
@@ -170,12 +171,12 @@ public class SelectorParser {
 
     private ConstantExpression parseConstant() {
         String stringValue = tryParseString();
-        if (stringValue != null) {
+        if (Objects.nonNull(stringValue)) {
             return new ConstantExpression(stringValue);
         }
 
         String numberValue = tryParseNumber();
-        if (numberValue != null) {
+        if (Objects.nonNull(numberValue)) {
             return new ConstantExpression(numberValue);
         }
 
@@ -262,7 +263,7 @@ public class SelectorParser {
      * @return 表达式节点
      */
     public static Expression build(String expression) {
-        if (expression == null || expression.trim().isEmpty() || "*".equals(expression.trim())) {
+        if (Objects.isNull(expression) || expression.trim().isEmpty() || "*".equals(expression.trim())) {
             return null;
         }
         try {

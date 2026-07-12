@@ -1,12 +1,15 @@
 package io.github.streammq.adapter.redisson.producer;
 
 import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.core.compression.CompressionCodec;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.StreamMessageProducer;
 import io.github.streammq.core.producer.StreamMessageProducerFactory;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.util.StringUtils;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
+import lombok.Setter;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,12 +54,16 @@ public class RedissonStreamProducerFactory implements StreamMessageProducerFacto
     private final ConcurrentMap<String, RedissonStreamProducer> producers = new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
+    /** 压缩编解码器（可选注入，配合 ProducerConfig.compressThreshold 使用） */
+    @Setter
+    private CompressionCodec compressionCodec;
+
     @Override
     public StreamMessageProducer createProducer(ProducerConfig config) {
         ensureOpen();
         Objects.requireNonNull(config, "config");
         String group = config.getGroup();
-        if (group == null || group.isEmpty()) {
+        if (StringUtils.isEmpty(group)) {
             throw new IllegalArgumentException("Missing required property: group");
         }
         return producers.computeIfAbsent(group, g -> {
@@ -72,16 +79,25 @@ public class RedissonStreamProducerFactory implements StreamMessageProducerFacto
             if (maxLen < 0) {
                 maxLen = DEFAULT_MAX_LEN;
             }
-            LOG.info("Create RedissonStreamProducer: group={}, namespace={}, timeout={}ms, maxLen={}",
-                g, namespace, timeout, maxLen);
-            return RedissonStreamProducer.builder()
+            int compressThreshold = config.getCompressThreshold();
+            if (compressThreshold < 0) {
+                compressThreshold = 0;
+            }
+            LOG.info("Create RedissonStreamProducer: group={}, namespace={}, timeout={}ms, maxLen={}, compressThreshold={}",
+                g, namespace, timeout, maxLen, compressThreshold);
+            RedissonStreamProducer producer = RedissonStreamProducer.builder()
                 .redisson(redisson)
                 .namespace(namespace)
                 .group(g)
                 .converter(converter)
                 .defaultTimeoutMillis(timeout)
                 .maxLen(maxLen)
+                .compressThreshold(compressThreshold)
                 .build();
+            if (Objects.nonNull(compressionCodec)) {
+                producer.setCompressionCodec(compressionCodec);
+            }
+            return producer;
         });
     }
 

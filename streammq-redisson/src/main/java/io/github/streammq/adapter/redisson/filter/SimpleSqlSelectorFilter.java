@@ -7,6 +7,8 @@ import io.github.streammq.core.message.Message;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Objects;
+
 /**
  * 简单 SQL92 选择器过滤器实现。
  *
@@ -35,14 +37,14 @@ public class SimpleSqlSelectorFilter extends SqlSelectorFilter {
     public SimpleSqlSelectorFilter(String selectorExpression) {
         super(selectorExpression);
         this.expression = SelectorParser.build(selectorExpression);
-        if (expression == null && !WILD_CARD.equals(selectorExpression)) {
+        if (Objects.isNull(expression) && !WILD_CARD.equals(selectorExpression)) {
             LOG.warn("Failed to parse SQL92 expression: {}, filter will accept all messages", selectorExpression);
         }
     }
 
     @Override
     protected boolean evaluate(Message<?> message) {
-        if (expression == null) {
+        if (Objects.isNull(expression)) {
             return true;
         }
         try {

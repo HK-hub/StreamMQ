@@ -64,7 +64,7 @@ public class DefaultConsumerInterceptorChain implements ConsumerInterceptorChain
      */
     @Override
     public void addInterceptors(Collection<ConsumerInterceptor> interceptors) {
-        if (interceptors != null) {
+        if (Objects.nonNull(interceptors)) {
             for (ConsumerInterceptor interceptor : interceptors) {
                 addInterceptor(interceptor);
             }
@@ -131,6 +131,7 @@ public class DefaultConsumerInterceptorChain implements ConsumerInterceptorChain
                 interceptor.onException(message, ex, timing, context);
             } catch (Exception ignored) {
                 // 拦截器异常不应影响主流程
+                LOG.debug("Interceptor {} onException threw", interceptor.name(), ignored);
             }
         }
     }

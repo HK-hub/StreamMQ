@@ -4,6 +4,8 @@ import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.policy.ConsumerGroupManager;
 import io.github.streammq.core.policy.RebalanceStrategy;
+import io.github.streammq.core.util.CollectionUtils;
+import io.github.streammq.core.util.StringUtils;
 import org.redisson.api.*;
 import org.redisson.client.RedisException;
 import org.slf4j.Logger;
@@ -87,7 +89,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
                                          String instanceId, RebalanceStrategy rebalanceStrategy,
                                          long heartbeatIntervalMs, long instanceTimeoutMs) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
-        this.namespace = namespace == null ? "" : namespace;
+        this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.group = Objects.requireNonNull(group, "group");
         this.instanceId = Objects.requireNonNull(instanceId, "instanceId");
         this.rebalanceStrategy = Objects.requireNonNull(rebalanceStrategy, "rebalanceStrategy");
@@ -156,7 +158,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
         }
         // 取消心跳
         ScheduledFuture<?> future = this.heartbeatFuture;
-        if (future != null) {
+        if (Objects.nonNull(future)) {
             future.cancel(false);
             this.heartbeatFuture = null;
         }
@@ -216,7 +218,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
         String instancesKey = StreamMQKeys.consumerGroupInstances(namespace, group);
         RMap<String, Long> instances = redisson.getMap(instancesKey);
         Map<String, Long> all = instances.readAllMap();
-        if (all == null || all.isEmpty()) {
+        if (CollectionUtils.isEmpty(all)) {
             return List.of();
         }
         long now = System.currentTimeMillis();
@@ -310,7 +312,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
         String assignmentKey = StreamMQKeys.consumerGroupAssignment(namespace, group);
         RMap<String, String> assignMap = redisson.getMap(assignmentKey);
         String csv = assignMap.get(instanceId);
-        if (csv == null || csv.isEmpty()) {
+        if (StringUtils.isEmpty(csv)) {
             return List.of();
         }
         List<Integer> shards = new ArrayList<>();
@@ -318,6 +320,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
             try {
                 shards.add(Integer.parseInt(part.trim()));
             } catch (NumberFormatException ignored) {
+                LOG.debug("Failed to parse number: {}", part);
             }
         }
         return shards;

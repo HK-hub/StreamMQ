@@ -2,6 +2,8 @@ package io.github.streammq.adapter.redisson.filter.expression;
 
 import io.github.streammq.core.message.Message;
 
+import java.util.Objects;
+
 /**
  * 逻辑表达式。
  *
@@ -40,8 +42,8 @@ public class LogicExpression implements Expression {
     @Override
     public boolean evaluate(Message<?> message) {
         return switch (logicType) {
-            case AND -> left.evaluate(message) && (right == null || right.evaluate(message));
-            case OR -> left.evaluate(message) || (right == null || right.evaluate(message));
+            case AND -> left.evaluate(message) && (Objects.isNull(right) || right.evaluate(message));
+            case OR -> left.evaluate(message) || (Objects.isNull(right) || right.evaluate(message));
             case NOT -> !left.evaluate(message);
         };
     }

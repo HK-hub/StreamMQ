@@ -88,7 +88,7 @@ public class ConsistentHashRebalanceStrategy implements RebalanceStrategy {
         long hash = fnv1aHash("shard-" + shardId);
         // 顺时针查找第一个 >= hash 的节点
         Map.Entry<Long, String> entry = ring.ceilingEntry(hash);
-        if (entry == null) {
+        if (Objects.isNull(entry)) {
             // 环绕到环首
             entry = ring.firstEntry();
         }

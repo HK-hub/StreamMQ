@@ -37,7 +37,7 @@ public class TokenAuthenticator implements ManagementAuthenticator {
 
     @Override
     public boolean authenticate(String username, String password, String resource) {
-        if (password == null) {
+        if (Objects.isNull(password)) {
             return false;
         }
         byte[] credential = password.getBytes(StandardCharsets.UTF_8);

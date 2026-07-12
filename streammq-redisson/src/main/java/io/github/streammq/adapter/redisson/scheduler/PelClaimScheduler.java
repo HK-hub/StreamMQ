@@ -3,6 +3,9 @@ package io.github.streammq.adapter.redisson.scheduler;
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
+import io.github.streammq.core.util.CollectionUtils;
+import io.github.streammq.core.util.StringUtils;
+import org.redisson.api.PendingEntry;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.StreamMessageId;
@@ -86,7 +89,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
     public PelClaimScheduler(RedissonClient redisson, String namespace,
                              long scanIntervalMs, int batchSize, long minIdleMs) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
-        this.namespace = namespace == null ? "" : namespace;
+        this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
         this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
         this.minIdleMs = minIdleMs > 0 ? minIdleMs : DEFAULT_MIN_IDLE_MS;
@@ -133,7 +136,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
             return;
         }
         ScheduledFuture<?> future = this.scanFuture;
-        if (future != null) {
+        if (Objects.nonNull(future)) {
             future.cancel(false);
             this.scanFuture = null;
         }
@@ -171,20 +174,19 @@ public class PelClaimScheduler implements StreamMQScheduler {
             // listPending 返回 PendingEntry 列表，包含 messageId 和 idleTime
             var pending = stream.listPending(target.group,
                 StreamMessageId.MIN, StreamMessageId.MAX, batchSize);
-            if (pending == null || pending.isEmpty()) {
+            if (CollectionUtils.isEmpty(pending)) {
                 return;
             }
-            for (Object entry : pending) {
+            for (PendingEntry entry : pending) {
                 try {
-                    // Redisson PendingEntry 有 getId() 和 getIdleTime() 方法
-                    var id = (StreamMessageId) entry.getClass().getMethod("getId").invoke(entry);
-                    var idleTime = (Long) entry.getClass().getMethod("getIdleTime").invoke(entry);
-                    if (idleTime == null || idleTime < minIdleMs) {
+                    StreamMessageId id = entry.getId();
+                    long idleTime = entry.getIdleTime();
+                    if (idleTime < minIdleMs) {
                         continue;
                     }
                     // 读取消息内容判断 retryTimes
                     var readResult = stream.range(id, id);
-                    if (readResult == null || readResult.isEmpty()) {
+                    if (CollectionUtils.isEmpty(readResult)) {
                         continue;
                     }
                     Map<String, String> fields = (Map<String, String>) readResult.values().iterator().next();
@@ -222,10 +224,11 @@ public class PelClaimScheduler implements StreamMQScheduler {
 
     private int parseRetryTimes(Map<String, String> fields) {
         String retryTimesStr = fields.get(DefaultMessageConverter.FIELD_RETRY_TIMES);
-        if (retryTimesStr != null && !retryTimesStr.isEmpty()) {
+        if (StringUtils.isNotEmpty(retryTimesStr)) {
             try {
                 return Integer.parseInt(retryTimesStr);
             } catch (NumberFormatException ignored) {
+                LOG.debug("Failed to parse retry times: {}", retryTimesStr);
             }
         }
         return 0;

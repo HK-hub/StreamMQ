@@ -4,6 +4,8 @@ import io.github.streammq.core.interceptor.TraceCollector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Objects;
+
 /**
  * 基于 SLF4J 的链路追踪收集器。
  *
@@ -28,7 +30,7 @@ public class Slf4jTraceCollector implements TraceCollector {
 
     @Override
     public void recordSend(SendTraceContext context) {
-        if (context == null) {
+        if (Objects.isNull(context)) {
             return;
         }
         if (context.success()) {
@@ -44,7 +46,7 @@ public class Slf4jTraceCollector implements TraceCollector {
 
     @Override
     public void recordConsume(ConsumeTraceContext context) {
-        if (context == null) {
+        if (Objects.isNull(context)) {
             return;
         }
         if (context.success()) {

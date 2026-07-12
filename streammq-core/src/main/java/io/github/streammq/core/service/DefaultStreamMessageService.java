@@ -134,7 +134,7 @@ public class DefaultStreamMessageService implements StreamMessageService {
     @Override
     public <T> SendResult send(String topic, T body, MessageMetadataBuilder metadata) {
         MessageBuilder<T> builder = MessageBuilder.<T>withTopic(topic).body(body);
-        if (metadata != null) {
+        if (Objects.nonNull(metadata)) {
             metadata.applyTo(builder);
         }
         return template.syncSend(builder.build());
@@ -143,7 +143,7 @@ public class DefaultStreamMessageService implements StreamMessageService {
     @Override
     public <T> SendResult send(String topic, T body, MessageMetadataBuilder metadata, long timeoutMillis) {
         MessageBuilder<T> builder = MessageBuilder.<T>withTopic(topic).body(body);
-        if (metadata != null) {
+        if (Objects.nonNull(metadata)) {
             metadata.applyTo(builder);
         }
         return template.syncSend(builder.build(), timeoutMillis);
@@ -153,7 +153,7 @@ public class DefaultStreamMessageService implements StreamMessageService {
     public <T> SendResult send(String topic, T body, MessageMetadataBuilder metadata,
                                 long timeoutMillis, int retryTimes) {
         MessageBuilder<T> builder = MessageBuilder.<T>withTopic(topic).body(body);
-        if (metadata != null) {
+        if (Objects.nonNull(metadata)) {
             metadata.applyTo(builder);
         }
         return template.syncSend(builder.build(), timeoutMillis, retryTimes);
@@ -199,7 +199,7 @@ public class DefaultStreamMessageService implements StreamMessageService {
     public <T> CompletableFuture<SendResult> asyncSend(String topic, T body,
                                                         MessageMetadataBuilder metadata) {
         MessageBuilder<T> builder = MessageBuilder.<T>withTopic(topic).body(body);
-        if (metadata != null) {
+        if (Objects.nonNull(metadata)) {
             metadata.applyTo(builder);
         }
         return template.asyncSend(builder.build());
@@ -209,7 +209,7 @@ public class DefaultStreamMessageService implements StreamMessageService {
     public <T> CompletableFuture<SendResult> asyncSend(String topic, T body,
                                                         MessageMetadataBuilder metadata, long timeoutMillis) {
         MessageBuilder<T> builder = MessageBuilder.<T>withTopic(topic).body(body);
-        if (metadata != null) {
+        if (Objects.nonNull(metadata)) {
             metadata.applyTo(builder);
         }
         return template.asyncSend(builder.build())
@@ -237,7 +237,7 @@ public class DefaultStreamMessageService implements StreamMessageService {
     public <T> void asyncSend(String topic, T body, MessageMetadataBuilder metadata,
                                SendCallback callback) {
         MessageBuilder<T> builder = MessageBuilder.<T>withTopic(topic).body(body);
-        if (metadata != null) {
+        if (Objects.nonNull(metadata)) {
             metadata.applyTo(builder);
         }
         template.asyncSend(builder.build(), callback);
@@ -247,7 +247,7 @@ public class DefaultStreamMessageService implements StreamMessageService {
     public <T> void asyncSend(String topic, T body, MessageMetadataBuilder metadata,
                                SendCallback callback, long timeoutMillis) {
         MessageBuilder<T> builder = MessageBuilder.<T>withTopic(topic).body(body);
-        if (metadata != null) {
+        if (Objects.nonNull(metadata)) {
             metadata.applyTo(builder);
         }
         template.asyncSend(builder.build(), callback, timeoutMillis);
@@ -285,7 +285,7 @@ public class DefaultStreamMessageService implements StreamMessageService {
     @Override
     public <T> void sendOneway(String topic, T body, MessageMetadataBuilder metadata) {
         MessageBuilder<T> builder = MessageBuilder.<T>withTopic(topic).body(body);
-        if (metadata != null) {
+        if (Objects.nonNull(metadata)) {
             metadata.applyTo(builder);
         }
         template.sendOneway(builder.build());
@@ -332,7 +332,7 @@ public class DefaultStreamMessageService implements StreamMessageService {
         }
         List<Message<T>> messages = bodies.stream().map(body -> {
             MessageBuilder<T> builder = MessageBuilder.<T>withTopic(topic).body(body);
-            if (metadata != null) {
+            if (Objects.nonNull(metadata)) {
                 metadata.applyTo(builder);
             }
             return builder.build();
@@ -417,19 +417,19 @@ public class DefaultStreamMessageService implements StreamMessageService {
             .tag(message.getTag())
             .keys(message.getKeys())
             .shardingKey(message.getShardingKey());
-        if (message.getDelayLevel() != null) {
+        if (Objects.nonNull(message.getDelayLevel())) {
             builder.delayLevel(message.getDelayLevel());
         }
-        if (message.getDelayTimeMillis() != null) {
+        if (Objects.nonNull(message.getDelayTimeMillis())) {
             builder.delayTimeMillis(message.getDelayTimeMillis());
         }
         if (message.getBornTimestamp() > 0) {
             builder.bornTimestamp(message.getBornTimestamp());
         }
-        if (message.getBornHost() != null) {
+        if (Objects.nonNull(message.getBornHost())) {
             builder.bornHost(message.getBornHost());
         }
-        if (message.getTransactionId() != null) {
+        if (Objects.nonNull(message.getTransactionId())) {
             builder.transactionId(message.getTransactionId());
         }
         Map<String, String> props = message.getProperties();
@@ -472,7 +472,7 @@ public class DefaultStreamMessageService implements StreamMessageService {
     @Override
     public <T> SendResult sendDelay(String topic, T body, MessageMetadataBuilder metadata) {
         MessageBuilder<T> builder = MessageBuilder.<T>withTopic(topic).body(body);
-        if (metadata != null) {
+        if (Objects.nonNull(metadata)) {
             metadata.applyTo(builder);
         }
         return template.syncSend(builder.build());
@@ -482,7 +482,7 @@ public class DefaultStreamMessageService implements StreamMessageService {
     public <T> SendResult sendDelay(String topic, T body, MessageMetadataBuilder metadata,
                                      long timeoutMillis) {
         MessageBuilder<T> builder = MessageBuilder.<T>withTopic(topic).body(body);
-        if (metadata != null) {
+        if (Objects.nonNull(metadata)) {
             metadata.applyTo(builder);
         }
         return template.syncSend(builder.build(), timeoutMillis);
@@ -507,7 +507,7 @@ public class DefaultStreamMessageService implements StreamMessageService {
     public <T> SendResult sendTransaction(String topic, T body, MessageMetadataBuilder metadata,
                                            TransactionCallback<T> callback) {
         MessageBuilder<T> builder = MessageBuilder.<T>withTopic(topic).body(body);
-        if (metadata != null) {
+        if (Objects.nonNull(metadata)) {
             metadata.applyTo(builder);
         }
         return template.executeInTransaction(builder.build(), callback);

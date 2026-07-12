@@ -179,7 +179,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
             }
             applyInterceptorsAfter(message, buildFailedResult(message, lastError));
             recordSendMetrics(message.getTopic(), false, sendStart);
-            throw lastError != null ? lastError
+            throw Objects.nonNull(lastError) ? lastError
                 : new StreamMQException("syncSend failed for unknown reason: " + message.getTopic());
         } finally {
             // 清理 MDC 结构化日志上下文
@@ -201,9 +201,9 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
             StreamMessageProducer producer = resolveProducer(message.getTopic());
             long sendStart = System.nanoTime();
             return producer.asyncSend(message).whenComplete((result, ex) -> {
-                if (ex == null) {
+                if (Objects.isNull(ex)) {
                     applyInterceptorsAfter(message, result);
-                    recordSendMetrics(message.getTopic(), result != null && result.isSuccess(), sendStart);
+                    recordSendMetrics(message.getTopic(), Objects.nonNull(result) && result.isSuccess(), sendStart);
                 } else {
                     Exception e = ex instanceof Exception ? (Exception) ex
                         : new StreamMQException("async send failed", ex);
@@ -235,7 +235,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
             }
             StreamMessageProducer producer = resolveProducer(message.getTopic());
             producer.asyncSend(message).whenComplete((result, ex) -> {
-                if (ex == null) {
+                if (Objects.isNull(ex)) {
                     applyInterceptorsAfter(message, result);
                     callback.onSuccess(result);
                 } else {
@@ -309,7 +309,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     public <T> SendResult executeInTransaction(Message<T> message, TransactionCallback<T> callback) {
         Objects.requireNonNull(message, "message");
         Objects.requireNonNull(callback, "callback");
-        if (transactionGroup == null) {
+        if (Objects.isNull(transactionGroup)) {
             throw new TransactionException("Transaction group not configured",
                 null, null);
         }
@@ -320,7 +320,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         // 完整半消息流程：使用 TransactionScanner（如果已注入）
         // 否则回退到简化实现（直接发送 + 本地事务，无回查保护）
         TransactionScanner scanner = this.transactionScanner;
-        if (scanner != null) {
+        if (Objects.nonNull(scanner)) {
             return executeInTransactionWithScanner(message, callback, transactionId, scanner);
         }
 
@@ -475,7 +475,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     @Override
     public void setProducerInterceptors(List<ProducerInterceptor> interceptors) {
         this.interceptors.clear();
-        if (interceptors != null) {
+        if (Objects.nonNull(interceptors)) {
             List<ProducerInterceptor> sorted = new ArrayList<>(interceptors);
             sorted.sort((a, b) -> Integer.compare(a.order(), b.order()));
             this.interceptors.addAll(sorted);
@@ -507,11 +507,12 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
      * @param startNanos  发送起始时间（{@link System#nanoTime()}）
      */
     private void recordSendMetrics(String topic, boolean success, long startNanos) {
-        if (metrics != null) {
+        if (Objects.nonNull(metrics)) {
             try {
                 metrics.recordSend(topic, success, Duration.ofNanos(System.nanoTime() - startNanos));
             } catch (Exception ignored) {
                 // 指标收集失败不得影响业务主流程
+                LOG.debug("Metrics collection failed", ignored);
             }
         }
     }
@@ -573,6 +574,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                 interceptor.onException(message, ex, timing);
             } catch (Exception ignored) {
                 // 拦截器异常不应影响主流程
+                LOG.debug("Interceptor exception", ignored);
             }
         }
     }
@@ -585,10 +587,10 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     private void injectProducerMdc(Message<?> message) {
         MDC.put(MdcKeys.TOPIC, message.getTopic());
         MDC.put(MdcKeys.PRODUCER_GROUP, defaultGroup);
-        if (message.getMessageId() != null) {
+        if (Objects.nonNull(message.getMessageId())) {
             MDC.put(MdcKeys.MSG_ID, String.valueOf(message.getMessageId()));
         }
-        if (message.getShardingKey() != null) {
+        if (Objects.nonNull(message.getShardingKey())) {
             MDC.put(MdcKeys.SHARDING_KEY, message.getShardingKey());
         }
     }
@@ -629,7 +631,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
             SendStatus.SEND_FAILED,
             message.getBornTimestamp(),
             null,
-            error != null ? error.getMessage() : "unknown error");
+            Objects.nonNull(error) ? error.getMessage() : "unknown error");
     }
 
     @Override

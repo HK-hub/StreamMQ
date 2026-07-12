@@ -21,7 +21,7 @@ public class StringSerializer implements MessageSerializer<String> {
 
     @Override
     public byte[] serialize(String object, Class<String> type) {
-        if (object == null) {
+        if (Objects.isNull(object)) {
             return new byte[0];
         }
         return object.getBytes(StandardCharsets.UTF_8);
@@ -31,7 +31,7 @@ public class StringSerializer implements MessageSerializer<String> {
     @SuppressWarnings("unchecked")
     public <R> R deserialize(byte[] bytes, Class<R> type) {
         Objects.requireNonNull(type, "type");
-        if (bytes == null || bytes.length == 0) {
+        if (Objects.isNull(bytes) || bytes.length == 0) {
             return null;
         }
         String str = new String(bytes, StandardCharsets.UTF_8);

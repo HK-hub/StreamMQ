@@ -5,6 +5,8 @@ import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.message.Message;
 import org.slf4j.MDC;
 
+import java.util.Objects;
+
 /**
  * 消费侧 MDC 结构化日志上下文管理（策略类）。
  *
@@ -28,10 +30,10 @@ public final class ConsumerMdcTrace {
     public static void inject(Message<?> message, ListenerRegistration<?> reg) {
         MDC.put(MdcKeys.TOPIC, reg.getTopic());
         MDC.put(MdcKeys.CONSUMER_GROUP, reg.getGroup());
-        if (message.getMessageId() != null) {
+        if (Objects.nonNull(message.getMessageId())) {
             MDC.put(MdcKeys.MSG_ID, String.valueOf(message.getMessageId()));
         }
-        if (message.getShardingKey() != null) {
+        if (Objects.nonNull(message.getShardingKey())) {
             MDC.put(MdcKeys.SHARDING_KEY, message.getShardingKey());
         }
         MDC.put(MdcKeys.RECONSUME_TIMES, String.valueOf(message.getReconsumeTimes()));

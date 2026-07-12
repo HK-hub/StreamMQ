@@ -5,6 +5,7 @@ import io.github.streammq.core.policy.DlqConfig;
 
 import java.util.Collections;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * {@link DlqFailureContext} 默认实现。
@@ -45,6 +46,6 @@ public class DefaultDlqFailureContext implements DlqFailureContext {
     @Override public long dlqRetryDelayMs() { return dlqRetryDelayMs; }
     @Override
     public Map<String, String> dlqFields() {
-        return dlqFields != null ? Collections.unmodifiableMap(dlqFields) : Collections.emptyMap();
+        return Objects.nonNull(dlqFields) ? Collections.unmodifiableMap(dlqFields) : Collections.emptyMap();
     }
 }

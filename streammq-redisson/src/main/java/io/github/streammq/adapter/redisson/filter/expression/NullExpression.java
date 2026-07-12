@@ -1,6 +1,7 @@
 package io.github.streammq.adapter.redisson.filter.expression;
 
 import io.github.streammq.core.message.Message;
+import io.github.streammq.core.util.StringUtils;
 
 /**
  * NULL 判断表达式。
@@ -27,7 +28,7 @@ public class NullExpression implements Expression {
     @Override
     public boolean evaluate(Message<?> message) {
         String value = property.getValue(message);
-        boolean actualIsNull = value == null || value.isEmpty();
+        boolean actualIsNull = StringUtils.isEmpty(value);
         return isNull == actualIsNull;
     }
 }

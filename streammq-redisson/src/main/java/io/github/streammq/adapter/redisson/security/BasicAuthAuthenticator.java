@@ -34,7 +34,7 @@ public class BasicAuthAuthenticator implements ManagementAuthenticator {
 
     @Override
     public boolean authenticate(String username, String password, String resource) {
-        if (username == null || password == null) {
+        if (Objects.isNull(username) || Objects.isNull(password)) {
             return false;
         }
         // 使用恒定时间比较以缓解时序攻击
@@ -55,7 +55,7 @@ public class BasicAuthAuthenticator implements ManagementAuthenticator {
      * @return true 如果相等
      */
     private static boolean constantTimeEquals(String a, String b) {
-        if (a == null || b == null) {
+        if (Objects.isNull(a) || Objects.isNull(b)) {
             return false;
         }
         if (a.length() != b.length()) {

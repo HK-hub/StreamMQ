@@ -3,11 +3,14 @@ package io.github.streammq.adapter.redisson.converter;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.streammq.core.compression.CompressionCodec;
 import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.serializer.MessageSerializer;
+import io.github.streammq.core.util.StringUtils;
+import lombok.Setter;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
@@ -57,9 +60,14 @@ public class DefaultMessageConverter implements MessageConverter {
     public static final String FIELD_RETRY_TIMES = "retryTimes";
     public static final String FIELD_TX_ID = "txId";
     public static final String FIELD_ORIGIN_TOPIC = "originTopic";
+    public static final String FIELD_COMPRESSED = "compressed";
 
     private final MessageSerializer<Object> serializer;
     private final ObjectMapper propsMapper;
+
+    /** 压缩编解码器（可选注入，用于解压 compressed=true 的消息体） */
+    @Setter
+    private CompressionCodec compressionCodec;
 
     /**
      * 构造转换器。
@@ -79,7 +87,7 @@ public class DefaultMessageConverter implements MessageConverter {
         Map<String, String> fields = new HashMap<>(16);
 
         Object body = message.getBody();
-        if (body != null) {
+        if (Objects.nonNull(body)) {
             Class<?> bodyType = body.getClass();
             byte[] bodyBytes = serializer.serialize(body, (Class<Object>) (Class) bodyType);
             fields.put(FIELD_BODY, Base64.getEncoder().encodeToString(bodyBytes));
@@ -87,13 +95,13 @@ public class DefaultMessageConverter implements MessageConverter {
             fields.put(FIELD_BODY_TYPE_NAME, bodyType.getSimpleName());
         }
 
-        if (message.getTag() != null) {
+        if (Objects.nonNull(message.getTag())) {
             fields.put(FIELD_TAG, message.getTag());
         }
-        if (message.getKeys() != null) {
+        if (Objects.nonNull(message.getKeys())) {
             fields.put(FIELD_KEYS, message.getKeys());
         }
-        if (message.getShardingKey() != null) {
+        if (Objects.nonNull(message.getShardingKey())) {
             fields.put(FIELD_SHARDING_KEY, message.getShardingKey());
         }
 
@@ -112,13 +120,13 @@ public class DefaultMessageConverter implements MessageConverter {
 
         fields.put(FIELD_BORN_TS, Long.toString(message.getBornTimestamp()));
 
-        if (message.getBornHost() != null) {
+        if (Objects.nonNull(message.getBornHost())) {
             fields.put(FIELD_BORN_HOST, message.getBornHost());
         }
         if (message.getReconsumeTimes() > 0) {
             fields.put(FIELD_RETRY_TIMES, Integer.toString(message.getReconsumeTimes()));
         }
-        if (message.getTransactionId() != null) {
+        if (Objects.nonNull(message.getTransactionId())) {
             fields.put(FIELD_TX_ID, message.getTransactionId());
         }
 
@@ -135,8 +143,9 @@ public class DefaultMessageConverter implements MessageConverter {
         Message<T> message = new Message<>();
 
         String bodyStr = fields.get(FIELD_BODY);
-        if (bodyStr != null && !bodyStr.isEmpty()) {
-            T body = deserializeBody(bodyStr, fields.get(FIELD_BODY_TYPE), targetType);
+        if (StringUtils.isNotEmpty(bodyStr)) {
+            boolean compressed = "true".equals(fields.get(FIELD_COMPRESSED));
+            T body = deserializeBody(bodyStr, fields.get(FIELD_BODY_TYPE), targetType, compressed);
             message.setBody(body);
         }
 
@@ -157,7 +166,7 @@ public class DefaultMessageConverter implements MessageConverter {
         }
 
         String propsJson = fields.get(FIELD_PROPS);
-        if (propsJson != null && !propsJson.isEmpty()) {
+        if (StringUtils.isNotEmpty(propsJson)) {
             try {
                 Map<String, String> props = propsMapper.readValue(propsJson, new TypeReference<Map<String, String>>() {
                 });
@@ -169,7 +178,7 @@ public class DefaultMessageConverter implements MessageConverter {
         }
 
         String bornTs = fields.get(FIELD_BORN_TS);
-        if (bornTs != null && !bornTs.isEmpty()) {
+        if (StringUtils.isNotEmpty(bornTs)) {
             try {
                 message.setBornTimestamp(Long.parseLong(bornTs));
             } catch (NumberFormatException ex) {
@@ -178,7 +187,7 @@ public class DefaultMessageConverter implements MessageConverter {
         }
 
         String retryTimesStr = fields.get(FIELD_RETRY_TIMES);
-        if (retryTimesStr != null && !retryTimesStr.isEmpty()) {
+        if (StringUtils.isNotEmpty(retryTimesStr)) {
             try {
                 message.setReconsumeTimes(Integer.parseInt(retryTimesStr));
             } catch (NumberFormatException ex) {
@@ -207,17 +216,30 @@ public class DefaultMessageConverter implements MessageConverter {
      * @param bodyStr body 字段值
      * @param bodyTypeField bodyType 字段值（可为 null 或空，表示非 SDK 发送方）
      * @param targetType 目标 body 类型
+     * @param compressed body 是否被压缩
      * @param <T> 目标类型
      * @return 反序列化后的 body
      */
     @SuppressWarnings("unchecked")
-    private <T> T deserializeBody(String bodyStr, String bodyTypeField, Class<T> targetType) {
+    private <T> T deserializeBody(String bodyStr, String bodyTypeField, Class<T> targetType, boolean compressed) {
         // SDK 路径：bodyType 字段存在 → body 为 Base64 编码的序列化字节
-        if (bodyTypeField != null && !bodyTypeField.isEmpty()) {
+        if (StringUtils.isNotEmpty(bodyTypeField)) {
             byte[] bodyBytes = Base64.getDecoder().decode(bodyStr);
+            if (compressed) {
+                bodyBytes = decompressBody(bodyBytes);
+            }
             return serializer.deserialize(bodyBytes, targetType);
         }
         // 跨平台路径：bodyType 字段缺失 → body 为原始字符串
+        if (compressed) {
+            // 压缩消息的 body 为 Base64 编码的压缩字节，需先解码解压
+            byte[] bodyBytes = Base64.getDecoder().decode(bodyStr);
+            bodyBytes = decompressBody(bodyBytes);
+            if (targetType == String.class) {
+                return (T) new String(bodyBytes, StandardCharsets.UTF_8);
+            }
+            return serializer.deserialize(bodyBytes, targetType);
+        }
         if (targetType == String.class) {
             return (T) bodyStr;
         }
@@ -225,6 +247,21 @@ public class DefaultMessageConverter implements MessageConverter {
         // 适用场景：Jackson 序列化器 + JSON 字符串 body → 反序列化为 POJO
         byte[] rawBytes = bodyStr.getBytes(StandardCharsets.UTF_8);
         return serializer.deserialize(rawBytes, targetType);
+    }
+
+    /**
+     * 解压 body 字节。
+     *
+     * @param compressedBytes 压缩后的字节
+     * @return 解压后的原始字节
+     * @throws SerializationException 当未配置 CompressionCodec 时
+     */
+    private byte[] decompressBody(byte[] compressedBytes) {
+        if (Objects.isNull(compressionCodec)) {
+            throw new SerializationException(
+                "Message body is marked as compressed but no CompressionCodec is configured", null);
+        }
+        return compressionCodec.decompress(compressedBytes);
     }
 
     /**

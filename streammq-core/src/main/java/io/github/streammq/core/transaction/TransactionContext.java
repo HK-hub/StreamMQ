@@ -51,7 +51,7 @@ public final class TransactionContext {
         this.transactionGroup = Objects.requireNonNull(transactionGroup, "transactionGroup");
         this.producerGroup = producerGroup;
         this.bornTimestamp = bornTimestamp;
-        this.extAttributes = extAttributes == null
+        this.extAttributes = Objects.isNull(extAttributes)
             ? Collections.emptyMap()
             : Collections.unmodifiableMap(new HashMap<>(extAttributes));
     }

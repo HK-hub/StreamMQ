@@ -11,6 +11,8 @@ import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate;
 import io.github.streammq.adapter.redisson.trace.NoopTraceCollector;
 import io.github.streammq.adapter.redisson.trace.Slf4jTraceCollector;
+import io.github.streammq.adapter.redisson.compression.GzipCompressionCodec;
+import io.github.streammq.core.compression.CompressionCodec;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.StreamMessageProducerFactory;
@@ -25,6 +27,7 @@ import io.github.streammq.core.policy.ManagementAuthenticator;
 import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.template.StreamMessageTemplate;
+import io.github.streammq.core.util.StringUtils;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import org.redisson.Redisson;
 import org.redisson.api.RedissonClient;
@@ -95,7 +98,7 @@ public class StreamMQCoreAutoConfiguration {
     @ConditionalOnMissingBean(MessageSerializer.class)
     public MessageSerializer<?> streamMQMessageSerializer(StreamMQProperties properties) {
         String className = properties.getProducer().getSerializer();
-        if (className == null || className.isEmpty()
+        if (StringUtils.isEmpty(className)
             || JacksonJsonSerializer.class.getName().equals(className)) {
             LOG.info("Using default JacksonJsonSerializer");
             return new JacksonJsonSerializer<>();
@@ -107,13 +110,36 @@ public class StreamMQCoreAutoConfiguration {
      * 默认消息转换器：DefaultMessageConverter。
      *
      * @param serializer 序列化器
+     * @param compressionCodecProvider 压缩编解码器（可选）
      * @return 消息转换器
      */
     @Bean
     @ConditionalOnMissingBean(MessageConverter.class)
-    public MessageConverter streamMQMessageConverter(MessageSerializer<?> serializer) {
+    public MessageConverter streamMQMessageConverter(MessageSerializer<?> serializer,
+            ObjectProvider<CompressionCodec> compressionCodecProvider) {
+        DefaultMessageConverter converter = new DefaultMessageConverter(serializer);
+        CompressionCodec codec = compressionCodecProvider.getIfAvailable();
+        if (codec != null) {
+            converter.setCompressionCodec(codec);
+            LOG.info("CompressionCodec injected into DefaultMessageConverter: {}", codec.name());
+        }
         LOG.info("Using DefaultMessageConverter with serializer={}", serializer.getClass().getSimpleName());
-        return new DefaultMessageConverter(serializer);
+        return converter;
+    }
+
+    /**
+     * 默认压缩编解码器：GzipCompressionCodec。
+     *
+     * <p>当用户未注册自定义 {@link CompressionCodec} Bean 时使用 GZIP 实现。
+     * 可通过注册自定义 Bean 覆盖（如 LZ4）。
+     *
+     * @return GzipCompressionCodec 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean(CompressionCodec.class)
+    public CompressionCodec streamMQCompressionCodec() {
+        LOG.info("Using GzipCompressionCodec");
+        return new GzipCompressionCodec();
     }
 
     /**
@@ -167,13 +193,21 @@ public class StreamMQCoreAutoConfiguration {
      *
      * @param redisson Redisson 客户端
      * @param converter 消息转换器
+     * @param compressionCodecProvider 压缩编解码器（可选）
      * @return 生产者工厂
      */
     @Bean
     @ConditionalOnMissingBean(StreamMessageProducerFactory.class)
-    public StreamMessageProducerFactory streamMQProducerFactory(RedissonClient redisson, MessageConverter converter) {
+    public StreamMessageProducerFactory streamMQProducerFactory(RedissonClient redisson, MessageConverter converter,
+            ObjectProvider<CompressionCodec> compressionCodecProvider) {
+        RedissonStreamProducerFactory factory = new RedissonStreamProducerFactory(redisson, converter);
+        CompressionCodec codec = compressionCodecProvider.getIfAvailable();
+        if (codec != null) {
+            factory.setCompressionCodec(codec);
+            LOG.info("CompressionCodec injected into RedissonStreamProducerFactory: {}", codec.name());
+        }
         LOG.info("Creating RedissonStreamProducerFactory");
-        return new RedissonStreamProducerFactory(redisson, converter);
+        return factory;
     }
 
     /**
@@ -214,6 +248,7 @@ public class StreamMQCoreAutoConfiguration {
             .namespace(properties.getNamespace())
             .sendMessageTimeout(properties.getProducer().getSendMessageTimeout())
             .streamMaxLen(properties.getProducer().getStreamMaxLen())
+            .compressThreshold(properties.getProducer().getCompressThreshold())
             .build();
         LOG.info("Creating DefaultStreamMessageTemplate: defaultGroup={}, transactionGroup={}, namespace={}",
             defaultGroup, txGroup, properties.getNamespace());
@@ -341,7 +376,7 @@ public class StreamMQCoreAutoConfiguration {
      */
     @SuppressWarnings("unchecked")
     private static <T> T instantiate(String className, Class<T> expectedType) {
-        if (className == null || className.isEmpty()) {
+        if (StringUtils.isEmpty(className)) {
             throw new IllegalArgumentException("Class name must not be null or empty for " + expectedType.getName());
         }
         try {

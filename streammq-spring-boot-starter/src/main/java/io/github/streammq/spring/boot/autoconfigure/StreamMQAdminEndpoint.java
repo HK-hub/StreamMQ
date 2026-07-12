@@ -2,6 +2,7 @@ package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.core.util.CollectionUtils;
 import org.redisson.api.*;
 import org.redisson.api.stream.StreamAddArgs;
 import org.slf4j.Logger;
@@ -60,7 +61,7 @@ public class StreamMQAdminEndpoint {
                 RMap<String, Long> instances = redisson.getMap(instancesKey);
                 Map<String, Long> all = instances.readAllMap();
                 info.put("activeInstances", all != null ? all.size() : 0);
-                if (all != null && !all.isEmpty()) {
+                if (CollectionUtils.isNotEmpty(all)) {
                     List<Map<String, Object>> instList = new ArrayList<>();
                     for (var e : all.entrySet()) {
                         Map<String, Object> inst = new LinkedHashMap<>();
@@ -150,7 +151,7 @@ public class StreamMQAdminEndpoint {
             StreamMessageId streamMsgId = parseId(msgId);
             // 读取 DLQ 消息
             var entries = dlqStream.range(1, streamMsgId, streamMsgId);
-            if (entries == null || entries.isEmpty()) {
+            if (CollectionUtils.isEmpty(entries)) {
                 result.put("success", false);
                 result.put("error", "DLQ message not found: " + msgId);
                 return result;
@@ -223,6 +224,151 @@ public class StreamMQAdminEndpoint {
             stats.put("error", ex.getMessage());
         }
         return stats;
+    }
+
+    /**
+     * 手动 ACK 一条 pending 消息。
+     *
+     * <p>通过 {@code RStream.ack(group, streamMessageId)} 确认消息已处理完成，
+     * 将其从 PEL（Pending Entry List）中移除。
+     *
+     * @param group 消费者组名
+     * @param topic 主题
+     * @param msgId 消息 ID（格式：{@code ts-seq}）
+     * @return 操作结果
+     */
+    public Map<String, Object> ackPending(String group, String topic, String msgId) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        String streamKey = StreamMQKeys.topicStream(namespace, topic);
+        try {
+            RStream<String, String> stream = redisson.getStream(streamKey);
+            StreamMessageId streamMsgId = parseId(msgId);
+            long acked = stream.ack(group, streamMsgId);
+            result.put("success", acked > 0);
+            result.put("acked", acked);
+            LOG.info("Pending message acked: group={}, topic={}, msgId={}", group, topic, msgId);
+        } catch (RuntimeException ex) {
+            result.put("success", false);
+            result.put("error", ex.getMessage());
+            LOG.warn("Ack pending failed: group={}, topic={}, msgId={}: {}", group, topic, msgId, ex.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 触发消费组重平衡。
+     *
+     * <p>通过清除 {@code streammq:{ns}:cg:{group}:instances} 中的实例注册信息，
+     * 使所有实例在下次心跳时重新注册并触发分片重新分配。
+     *
+     * @param group 消费者组名
+     * @return 操作结果
+     */
+    public Map<String, Object> triggerRebalance(String group) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        String instancesKey = StreamMQKeys.consumerGroupInstances(namespace, group);
+        try {
+            RMap<String, Long> instances = redisson.getMap(instancesKey);
+            int cleared = instances.size();
+            instances.delete();
+            result.put("success", true);
+            result.put("clearedInstances", cleared);
+            LOG.info("Rebalance triggered: group={}, clearedInstances={}", group, cleared);
+        } catch (RuntimeException ex) {
+            result.put("success", false);
+            result.put("error", ex.getMessage());
+            LOG.warn("Trigger rebalance failed: group={}: {}", group, ex.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 创建 Topic。
+     *
+     * <p>通过向目标 Stream 写入一条占位消息来创建 Stream（Redis Stream 在首次 XADD 时自动创建）。
+     *
+     * @param topic 主题名
+     * @return 操作结果
+     */
+    public Map<String, Object> createTopic(String topic) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        String streamKey = StreamMQKeys.topicStream(namespace, topic);
+        try {
+            RStream<String, String> stream = redisson.getStream(streamKey);
+            Map<String, String> placeholder = new HashMap<>(2);
+            placeholder.put("__placeholder", "true");
+            placeholder.put("bornTs", Long.toString(System.currentTimeMillis()));
+            StreamMessageId id = stream.add(StreamAddArgs.entries(placeholder));
+            result.put("success", true);
+            result.put("topic", topic);
+            result.put("streamKey", streamKey);
+            result.put("placeholderId", id.toString());
+            LOG.info("Topic created: topic={}, streamKey={}, placeholderId={}", topic, streamKey, id);
+        } catch (RuntimeException ex) {
+            result.put("success", false);
+            result.put("error", ex.getMessage());
+            LOG.warn("Create topic failed: topic={}: {}", topic, ex.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 删除 Topic。
+     *
+     * <p>删除目标 Stream 及其所有数据，操作不可逆。
+     *
+     * @param topic 主题名
+     * @return 操作结果
+     */
+    public Map<String, Object> deleteTopic(String topic) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        String streamKey = StreamMQKeys.topicStream(namespace, topic);
+        try {
+            RStream<String, String> stream = redisson.getStream(streamKey);
+            boolean deleted = stream.delete();
+            result.put("success", true);
+            result.put("topic", topic);
+            result.put("deleted", deleted);
+            LOG.info("Topic deleted: topic={}, deleted={}", topic, deleted);
+        } catch (RuntimeException ex) {
+            result.put("success", false);
+            result.put("error", ex.getMessage());
+            LOG.warn("Delete topic failed: topic={}: {}", topic, ex.getMessage());
+        }
+        return result;
+    }
+
+    /**
+     * 更新消费组配置。
+     *
+     * <p>将配置写入 {@code streammq:{ns}:meta:config:{group}} Hash，
+     * 支持动态调整消费组参数（如并发度、最大重试次数等）。
+     *
+     * @param group 消费者组名
+     * @param config 配置键值对
+     * @return 操作结果
+     */
+    public Map<String, Object> updateGroupConfig(String group, Map<String, String> config) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (CollectionUtils.isEmpty(config)) {
+            result.put("success", false);
+            result.put("error", "config must not be null or empty");
+            return result;
+        }
+        String configKey = StreamMQKeys.metaConfig(namespace, group);
+        try {
+            RMap<String, String> configMap = redisson.getMap(configKey);
+            configMap.putAll(config);
+            result.put("success", true);
+            result.put("group", group);
+            result.put("updatedKeys", config.keySet());
+            LOG.info("Group config updated: group={}, keys={}", group, config.keySet());
+        } catch (RuntimeException ex) {
+            result.put("success", false);
+            result.put("error", ex.getMessage());
+            LOG.warn("Update group config failed: group={}: {}", group, ex.getMessage());
+        }
+        return result;
     }
 
     private static StreamMessageId parseId(String msgId) {

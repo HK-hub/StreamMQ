@@ -9,6 +9,7 @@ import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
+import io.github.streammq.core.util.StringUtils;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -91,7 +92,7 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
 
     @Override
     public void resolveNamespace(String defaultNs) {
-        if (namespace == null || namespace.isEmpty()) {
+        if (StringUtils.isEmpty(namespace)) {
             namespace = defaultNs;
         }
     }

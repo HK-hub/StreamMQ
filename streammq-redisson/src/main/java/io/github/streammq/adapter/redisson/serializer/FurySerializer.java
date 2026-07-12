@@ -5,6 +5,8 @@ import org.apache.fury.Fury;
 import org.apache.fury.ThreadSafeFury;
 import org.apache.fury.config.Language;
 
+import java.util.Objects;
+
 /**
  * 基于 Apache Fury 的高性能跨语言序列化器。
  *
@@ -31,7 +33,7 @@ public class FurySerializer<T> implements MessageSerializer<T> {
 
     @Override
     public byte[] serialize(T object, Class<T> type) {
-        if (object == null) {
+        if (Objects.isNull(object)) {
             return new byte[0];
         }
         return fury.serialize(object);
@@ -40,7 +42,7 @@ public class FurySerializer<T> implements MessageSerializer<T> {
     @Override
     @SuppressWarnings("unchecked")
     public <R> R deserialize(byte[] bytes, Class<R> type) {
-        if (bytes == null || bytes.length == 0) {
+        if (Objects.isNull(bytes) || bytes.length == 0) {
             return null;
         }
         return (R) fury.deserialize(bytes);

@@ -1,5 +1,7 @@
 package io.github.streammq.core.util;
 
+import java.util.Objects;
+
 /**
  * SPI 实例解析工具：按注解中声明的实现类无参实例化，未声明（marker）时回退到全局默认实例。
  *
@@ -27,7 +29,7 @@ public final class SpiResolver {
      * @return 实例
      */
     public static <T> T resolveOrInstantiate(Class<? extends T> clazz, Class<T> spiType, T globalDefault) {
-        if (clazz == null || clazz == spiType) {
+        if (Objects.isNull(clazz) || clazz == spiType) {
             return globalDefault;
         }
         try {

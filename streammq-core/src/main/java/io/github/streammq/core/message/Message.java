@@ -1,6 +1,7 @@
 package io.github.streammq.core.message;
 
 import io.github.streammq.core.enums.DelayLevel;
+import io.github.streammq.core.util.StringUtils;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.Setter;
@@ -97,8 +98,8 @@ public final class Message<T> implements Serializable {
         this.tag = tag;
         this.keys = keys;
         this.shardingKey = shardingKey;
-        this.properties = properties == null ? new HashMap<>() : new HashMap<>(properties);
-        this.userProperties = userProperties == null ? new HashMap<>() : new HashMap<>(userProperties);
+        this.properties = Objects.isNull(properties) ? new HashMap<>() : new HashMap<>(properties);
+        this.userProperties = Objects.isNull(userProperties) ? new HashMap<>() : new HashMap<>(userProperties);
         this.body = body;
         this.delayLevel = delayLevel;
         this.delayTimeMillis = delayTimeMillis;
@@ -119,7 +120,7 @@ public final class Message<T> implements Serializable {
     }
 
     public void setProperties(Map<String, String> properties) {
-        this.properties = properties == null ? new HashMap<>() : new LinkedHashMap<>(properties);
+        this.properties = Objects.isNull(properties) ? new HashMap<>() : new LinkedHashMap<>(properties);
     }
 
     public void putProperty(String key, String value) {
@@ -138,7 +139,7 @@ public final class Message<T> implements Serializable {
     }
 
     public void setUserProperties(Map<String, String> userProperties) {
-        this.userProperties = userProperties == null ? new HashMap<>() : new LinkedHashMap<>(userProperties);
+        this.userProperties = Objects.isNull(userProperties) ? new HashMap<>() : new LinkedHashMap<>(userProperties);
     }
 
     public void putUserProperty(String key, String value) {
@@ -155,7 +156,7 @@ public final class Message<T> implements Serializable {
      * @return true 如果 delayLevel 或 delayTimeMillis 非空
      */
     public boolean isDelayMessage() {
-        return delayLevel != null || delayTimeMillis != null;
+        return Objects.nonNull(delayLevel) || Objects.nonNull(delayTimeMillis);
     }
 
     /**
@@ -164,7 +165,7 @@ public final class Message<T> implements Serializable {
      * @return true 如果 transactionId 非空
      */
     public boolean isTransactionMessage() {
-        return transactionId != null && !transactionId.isEmpty();
+        return StringUtils.isNotEmpty(transactionId);
     }
 
     @Override
@@ -180,7 +181,7 @@ public final class Message<T> implements Serializable {
             + ", transactionId='" + transactionId + '\''
             + ", delayLevel=" + delayLevel
             + ", delayTimeMillis=" + delayTimeMillis
-            + ", body=" + (body == null ? "null" : body.getClass().getSimpleName())
+            + ", body=" + (Objects.isNull(body) ? "null" : body.getClass().getSimpleName())
             + ", properties.size=" + properties.size()
             + ", userProperties.size=" + userProperties.size()
             + '}';

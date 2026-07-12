@@ -1,6 +1,8 @@
 package io.github.streammq.adapter.redisson.producer;
 
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
+import io.github.streammq.core.compression.CompressionCodec;
 import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.exception.ProducerTimeoutException;
 import io.github.streammq.core.exception.StreamMQBrokerException;
@@ -10,9 +12,11 @@ import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.producer.StreamMessageProducer;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.util.StringUtils;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NonNull;
+import lombok.Setter;
 import org.redisson.api.*;
 import org.redisson.api.stream.StreamAddArgs;
 import org.slf4j.Logger;
@@ -53,8 +57,13 @@ public class RedissonStreamProducer implements StreamMessageProducer {
     private final @NonNull MessageConverter converter;
     private final long defaultTimeoutMillis;
     private final int maxLen;
+    private final int compressThreshold;
     private final ExecutorService asyncExecutor;
     private final AtomicBoolean closed = new AtomicBoolean(false);
+
+    /** 压缩编解码器（可选注入，配合 compressThreshold 使用） */
+    @Setter
+    private CompressionCodec compressionCodec;
 
     /** 关闭异步执行线程池时的等待超时（秒） */
     private static final long ASYNC_AWAIT_TERMINATION_SECONDS = 5L;
@@ -84,16 +93,19 @@ public class RedissonStreamProducer implements StreamMessageProducer {
      * @param converter 消息转换器（必填）
      * @param defaultTimeoutMillis 默认发送超时（毫秒）
      * @param maxLen Stream 最大长度（0 表示不限制）
+     * @param compressThreshold 压缩阈值（字节，0 = 禁用）
      */
     @Builder
     public RedissonStreamProducer(@NonNull RedissonClient redisson, String namespace, @NonNull String group,
-                                  @NonNull MessageConverter converter, long defaultTimeoutMillis, int maxLen) {
+                                  @NonNull MessageConverter converter, long defaultTimeoutMillis, int maxLen,
+                                  int compressThreshold) {
         this.redisson = redisson;
-        this.namespace = namespace == null ? "" : namespace;
+        this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.group = group;
         this.converter = converter;
         this.defaultTimeoutMillis = defaultTimeoutMillis;
         this.maxLen = maxLen;
+        this.compressThreshold = compressThreshold;
         this.asyncExecutor = Executors.newVirtualThreadPerTaskExecutor();
     }
 
@@ -113,6 +125,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         }
 
         Map<String, String> fields = converter.toStreamFields(message);
+        applyCompression(fields);
         String streamKey = StreamMQKeys.topicStream(namespace, message.getTopic());
 
         try {
@@ -227,7 +240,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         Long delayTimeMillis = message.getDelayTimeMillis();
 
         // V1.0+: 任意延时优先使用 custom ZSet，不转换为 DelayLevel
-        if (level == null && delayTimeMillis != null && delayTimeMillis > 0) {
+        if (Objects.isNull(level) && Objects.nonNull(delayTimeMillis) && delayTimeMillis > 0) {
             // 使用 custom ZSet 支持任意延时
             long deliverAt = now + delayTimeMillis;
             String zsetKey = StreamMQKeys.delayCustomZSet(namespace);
@@ -256,7 +269,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             }
         }
 
-        if (level == null) {
+        if (Objects.isNull(level)) {
             throw new StreamMQException("Delay message has no delayLevel or delayTimeMillis");
         }
 
@@ -289,6 +302,33 @@ public class RedissonStreamProducer implements StreamMessageProducer {
     }
 
     /**
+     * 按压缩阈值对 body 字段进行压缩。
+     *
+     * <p>当 {@code compressThreshold > 0} 且 {@code compressionCodec != null} 时，
+     * 若 body 字节大小超过阈值，则压缩 body 并标记 {@code compressed=true}。
+     *
+     * @param fields Stream Entry 字段 Map（原地修改）
+     */
+    private void applyCompression(Map<String, String> fields) {
+        if (compressThreshold <= 0 || Objects.isNull(compressionCodec)) {
+            return;
+        }
+        String bodyField = fields.get(DefaultMessageConverter.FIELD_BODY);
+        if (StringUtils.isEmpty(bodyField)) {
+            return;
+        }
+        byte[] bodyBytes = Base64.getDecoder().decode(bodyField);
+        if (bodyBytes.length <= compressThreshold) {
+            return;
+        }
+        byte[] compressed = compressionCodec.compress(bodyBytes);
+        fields.put(DefaultMessageConverter.FIELD_BODY, Base64.getEncoder().encodeToString(compressed));
+        fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
+        LOG.debug("Body compressed: originalSize={}, compressedSize={}, codec={}",
+            bodyBytes.length, compressed.length, compressionCodec.name());
+    }
+
+    /**
      * 调用 RStream.add 写入 Stream Entry（含 MAXLEN 截断）。
      *
      * <p>使用异步 API + 超时控制，确保 {@code timeoutMillis} 真正生效。
@@ -311,7 +351,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             Thread.currentThread().interrupt();
             throw new StreamMQBrokerException("syncSend interrupted for stream " + streamKey, null, ex);
         } catch (ExecutionException ex) {
-            Throwable cause = ex.getCause() != null ? ex.getCause() : ex;
+            Throwable cause = Objects.nonNull(ex.getCause()) ? ex.getCause() : ex;
             throw new StreamMQBrokerException("syncSend failed for stream " + streamKey, null, cause);
         }
     }

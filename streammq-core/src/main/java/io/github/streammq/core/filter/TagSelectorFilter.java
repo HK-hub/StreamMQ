@@ -2,6 +2,9 @@ package io.github.streammq.core.filter;
 
 import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.message.Message;
+import io.github.streammq.core.util.StringUtils;
+
+import java.util.Objects;
 
 /**
  * Tag 选择器过滤器抽象类。
@@ -18,7 +21,7 @@ public abstract class TagSelectorFilter implements ExpressionSelectorFilter {
     protected final String selectorExpression;
 
     protected TagSelectorFilter(String selectorExpression) {
-        this.selectorExpression = selectorExpression != null ? selectorExpression.trim() : WILD_CARD;
+        this.selectorExpression = Objects.nonNull(selectorExpression) ? selectorExpression.trim() : WILD_CARD;
     }
 
     @Override
@@ -26,7 +29,7 @@ public abstract class TagSelectorFilter implements ExpressionSelectorFilter {
         if (WILD_CARD.equals(selectorExpression) || selectorExpression.isEmpty()) {
             return true;
         }
-        if (message.getTag() == null || message.getTag().isEmpty()) {
+        if (StringUtils.isEmpty(message.getTag())) {
             return false;
         }
         return matchTag(message.getTag());

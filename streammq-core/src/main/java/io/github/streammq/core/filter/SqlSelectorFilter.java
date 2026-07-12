@@ -3,6 +3,8 @@ package io.github.streammq.core.filter;
 import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.message.Message;
 
+import java.util.Objects;
+
 /**
  * SQL92 选择器过滤器抽象类。
  *
@@ -19,7 +21,7 @@ public abstract class SqlSelectorFilter implements ExpressionSelectorFilter {
     protected final String selectorExpression;
 
     protected SqlSelectorFilter(String selectorExpression) {
-        this.selectorExpression = selectorExpression != null ? selectorExpression.trim() : WILD_CARD;
+        this.selectorExpression = Objects.nonNull(selectorExpression) ? selectorExpression.trim() : WILD_CARD;
     }
 
     @Override

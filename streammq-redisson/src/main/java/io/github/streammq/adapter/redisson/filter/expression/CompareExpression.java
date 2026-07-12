@@ -2,6 +2,8 @@ package io.github.streammq.adapter.redisson.filter.expression;
 
 import io.github.streammq.core.message.Message;
 
+import java.util.Objects;
+
 /**
  * 比较表达式。
  *
@@ -37,12 +39,12 @@ public class CompareExpression implements Expression {
     @Override
     public boolean evaluate(Message<?> message) {
         String propertyValue = property.getValue(message);
-        if (propertyValue == null) {
+        if (Objects.isNull(propertyValue)) {
             return false;
         }
 
         String constantValue = constant.getValue();
-        if (constantValue == null) {
+        if (Objects.isNull(constantValue)) {
             return false;
         }
 

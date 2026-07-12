@@ -7,6 +7,7 @@ import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.util.StringUtils;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -59,19 +60,19 @@ public class PassThroughMessageConverter implements MessageConverter {
         Map<String, String> fields = new HashMap<>(16);
 
         Object body = message.getBody();
-        if (body != null) {
+        if (Objects.nonNull(body)) {
             // body 直接 toString()，不经过序列化器
             fields.put(FIELD_BODY, body.toString());
             fields.put(FIELD_BODY_TYPE, body.getClass().getName());
         }
 
-        if (message.getTag() != null) {
+        if (Objects.nonNull(message.getTag())) {
             fields.put(FIELD_TAG, message.getTag());
         }
-        if (message.getKeys() != null) {
+        if (Objects.nonNull(message.getKeys())) {
             fields.put(FIELD_KEYS, message.getKeys());
         }
-        if (message.getShardingKey() != null) {
+        if (Objects.nonNull(message.getShardingKey())) {
             fields.put(FIELD_SHARDING_KEY, message.getShardingKey());
         }
 
@@ -90,13 +91,13 @@ public class PassThroughMessageConverter implements MessageConverter {
 
         fields.put(FIELD_BORN_TS, Long.toString(message.getBornTimestamp()));
 
-        if (message.getBornHost() != null) {
+        if (Objects.nonNull(message.getBornHost())) {
             fields.put(FIELD_BORN_HOST, message.getBornHost());
         }
         if (message.getReconsumeTimes() > 0) {
             fields.put(FIELD_RETRY_TIMES, Integer.toString(message.getReconsumeTimes()));
         }
-        if (message.getTransactionId() != null) {
+        if (Objects.nonNull(message.getTransactionId())) {
             fields.put(FIELD_TX_ID, message.getTransactionId());
         }
 
@@ -113,7 +114,7 @@ public class PassThroughMessageConverter implements MessageConverter {
         Message<T> message = new Message<>();
 
         String bodyStr = fields.get(FIELD_BODY);
-        if (bodyStr != null && !bodyStr.isEmpty()) {
+        if (StringUtils.isNotEmpty(bodyStr)) {
             // body 直接取字符串，不反序列化
             message.setBody((T) bodyStr);
         }
@@ -135,7 +136,7 @@ public class PassThroughMessageConverter implements MessageConverter {
         }
 
         String propsJson = fields.get(FIELD_PROPS);
-        if (propsJson != null && !propsJson.isEmpty()) {
+        if (StringUtils.isNotEmpty(propsJson)) {
             try {
                 Map<String, String> props = propsMapper.readValue(propsJson, new TypeReference<Map<String, String>>() {
                 });
@@ -146,7 +147,7 @@ public class PassThroughMessageConverter implements MessageConverter {
         }
 
         String bornTs = fields.get(FIELD_BORN_TS);
-        if (bornTs != null && !bornTs.isEmpty()) {
+        if (StringUtils.isNotEmpty(bornTs)) {
             try {
                 message.setBornTimestamp(Long.parseLong(bornTs));
             } catch (NumberFormatException ex) {
@@ -155,7 +156,7 @@ public class PassThroughMessageConverter implements MessageConverter {
         }
 
         String retryTimesStr = fields.get(FIELD_RETRY_TIMES);
-        if (retryTimesStr != null && !retryTimesStr.isEmpty()) {
+        if (StringUtils.isNotEmpty(retryTimesStr)) {
             try {
                 message.setReconsumeTimes(Integer.parseInt(retryTimesStr));
             } catch (NumberFormatException ex) {

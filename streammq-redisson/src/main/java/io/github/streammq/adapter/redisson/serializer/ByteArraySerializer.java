@@ -21,7 +21,7 @@ public class ByteArraySerializer implements MessageSerializer<byte[]> {
 
     @Override
     public byte[] serialize(byte[] object, Class<byte[]> type) {
-        if (object == null) {
+        if (Objects.isNull(object)) {
             return new byte[0];
         }
         // 零拷贝：直接返回原 byte[]

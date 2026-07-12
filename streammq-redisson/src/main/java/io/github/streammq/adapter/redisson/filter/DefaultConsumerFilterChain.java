@@ -47,7 +47,7 @@ public class DefaultConsumerFilterChain implements ConsumerFilterChain {
 
     @Override
     public void addFilters(Collection<ConsumerFilter> filters) {
-        if (filters != null) {
+        if (Objects.nonNull(filters)) {
             for (ConsumerFilter filter : filters) {
                 addFilter(filter);
             }
