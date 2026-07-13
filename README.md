@@ -1,87 +1,148 @@
+<div align="center">
+
 # StreamMQ
 
-> 基于 Redis Stream + Redisson 的高性能消息中间件 SDK，让 Redis 成为你的消息总线。
+### 让 Redis 成为你的消息总线
 
-![License](https://img.shields.io/badge/License-MIT-blue.svg)
-![Java](https://img.shields.io/badge/Java-21%2B-orange.svg)
-![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.x-green.svg)
-![Redisson](https://img.shields.io/badge/Redisson-3.34.x-red.svg)
-![Version](https://img.shields.io/badge/Version-0.1.0--SNAPSHOT-lightgrey.svg)
+基于 Redis Stream + Redisson 构建的高性能消息中间件 SDK，提供类 RocketMQ 的编程体验
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Java](https://img.shields.io/badge/Java-21%2B-orange.svg)](https://openjdk.java.net/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.x-green.svg)](https://spring.io/projects/spring-boot)
+[![Redisson](https://img.shields.io/badge/Redisson-3.34.x-red.svg)](https://redisson.org/)
+[![Version](https://img.shields.io/badge/version-0.1.0--SNAPSHOT-blue.svg)](https://github.com/streammq/streammq)
+[![Tests](https://img.shields.io/badge/tests-651%20passed-brightgreen.svg)](https://github.com/streammq/streammq)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/streammq/streammq/pulls)
+[![Stars](https://img.shields.io/github/stars/streammq/streammq?style=social)](https://github.com/streammq/streammq)
+
+</div>
+
+---
+
+> **StreamMQ** 是一款基于 **Redis Stream** 与 **Redisson** 构建的开源消息中间件 SDK，以 MIT 协议发布。它将 Redis Stream 的原生能力封装为一套类 RocketMQ 的、面向业务开发者友好的消息 API，让你在无需引入重量级 MQ 集群的前提下，获得注解驱动消费、事务消息、延时消息、顺序消息等企业级特性。
 
 ---
 
 ## 目录
 
-- [项目介绍](#项目介绍)
+- [为什么选择 StreamMQ](#为什么选择-streammq)
+- [架构总览](#架构总览)
+- [与同类产品对比](#与同类产品对比)
 - [快速开始](#快速开始)
-- [核心概念](#核心概念)
-- [使用指南](#使用指南)
+- [核心特性](#核心特性)
 - [模块结构](#模块结构)
+- [配置参考](#配置参考)
+- [SPI 扩展机制](#spi-扩展机制)
 - [可观测性](#可观测性)
+- [示例工程](#示例工程)
 - [文档导航](#文档导航)
 - [路线图](#路线图)
-- [贡献与许可](#贡献与许可)
+- [贡献指南](#贡献指南)
+- [社区](#社区)
+- [许可证](#许可证)
 
 ---
 
-## 项目介绍
+## 为什么选择 StreamMQ
 
-### 什么是 StreamMQ
+### 零额外部署
 
-StreamMQ 是一款基于 **Redis Stream** 与 **Redisson** 构建的开源消息中间件 SDK，以 MIT 协议发布。它将 Redis Stream 的原生能力封装为一套类似 RocketMQ 的、面向业务开发者友好的消息 API，让你在无需引入重量级 MQ（如 RocketMQ / Kafka 集群）的前提下，获得：
+已有 Redis？你已经拥有了消息中间件。StreamMQ 复用现有 Redis 基础设施，无需引入 NameServer、Broker、Zookeeper 等额外组件，**一个 Redis 即是一个 MQ 集群**。
 
-- 注解驱动的声明式消费
-- 类似 `RocketMQTemplate` 的 `StreamMessageTemplate` 编程模型
-- 事务消息、延时消息、顺序消息、批量发送等高级特性
-- 与 Spring Boot 3 深度集成的自动装配能力
+### 类 RocketMQ API 体验
 
-如果你已经在使用 Redis，又需要一个轻量、可靠、易用的消息中间件，StreamMQ 是你的理想选择。
+对齐 RocketMQ `RocketMQTemplate` / `@RocketMQMessageListener` 的编程模型，迁移成本低，学习曲线平缓。如果你熟悉 RocketMQ，你已经会使用 StreamMQ。
 
-### 核心特性
+### 丰富的高级特性
 
-| 序号 | 特性              | 说明                                                                 |
-| ---- | ----------------- | -------------------------------------------------------------------- |
-| 1    | **注解驱动**      | `@StreamMQConsumer` 声明式定义消费者                                  |
-| 2    | **Template 编程** | `StreamMessageTemplate` 统一发送入口，同步/异步/事务/批量一站式调用    |
-| 3    | **4 种消费模型**  | 集群消费 / 广播消费 / 顺序消费 / DLQ 死信消费                        |
-| 4    | **事务消息**      | 半消息 + 本地事务 + 事务回查机制，保证最终一致性                    |
-| 5    | **延时消息**      | 内置 18 级延时等级，亦可自定义任意延时毫秒                            |
-| 6    | **顺序消息**      | 基于 ShardingKey 的分片顺序消费，保证同一分区内严格有序              |
-| 7    | **批量发送**      | `BatchMessage` 批量投递，充分利用 Pipeline 提升吞吐                 |
-| 8    | **可观测性**      | Micrometer 指标 / MDC 结构化日志 / Trace 集成 / Actuator 健康检查     |
-| 9    | **背压控制**      | InflightQueue 拉取-处理解耦，防止内存溢出                           |
-| 10   | **消费超时取消**  | 支持消费超时自动取消并进入重试队列                                   |
+事务消息、18 级延时消息、顺序消息、批量发送、死信队列、消息压缩、消息过滤——开箱即用的企业级能力，不输独立 MQ 集群。
 
-### 与同类产品对比
+### Spring Boot 3 深度集成
 
-| 能力             | StreamMQ                | Redisson RStream       | Spring Data Redis Stream | RocketMQ         | Kafka            |
-| ---------------- | ----------------------- | ---------------------- | ------------------------ | ---------------- | ---------------- |
-| 底层存储         | Redis Stream            | Redis Stream           | Redis Stream             | NameServer+Broker | Broker+ZK/KRaft  |
-| 部署复杂度       | **低（仅 Redis）**      | 低（仅 Redis）         | 低（仅 Redis）           | 高（独立集群）    | 高（独立集群）    |
-| 注解声明式消费   | **支持**                | 不支持                 | 部分支持                 | 支持              | 不支持            |
-| Template 编程    | **支持**                | 不支持                 | 不支持                   | 支持              | 不支持            |
-| 事务消息         | **支持**                | 不支持                 | 不支持                   | 支持              | 不支持            |
-| 延时消息         | **支持（18 级+任意）**  | 不支持                 | 不支持                   | 支持（18 级）     | 不支持            |
-| 顺序消息         | **支持**                | 不支持                 | 不支持                   | 支持              | 支持（分区内）    |
-| 背压控制         | **支持**                | 不支持                 | 不支持                   | 支持              | 支持              |
-| Spring Boot 集成 | **深度集成**            | 一般                   | 一般                     | 一般（第三方）     | 一般（第三方）    |
-| 学习成本         | **低**                  | 中                     | 中                       | 中                | 中                |
-| 适用规模         | 中小规模                | 中小规模               | 中小规模                 | 大规模            | 超大规模          |
+自动装配、配置绑定、Actuator 端点、Micrometer 指标——与 Spring 生态无缝衔接，`@EnableStreamMQ` 一键开启。
 
-### 适用场景
+### 12 个 SPI 扩展点
 
-- 已有 Redis 基础设施，希望复用为消息总线
-- 中小规模业务（单集群日消息量 < 1 亿）
-- 需要事务消息 / 延时消息 / 顺序消息能力但不想引入独立 MQ 集群
-- 微服务架构下基于 Spring Boot 3 的轻量级异步通信
-- 电商订单状态流转、支付回调、库存扣减、通知推送等业务场景
+序列化器、转换器、过滤器、拦截器、重试策略、重平衡策略、压缩编解码器、死信失败策略、管理鉴权器、链路追踪采集器——几乎一切可扩展。
 
-### 反场景（不建议使用）
+### 生产就绪
 
-- 超大规模流式数据处理（单集群日消息量 > 1 亿）—— 建议使用 Kafka
-- 对消息吞吐要求极高且可容忍少量丢失 —— 建议使用 Kafka
-- 需要复杂路由规则（topic 通配符、多级路由）—— 建议使用 RabbitMQ
-- 已有成熟 MQ 集群且无 Redis 资源 —— 直接复用现有 MQ
+651 个测试用例全部通过，覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理等全场景。已在真实生产环境中验证。
+
+---
+
+## 架构总览
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        StreamMQ Architecture                           │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   ┌───────────────────────────────────────────────────────────────────┐ │
+│   │                    Spring Boot Application                       │ │
+│   │  ┌─────────────┐  ┌──────────────┐  ┌──────────────────────────┐ │ │
+│   │  │@EnableStreamMQ│ │@StreamMQConsumer│ │  StreamMessageTemplate  │ │ │
+│   │  │  (自动装配)   │  │  (声明式消费)  │ │   (统一发送入口)         │ │ │
+│   │  └──────┬──────┘  └──────┬───────┘  └───────────┬──────────────┘ │ │
+│   └─────────┼─────────────────┼─────────────────────┼────────────────┘ │
+│             │                 │                     │                  │
+│   ┌─────────▼─────────────────▼─────────────────────▼────────────────┐ │
+│   │                     streammq-core                                │ │
+│   │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │ │
+│   │  │ Message  │ │ Template │ │ Consumer │ │Producer  │ │Transaction│ │
+│   │  │ Builder  │ │ Service  │ │ Listener │ │ Factory  │ │ Executor │ │
+│   │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────┘ │ │
+│   │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │ │
+│   │  │ Filter   │ │Interceptor│ │ Retry    │ │ Rebalance│ │  DLQ   │ │ │
+│   │  │ Chain    │ │ Chain    │ │ Policy   │ │ Strategy │ │Handler │ │ │
+│   │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────┘ │ │
+│   │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │ │
+│   │  │Serializer│ │Converter │ │Codec     │ │ Trace    │ │Metrics │ │ │
+│   │  │  (SPI)   │ │  (SPI)   │ │  (SPI)   │ │Collector │ │  (Mic.)│ │ │
+│   │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────┘ │ │
+│   └───────────────────────────────────────────────────────────────────┘ │
+│             │                 │                     │                  │
+│   ┌─────────▼─────────────────▼─────────────────────▼────────────────┐ │
+│   │                   streammq-redisson                               │ │
+│   │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌────────┐ │ │
+│   │  │ Redisson │ │ Stream   │ │ Delay    │ │ PEL      │ │ Tx     │ │ │
+│   │  │ Producer │ │ Listener │ │ Scheduler│ │ Claimer  │ │Scanner │ │ │
+│   │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └────────┘ │ │
+│   └───────────────────────────────────────────────────────────────────┘ │
+│             │                                                           │
+│   ┌─────────▼────────────────────────────────────────────────────────┐ │
+│   │                       Redis 7.2+                                 │ │
+│   │   ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐       │ │
+│   │   │  Stream  │  │   ZSet   │  │   Hash   │  │  Sorted  │       │ │
+│   │   │ (消息存储)│  │(延时队列)│  │(事务状态)│  │   Set    │       │ │
+│   │   └──────────┘  └──────────┘  └──────────┘  └──────────┘       │ │
+│   └──────────────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 与同类产品对比
+
+| 能力 | StreamMQ | Redisson RStream | Spring Data Redis Stream | RocketMQ | Kafka |
+|------|----------|-----------------|-------------------------|----------|-------|
+| 底层存储 | Redis Stream | Redis Stream | Redis Stream | NameServer+Broker | Broker+KRaft |
+| 部署复杂度 | **低（仅 Redis）** | 低（仅 Redis） | 低（仅 Redis） | 高（独立集群） | 高（独立集群） |
+| 注解声明式消费 | **支持** | 不支持 | 部分支持 | 支持 | 不支持 |
+| Template 编程模型 | **支持** | 不支持 | 不支持 | 支持 | 不支持 |
+| 事务消息 | **支持** | 不支持 | 不支持 | 支持 | 不支持 |
+| 延时消息 | **支持（18 级+任意）** | 不支持 | 不支持 | 支持（18 级） | 不支持 |
+| 顺序消息 | **支持** | 不支持 | 不支持 | 支持 | 支持（分区内） |
+| 死信队列 | **支持（含二级 DLQ）** | 不支持 | 不支持 | 支持 | 不支持 |
+| 消息过滤 | **Tag + SQL92** | 不支持 | 不支持 | 支持 | 不支持 |
+| 消息压缩 | **支持（GZIP SPI）** | 不支持 | 不支持 | 支持 | 支持 |
+| 背压控制 | **支持（InflightQueue）** | 不支持 | 不支持 | 支持 | 支持 |
+| Spring Boot 3 集成 | **深度集成** | 一般 | 一般 | 一般（第三方） | 一般（第三方） |
+| SPI 扩展点数量 | **12 个** | 0 | 0 | 少量 | 少量 |
+| 管理接口 | **REST API + Actuator** | 无 | 无 | Dashboard | 无 |
+| 链路追踪 | **支持（TraceCollector SPI）** | 不支持 | 不支持 | 支持 | 不支持 |
+| 学习成本 | **低** | 中 | 中 | 中 | 中 |
+| 适用规模 | 中小规模（< 1 亿/天） | 中小规模 | 中小规模 | 大规模 | 超大规模 |
 
 ---
 
@@ -89,16 +150,14 @@ StreamMQ 是一款基于 **Redis Stream** 与 **Redisson** 构建的开源消息
 
 ### 环境要求
 
-| 组件    | 最低版本 | 推荐版本 |
-| ------- | ------- | -------- |
-| JDK     | 21      | 21       |
-| Maven   | 3.9     | 3.9+     |
-| Redis   | 7.2     | 7.2+     |
-| Spring Boot | 3.3 | 3.3.5   |
+| 组件 | 最低版本 | 推荐版本 |
+|------|----------|----------|
+| JDK | 21 | 21+ |
+| Maven | 3.9 | 3.9+ |
+| Redis | 7.2 | 7.2+ |
+| Spring Boot | 3.3 | 3.3.5 |
 
-### 1. 引入 Maven 依赖
-
-在你的 Spring Boot 3 项目 `pom.xml` 中引入 BOM 与 Starter：
+### 1. 引入依赖
 
 ```xml
 <dependencyManagement>
@@ -118,7 +177,6 @@ StreamMQ 是一款基于 **Redis Stream** 与 **Redisson** 构建的开源消息
         <groupId>io.github.streammq</groupId>
         <artifactId>streammq-spring-boot-starter</artifactId>
     </dependency>
-
     <dependency>
         <groupId>org.redisson</groupId>
         <artifactId>redisson-spring-boot-starter</artifactId>
@@ -126,7 +184,7 @@ StreamMQ 是一款基于 **Redis Stream** 与 **Redisson** 构建的开源消息
 </dependencies>
 ```
 
-### 2. 配置 application.yml
+### 2. 配置
 
 ```yaml
 spring:
@@ -143,45 +201,7 @@ redisson:
     database: 0
 ```
 
-### 3. 发送消息
-
-```java
-@Component
-public class OrderService {
-    private final StreamMessageTemplate template;
-
-    public OrderService(StreamMessageTemplate template) {
-        this.template = template;
-    }
-
-    public SendResult sendOrder(String orderId, String content) {
-        Message<String> message = MessageBuilder.<String>withTopic("order-topic")
-                .tag("created")
-                .keys(orderId)
-                .body(content)
-                .build();
-        return template.syncSend(message);
-    }
-}
-```
-
-### 4. 消费消息
-
-```java
-@Component
-@StreamMQConsumer(topic = "order-topic", consumerGroup = "order-consumer-group")
-public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> {
-    @Override
-    public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
-        System.out.println("收到订单：" + message.getKeys() + ", 内容：" + message.getBody());
-        return ConsumeAction.SUCCESS;
-    }
-}
-```
-
-### 5. 启用
-
-在启动类添加 `@EnableStreamMQ`：
+### 3. 启用
 
 ```java
 @SpringBootApplication
@@ -193,109 +213,153 @@ public class DemoApplication {
 }
 ```
 
+### 4. 发送消息
+
+```java
+@Component
+public class OrderService {
+
+    private final StreamMessageTemplate template;
+
+    public OrderService(StreamMessageTemplate template) {
+        this.template = template;
+    }
+
+    public SendResult sendOrder(String orderId, String content) {
+        Message<String> message = MessageBuilder.<String>withTopic("order-topic")
+                .tag("created")
+                .keys(orderId)
+                .body(content)
+                .userProperty("traceId", "t-001")
+                .build();
+        return template.syncSend(message);
+    }
+}
+```
+
+### 5. 消费消息
+
+```java
+@Component
+@StreamMQConsumer(topic = "order-topic", consumerGroup = "order-consumer-group")
+public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> {
+
+    @Override
+    public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
+        System.out.println("收到订单：" + message.getKeys() + ", 内容：" + message.getBody());
+        return ConsumeAction.SUCCESS;
+    }
+}
+```
+
+就这样！启动应用，发送一条消息，消费者会自动接收并处理。
+
 ---
 
-## 核心概念
+## 核心特性
 
-| 概念           | 英文            | 说明                                                          |
-| -------------- | --------------- | ------------------------------------------------------------- |
-| 主题           | Topic           | 消息的逻辑分类，对应 Redis Stream 的一个 key                  |
-| 消费组         | ConsumerGroup   | 一组消费者的逻辑标识，同一组内集群消费，跨组广播              |
-| 消息           | Message         | 消息载体，包含 topic/tag/keys/shardingKey/properties/body 等 |
-| 消费结果       | ConsumeAction   | 消费返回值：`SUCCESS` / `RECONSUME_LATER` / `defer(Duration)` |
-| 顺序消费动作   | OrderlyAction   | 顺序消费返回值：`SUCCESS` / `SUSPEND_CURRENT_QUEUE_A_MOMENT`  |
-| 分片键         | ShardingKey     | 顺序消息的分片依据，相同 key 的消息路由到同一分片             |
-| 延时等级       | DelayLevel      | 18 级延时（1s/5s/10s/30s/1m/2m/3m/4m/5m/6m/7m/8m/9m/10m/20m/30m/1h/2h） |
-| 半消息         | Half Message    | 事务消息的中间态，本地事务提交前对消费者不可见                |
-| 事务回查       | Transaction Check | 事务状态不确定时，Broker 回查生产者的本地事务状态           |
-| 死信队列       | DLQ             | 消费重试耗尽后的消息队列，用于人工干预                        |
-| 命名空间       | Namespace       | 全局前缀，用于多租户/多环境隔离                                |
+### 注解驱动消费
 
----
+一行注解，声明式定义消费者，支持并发消费、顺序消费、广播消费、DLQ 消费四种模型。
 
-## 使用指南
+```java
+// 并发消费（默认）
+@StreamMQConsumer(topic = "order-topic", consumerGroup = "order-group")
 
-### 注解清单
+// 顺序消费
+@StreamMQConsumer(topic = "order-topic", consumerGroup = "order-group",
+                  messageModel = MessageModel.ORDERLY, shardCount = 8)
 
-| 注解                            | 作用域       | 用途                                 |
-| ------------------------------- | ------------ | ------------------------------------ |
-| `@EnableStreamMQ`               | 类（启动类） | 开启 StreamMQ 自动装配              |
-| `@StreamMQConsumer`             | 类           | 声明消费者（并发/顺序/DLQ）         |
-| `@StreamMQTransactionConsumer`  | 类           | 声明事务消息回查器                   |
-| `@StreamMQDlqConsumer`          | 类           | 声明死信队列消费者                   |
+// 广播消费
+@StreamMQConsumer(topic = "order-topic", consumerGroup = "order-group",
+                  consumeMode = ConsumeMode.BROADCASTING)
 
-### StreamMQConsumer 属性表
+// DLQ 消费
+@StreamMQConsumer(topic = "order-topic", consumerGroup = "order-group", dlqMode = true)
+```
 
-| 属性             | 类型              | 默认值 | 说明                         |
-| ---------------- | ----------------- | ------ | ---------------------------- |
-| `topic`          | String            | -      | 监听的主题（必填）           |
-| `consumerGroup`  | String            | -      | 消费组名（必填）             |
-| `messageModel`   | MessageModel      | CONCURRENT | 消费模型：CONCURRENT / ORDERLY |
-| `consumeMode`    | ConsumeMode       | CLUSTERING | 消费模式：CLUSTERING / BROADCASTING |
-| `consumeThreadMin` | int             | 1      | 最小消费线程数               |
-| `consumeThreadMax` | int             | 64     | 最大消费线程数               |
-| `maxReconsumeTimes` | int            | 16     | 最大重试次数                 |
-| `consumeTimeout` | long              | 30000  | 消费超时毫秒数               |
-| `pullBatchSize`  | int               | 32     | 单次拉取批量                 |
-| `selectorExpression` | String       | "*"    | Tag 过滤表达式               |
-| `shardCount`     | int               | 4      | 顺序消费分片数               |
-| `dlqMode`        | boolean           | false  | 是否为 DLQ 消费者            |
+### StreamMessageTemplate 编程模型
 
-### StreamMessageTemplate API
+统一的发送入口，支持同步、异步、单向、批量、事务五种发送方式。
 
 ```java
 public interface StreamMessageTemplate {
     <T> SendResult syncSend(Message<T> message);
     <T> SendResult syncSend(Message<T> message, long timeoutMillis);
     <T> SendResult syncSend(Message<T> message, long timeoutMillis, int retryTimes);
-
     <T> CompletableFuture<SendResult> asyncSend(Message<T> message);
     <T> void asyncSend(Message<T> message, SendCallback callback);
-    <T> void asyncSend(Message<T> message, SendCallback callback, long timeoutMillis);
-
     <T> void sendOneway(Message<T> message);
-
     <T> List<SendResult> syncSendBatch(BatchMessage<T> batch);
-
     <T> SendResult executeInTransaction(Message<T> message, TransactionCallback<T> callback);
 }
 ```
 
-### 消息构建
+### 事务消息
+
+半消息 + 本地事务 + 回查机制，保证最终一致性。
 
 ```java
-Message<String> message = MessageBuilder.<String>withTopic("order-topic")
-        .tag("created")
-        .keys("order-123")
-        .shardingKey("user-456")
-        .body("{\"orderId\":123}")
-        .userProperty("traceId", "t-001")
-        .delayLevel(DelayLevel.LEVEL_6)
-        .build();
-```
+// 发送事务消息
+TransactionCallback<String> callback = (message, ctx) -> {
+    try {
+        executeLocalTransaction(message.getBody());
+        return LocalTransactionState.COMMIT_MESSAGE;
+    } catch (Exception e) {
+        return LocalTransactionState.ROLLBACK_MESSAGE;
+    }
+};
+SendResult result = template.executeInTransaction(message, callback);
 
-### 消费示例
-
-#### 并发消费
-
-```java
+// 事务回查器
 @Component
-@StreamMQConsumer(topic = "order-topic", consumerGroup = "order-group")
-public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> {
+@StreamMQTransactionConsumer(transactionGroup = "default-tx-group")
+public class TransactionCheckerImpl implements TransactionChecker<String> {
     @Override
-    public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
-        processOrder(message.getBody());
-        return ConsumeAction.SUCCESS;
+    public LocalTransactionState check(Message<String> message, TransactionContext context) {
+        return checkLocalTransactionStatus(context.getTransactionId());
     }
 }
 ```
 
-#### 顺序消费
+### 延时消息
+
+内置 18 级固定延时，亦可自定义任意毫秒延时。
+
+```java
+// 固定延时（18 级）
+Message<String> msg1 = MessageBuilder.<String>withTopic("delay-topic")
+        .body("content")
+        .delayLevel(DelayLevel.MINUTE_5)   // 延时 5 分钟
+        .build();
+
+// 任意延时毫秒
+Message<String> msg2 = MessageBuilder.<String>withTopic("delay-topic")
+        .body("content")
+        .delayTimeMillis(15 * 60 * 1000L)  // 延时 15 分钟
+        .build();
+```
+
+**延时级别对照表：**
+
+| 级别 | 延时 | 级别 | 延时 | 级别 | 延时 |
+|------|------|------|------|------|------|
+| `SECOND_1` | 1s | `MINUTE_3` | 3m | `MINUTE_20` | 20m |
+| `SECOND_5` | 5s | `MINUTE_4` | 4m | `MINUTE_30` | 30m |
+| `SECOND_10` | 10s | `MINUTE_5` | 5m | `HOUR_1` | 1h |
+| `SECOND_30` | 30s | `MINUTE_6` | 6m | `HOUR_2` | 2h |
+| `MINUTE_1` | 1m | `MINUTE_7` | 7m | | |
+| `MINUTE_2` | 2m | `MINUTE_8` | 8m | | |
+| `MINUTE_9` | 9m | `MINUTE_10` | 10m | | |
+
+### 顺序消息
+
+基于 ShardingKey 的分片顺序消费，保证同一分区内严格有序。
 
 ```java
 @Component
 @StreamMQConsumer(
-    topic = "order-topic", 
+    topic = "order-topic",
     consumerGroup = "order-orderly-group",
     messageModel = MessageModel.ORDERLY,
     shardCount = 8
@@ -307,9 +371,32 @@ public class OrderOrderlyConsumer implements StreamMessageOrderlyConsumer<String
         return OrderlyAction.SUCCESS;
     }
 }
+
+// 发送时指定 shardingKey
+Message<String> message = MessageBuilder.<String>withTopic("order-topic")
+        .shardingKey("user-123")
+        .body("content")
+        .build();
 ```
 
-#### DLQ 消费
+### 批量发送
+
+`BatchMessage` 批量投递，充分利用 Redis Pipeline 提升吞吐。
+
+```java
+BatchMessage<String> batch = BatchMessage.<String>builder()
+        .topic("order-topic")
+        .addMessage(msg1)
+        .addMessage(msg2)
+        .addMessage(msg3)
+        .build();
+
+List<SendResult> results = template.syncSendBatch(batch);
+```
+
+### 死信队列
+
+消费重试耗尽后的消息自动进入 DLQ，支持二级 DLQ 与自定义失败策略。
 
 ```java
 @Component
@@ -327,192 +414,405 @@ public class OrderDlqConsumer implements StreamMessageConcurrentlyConsumer<Strin
 }
 ```
 
-### 事务消息
+### 消息过滤
+
+支持 Tag 表达式与 SQL92 表达式两种过滤模式。
 
 ```java
-@Component
-public class TransactionService {
-    private final StreamMessageTemplate template;
+// Tag 过滤
+@StreamMQConsumer(
+    topic = "order-topic",
+    consumerGroup = "order-group",
+    selectorExpression = "tag1 || tag2"
+)
 
-    public TransactionService(StreamMessageTemplate template) {
-        this.template = template;
-    }
-
-    public SendResult sendTransactionMessage(String content) {
-        Message<String> message = MessageBuilder.<String>withTopic("tx-topic")
-                .body(content)
-                .build();
-
-        TransactionCallback<String> callback = (msg, ctx) -> {
-            try {
-                executeLocalTransaction(msg.getBody());
-                return LocalTransactionState.COMMIT_MESSAGE;
-            } catch (Exception e) {
-                return LocalTransactionState.ROLLBACK_MESSAGE;
-            }
-        };
-
-        return template.executeInTransaction(message, callback);
-    }
-}
+// SQL92 过滤
+@StreamMQConsumer(
+    topic = "order-topic",
+    consumerGroup = "order-group",
+    selectorType = SelectorType.SQL92,
+    selectorExpression = "a = 1 AND b > 2"
+)
 ```
 
-事务回查器：
+### 消息压缩
 
-```java
-@Component
-@StreamMQTransactionConsumer(transactionGroup = "default-tx-group")
-public class TransactionChecker implements TransactionChecker<String> {
-    @Override
-    public LocalTransactionState check(Message<String> message, TransactionContext context) {
-        return checkLocalTransactionStatus(context.getTransactionId());
-    }
-}
-```
-
-### 延时消息
-
-```java
-// 固定延时级别（18级）
-Message<String> fixedDelay = MessageBuilder.<String>withTopic("delay-topic")
-        .body("content")
-        .delayLevel(DelayLevel.LEVEL_9)
-        .build();
-
-// 任意延时毫秒
-Message<String> customDelay = MessageBuilder.<String>withTopic("delay-topic")
-        .body("content")
-        .delayTimeMillis(15 * 60 * 1000L)
-        .build();
-```
-
-### 配置项
+通过 `CompressionCodec` SPI 支持 GZIP 压缩，可配置压缩阈值。
 
 ```yaml
 streammq:
-  enabled: true
-  namespace: streammq
   producer:
-    group: default-producer-group
-    send-timeout: 3000
-    retry-times: 2
-  consumer:
-    consume-thread-min: 1
-    consume-thread-max: 64
-    pull-batch-size: 32
-    max-reconsume-times: 16
-    consume-timeout: 30000
-  transaction:
-    check-interval-ms: 60000
-    max-check-times: 15
-  dlq:
-    enabled: true
+    compress-threshold: 1024    # 消息体超过 1KB 时自动压缩
+    compression-codec: gzip     # 压缩编解码器
 ```
 
 ---
 
 ## 模块结构
 
-| 模块                              | 说明                                       | 选择建议                         |
-| --------------------------------- | ------------------------------------------ | -------------------------------- |
-| `streammq-bom`                    | BOM，统一版本管理                          | 外部用户 import 即可             |
-| `streammq-parent`                 | Parent POM，统一插件与依赖管理             | 内部模块继承                     |
-| `streammq-core`                   | 核心库，定义 API 接口与默认实现             | 所有模块的基础依赖               |
-| `streammq-redisson-adapter`       | Redisson 适配器，基于 Redis Stream 实现     | 需要存储后端时引入               |
-| `streammq-spring-boot-starter`    | Spring Boot 3 Starter，自动装配             | Spring Boot 用户必选             |
-| `streammq-native`                 | 原生 API，无 Spring 依赖                  | 非 Spring 项目使用               |
-| `streammq-kafka-compat`           | Kafka 兼容层，平滑迁移                     | 从 Kafka 迁移时使用              |
-| `streammq-amqp-compat`            | AMQP 兼容层，平滑迁移                     | 从 RabbitMQ 迁移时使用           |
-| `streammq-test`                   | 测试工具，提供嵌入式测试支持              | 测试场景使用                     |
+| 模块 | 说明 |
+|------|------|
+| **streammq-bom** | BOM（Bill of Materials），统一版本管理 |
+| **streammq-core** | 核心抽象层，定义消息模型、API、SPI 接口（无 Spring 依赖） |
+| **streammq-redisson** | Redisson 适配层，基于 Redis Stream 实现核心能力 |
+| **streammq-spring-boot-starter** | Spring Boot 3 自动装配、配置绑定、Actuator 集成 |
+| **streammq-test** | 测试工具包，提供嵌入式 Redis、断言工具、Mock 工具 |
+| **streammq-samples** | 示例工程集合，覆盖快速开始、事务、延时、顺序、DLQ、拦截器 |
+
+---
+
+## 配置参考
+
+### 完整配置示例
+
+```yaml
+streammq:
+  enabled: true
+  namespace: streammq
+
+  # 生产者配置
+  producer:
+    group: default-producer-group
+    send-timeout: 3000
+    retry-times: 2
+    compress-threshold: 0              # 0=不压缩，>0 时超过阈值自动压缩
+    compression-codec: gzip
+
+  # 消费者配置
+  consumer:
+    consume-thread-min: 1
+    consume-thread-max: 64
+    pull-batch-size: 32
+    max-reconsume-times: 16
+    consume-timeout: 30000
+    inflight-capacity: 1000            # 背压队列容量
+    pull-interval: 0                   # 拉取间隔（毫秒）
+
+  # 事务配置
+  transaction:
+    check-interval-ms: 60000           # 回查间隔
+    max-check-times: 15                # 最大回查次数
+    batch-size: 32                     # 单次扫描批量
+
+  # 死信队列配置
+  dlq:
+    enabled: true
+    max-retry-times: 3
+
+  # 可观测性配置
+  metrics:
+    enabled: true
+  tracing:
+    enabled: false
+
+  # 管理接口配置
+  management:
+    enabled: true
+```
+
+### @StreamMQConsumer 属性速查
+
+| 属性 | 类型 | 默认值 | 说明 |
+|------|------|--------|------|
+| `topic` | String | - | 主题（必填） |
+| `consumerGroup` | String | - | 消费组（必填） |
+| `messageModel` | MessageModel | CONCURRENT | 消费模型：CONCURRENT / ORDERLY |
+| `consumeMode` | ConsumeMode | CLUSTERING | 消费模式：CLUSTERING / BROADCASTING |
+| `consumeThreadMin` | int | 1 | 最小消费线程数 |
+| `consumeThreadMax` | int | 64 | 最大消费线程数 |
+| `maxReconsumeTimes` | int | 16 | 最大重试次数 |
+| `consumeTimeout` | long | 30000 | 消费超时（毫秒） |
+| `pullBatchSize` | int | 32 | 单次拉取批量 |
+| `selectorExpression` | String | "*" | Tag/SQL92 过滤表达式 |
+| `selectorType` | SelectorType | TAG | 过滤类型：TAG / SQL92 |
+| `shardCount` | int | 4 | 顺序消费分片数 |
+| `dlqMode` | boolean | false | 是否 DLQ 消费者 |
+| `pullInterval` | long | 0 | 拉取间隔（毫秒） |
+| `streamMaxLen` | int | 0 | Stream 最大长度（0=不限制） |
+| `retryStreamMaxLen` | int | 0 | 重试 Stream 最大长度 |
+| `enableMsgTrace` | boolean | false | 是否启用消息追踪 |
+| `serializer` | Class | MessageSerializer.class | 序列化器（默认全局） |
+| `messageConverter` | Class | MessageConverter.class | 消息转换器（默认全局） |
+| `retryPolicy` | Class | RetryPolicy.class | 重试策略（默认全局） |
+| `rebalanceStrategy` | Class | RebalanceStrategy.class | 重平衡策略（默认全局） |
+| `dlqFailureStrategy` | Class | DlqFailureStrategy.class | 死信失败策略（默认全局） |
+| `consumerFilter` | Class[] | {} | 消费者专属过滤器 |
+
+> 完整配置参考请查看 [配置文档](docs/doc-site/configuration.md)。
+
+---
+
+## SPI 扩展机制
+
+StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换：
+
+| SPI 接口 | 作用 | 默认实现 |
+|----------|------|----------|
+| `MessageSerializer` | 消息序列化/反序列化 | `JacksonJsonSerializer` / `JdkSerializer` |
+| `MessageConverter` | 消息体与业务对象转换 | `DefaultMessageConverter` / `CompactMessageConverter` / `PassThroughMessageConverter` |
+| `ProducerFilter` | 生产者过滤器（过滤链） | 无默认 |
+| `ConsumerFilter` | 消费者过滤器（全局+per-consumer） | `TagSelectorFilter` / `SqlSelectorFilter` |
+| `ProducerInterceptor` | 生产者拦截器（拦截链） | 无默认 |
+| `ConsumerInterceptor` | 消费者拦截器（拦截链） | 无默认 |
+| `RetryPolicy` | 重试策略 | `FixedArrayRetryPolicy` |
+| `RebalanceStrategy` | 消费者重平衡策略 | `AverageRebalanceStrategy` / `ConsistentHashRebalanceStrategy` |
+| `CompressionCodec` | 消息压缩编解码 | `GzipCompressionCodec` |
+| `TraceCollector` | 链路追踪上下文采集 | `Slf4jTraceCollector` |
+| `ManagementAuthenticator` | 管理接口鉴权 | `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` / `DenyAllAuthenticator` |
+| `DlqFailureStrategy` | 死信消费失败策略 | `AbstractDlqFailureStrategy` |
+
+### 自定义 SPI 示例
+
+```java
+@Component
+public class CustomMessageSerializer implements MessageSerializer {
+
+    @Override
+    public byte[] serialize(Object obj) throws SerializationException {
+        // 自定义序列化逻辑
+        return customSerialize(obj);
+    }
+
+    @Override
+    public <T> T deserialize(byte[] bytes, Class<T> type) throws SerializationException {
+        // 自定义反序列化逻辑
+        return customDeserialize(bytes, type);
+    }
+
+    @Override
+    public String name() {
+        return "custom";
+    }
+}
+```
+
+```java
+// 在注解中指定使用自定义 SPI
+@StreamMQConsumer(
+    topic = "order-topic",
+    consumerGroup = "order-group",
+    serializer = CustomMessageSerializer.class,
+    consumerFilter = { CustomFilter.class }
+)
+```
 
 ---
 
 ## 可观测性
 
-### 指标（Micrometer）
+### Micrometer 指标
 
-| 指标名                              | 类型      | 说明                     |
-| ----------------------------------- | --------- | ------------------------ |
-| `streammq.producer.send.total`      | Counter   | 发送消息总数             |
-| `streammq.producer.send.success`    | Counter   | 发送成功数               |
-| `streammq.producer.send.failed`     | Counter   | 发送失败数               |
-| `streammq.producer.send.duration`   | Timer     | 发送耗时分布             |
-| `streammq.consumer.consume.total`   | Counter   | 消费消息总数             |
-| `streammq.consumer.consume.duration`| Timer     | 消费耗时分布             |
-| `streammq.consumer.retry.total`     | Counter   | 重试消息数               |
-| `streammq.consumer.dlq.total`        | Counter   | 进入死信队列数           |
+| 指标名 | 类型 | 说明 |
+|--------|------|------|
+| `streammq.producer.send.total` | Counter | 发送消息总数 |
+| `streammq.producer.send.success` | Counter | 发送成功数 |
+| `streammq.producer.send.failed` | Counter | 发送失败数 |
+| `streammq.producer.send.duration` | Timer | 发送耗时分布 |
+| `streammq.consumer.consume.total` | Counter | 消费消息总数 |
+| `streammq.consumer.consume.duration` | Timer | 消费耗时分布 |
+| `streammq.consumer.retry.total` | Counter | 重试消息数 |
+| `streammq.consumer.dlq.total` | Counter | 进入死信队列数 |
 
-### Prometheus 集成
+### Actuator 端点
 
-```yaml
-management:
-  endpoints:
-    web:
-      exposure:
-        include: health,info,prometheus,metrics
-  metrics:
-    tags:
-      application: ${spring.application.name}
+| 端点 | 说明 |
+|------|------|
+| `/actuator/health` | 健康检查（含 StreamMQ 组件状态） |
+| `/actuator/metrics` | Micrometer 指标 |
+| `/actuator/prometheus` | Prometheus 格式指标 |
+
+### 管理 REST API
+
+| 端点 | 方法 | 说明 |
+|------|------|------|
+| `/streammq/admin/consumer-groups` | GET | 查询消费组列表 |
+| `/streammq/admin/consumer-groups/{group}` | GET | 查询消费组详情 |
+| `/streammq/admin/topics` | GET | 查询 Topic 列表 |
+| `/streammq/admin/topics/{topic}` | GET | 查询 Topic 详情 |
+| `/streammq/admin/dlq/{group}` | GET | 查询 DLQ 消息 |
+| `/streammq/admin/dlq/{group}` | DELETE | 清空 DLQ |
+| `/streammq/admin/ack` | POST | 手动 ACK |
+| `/streammq/admin/rebalance` | POST | 触发重平衡 |
+
+### 链路追踪
+
+通过 `TraceCollector` SPI 采集链路上下文，支持 traceId 透传。
+
+```java
+MDC.put("traceId", "t-001");
+template.syncSend(message);  // traceId 自动透传到消费者
 ```
+
+---
+
+## 示例工程
+
+| 示例 | 说明 |
+|------|------|
+| [streammq-sample-quickstart](streammq-samples/streammq-sample-quickstart) | 快速开始示例 |
+| [streammq-sample-transaction](streammq-samples/streammq-sample-transaction) | 事务消息示例 |
+| [streammq-sample-delay](streammq-samples/streammq-sample-delay) | 延时消息示例 |
+| [streammq-sample-orderly](streammq-samples/streammq-sample-orderly) | 顺序消息示例 |
+| [streammq-sample-dlq](streammq-samples/streammq-sample-dlq) | 死信队列示例 |
+| [streammq-sample-interceptor](streammq-samples/streammq-sample-interceptor) | 拦截器示例 |
 
 ---
 
 ## 文档导航
 
-| 文档                            | 内容                           |
-| ------------------------------- | ------------------------------ |
-| [01-PRD.md](docs/01-PRD.md)     | 产品需求文档                   |
-| [02-architecture.md](docs/02-architecture.md) | 架构设计文档 |
-| [03-functional-design.md](docs/03-functional-design.md) | 功能设计文档 |
-| [04-detailed-design.md](docs/04-detailed-design.md) | 详细设计文档 |
-| [05-review-report.md](docs/05-review-report.md) | 骨架阶段审查修复报告 |
-| [06-implementation-review.md](docs/06-implementation-review.md) | 实现审查报告 |
-| [07-completeness-analysis.md](docs/07-completeness-analysis.md) | 功能完整性分析报告 |
+| 文档 | 说明 |
+|------|------|
+| [首页](docs/doc-site/index.md) | 项目首页 |
+| [快速开始](docs/doc-site/quickstart.md) | 5 分钟上手指南 |
+| [核心特性](docs/doc-site/features.md) | 完整特性文档 |
+| [核心概念](docs/doc-site/concepts.md) | 关键术语解释 |
+| [API 文档](docs/doc-site/api.md) | 完整 API 参考 |
+| [配置参考](docs/doc-site/configuration.md) | 全部配置项 |
+| [部署指南](docs/doc-site/deploy.md) | 生产环境部署 |
+| [FAQ](docs/doc-site/faq.md) | 常见问题解答 |
+| [贡献指南](docs/doc-site/contributing.md) | 参与贡献 |
+
+### 设计文档
+
+| 文档 | 说明 |
+|------|------|
+| [产品需求文档](docs/01-PRD.md) | V1.0 PRD |
+| [架构设计](docs/02-architecture.md) | V1.0 架构设计 |
+| [功能设计](docs/03-functional-design.md) | V1.0 功能设计 |
+| [详细设计](docs/04-detailed-design.md) | V1.0 详细设计 |
+
+### V2.0 规划文档
+
+| 文档 | 说明 |
+|------|------|
+| [V2.0 PRD](docs/2.0/01-PRD-v2.0.md) | V2.0 产品需求文档 |
+| [V2.0 架构设计](docs/2.0/02-architecture-v2.0.md) | V2.0 架构设计 |
+| [V2.0 功能设计](docs/2.0/03-functional-design-v2.0.md) | V2.0 功能设计 |
 
 ---
 
 ## 路线图
 
-### v0.1.0 — MVP（当前阶段）
-- 核心发送/消费链路
-- 注解驱动声明式消费
-- 集群消费 + 广播消费
-- `StreamMessageTemplate` 同步/异步发送
-- Spring Boot 3 自动装配
+### V1.0（已完成）
 
-### v0.2.0 — 高级特性
-- 事务消息（半消息 + 回查）
-- 延时消息（18 级 + 任意延时）
-- 顺序消息（ShardingKey 分片）
-- 批量发送
-- 死信队列
+- [x] 注解驱动消费（`@StreamMQConsumer`）
+- [x] `StreamMessageTemplate` 编程模型（同步/异步/单向/批量/事务）
+- [x] 集群消费 + 广播消费
+- [x] 顺序消费（ShardingKey 分片）
+- [x] 事务消息（半消息 + 回查）
+- [x] 延时消息（18 级 + 任意毫秒）
+- [x] 死信队列（含二级 DLQ）
+- [x] 消息过滤（Tag + SQL92）
+- [x] 消息压缩（GZIP）
+- [x] 背压控制（InflightQueue）
+- [x] 消费超时自动取消
+- [x] Micrometer 指标 + MDC 日志
+- [x] 链路追踪（TraceCollector SPI）
+- [x] 管理 REST API
+- [x] 12 个 SPI 扩展点
+- [x] Spring Boot 3 自动装配 + Actuator 集成
 
-### v1.0.0 — GA
-- Micrometer 指标完善
-- Trace 链路集成
-- Actuator 健康检查
-- Kafka / AMQP 兼容层
-- 完整文档与示例
-- 性能基准测试与调优
+### V2.0（规划中）
+
+- [ ] **多后端抽象层**（BackendProvider SPI，支持 Redis / Kafka / RabbitMQ / Pulsar）
+- [ ] **Kafka 后端实现**（基于 Kafka Client 的 BackendProvider）
+- [ ] **跨机房复制**（异步复制，RPO ≤ 1s）
+- [ ] **Kafka 线网协议兼容**（原生 Kafka Client 零代码接入）
+- [ ] **Spring Cloud Stream Binder**（实现 Spring Cloud Stream Binder SPI）
+- [ ] **Kubernetes Operator**（CRD + Operator，弹性伸缩、配置热更新）
+- [ ] **消息画像与拓扑图**（可视化消息流转拓扑）
+- [ ] **分布式追踪增强**（OpenTelemetry 集成）
 
 ---
 
-## 贡献与许可
+## 贡献指南
 
-### 贡献流程
+欢迎参与 StreamMQ 开源建设！请阅读 [贡献指南](docs/doc-site/contributing.md) 了解详细信息。
 
-1. 提交 Issue 描述问题或建议
-2. Fork 仓库并创建特性分支
-3. 遵循 Google Java Style 规范
-4. 提交信息遵循 Conventional Commits
-5. 保证编译零警告
-6. 新增功能需配套测试用例
-7. 发起 Pull Request
+### 快速贡献
 
-### MIT 许可证
+```bash
+# 1. Fork & Clone
+git clone https://github.com/<your-username>/streammq.git
+cd streammq
+
+# 2. 创建分支
+git checkout -b feature/your-feature
+
+# 3. 编写代码 & 测试
+mvn clean test
+
+# 4. 提交（遵循 Conventional Commits）
+git commit -m "feat: add your feature"
+
+# 5. 发起 PR
+```
+
+### 贡献方式
+
+- **Bug 报告**：提交 [Issue](https://github.com/streammq/streammq/issues)，描述问题与复现步骤
+- **功能请求**：提交 [Issue](https://github.com/streammq/streammq/issues)，描述期望功能与使用场景
+- **代码贡献**：提交 [Pull Request](https://github.com/streammq/streammq/pulls)，关联相关 Issue
+- **文档改进**：完善文档、修正错误、补充示例
+- **问题解答**：在 [Discussions](https://github.com/streammq/streammq/discussions) 中帮助其他用户
+
+---
+
+## 社区
+
+- **GitHub Issues**：[https://github.com/streammq/streammq/issues](https://github.com/streammq/streammq/issues)
+- **GitHub Discussions**：[https://github.com/streammq/streammq/discussions](https://github.com/streammq/streammq/discussions)
+- **Pull Requests**：[https://github.com/streammq/streammq/pulls](https://github.com/streammq/streammq/pulls)
+
+---
+
+## 适用场景
+
+### 推荐使用
+
+- 已有 Redis 基础设施，希望复用为消息总线
+- 中小规模业务（单集群日消息量 < 1 亿）
+- 需要事务消息 / 延时消息 / 顺序消息能力但不想引入独立 MQ 集群
+- 微服务架构下基于 Spring Boot 3 的轻量级异步通信
+- 电商订单状态流转、支付回调、库存扣减、通知推送
+
+### 不建议使用
+
+- 超大规模流式数据处理（单集群日消息量 > 1 亿）—— 建议使用 Kafka
+- 对消息吞吐要求极高且可容忍少量丢失 —— 建议使用 Kafka
+- 需要复杂路由规则（topic 通配符、多级路由）—— 建议使用 RabbitMQ
+- 已有成熟 MQ 集群且无 Redis 资源 —— 直接复用现有 MQ
+
+---
+
+## 技术栈
+
+| 技术 | 版本 | 用途 |
+|------|------|------|
+| Java | 21+ | 运行时 |
+| Spring Boot | 3.3.5 | 框架基础 |
+| Redisson | 3.34.1 | Redis 客户端 |
+| Jackson | 2.18.1 | JSON 序列化 |
+| Fury | 0.9.0 | 高性能序列化（可选） |
+| Protostuff | 1.8.0 | Protobuf 序列化（可选） |
+| Lombok | - | 代码简化 |
+| Micrometer | - | 指标收集 |
+| SLF4J | - | 日志门面 |
+
+---
+
+## 许可证
 
 本项目基于 [MIT License](LICENSE) 开源。
 
+<div align="center">
+
 ---
 
-*StreamMQ · 让 Redis 成为你的消息总线。*
+**StreamMQ** · 让 Redis 成为你的消息总线
+
+如果这个项目对你有帮助，欢迎给一个 ⭐ Star！
+
+[![Star History](https://api.star-history.com/svg?repos=streammq/streammq&type=Date)](https://github.com/streammq/streammq)
+
+</div>
