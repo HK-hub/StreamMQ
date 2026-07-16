@@ -93,13 +93,8 @@ StreamMQ V2.0 是一个多后端、可观测、云原生的轻量级消息中间
 
 | 特性 | 优先级 | 模块 | 描述 |
 |------|--------|------|------|
-| 多后端抽象层 | P0 | `streammq-backend-spi` | 统一 BackendProvider SPI，支持 Redis / Kafka / RabbitMQ / Pulsar |
-| Kafka 后端实现 | P0 | `streammq-kafka-backend` | 基于 Kafka Client 的 BackendProvider 实现 |
-| 跨机房复制 | P1 | `streammq-replication` | 异步/同步复制，支持 Redis Replica / Kafka MirrorMaker / 自研 |
-| Kafka 线网协议兼容 | P1 | `streammq-kafka-protocol` | 实现 Kafka wire protocol server，原生 Client 零代码接入 |
 | Spring Cloud Stream Binder | P1 | `streammq-spring-cloud-stream-binder` | 实现 Spring Cloud Stream Binder SPI |
 | 云原生增强 | P2 | `streammq-cloud-k8s` | K8s Operator / HPA 指标 / 优雅上下线 / ConfigMap 热更新 |
-| 消息持久化抽象 | P2 | `streammq-persistence-spi` | 支持磁盘存储选项（RocksDB / LevelDB） |
 | 分布式追踪增强 | P2 | `streammq-tracing` | OpenTelemetry 原生集成 + 消息拓扑图 |
 | 消息画像与诊断 | P3 | `streammq-diagnostics` | 消息生命周期可视化 + 异常诊断 |
 
@@ -107,177 +102,13 @@ StreamMQ V2.0 是一个多后端、可观测、云原生的轻量级消息中间
 
 ## 4. 功能需求详细设计
 
-### 4.1 多后端抽象层（P0）
+### 4.1 Spring Cloud Stream Binder（P1）
 
-#### 4.1.1 BackendProvider SPI
-
-```java
-public interface BackendProvider extends AutoCloseable {
-    // 后端标识
-    String name(); // "redis" / "kafka" / "rabbitmq" / "pulsar"
-
-    // 生产者
-    StreamMessageProducer createProducer(ProducerConfig config);
-
-    // 消费者
-    StreamMessageConsumer createConsumer(ConsumerConfig config);
-
-    // 管理操作
-    void createTopic(String topic, int partitions);
-    void deleteTopic(String topic);
-    boolean topicExists(String topic);
-    long getTopicBacklog(String topic, String group);
-
-    // 事务支持
-    boolean supportsTransaction();
-    TransactionBackend createTransactionBackend();
-
-    // 延时支持
-    boolean supportsDelay();
-    DelayBackend createDelayBackend();
-
-    // 能力描述
-    BackendCapabilities capabilities();
-}
-```
-
-#### 4.1.2 BackendCapabilities
-
-```java
-public record BackendCapabilities(
-    boolean supportsBroadcasting,    // 广播消费
-    boolean supportsOrderly,         // 顺序消息
-    boolean supportsTransaction,     // 事务消息
-    boolean supportsDelay,           // 延时消息
-    boolean supportsBatch,           // 批量发送
-    boolean supportsPull,            // 拉取模式
-    boolean supportsSharding,        // 分片
-    int maxMessageSize,              // 最大消息体
-    long maxTopicCount               // 最大 Topic 数
-) {}
-```
-
-#### 4.1.3 配置切换
-
-```yaml
-streammq:
-  backend:
-    type: redis  # redis / kafka / rabbitmq / pulsar
-    redis:
-      namespace: "streammq"
-      redisson-config: classpath:redisson.yaml
-    kafka:
-      bootstrap-servers: localhost:9092
-      acks: all
-      retries: 3
-    rabbitmq:
-      host: localhost
-      port: 5672
-      virtual-host: /
-```
-
-### 4.2 Kafka 后端实现（P0）
-
-#### 4.2.1 KafkaBackendProvider
-
-- 基于 `org.apache.kafka.clients.producer.KafkaProducer` 和 `org.apache.kafka.clients.consumer.KafkaConsumer`
-- Topic → Kafka Topic 映射
-- ConsumerGroup → Kafka ConsumerGroup 映射
-- Tag 过滤 → Kafka Header 过滤
-- 顺序消息 → Kafka Partition + 同 Key 路由
-- 事务消息 → Kafka Transactional Producer
-- 延时消息 → Kafka 不原生支持，降级为 ZSet + 定时投递（复用 Redis 方案）
-
-#### 4.2.2 能力矩阵
-
-| 能力 | Redis 后端 | Kafka 后端 |
-|------|-----------|------------|
-| 集群消费 | ✅ ConsumerGroup | ✅ ConsumerGroup |
-| 广播消费 | ✅ 独立 Group | ✅ 每个 Consumer 独立 Group |
-| 分区顺序 | ✅ shard Stream | ✅ Partition |
-| 事务消息 | ✅ 半消息+回查 | ✅ Transactional Producer |
-| 延时消息 | ✅ ZSet | ⚠️ 降级方案 |
-| 批量发送 | ✅ RBatch | ✅ ProducerBatch |
-| 重试+DLQ | ✅ ZSet+DLQ Stream | ✅ retry topic + DLQ topic |
-| 自动 Rebalance | ✅ Redisson | ✅ Kafka Rebalance |
-| 最大消息体 | 1MB | 10MB（默认） |
-
-### 4.3 跨机房复制（P1）
-
-#### 4.3.1 复制架构
-
-```
-机房 A (主)                          机房 B (从)
-┌──────────────┐                   ┌──────────────┐
-│  StreamMQ    │                   │  StreamMQ    │
-│  Producer     │                   │  Consumer    │
-│      ↓        │                   │      ↑        │
-│  Redis/Kafka  │ ── 复制通道 ──→  │  Redis/Kafka  │
-│  (主集群)     │                   │  (从集群)     │
-└──────────────┘                   └──────────────┘
-```
-
-#### 4.3.2 复制模式
-
-| 模式 | RPO | RTO | 适用场景 |
-|------|-----|-----|----------|
-| 异步复制 | ≤ 1s | ≤ 30s | 容灾备份 |
-| 同步复制 | 0 | ≤ 30s | 金融级要求 |
-| 双活复制 | ≤ 1s | 0 | 两机房同时读写 |
-
-#### 4.3.3 复制 SPI
-
-```java
-public interface ReplicationProvider {
-    // 启动复制
-    void startReplication(ReplicationConfig config);
-    // 停止复制
-    void stopReplication();
-    // 复制状态
-    ReplicationStatus getStatus();
-    // 手动全量同步
-    void fullSync(String topic);
-}
-```
-
-### 4.4 Kafka 线网协议兼容（P1）
-
-#### 4.4.1 目标
-
-实现 Kafka wire protocol server，让原生 Kafka Client（包括 Kafka Producer / Consumer / Kafka Connect / Kafka Streams）零代码修改接入 StreamMQ。
-
-#### 4.4.2 架构
-
-```
-原生 Kafka Client
-       ↓ (Kafka wire protocol)
-StreamMQ Kafka Protocol Server (Netty)
-       ↓ (内部协议)
-StreamMQ Core (BackendProvider)
-       ↓
-Redis / Kafka / RabbitMQ 后端
-```
-
-#### 4.4.3 兼容范围
-
-| Kafka API | 兼容级别 | 说明 |
-|-----------|---------|------|
-| Produce API (v0-v9) | ✅ 完全兼容 | 支持 compression / batching / idempotent |
-| Fetch API (v0-v9) | ✅ 完全兼容 | 支持 follower fetch / fetch isolation |
-| ListGroups / DescribeGroups | ✅ 完全兼容 | |
-| JoinGroup / SyncGroup / Heartbeat | ✅ 完全兼容 | Rebalance 协议 |
-| OffsetCommit / OffsetFetch | ✅ 完全兼容 | |
-| CreateTopics / DeleteTopics | ✅ 完全兼容 | |
-| Kafka Connect | ⚠️ 部分兼容 | Source Connector 支持，Sink Connector 需适配 |
-| Kafka Streams | ⚠️ 部分兼容 | 简单拓扑支持，复杂窗口/聚合不支持 |
-
-### 4.5 Spring Cloud Stream Binder（P1）
-
-#### 4.5.1 目标
+#### 4.1.1 目标
 
 实现 Spring Cloud Stream Binder SPI，让 Spring Cloud Stream 用户零代码切换到 StreamMQ。
 
-#### 4.5.2 使用方式
+#### 4.1.2 使用方式
 
 ```yaml
 spring:
@@ -293,83 +124,56 @@ spring:
         type: streammq
 ```
 
-#### 4.5.3 实现范围
+#### 4.1.3 实现范围
 
 - `StreamMQMessageBinder` 实现 `Binder<MessageChannel, ConsumerProperties, ProducerProperties>`
 - 支持Spring Cloud Stream 的 `@EnableBinding` 注解
 - 支持函数式编程模型（`java.util.function.Function` / `Supplier` / `Consumer`）
 - 支持批量消费 (`spring.cloud.stream.bindings.input.consumer.batch-mode=true`)
 
-### 4.6 云原生增强（P2）
+### 4.2 云原生增强（P2）
 
-#### 4.6.1 Kubernetes Operator
+#### 4.2.1 Kubernetes Operator
 
 - CRD 定义：`StreamMQCluster` / `StreamMQTopic` / `StreamMQConsumerGroup`
 - Operator 自动管理 Consumer 实例的伸缩
 - 与 K8s HPA 集成，基于消费延迟自动扩缩容
 
-#### 4.6.2 优雅上下线
+#### 4.2.2 优雅上下线
 
 - Consumer 启动时注册到 K8s Endpoints
 - Consumer 收到 SIGTERM 时：停止拉取 → 完成处理中消息 → ACK → 注销 → 退出
 - 超时强制退出（`spring-boot-graceful-shutdown-timeout`）
 
-#### 4.6.3 配置热更新
+#### 4.2.3 配置热更新
 
 - ConfigMap 变更自动感知
 - 支持运行时动态调整：maxReconsumeTimes / consumeThread / scanInterval
 - 不支持运行时变更：backend type / namespace / serializer
 
-### 4.7 消息持久化抽象（P2）
+### 4.3 分布式追踪增强（P2）
 
-#### 4.7.1 目标
-
-提供磁盘存储选项，突破 Redis 内存限制，支持亿级消息堆积。
-
-#### 4.7.2 架构
-
-```
-StreamMQ Core
-      ↓
-PersistenceProvider SPI
-      ↓
-┌─────────┬─────────┬──────────┐
-│ Redis   │ RocksDB │ LevelDB  │
-│ (默认)  │ (磁盘)  │ (磁盘)   │
-└─────────┴─────────┴──────────┘
-```
-
-#### 4.7.3 使用场景
-
-| 场景 | 推荐后端 | 堆积上限 |
-|------|---------|---------|
-| 低延迟 + 小堆积 | Redis | < 100w |
-| 中等延迟 + 大堆积 | RocksDB | < 1亿 |
-| 高吞吐 + 海量堆积 | Kafka Backend | 无限 |
-
-### 4.8 分布式追踪增强（P2）
-
-#### 4.8.1 OpenTelemetry 原生集成
+#### 4.3.1 OpenTelemetry 原生集成
 
 - 自动注入 Trace Context（W3C TraceContext 标准）
 - Span 信息：producer.send / consumer.consume / retry / dlq
 - 与 Micrometer Tracing / Zipkin / Jaeger / SkyWalking 无缝对接
 
-#### 4.8.2 消息拓扑图
+#### 4.3.2 消息拓扑图
 
 - 可视化消息流转路径：Producer → Topic → ConsumerGroup → Consumer
 - 消息生命周期时间线：发送 → 入队 → 消费 → ACK/重试/DLQ
 - 异常消息诊断：失败原因 / 堆栈 / 处理耗时分布
 
-### 4.9 消息画像与诊断（P3）
+### 4.4 消息画像与诊断（P3）
 
-#### 4.9.1 消息画像
+#### 4.4.1 消息画像
 
 - 每条消息的完整生命周期记录
 - 消息指纹：topic + tag + keys + bodyHash
 - 消费轨迹：哪些 Consumer 消费过、耗时多少、结果如何
 
-#### 4.9.2 异常诊断
+#### 4.4.2 异常诊断
 
 - 消费慢诊断：Consumer 线程池 / GC / 网络 IO 分析
 - 消息堆积诊断：生产速率 vs 消费速率对比、消费者处理时间分布
@@ -416,12 +220,8 @@ PersistenceProvider SPI
 
 | 版本 | 目标 | 核心交付 | 时间 |
 |------|------|---------|------|
-| **v2.0.0** | 多后端 + Kafka 线网协议 | BackendProvider SPI + Kafka Backend + Kafka Protocol Server | Q4 2026 |
-| **v2.1.0** | 跨机房容灾 | ReplicationProvider + Redis Replica + Kafka MirrorMaker2 | Q1 2027 |
-| **v2.2.0** | 云原生 | K8s Operator + 优雅上下线 + ConfigMap 热更新 | Q2 2027 |
-| **v2.3.0** | Spring Cloud Stream | StreamMQ Binder + 函数式编程模型 | Q2 2027 |
-| **v2.4.0** | 持久化 + 追踪增强 | RocksDB Provider + OpenTelemetry 集成 + 消息拓扑图 | Q3 2027 |
-| **v2.5.0** | 诊断 + 优化 | 消息画像 + 异常诊断 + 性能优化 | Q4 2027 |
+| **v2.0.0** | 云原生 + 可观测性增强 | K8s Operator + OpenTelemetry + Spring Cloud Stream Binder | Q4 2026 |
+| **v2.1.0** | 诊断 + 优化 | 消息画像 + 异常诊断 + 性能优化 | Q1 2027 |
 
 ---
 
@@ -431,20 +231,16 @@ PersistenceProvider SPI
 
 | 风险 | 概率 | 影响 | 缓解措施 |
 |------|------|------|---------|
-| 多后端抽象设计不当导致 V1.x API 破坏 | 中 | 高 | V2.0 默认 Redis 后端，V1.x 用户零感知 |
-| Kafka 线网协议实现复杂度超预期 | 高 | 高 | 分阶段实现：Produce/Fetch 优先，Connect/Streams 后置 |
-| 跨机房复制一致性保障 | 中 | 高 | 提供 at-least-once 语义，文档明确限制 |
 | K8s Operator 运维复杂度 | 中 | 中 | 参考 Strimzi Kafka Operator 设计，充分测试 |
+| OpenTelemetry 集成性能开销 | 低 | 中 | 异步上报，可配置采样率 |
 
 ### 7.2 外部依赖
 
 | 依赖 | 用途 | 风险 |
 |------|------|------|
-| Kafka Client 3.6+ | Kafka Backend | API 变更 |
-| Netty 4.1+ | Kafka Protocol Server | 版本兼容 |
 | Spring Cloud Stream 4.x | Binder | API 变更 |
 | Kubernetes Client Java | Operator | K8s 版本兼容 |
-| RocksDB JNI | 磁盘持久化 | 平台兼容性 |
+| OpenTelemetry SDK | 分布式追踪 | API 变更 |
 
 ---
 
@@ -454,11 +250,10 @@ PersistenceProvider SPI
 
 | 术语 | 定义 |
 |------|------|
-| BackendProvider | 后端提供者 SPI，抽象不同 MQ 后端 |
-| BackendCapabilities | 后端能力描述，声明支持/不支持的特性 |
-| ReplicationProvider | 跨机房复制 SPI |
-| PersistenceProvider | 持久化存储 SPI |
 | StreamMQMessageBinder | Spring Cloud Stream Binder 实现 |
+| MessageTrace | 消息追踪记录，记录消息生命周期事件 |
+| TopologyGraph | 消息拓扑图，描述 Producer → Topic → Consumer 的流转关系 |
+| MessageProfile | 消息画像，完整记录单条消息的生命周期 |
 
 ### 8.2 参考文档
 
