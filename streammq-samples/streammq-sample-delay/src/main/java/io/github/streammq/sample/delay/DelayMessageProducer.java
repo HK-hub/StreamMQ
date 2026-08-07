@@ -56,7 +56,7 @@ public class DelayMessageProducer {
                 .keys(orderId)
                 .body(content)
                 .delayLevel(delayLevel)
-                .userProperty("source", "delay-sample")
+                .withUserProperty("source", "delay-sample")
                 .build();
 
         SendResult result = template.syncSend(message);
@@ -84,7 +84,7 @@ public class DelayMessageProducer {
                 .keys(orderId)
                 .body(content)
                 .delayTimeMillis(delayMillis)
-                .userProperty("source", "delay-sample")
+                .withUserProperty("source", "delay-sample")
                 .build();
 
         SendResult result = template.syncSend(message);
