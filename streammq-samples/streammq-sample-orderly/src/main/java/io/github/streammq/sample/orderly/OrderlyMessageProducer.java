@@ -48,8 +48,8 @@ public class OrderlyMessageProducer {
                 .keys(orderId)
                 .shardingKey(orderId)
                 .body(content)
-                .userProperty("sequence", String.valueOf(sequence))
-                .userProperty("source", "orderly-sample")
+                .withUserProperty("sequence", String.valueOf(sequence))
+                .withUserProperty("source", "orderly-sample")
                 .build();
 
         SendResult result = template.syncSend(message);

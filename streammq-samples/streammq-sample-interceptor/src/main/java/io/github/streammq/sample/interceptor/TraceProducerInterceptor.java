@@ -25,8 +25,8 @@ public class TraceProducerInterceptor implements ProducerInterceptor {
     @Override
     public boolean beforeSend(Message<?> message) {
         String traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-        message.getUserProperties().put("traceId", traceId);
-        message.getUserProperties().put("spanId", "1");
+        message.putUserProperty("traceId", traceId);
+        message.putUserProperty("spanId", "1");
         log.debug("Trace producer interceptor injected: traceId={}, topic={}", traceId, message.getTopic());
         return true;
     }

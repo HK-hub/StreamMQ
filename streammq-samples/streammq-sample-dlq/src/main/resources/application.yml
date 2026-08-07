@@ -4,7 +4,7 @@ spring:
 
 streammq:
   enabled: true
-  namespace: sample
+  namespace: dlq
   producer:
     group: dlq-producer-group
   consumer:

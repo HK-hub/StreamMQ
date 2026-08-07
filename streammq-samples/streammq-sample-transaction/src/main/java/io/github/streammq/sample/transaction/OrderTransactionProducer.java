@@ -55,7 +55,7 @@ public class OrderTransactionProducer {
         Message<String> msg = MessageBuilder.<String>withTopic("order-topic")
                 .tag("transaction")
                 .body(orderContent)
-                .userProperty("bizType", "order-create")
+                .withUserProperty("bizType", "order-create")
                 .build();
 
         log.info("Sending transaction message: body={}", orderContent);

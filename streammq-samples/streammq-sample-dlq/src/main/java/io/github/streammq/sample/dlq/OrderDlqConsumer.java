@@ -25,7 +25,7 @@ import org.springframework.stereotype.Component;
 @Component
 @StreamMQDlqConsumer(
         consumerGroup = "order-consumer-group",
-        namespace = "sample",
+        namespace = "dlq",
         maxDlqRetryAttempts = 3,
         dlqRetryDelayMs = 10000
 )

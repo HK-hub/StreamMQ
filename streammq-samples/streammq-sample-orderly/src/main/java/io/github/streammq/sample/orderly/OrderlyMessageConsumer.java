@@ -2,8 +2,8 @@ package io.github.streammq.sample.orderly;
 
 import io.github.streammq.core.annotation.StreamMQConsumer;
 import io.github.streammq.core.consumer.ConsumeOrderlyContext;
+import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.enums.MessageModel;
-import io.github.streammq.core.enums.OrderlyAction;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
 import io.github.streammq.core.message.Message;
 import org.slf4j.Logger;
@@ -35,7 +35,7 @@ public class OrderlyMessageConsumer implements StreamMessageOrderlyConsumer<Stri
     private final AtomicInteger processedCount = new AtomicInteger(0);
 
     @Override
-    public OrderlyAction onMessage(Message<String> message, ConsumeOrderlyContext context) throws Exception {
+    public ConsumeAction onMessage(Message<String> message, ConsumeOrderlyContext context) throws Exception {
         String orderId = message.getKeys();
         String sequence = message.getUserProperties().get("sequence");
 
@@ -47,12 +47,12 @@ public class OrderlyMessageConsumer implements StreamMessageOrderlyConsumer<Stri
             processOrderStatus(message);
 
             log.info("Orderly message processed successfully: orderId={}, sequence={}", orderId, sequence);
-            return OrderlyAction.SUCCESS;
+            return ConsumeAction.SUCCESS;
         } catch (Exception e) {
             log.error("Failed to process orderly message: orderId={}, sequence={}, error={}",
                     orderId, sequence, e.getMessage(), e);
 
-            return OrderlyAction.SUSPEND_CURRENT_QUEUE_A_MOMENT;
+            return ConsumeAction.RECONSUME_LATER;
         }
     }
 

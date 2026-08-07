@@ -55,7 +55,7 @@ public class OrderProducer {
                 .tag("created")
                 .keys(orderId)
                 .body(content)
-                .userProperty("source", "quickstart-sample")
+                .withUserProperty("source", "quickstart-sample")
                 .build();
         log.info("Producing order message via builder: orderId={}", orderId);
         SendResult result = service.send(message);
@@ -161,7 +161,7 @@ public class OrderProducer {
                     .tag("batch")
                     .keys(orderIds.get(i))
                     .body(contents.get(i))
-                    .userProperty("batchIndex", String.valueOf(i))
+                    .withUserProperty("batchIndex", String.valueOf(i))
                     .build();
             builder.add(msg);
         }

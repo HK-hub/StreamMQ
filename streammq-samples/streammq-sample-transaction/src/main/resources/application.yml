@@ -4,9 +4,9 @@ spring:
 
 streammq:
   enabled: true
-  namespace: sample
+  namespace: transaction
   producer:
-    group: default-producer-group
+    group: transaction-producer-group
   # 事务消息回查配置
   transaction:
     check-interval-ms: 60000      # 回查间隔（毫秒），默认 60s

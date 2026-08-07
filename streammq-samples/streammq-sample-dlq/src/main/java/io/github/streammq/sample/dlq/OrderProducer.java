@@ -41,7 +41,7 @@ public class OrderProducer {
                 .tag("dlq-test")
                 .keys(orderId)
                 .body(content)
-                .userProperty("source", "dlq-sample")
+                .withUserProperty("source", "dlq-sample")
                 .build();
 
         SendResult result = service.send(message);
