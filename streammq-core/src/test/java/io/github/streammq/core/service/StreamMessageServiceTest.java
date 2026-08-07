@@ -803,7 +803,7 @@ class StreamMessageServiceTest {
                 .keys("k1")
                 .shardingKey("shard-1")
                 .body("payload")
-                .userProperty("traceId", "t-001")
+                .withUserProperty("traceId", "t-001")
                 .build();
             mqService.sendBatch("new-topic", original);
 

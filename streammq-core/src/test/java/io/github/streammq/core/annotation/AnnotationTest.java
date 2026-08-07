@@ -27,7 +27,7 @@ class AnnotationTest {
     static class OrderlyListenerSample {
     }
 
-    @StreamMQConsumer(topic = "t", consumerGroup = "g", dlqMode = true)
+    @StreamMQConsumer(topic = "dlq-topic", consumerGroup = "g")
     static class DlqListenerSample {
     }
 
@@ -61,13 +61,6 @@ class AnnotationTest {
         void messageModelDefault() throws Exception {
             StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.messageModel()).isEqualTo(MessageModel.CONCURRENT);
-        }
-
-        @Test
-        @DisplayName("dlqFailureStrategy 默认 DlqFailureStrategy.class（marker）")
-        void dlqFailureStrategyDefault() {
-            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
-            assertThat(ann.dlqFailureStrategy()).isEqualTo(DlqFailureStrategy.class);
         }
 
         @Test
@@ -130,13 +123,6 @@ class AnnotationTest {
         }
 
         @Test
-        @DisplayName("dlqMode 默认 false")
-        void dlqModeDefault() {
-            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
-            assertThat(ann.dlqMode()).isFalse();
-        }
-
-        @Test
         @DisplayName("consumerName 默认空字符串")
         void consumerNameDefault() {
             StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
@@ -145,7 +131,7 @@ class AnnotationTest {
     }
 
     @Nested
-    @DisplayName("@StreamMQConsumer 顺序消费与 DLQ 配置")
+    @DisplayName("@StreamMQConsumer 顺序消费配置")
     class StreamMQConsumerOrderlyAndDlq {
 
         @Test
@@ -153,14 +139,6 @@ class AnnotationTest {
         void orderlyMessageModel() {
             StreamMQConsumer ann = OrderlyListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.messageModel()).isEqualTo(MessageModel.ORDERLY);
-        }
-
-        @Test
-        @DisplayName("dlqMode 为 true 时正确读取")
-        void dlqModeSet() {
-            StreamMQConsumer ann = DlqListenerSample.class.getAnnotation(StreamMQConsumer.class);
-            assertThat(ann.dlqMode()).isTrue();
-            assertThat(ann.consumerGroup()).isEqualTo("g");
         }
     }
 

@@ -2,7 +2,6 @@ package io.github.streammq.core.util;
 
 import io.github.streammq.core.consumer.*;
 import io.github.streammq.core.enums.ConsumeAction;
-import io.github.streammq.core.enums.OrderlyAction;
 import io.github.streammq.core.message.Message;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -50,8 +49,8 @@ class BodyTypeResolverTest {
     /** 直接实现 StreamMQOrderlyConsumer&lt;Map&gt; */
     static class MapOrderlyListener implements StreamMessageOrderlyConsumer<Map> {
         @Override
-        public OrderlyAction onMessage(Message<Map> message, ConsumeOrderlyContext context) {
-            return OrderlyAction.SUCCESS;
+        public ConsumeAction onMessage(Message<Map> message, ConsumeOrderlyContext context) {
+            return ConsumeAction.SUCCESS;
         }
     }
 

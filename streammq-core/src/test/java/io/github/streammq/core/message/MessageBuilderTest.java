@@ -60,84 +60,84 @@ class MessageBuilderTest {
     class WithAliasMethods {
 
         @Test
-        @DisplayName("withTag 等价于 tag")
+        @DisplayName("tag 设置标签")
         void withTag() {
             Message<String> message = MessageBuilder.<String>withTopic("t")
-                .withTag("tag1").withBody("b").build();
+                .tag("tag1").body("b").build();
             assertThat(message.getTag()).isEqualTo("tag1");
         }
 
         @Test
-        @DisplayName("withKeys 等价于 keys")
+        @DisplayName("keys 设置业务键")
         void withKeys() {
             Message<String> message = MessageBuilder.<String>withTopic("t")
-                .withKeys("k1").withBody("b").build();
+                .keys("k1").body("b").build();
             assertThat(message.getKeys()).isEqualTo("k1");
         }
 
         @Test
-        @DisplayName("withShardingKey 等价于 shardingKey")
+        @DisplayName("shardingKey 设置分片键")
         void withShardingKey() {
             Message<String> message = MessageBuilder.<String>withTopic("t")
-                .withShardingKey("shard-1").withBody("b").build();
+                .shardingKey("shard-1").body("b").build();
             assertThat(message.getShardingKey()).isEqualTo("shard-1");
         }
 
         @Test
-        @DisplayName("withBody 等价于 body")
+        @DisplayName("body 设置消息体")
         void withBody() {
             Message<String> message = MessageBuilder.<String>withTopic("t")
-                .withBody("body-val").build();
+                .body("body-val").build();
             assertThat(message.getBody()).isEqualTo("body-val");
         }
 
         @Test
-        @DisplayName("withProperty 等价于 property")
+        @DisplayName("withProperty 添加单条系统属性")
         void withProperty() {
             Message<String> message = MessageBuilder.<String>withTopic("t")
-                .withProperty("traceId", "t-1").withBody("b").build();
+                .withProperty("traceId", "t-1").body("b").build();
             assertThat(message.getProperties()).containsEntry("traceId", "t-1");
         }
 
         @Test
-        @DisplayName("withUserProperty 等价于 userProperty")
+        @DisplayName("withUserProperty 添加单条用户属性")
         void withUserProperty() {
             Message<String> message = MessageBuilder.<String>withTopic("t")
-                .withUserProperty("biz", "val").withBody("b").build();
+                .withUserProperty("biz", "val").body("b").build();
             assertThat(message.getUserProperties()).containsEntry("biz", "val");
         }
 
         @Test
-        @DisplayName("withDelayLevel 等价于 delayLevel")
+        @DisplayName("delayLevel 设置延时级别")
         void withDelayLevel() {
             Message<String> message = MessageBuilder.<String>withTopic("t")
-                .withDelayLevel(DelayLevel.SECOND_10).withBody("b").build();
+                .delayLevel(DelayLevel.SECOND_10).body("b").build();
             assertThat(message.getDelayLevel()).isEqualTo(DelayLevel.SECOND_10);
             assertThat(message.isDelayMessage()).isTrue();
         }
 
         @Test
-        @DisplayName("withDelayTimeMillis 等价于 delayTimeMillis")
+        @DisplayName("delayTimeMillis 设置延时毫秒")
         void withDelayTimeMillis() {
             Message<String> message = MessageBuilder.<String>withTopic("t")
-                .withDelayTimeMillis(3000L).withBody("b").build();
+                .delayTimeMillis(3000L).body("b").build();
             assertThat(message.getDelayTimeMillis()).isEqualTo(3000L);
             assertThat(message.isDelayMessage()).isTrue();
         }
     }
 
     @Nested
-    @DisplayName("withProperties 批量设置")
+    @DisplayName("properties 批量设置")
     class WithProperties {
 
         @Test
-        @DisplayName("withProperties 批量设置系统属性")
+        @DisplayName("properties 批量设置系统属性")
         void withProperties_batch() {
             Map<String, String> props = new LinkedHashMap<>();
             props.put("a", "1");
             props.put("b", "2");
             Message<String> message = MessageBuilder.<String>withTopic("t")
-                .withProperties(props).withBody("b").build();
+                .properties(props).body("b").build();
             assertThat(message.getProperties())
                 .containsEntry("a", "1")
                 .containsEntry("b", "2")
@@ -148,7 +148,7 @@ class MessageBuilderTest {
         @DisplayName("properties 传入 null 不影响已有属性")
         void properties_nullIgnored() {
             Message<String> message = MessageBuilder.<String>withTopic("t")
-                .property("k", "v")
+                .withProperty("k", "v")
                 .properties(null)
                 .body("b").build();
             assertThat(message.getProperties()).containsOnlyKeys("k");

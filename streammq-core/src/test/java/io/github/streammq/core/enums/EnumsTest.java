@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
- * 各枚举/动作类型完整性测试，覆盖 ConsumeAction / OrderlyAction / ConsumeMode / MessageModel / LocalTransactionState。
+ * 各枚举/动作类型完整性测试，覆盖 ConsumeAction / ConsumeMode / MessageModel / LocalTransactionState。
  */
 @DisplayName("核心枚举与动作类型完整性测试")
 class EnumsTest {
@@ -63,26 +63,6 @@ class EnumsTest {
             assertThat(ConsumeAction.SUCCESS.name()).isEqualTo("SUCCESS");
             assertThat(ConsumeAction.RECONSUME_LATER.name()).isEqualTo("RECONSUME_LATER");
             assertThat(ConsumeAction.defer(Duration.ofSeconds(1)).name()).isEqualTo("DEFER");
-        }
-    }
-
-    @Nested
-    @DisplayName("OrderlyAction")
-    class OrderlyActionTest {
-
-        @Test
-        @DisplayName("OrderlyAction 含 SUCCESS 与 SUSPEND_CURRENT_QUEUE_A_MOMENT")
-        void containsSuccessAndSuspend() {
-            assertThat(OrderlyAction.values())
-                .contains(OrderlyAction.SUCCESS, OrderlyAction.SUSPEND_CURRENT_QUEUE_A_MOMENT);
-        }
-
-        @Test
-        @DisplayName("OrderlyAction 含全部 2 个值")
-        void hasAllTwoValues() {
-            assertThat(OrderlyAction.values()).hasSize(2);
-            assertThat(OrderlyAction.values())
-                .containsExactly(OrderlyAction.SUCCESS, OrderlyAction.SUSPEND_CURRENT_QUEUE_A_MOMENT);
         }
     }
 

@@ -63,7 +63,7 @@ class MessageTest {
 
             Message<String> message = new Message<>("topic", "tag", "keys", "shard",
                 props, userProps, "body", DelayLevel.SECOND_1, 100L,
-                1234567890L, "host:8080", "tx-1");
+                1234567890L, "host:8080", "tx-1", 0);
 
             assertThat(message.getTopic()).isEqualTo("topic");
             assertThat(message.getTag()).isEqualTo("tag");
@@ -83,7 +83,7 @@ class MessageTest {
         @DisplayName("全参构造对 null properties/userProperties 创建空 Map")
         void fullConstructor_nullPropertiesBecomesEmpty() {
             Message<String> message = new Message<>("topic", null, null, null,
-                null, null, "body", null, null, 0L, null, null);
+                null, null, "body", null, null, 0L, null, null, 0);
             assertThat(message.getProperties()).isEmpty();
             assertThat(message.getUserProperties()).isEmpty();
         }
@@ -94,7 +94,7 @@ class MessageTest {
             Map<String, String> props = new HashMap<>();
             props.put("k", "v");
             Message<String> message = new Message<>("topic", null, null, null,
-                props, null, "body", null, null, 0L, null, null);
+                props, null, "body", null, null, 0L, null, null, 0);
             props.put("k2", "v2");
             assertThat(message.getProperties()).hasSize(1).containsEntry("k", "v");
         }
