@@ -11,15 +11,30 @@
         <relativePath>../pom.xml</relativePath>
     </parent>
 
-    <artifactId>streammq-cloud-k8s</artifactId>
+    <artifactId>streammq-kubernetes</artifactId>
     <name>StreamMQ Cloud Kubernetes</name>
-    <description>StreamMQ 云原生增强模块：K8s 健康探针、优雅上下线、配置热更新、HPA 指标暴露。</description>
+    <description>StreamMQ 云原生增强模块：K8s Operator、CRD、配置热更新、自动扩缩容、优雅上下线、HPA 指标暴露。</description>
 
     <dependencies>
         <!-- Core：监听器容器、工具类（provided：由运行时 starter 提供） -->
         <dependency>
             <groupId>io.github.streammq</groupId>
             <artifactId>streammq-core</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Fabric8 Kubernetes Client：Operator 实现核心依赖 -->
+        <dependency>
+            <groupId>io.fabric8</groupId>
+            <artifactId>kubernetes-client</artifactId>
+            <version>6.13.1</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Jackson: JSON 处理 CRD 对象 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
             <scope>provided</scope>
         </dependency>
 

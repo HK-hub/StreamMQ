@@ -1,0 +1,490 @@
+# StreamMQ Kubernetes CustomResourceDefinitions
+#
+# Full CRD definitions with OpenAPI v3 schema validation for:
+# - StreamMQCluster: cluster configuration and operator management
+# - StreamMQTopic: topic lifecycle management
+# - StreamMQConsumerGroup: consumer group with auto-scaling
+#
+# Requires: Kubernetes 1.16+ (apiextensions.k8s.io/v1)
+# Group: streammq.io
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: streammqclusters.streammq.io
+  labels:
+    app.kubernetes.io/name: streammq
+    app.kubernetes.io/part-of: streammq-operator
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.15.0
+spec:
+  group: streammq.io
+  scope: Namespaced
+  names:
+    kind: StreamMQCluster
+    plural: streammqclusters
+    singular: streammqcluster
+    shortNames:
+    - smq
+    - smqcluster
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        description: StreamMQCluster defines a StreamMQ cluster configuration.
+        properties:
+          spec:
+            type: object
+            required: [backend, replicas]
+            properties:
+              backend:
+                type: object
+                required: [type]
+                description: Backend storage configuration.
+                properties:
+                  type:
+                    type: string
+                    enum: [redis]
+                    default: redis
+                    description: Backend storage type.
+                  redis:
+                    type: object
+                    properties:
+                      address:
+                        type: string
+                        description: Redis connection address.
+                      namespace:
+                        type: string
+                        description: Key namespace prefix.
+                      masterName:
+                        type: string
+                        description: Sentinel master name.
+                      password:
+                        type: string
+                        description: Connection password.
+                      poolSize:
+                        type: integer
+                        minimum: 1
+                        maximum: 500
+                        default: 50
+                      connectTimeoutMs:
+                        type: integer
+                        default: 5000
+                      readTimeoutMs:
+                        type: integer
+                        default: 3000
+              config:
+                type: object
+                properties:
+                  retry:
+                    type: object
+                    properties:
+                      maxReconsumeTimes:
+                        type: integer
+                        minimum: 1
+                        maximum: 128
+                        default: 16
+                      retryIntervals:
+                        type: array
+                        items:
+                          type: integer
+                  delay:
+                    type: object
+                    properties:
+                      enabled:
+                        type: boolean
+                        default: true
+                      scanIntervalMs:
+                        type: integer
+                        default: 1000
+                  tracing:
+                    type: object
+                    properties:
+                      enabled:
+                        type: boolean
+                        default: false
+                      sampleRate:
+                        type: number
+                        minimum: 0.0
+                        maximum: 1.0
+                        default: 0.1
+                      exporter:
+                        type: string
+                        enum: [otlp, zipkin, jaeger]
+                        default: otlp
+                      endpoint:
+                        type: string
+                  compression:
+                    type: object
+                    properties:
+                      enabled:
+                        type: boolean
+                        default: false
+                      algorithm:
+                        type: string
+                        enum: [gzip, lz4, snappy, zstd]
+                        default: gzip
+                      threshold:
+                        type: integer
+                        default: 1024
+              replicas:
+                type: integer
+                minimum: 1
+                maximum: 100
+                default: 3
+              resources:
+                type: object
+                properties:
+                  cpuRequest:
+                    type: string
+                    default: "500m"
+                  cpuLimit:
+                    type: string
+                    default: "1000m"
+                  memoryRequest:
+                    type: string
+                    default: "512Mi"
+                  memoryLimit:
+                    type: string
+                    default: "1Gi"
+              autoScale:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                    default: false
+                  minReplicas:
+                    type: integer
+                    minimum: 1
+                    default: 1
+                  maxReplicas:
+                    type: integer
+                    minimum: 1
+                    maximum: 100
+                    default: 10
+                  targetLag:
+                    type: integer
+                    minimum: 1
+                    default: 100
+                  scaleUpThreshold:
+                    type: integer
+                    minimum: 1
+                    maximum: 100
+                    default: 80
+                  scaleDownThreshold:
+                    type: integer
+                    minimum: 1
+                    maximum: 100
+                    default: 20
+                  stabilizationWindowSeconds:
+                    type: integer
+                    default: 300
+                  scaleUpCooldownSeconds:
+                    type: integer
+                    default: 60
+                  scaleDownCooldownSeconds:
+                    type: integer
+                    default: 300
+              labels:
+                type: object
+                additionalProperties:
+                  type: string
+              annotations:
+                type: object
+                additionalProperties:
+                  type: string
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+                enum: [Pending, Ready, NotReady, Updating, Failed]
+              replicas:
+                type: integer
+              readyReplicas:
+                type: integer
+              lastUpdateTime:
+                type: string
+                format: date-time
+              observedGeneration:
+                type: integer
+              conditions:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                    status:
+                      type: string
+                    reason:
+                      type: string
+                    message:
+                      type: string
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+    subresources:
+      status: {}
+    additionalPrinterColumns:
+    - name: PHASE
+      type: string
+      jsonPath: .status.phase
+    - name: REPLICAS
+      type: integer
+      jsonPath: .status.replicas
+    - name: READY
+      type: integer
+      jsonPath: .status.readyReplicas
+    - name: AGE
+      type: date
+      jsonPath: .metadata.creationTimestamp
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: streammqtopics.streammq.io
+  labels:
+    app.kubernetes.io/name: streammq
+    app.kubernetes.io/part-of: streammq-operator
+spec:
+  group: streammq.io
+  scope: Namespaced
+  names:
+    kind: StreamMQTopic
+    plural: streammqtopics
+    singular: streammqtopic
+    shortNames:
+    - smqtopic
+    - smqt
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        description: StreamMQTopic defines a StreamMQ topic.
+        properties:
+          spec:
+            type: object
+            required: [clusterRef]
+            properties:
+              clusterRef:
+                type: string
+                description: Name of the StreamMQCluster this topic belongs to.
+              partitions:
+                type: integer
+                minimum: 1
+                maximum: 1024
+                default: 8
+              maxLength:
+                type: integer
+                minimum: 1
+                default: 1000000
+              retentionHours:
+                type: integer
+                minimum: 1
+                default: 72
+              replicas:
+                type: integer
+                minimum: 1
+                default: 1
+              compression:
+                type: string
+                enum: [gzip, lz4, snappy, zstd, none]
+              deduplicationEnabled:
+                type: boolean
+                default: false
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+                enum: [Pending, Active, Deleting, Failed]
+              partitions:
+                type: integer
+              currentSize:
+                type: integer
+              lastUpdateTime:
+                type: string
+                format: date-time
+              observedGeneration:
+                type: integer
+    subresources:
+      status: {}
+    additionalPrinterColumns:
+    - name: PHASE
+      type: string
+      jsonPath: .status.phase
+    - name: PARTITIONS
+      type: integer
+      jsonPath: .status.partitions
+    - name: CLUSTER
+      type: string
+      jsonPath: .spec.clusterRef
+    - name: AGE
+      type: date
+      jsonPath: .metadata.creationTimestamp
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: streammqconsumergroups.streammq.io
+  labels:
+    app.kubernetes.io/name: streammq
+    app.kubernetes.io/part-of: streammq-operator
+spec:
+  group: streammq.io
+  scope: Namespaced
+  names:
+    kind: StreamMQConsumerGroup
+    plural: streammqconsumergroups
+    singular: streammqconsumergroup
+    shortNames:
+    - smqcg
+    - smqconsumergroup
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        description: StreamMQConsumerGroup defines a StreamMQ consumer group.
+        properties:
+          spec:
+            type: object
+            required: [clusterRef, topic]
+            properties:
+              clusterRef:
+                type: string
+                description: Name of the StreamMQCluster.
+              topic:
+                type: string
+                description: Topic to consume from.
+              replicas:
+                type: integer
+                minimum: 1
+                maximum: 100
+                default: 3
+              autoScale:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                    default: false
+                  minReplicas:
+                    type: integer
+                    minimum: 1
+                    default: 1
+                  maxReplicas:
+                    type: integer
+                    minimum: 1
+                    maximum: 100
+                    default: 10
+                  targetLag:
+                    type: integer
+                    minimum: 1
+                    default: 100
+                  scaleUpThreshold:
+                    type: integer
+                    minimum: 1
+                    maximum: 100
+                    default: 80
+                  scaleDownThreshold:
+                    type: integer
+                    minimum: 1
+                    maximum: 100
+                    default: 20
+                  stabilizationWindowSeconds:
+                    type: integer
+                    default: 300
+                  scaleUpCooldownSeconds:
+                    type: integer
+                    default: 60
+                  scaleDownCooldownSeconds:
+                    type: integer
+                    default: 300
+              resources:
+                type: object
+                properties:
+                  cpuRequest:
+                    type: string
+                    default: "500m"
+                  cpuLimit:
+                    type: string
+                    default: "1000m"
+                  memoryRequest:
+                    type: string
+                    default: "512Mi"
+                  memoryLimit:
+                    type: string
+                    default: "1Gi"
+              config:
+                type: object
+                properties:
+                  maxReconsumeTimes:
+                    type: integer
+                    minimum: 1
+                    maximum: 128
+                    default: 16
+                  retryIntervals:
+                    type: array
+                    items:
+                      type: integer
+                  retryScanMs:
+                    type: integer
+                    default: 5000
+                  delayScanMs:
+                    type: integer
+                    default: 1000
+                  pullBatchSize:
+                    type: integer
+                    minimum: 1
+                    default: 32
+                  consumeTimeoutMs:
+                    type: integer
+                    default: 30000
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+                enum: [Pending, Ready, NotReady, Updating, Failed]
+              replicas:
+                type: integer
+              readyReplicas:
+                type: integer
+              lastUpdateTime:
+                type: string
+                format: date-time
+              observedGeneration:
+                type: integer
+    subresources:
+      status: {}
+    additionalPrinterColumns:
+    - name: PHASE
+      type: string
+      jsonPath: .status.phase
+    - name: REPLICAS
+      type: integer
+      jsonPath: .status.replicas
+    - name: READY
+      type: integer
+      jsonPath: .status.readyReplicas
+    - name: TOPIC
+      type: string
+      jsonPath: .spec.topic
+    - name: CLUSTER
+      type: string
+      jsonPath: .spec.clusterRef
+    - name: AGE
+      type: date
+      jsonPath: .metadata.creationTimestamp
