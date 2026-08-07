@@ -4,6 +4,7 @@ import io.github.streammq.core.listener.StreamMQListenerContainer;
 import io.github.streammq.core.trace.StreamMQTraceService;
 import io.github.streammq.diagnostics.endpoint.StreamMQDiagnosticsEndpoint;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
+import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -42,6 +43,10 @@ import java.util.Objects;
  * @since 1.0.0
  */
 @AutoConfiguration
+@AutoConfigureAfter(name = {
+        "io.github.streammq.spring.boot.autoconfigure.StreamMQTraceAutoConfiguration",
+        "io.github.streammq.spring.boot.autoconfigure.StreamMQListenerContainerAutoConfiguration"
+})
 @ConditionalOnClass(StreamMQTraceService.class)
 @ConditionalOnProperty(prefix = "streammq.diagnostics", name = "enabled", havingValue = "true", matchIfMissing = false)
 @EnableConfigurationProperties(StreamMQDiagnosticsProperties.class)
@@ -78,12 +83,15 @@ public class StreamMQDiagnosticsAutoConfiguration {
     /**
      * 装配诊断 REST 端点（仅 Web 应用）。
      *
+     * <p>仅当诊断服务与画像服务均就绪时才注册端点，避免因依赖未就绪导致上下文启动失败。
+     *
      * @param diagnosticsService 诊断服务
      * @param profileService 消息画像服务
      * @return 诊断端点实例
      */
     @Bean
     @ConditionalOnWebApplication
+    @ConditionalOnBean({StreamMQDiagnosticsService.class, MessageProfileService.class})
     public StreamMQDiagnosticsEndpoint streamMQDiagnosticsEndpoint(
             StreamMQDiagnosticsService diagnosticsService,
             MessageProfileService profileService) {

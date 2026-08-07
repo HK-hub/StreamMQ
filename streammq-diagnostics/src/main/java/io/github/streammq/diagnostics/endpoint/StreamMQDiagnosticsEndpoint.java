@@ -11,7 +11,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.ResponseBody;
 
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -22,6 +22,10 @@ import java.util.Objects;
  * StreamMQ 诊断 REST 端点，暴露 JSON 接口供仪表盘集成。
  *
  * <p>基础路径：{@code /streammq/diagnostics}
+ *
+ * <p>本类不使用 {@code @RestController}，而是通过
+ * {@link StreamMQDiagnosticsAutoConfiguration#streamMQDiagnosticsEndpoint} 注册为 Bean，
+ * 确保仅在诊断服务与画像服务均就绪时才启用端点，避免组件扫描导致的依赖缺失问题。
  *
  * <p>提供以下端点：
  * <ul>
@@ -37,7 +41,7 @@ import java.util.Objects;
  * @author StreamMQ Contributors
  * @since 1.0.0
  */
-@RestController
+@ResponseBody
 @RequestMapping("/streammq/diagnostics")
 public class StreamMQDiagnosticsEndpoint {
 
