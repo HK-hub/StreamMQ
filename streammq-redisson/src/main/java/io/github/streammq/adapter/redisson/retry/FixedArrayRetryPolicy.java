@@ -74,11 +74,11 @@ public class FixedArrayRetryPolicy implements RetryPolicy {
         if (reconsumeTimes < 0) {
             reconsumeTimes = 0;
         }
-        if (reconsumeTimes >= DELAY_MILLIS.length) {
-            // 超出数组范围，使用最后一个级别（2h）
-            return Duration.ofMillis(DELAY_MILLIS[DELAY_MILLIS.length - 1]);
+        if (reconsumeTimes >= maxReconsumeTimes) {
+            return null;
         }
-        return Duration.ofMillis(DELAY_MILLIS[reconsumeTimes]);
+        int index = Math.min(reconsumeTimes, DELAY_MILLIS.length - 1);
+        return Duration.ofMillis(DELAY_MILLIS[index]);
     }
 
     @Override

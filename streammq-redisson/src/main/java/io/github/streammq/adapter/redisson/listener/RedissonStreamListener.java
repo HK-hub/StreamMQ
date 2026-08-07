@@ -85,6 +85,8 @@ public class RedissonStreamListener implements StreamMQListener {
     private static final int MAX_BATCH_SIZE = StreamMQConstants.MAX_BATCH_SIZE_LIMIT;
     /** BUSYGROUP 错误标识，用于判断消费者组已存在 */
     private static final String BUSYGROUP_MARKER = "BUSYGROUP";
+    /** NOGROUP 错误标识，用于判断 Stream 或消费者组被删除的情况 */
+    private static final String NOGROUP_MARKER = "NOGROUP";
 
     /**
      * 兼容构造器：不启用 DLQ/retry/broadcast 模式（等价于全部 false）。
@@ -242,18 +244,32 @@ public class RedissonStreamListener implements StreamMQListener {
             args = StreamReadGroupArgs.neverDelivered().count(batchSize);
         }
         String effectiveGroup = getEffectiveGroup();
+        LOG.debug("doRead: streamKey={}, effectiveGroup={}, consumerName={}, batchSize={}, timeout={}",
+            stream.getName(), effectiveGroup, consumerName, batchSize, timeout);
         try {
             Map<StreamMessageId, Map<String, String>> result = stream.readGroup(effectiveGroup, consumerName, args);
+            LOG.debug("doRead result: streamKey={}, resultSize={}", stream.getName(),
+                result != null ? result.size() : 0);
             if (CollectionUtils.isEmpty(result)) {
                 return List.of();
             }
             List<Message<?>> messages = new ArrayList<>(result.size());
             for (Map.Entry<StreamMessageId, Map<String, String>> entry : result.entrySet()) {
+                LOG.debug("doRead processing entry: streamKey={}, msgId={}",
+                    stream.getName(), entry.getKey());
                 Message<?> message = toMessage(entry.getKey(), entry.getValue());
                 messages.add(message);
             }
             return messages;
         } catch (RuntimeException ex) {
+            String msg = ex.getMessage();
+            if (Objects.nonNull(msg) && msg.contains(NOGROUP_MARKER)) {
+                LOG.warn("NOGROUP detected, resetting groupCreated flag to trigger re-creation: " +
+                    "streamKey={}, effectiveGroup={}, error={}", stream.getName(), effectiveGroup, msg);
+                groupCreated.set(false);
+            }
+            LOG.error("doRead failed: streamKey={}, effectiveGroup={}, error={}",
+                stream.getName(), effectiveGroup, ex.getMessage());
             throw new StreamMQBrokerException(
                 "readGroup failed for topic " + topic, null, ex);
         }
@@ -318,6 +334,8 @@ public class RedissonStreamListener implements StreamMQListener {
             RStream<String, String> stream = getStream();
             // 广播模式下使用独立消费者组名（每个实例一个组，均接收全量消息）
             String effectiveGroup = getEffectiveGroup();
+            LOG.info("Ensuring consumer group: namespace={}, topic={}, group={}, effectiveGroup={}, dlqMode={}, retryMode={}, streamKey={}",
+                namespace, topic, group, effectiveGroup, dlqMode, retryMode, stream.getName());
             try {
                 // makeStream：如果 Stream 不存在则创建
                 // id(0-0)：从头开始消费
@@ -332,6 +350,8 @@ public class RedissonStreamListener implements StreamMQListener {
                 } else {
                     // 其他错误重置标志位，允许下次重试
                     groupCreated.set(false);
+                    LOG.error("createGroup failed: streamKey={}, effectiveGroup={}, error={}",
+                        stream.getName(), effectiveGroup, ex.getMessage());
                     throw new StreamMQBrokerException(
                         "createGroup failed for topic " + topic + ", group " + effectiveGroup, null, ex);
                 }
@@ -362,6 +382,8 @@ public class RedissonStreamListener implements StreamMQListener {
         } else {
             streamKey = StreamMQKeys.topicStream(namespace, topic);
         }
+        LOG.debug("getStream: streamKey={}, namespace={}, topic={}, group={}, dlqMode={}, retryMode={}",
+            streamKey, namespace, topic, group, dlqMode, retryMode);
         return redisson.getStream(streamKey);
     }
 

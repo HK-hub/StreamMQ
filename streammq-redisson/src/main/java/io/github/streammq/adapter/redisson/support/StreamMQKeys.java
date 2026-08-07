@@ -292,6 +292,21 @@ public final class StreamMQKeys {
     }
 
     /**
+     * 事务分布式锁 Key：{@code streammq:{ns}:txlock:{txGroup}:{txId}}。
+     *
+     * <p>用于防止多实例并发提交/回滚同一事务（TOCTOU 保护）。
+     *
+     * @param namespace 命名空间
+     * @param txGroup 事务组名
+     * @param txId 事务 ID
+     * @return 锁 Key
+     */
+    public static String transactionLock(String namespace, String txGroup, String txId) {
+        return prefix(namespace) + SEP + "txlock" + SEP + requireNonEmpty(txGroup, "txGroup")
+            + SEP + requireNonEmpty(txId, "txId");
+    }
+
+    /**
      * 顺序消费分片锁 Key：{@code streammq:{ns}:shardlock:{topic}:{group}:{shardId}}。
      */
     public static String shardLock(String namespace, String topic, String group, int shardId) {

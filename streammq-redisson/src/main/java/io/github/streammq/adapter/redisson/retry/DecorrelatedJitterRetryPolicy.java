@@ -81,24 +81,21 @@ public class DecorrelatedJitterRetryPolicy implements RetryPolicy {
         if (reconsumeTimes < 0) {
             reconsumeTimes = 0;
         }
-        // 计算随机上界：base * 3^reconsumeTimes，并与 cap 取最小
-        // 为防止 reconsumeTimes 过大导致溢出，使用 Math.pow 后转 long
+        if (reconsumeTimes >= maxReconsumeTimes) {
+            return null;
+        }
         double upperDouble = baseMillis * Math.pow(3.0, reconsumeTimes);
         long upper = (long) Math.min(upperDouble, capMillis);
         if (upper < 0) {
-            // 溢出保护
             upper = capMillis;
         }
 
-        // 随机区间 [base, upper]，并最终与 cap 取最小
         long high = Math.min(upper, capMillis);
-        // 防止 ThreadLocalRandom.nextLong 的 bound 溢出
         high = Math.min(high, Long.MAX_VALUE - 1);
         long delay;
         if (high <= baseMillis) {
             delay = baseMillis;
         } else {
-            // nextLong(origin, bound): bound 独占，故传入 high + 1 使 high 包含
             delay = ThreadLocalRandom.current().nextLong(baseMillis, high + 1);
         }
         return Duration.ofMillis(Math.min(delay, capMillis));

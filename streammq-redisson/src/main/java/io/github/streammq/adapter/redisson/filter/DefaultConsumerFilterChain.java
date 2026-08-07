@@ -33,6 +33,11 @@ public class DefaultConsumerFilterChain implements ConsumerFilterChain {
     @Override
     public void addFilter(ConsumerFilter filter) {
         Objects.requireNonNull(filter, "filter");
+        int order = filter.order();
+        if (order < -1000 || order > 1000) {
+            LOG.warn("ConsumerFilter {} order={} is outside recommended range [-1000, 1000], " +
+                "may cause unexpected ordering behavior", filter.name(), order);
+        }
         int insertIndex = 0;
         for (ConsumerFilter existing : filters) {
             if (existing.order() <= filter.order()) {

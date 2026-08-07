@@ -13,12 +13,13 @@ import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.annotation.StreamMQConsumer;
-import io.github.streammq.core.consumer.ConsumeContext;
-import io.github.streammq.core.consumer.ConsumeOrderlyContext;
-import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
-import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
+import io.github.streammq.core.annotation.StreamMQDlqConsumer;
+import io.github.streammq.core.consumer.*;
 import io.github.streammq.core.converter.MessageConverter;
-import io.github.streammq.core.enums.*;
+import io.github.streammq.core.enums.ConsumeAction;
+import io.github.streammq.core.enums.ConsumeMode;
+import io.github.streammq.core.enums.InvokeTiming;
+import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.exception.StreamMQBrokerException;
 import io.github.streammq.core.filter.ConsumerFilter;
 import io.github.streammq.core.filter.ConsumerFilterChain;
@@ -357,8 +358,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         Objects.requireNonNull(annotation, "annotation");
         checkBeforeStart();
         Class<?> bodyType = BodyTypeResolver.resolve(consumer);
-        boolean dlqMode = annotation.dlqMode();
         String effectiveGroup = annotation.consumerGroup();
+        boolean isDlqMode = annotation.dlqMode();
         ListenerRegistration<T> reg = ListenerRegistration.<T>builder()
             .type(ListenerType.AUTO_ACK)
             .consumer(consumer)
@@ -380,9 +381,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .suspendCurrentQueueTimeMillis(annotation.suspendCurrentQueueTimeMillis())
             .streamMaxLen(annotation.streamMaxLen())
             .enableMsgTrace(annotation.enableMsgTrace())
-            .dlqMode(dlqMode)
+            .dlqMode(isDlqMode)
             .targetBodyType(bodyType)
-            .dlqFailureStrategy(annotation.dlqFailureStrategy())
+            .dlqFailureStrategy(DlqFailureStrategy.class)
             .consumerFilter(annotation.consumerFilter())
             .selectorType(annotation.selectorType())
             .namespace(annotation.namespace())
@@ -390,13 +391,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         reg.resolveNamespace(defaultNamespace);
         resolvePerConsumerSpi(reg);
         registrations.put(reg.key(), reg);
-        if (dlqMode) {
-            LOG.info("Registered StreamMQ DLQ Consumer: topic={}, group={}, bodyType={}",
-                annotation.topic(), effectiveGroup, bodyType);
-        } else {
-            LOG.info("Registered StreamMQ Consumer: topic={}, group={}, bodyType={}",
-                annotation.topic(), effectiveGroup, bodyType);
-        }
+        LOG.info("Registered StreamMQ Consumer: topic={}, group={}, dlqMode={}, bodyType={}",
+            annotation.topic(), effectiveGroup, isDlqMode, bodyType);
     }
 
     @Override
@@ -432,7 +428,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             .enableMsgTrace(annotation.enableMsgTrace())
             .dlqMode(false)
             .targetBodyType(bodyType)
-            .dlqFailureStrategy(annotation.dlqFailureStrategy())
+            .dlqFailureStrategy(DlqFailureStrategy.class)
             .consumerFilter(annotation.consumerFilter())
             .selectorType(annotation.selectorType())
             .namespace(annotation.namespace())
@@ -442,6 +438,48 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         registrations.put(reg.key(), reg);
         LOG.info("Registered StreamMQ Orderly Consumer: topic={}, group={}, shardCount={}, bodyType={}",
             annotation.topic(), annotation.consumerGroup(), annotation.shardCount(), bodyType);
+    }
+
+    @Override
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public <T> void registerDlqConsumer(DlqMessageConsumer<T> consumer, StreamMQDlqConsumer annotation) {
+        Objects.requireNonNull(consumer, "consumer");
+        Objects.requireNonNull(annotation, "annotation");
+        checkBeforeStart();
+        String effectiveGroup = annotation.consumerGroup();
+        Class<?> bodyType = BodyTypeResolver.resolve(consumer);
+        ListenerRegistration<T> reg = ListenerRegistration.<T>builder()
+            .type(ListenerType.AUTO_ACK)
+            .consumer(consumer)
+            .topic(effectiveGroup)
+            .group(effectiveGroup)
+            .consumeMode(ConsumeMode.CLUSTERING)
+            .maxReconsumeTimes(0)
+            .shardCount(0)
+            .consumeTimeoutMillis(StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS)
+            .shardLocks(null)
+            .pullBatchSize(StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE)
+            .pullBlockTimeoutMillis(StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS)
+            .pullIntervalMillis(0L)
+            .selectorExpression("*")
+            .serializer(MessageSerializer.class)
+            .retryPolicy(RetryPolicy.class)
+            .messageConverter(MessageConverter.class)
+            .rebalanceStrategy(RebalanceStrategy.class)
+            .suspendCurrentQueueTimeMillis(StreamMQConstants.DEFAULT_SUSPEND_CURRENT_QUEUE_TIME_MS)
+            .streamMaxLen(StreamMQConstants.DEFAULT_STREAM_MAX_LEN)
+            .enableMsgTrace(false)
+            .dlqMode(true)
+            .targetBodyType(bodyType)
+            .dlqFailureStrategy(annotation.failureStrategy())
+            .consumerFilter(new Class[0])
+            .selectorType(SelectorType.TAG)
+            .namespace(annotation.namespace())
+            .build();
+        reg.resolveNamespace(defaultNamespace);
+        resolvePerConsumerSpi(reg);
+        registrations.put(reg.key(), reg);
+        LOG.info("Registered StreamMQ DLQ Consumer: group={}, bodyType={}", effectiveGroup, bodyType);
     }
 
     /**
@@ -465,8 +503,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         perConsumerConverters.put(reg.key(), converter);
 
         // 2. per-consumer 重试策略
-        RetryPolicy policy = SpiResolver.resolveOrInstantiate(
-            (Class) reg.getRetryPolicy(), RetryPolicy.class, this.retryPolicy);
+        RetryPolicy policy = SpiResolver.resolveOrInstantiate(reg.getRetryPolicy(), RetryPolicy.class, this.retryPolicy);
 
         // 3. per-consumer 死信失败策略
         DlqFailureStrategy dlqStrategy = SpiResolver.resolveOrInstantiate(
@@ -813,32 +850,43 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         long consumeTimeoutMs = reg.getConsumeTimeoutMillis();
         long consumeStart = System.nanoTime();
         boolean recordedByTimeout = false;
+        LOG.debug("processMessage: topic={}, group={}, dlqMode={}, type={}, messageId={}",
+            reg.getTopic(), reg.getGroup(), reg.isDlqMode(), reg.getType(), message.getMessageId());
         try {
             // 消费者过滤器检查（全局 + per-consumer + selectorExpression）
             if (!acceptMessage(message, reg)) {
-                LOG.debug("Message filtered: topic={}, tag={}", message.getTopic(), message.getTag());
+                LOG.debug("Message filtered: topic={}, tag={}, group={}", message.getTopic(), message.getTag(), reg.getGroup());
                 finalAction = ConsumeAction.SUCCESS;
                 handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
                 return;
             }
 
             if (!interceptorChain.applyBefore(message, ctx)) {
+                LOG.debug("Message rejected by interceptor: topic={}, group={}", message.getTopic(), reg.getGroup());
                 finalAction = ConsumeAction.SUCCESS;
                 handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
                 return;
             }
             // 消费超时控制：使用 Future.get(timeout) 包裹 onMessage 调用
-            if (consumeTimeoutMs > 0 && reg.getType() != ListenerType.ORDERLY) {
+            if (consumeTimeoutMs > 0 && reg.getType() != ListenerType.ORDERLY && !reg.isDlqMode()) {
                 processWithTimeout(message, reg, listener, ctx, handler, consumeStart);
                 recordedByTimeout = true;
                 return;
             }
             try {
-                if (reg.getType() == ListenerType.ORDERLY) {
+                if (reg.isDlqMode()) {
+                    LOG.debug("Processing DLQ message: topic={}, group={}, messageId={}, consumerType={}",
+                        reg.getTopic(), reg.getGroup(), message.getMessageId(), reg.getConsumer().getClass().getSimpleName());
+                    ConsumeAction dlqAction = processDlqMessage(message, reg, ctx);
+                    LOG.debug("DLQ message processed: topic={}, group={}, messageId={}, action={}",
+                        reg.getTopic(), reg.getGroup(), message.getMessageId(), dlqAction);
+                    handler.handleAction(dlqAction, message, reg, listener, null);
+                    finalAction = dlqAction;
+                } else if (reg.getType() == ListenerType.ORDERLY) {
                     StreamMessageOrderlyConsumer orderly = (StreamMessageOrderlyConsumer) reg.getConsumer();
-                    OrderlyAction orderlyAction = shardLockManager.consumeWithShardLock(
+                    ConsumeAction orderlyAction = shardLockManager.consumeWithShardLock(
                         message, reg, (ConsumeOrderlyContext) ctx, orderly);
-                    if (orderlyAction == OrderlyAction.SUCCESS) {
+                    if (orderlyAction.isSuccess()) {
                         handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
                         finalAction = ConsumeAction.SUCCESS;
                     } else {
@@ -847,7 +895,11 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                     }
                 } else {
                     StreamMessageConcurrentlyConsumer consumer = (StreamMessageConcurrentlyConsumer) reg.getConsumer();
+                    LOG.debug("Calling onMessage: topic={}, group={}, messageId={}, consumerClass={}",
+                        reg.getTopic(), reg.getGroup(), message.getMessageId(), consumer.getClass().getSimpleName());
                     ConsumeAction action = consumer.onMessage(message, ctx);
+                    LOG.debug("onMessage returned: topic={}, group={}, messageId={}, action={}",
+                        reg.getTopic(), reg.getGroup(), message.getMessageId(), action);
                     if (Objects.isNull(action)) {
                         action = ConsumeAction.RECONSUME_LATER;
                     }
@@ -876,12 +928,23 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void processWithTimeout(Message<?> message, ListenerRegistration reg, StreamMQListener listener,
                                      ConsumeContext ctx, RetryAndDlqHandler handler, long consumeStart) {
+        LOG.debug("processWithTimeout called: topic={}, group={}, messageId={}, timeoutMs={}",
+            reg.getTopic(), reg.getGroup(), message.getMessageId(), reg.getConsumeTimeoutMillis());
         Future<ConsumeAction> future = consumeExecutor.submit(() -> {
+            if (reg.isDlqMode()) {
+                return processDlqMessage(message, reg, ctx);
+            }
             StreamMessageConcurrentlyConsumer consumer = (StreamMessageConcurrentlyConsumer) reg.getConsumer();
-            return consumer.onMessage(message, ctx);
+            LOG.debug("processWithTimeout executing onMessage: topic={}, group={}, consumerClass={}",
+                reg.getTopic(), reg.getGroup(), consumer.getClass().getSimpleName());
+            ConsumeAction action = consumer.onMessage(message, ctx);
+            LOG.debug("processWithTimeout onMessage returned: action={}", action);
+            return action;
         });
         try {
             ConsumeAction action = future.get(reg.getConsumeTimeoutMillis(), TimeUnit.MILLISECONDS);
+            LOG.debug("processWithTimeout completed: topic={}, group={}, action={}",
+                reg.getTopic(), reg.getGroup(), action);
             if (Objects.isNull(action)) {
                 action = ConsumeAction.RECONSUME_LATER;
             }
@@ -897,8 +960,37 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             if (e instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
+            LOG.warn("processWithTimeout exception: topic={}, group={}, error={}",
+                reg.getTopic(), reg.getGroup(), e.getMessage());
             handler.handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener, e);
             recordConsumeMetrics(reg, consumeStart, false);
+        }
+    }
+
+    /**
+     * 处理 DLQ 消息，支持两种消费者类型：
+     * <ul>
+     *   <li>{@link DlqMessageConsumer} - 专门的 DLQ 消费者接口</li>
+     *   <li>{@link StreamMessageConcurrentlyConsumer} - 普通并发消费者</li>
+     * </ul>
+     *
+     * @param message 消息
+     * @param reg 注册信息
+     * @param ctx 消费上下文
+     * @return 消费动作
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private ConsumeAction processDlqMessage(Message<?> message, ListenerRegistration reg, ConsumeContext ctx) throws Exception {
+        Object consumer = reg.getConsumer();
+        if (consumer instanceof DlqMessageConsumer dlqConsumer) {
+            dlqConsumer.onDlqMessage(message, ctx);
+            return ConsumeAction.SUCCESS;
+        } else if (consumer instanceof StreamMessageConcurrentlyConsumer concurrentConsumer) {
+            ConsumeAction action = concurrentConsumer.onMessage(message, ctx);
+            return Objects.isNull(action) ? ConsumeAction.RECONSUME_LATER : action;
+        } else {
+            LOG.warn("Unknown DLQ consumer type: {}, defaulting to SUCCESS", consumer.getClass().getSimpleName());
+            return ConsumeAction.SUCCESS;
         }
     }
 

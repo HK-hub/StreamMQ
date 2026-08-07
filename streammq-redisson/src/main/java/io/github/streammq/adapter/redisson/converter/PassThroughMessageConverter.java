@@ -1,196 +1,176 @@
 package io.github.streammq.adapter.redisson.converter;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
-import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.util.StringUtils;
 
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 
 /**
- * 透传消息转换器。
+ * 直通消息转换器，body 不经过序列化器，直接以字符串形式存取。
  *
- * <p>与 {@link DefaultMessageConverter} 的差异在于 body 处理：
+ * <p>与 {@link DefaultMessageConverter}（序列化 + Base64 + 压缩）相比，本实现的特点：
  * <ul>
- *   <li>{@code body} 直接以字符串形式存入 Stream Entry 的 {@code body} 字段（{@code toString()}），
- *       不经过 {@code MessageSerializer} 序列化与 Base64 编码</li>
- *   <li>反序列化时 {@code body} 字段直接作为字符串还原</li>
+ *   <li>Body 写入时调用 {@code toString()}，读取时直接作为 String 赋值</li>
+ *   <li>不依赖 {@link io.github.streammq.core.serializer.MessageSerializer}，无序列化开销</li>
+ *   <li>适用于 body 已经是可读字符串的场景（如 JSON 文本）</li>
+ *   <li>系统属性与用户属性合并存储为单个 {@code props} JSON 字段（与 Default 一致）</li>
+ *   <li><b>不支持消息体压缩</b></li>
  * </ul>
  *
- * <p>适用于 body 本身就是字符串/JSON 的场景，避免双重序列化开销。
- *
- * <p>其他字段（tag/keys/props/bornTs 等）映射规则与 {@link DefaultMessageConverter} 一致。
+ * <h3>Stream Entry 字段映射</h3>
+ * <table>
+ *   <tr><th>字段名</th><th>常量</th><th>说明</th></tr>
+ *   <tr><td>{@code body}</td><td>{@link #FIELD_BODY}</td><td>消息体（原始字符串）</td></tr>
+ *   <tr><td>{@code bodyType}</td><td>{@link #FIELD_BODY_TYPE}</td><td>body 类型全限定名</td></tr>
+ *   <tr><td>{@code tag}</td><td>{@link #FIELD_TAG}</td><td>标签</td></tr>
+ *   <tr><td>{@code keys}</td><td>{@link #FIELD_KEYS}</td><td>业务键</td></tr>
+ *   <tr><td>{@code shardingKey}</td><td>{@link #FIELD_SHARDING_KEY}</td><td>分片键</td></tr>
+ *   <tr><td>{@code props}</td><td>{@link #FIELD_PROPS}</td><td>属性 JSON（sys + user 合并）</td></tr>
+ *   <tr><td>{@code bornTs}</td><td>{@link #FIELD_BORN_TS}</td><td>出生时间戳（毫秒）</td></tr>
+ *   <tr><td>{@code bornHost}</td><td>{@link #FIELD_BORN_HOST}</td><td>出生主机</td></tr>
+ *   <tr><td>{@code retryTimes}</td><td>{@link #FIELD_RETRY_TIMES}</td><td>重试次数</td></tr>
+ *   <tr><td>{@code txId}</td><td>{@link #FIELD_TX_ID}</td><td>事务 ID</td></tr>
+ * </table>
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public class PassThroughMessageConverter implements MessageConverter {
+public class PassThroughMessageConverter extends AbstractMessageConverter {
 
-    /** Stream Entry 字段名常量 */
+    // ================================================================
+    // 字段名常量
+    // ================================================================
+
+    /** Stream Entry 字段名：消息体（原始字符串） */
     public static final String FIELD_BODY = "body";
+    /** Stream Entry 字段名：消息体类型全限定名 */
     public static final String FIELD_BODY_TYPE = "bodyType";
+    /** Stream Entry 字段名：标签 */
     public static final String FIELD_TAG = "tag";
+    /** Stream Entry 字段名：业务键 */
     public static final String FIELD_KEYS = "keys";
+    /** Stream Entry 字段名：分片键 */
     public static final String FIELD_SHARDING_KEY = "shardingKey";
+    /** Stream Entry 字段名：属性 JSON（sys + user 合并） */
     public static final String FIELD_PROPS = "props";
+    /** Stream Entry 字段名：出生时间戳（毫秒） */
     public static final String FIELD_BORN_TS = "bornTs";
+    /** Stream Entry 字段名：出生主机 */
     public static final String FIELD_BORN_HOST = "bornHost";
-    public static final String FIELD_RETRY_TIMES = "retryTimes";
+    /** Stream Entry 字段名：事务 ID */
     public static final String FIELD_TX_ID = "txId";
-    public static final String FIELD_ORIGIN_TOPIC = "originTopic";
+    /** Stream Entry 字段名：重试次数 */
+    public static final String FIELD_RETRY_TIMES = "retryTimes";
 
-    private final ObjectMapper propsMapper;
+    /** {@inheritDoc} */ @Override protected String fieldBody() { return FIELD_BODY; }
+    /** {@inheritDoc} */ @Override protected String fieldBodyType() { return FIELD_BODY_TYPE; }
+    /** {@inheritDoc} */ @Override protected String fieldTag() { return FIELD_TAG; }
+    /** {@inheritDoc} */ @Override protected String fieldKeys() { return FIELD_KEYS; }
+    /** {@inheritDoc} */ @Override protected String fieldShardingKey() { return FIELD_SHARDING_KEY; }
+    /** {@inheritDoc} */ @Override protected String fieldBornTs() { return FIELD_BORN_TS; }
+    /** {@inheritDoc} */ @Override protected String fieldBornHost() { return FIELD_BORN_HOST; }
+    /** {@inheritDoc} */ @Override protected String fieldRetryTimes() { return FIELD_RETRY_TIMES; }
+    /** {@inheritDoc} */ @Override protected String fieldTxId() { return FIELD_TX_ID; }
 
     /**
-     * 构造透传转换器。
+     * 无参构造。
      */
-    public PassThroughMessageConverter() {
-        this.propsMapper = new ObjectMapper();
-    }
+    public PassThroughMessageConverter() {}
 
+    // ================================================================
+    // Body 编解码 —— toString / 直接 String 赋值
+    // ================================================================
+
+    /**
+     * 将消息体通过 {@code toString()} 转换为字符串写入字段。
+     *
+     * <p>同时写入 {@code bodyType} 字段以记录原始类型全限定名。
+     * body 为 null 时不做任何写入。
+     *
+     * @param message 消息载体
+     * @param fields  输出 Map
+     */
     @Override
-    public Map<String, String> toStreamFields(Message<?> message) {
-        Objects.requireNonNull(message, "message");
-        Map<String, String> fields = new HashMap<>(16);
-
+    protected void encodeBody(Message<?> message, Map<String, String> fields) {
         Object body = message.getBody();
-        if (Objects.nonNull(body)) {
-            // body 直接 toString()，不经过序列化器
-            fields.put(FIELD_BODY, body.toString());
-            fields.put(FIELD_BODY_TYPE, body.getClass().getName());
-        }
-
-        if (Objects.nonNull(message.getTag())) {
-            fields.put(FIELD_TAG, message.getTag());
-        }
-        if (Objects.nonNull(message.getKeys())) {
-            fields.put(FIELD_KEYS, message.getKeys());
-        }
-        if (Objects.nonNull(message.getShardingKey())) {
-            fields.put(FIELD_SHARDING_KEY, message.getShardingKey());
-        }
-
-        Map<String, String> sysProps = message.getProperties();
-        Map<String, String> userProps = message.getUserProperties();
-        if (!sysProps.isEmpty() || !userProps.isEmpty()) {
-            Map<String, String> merged = new HashMap<>(sysProps.size() + userProps.size());
-            merged.putAll(sysProps);
-            merged.putAll(userProps);
-            try {
-                fields.put(FIELD_PROPS, propsMapper.writeValueAsString(merged));
-            } catch (JsonProcessingException ex) {
-                throw new SerializationException("Failed to serialize message properties", ex);
-            }
-        }
-
-        fields.put(FIELD_BORN_TS, Long.toString(message.getBornTimestamp()));
-
-        if (Objects.nonNull(message.getBornHost())) {
-            fields.put(FIELD_BORN_HOST, message.getBornHost());
-        }
-        if (message.getReconsumeTimes() > 0) {
-            fields.put(FIELD_RETRY_TIMES, Integer.toString(message.getReconsumeTimes()));
-        }
-        if (Objects.nonNull(message.getTransactionId())) {
-            fields.put(FIELD_TX_ID, message.getTransactionId());
-        }
-
-        return fields;
+        if (Objects.isNull(body)) { return; }
+        fields.put(FIELD_BODY, body.toString());
+        fields.put(FIELD_BODY_TYPE, body.getClass().getName());
     }
 
+    /**
+     * 从字段中读取字符串并直接赋值为 body。
+     *
+     * <p>不经过反序列化，不做类型校验。调用方需确保目标类型与 body 字符串兼容。
+     * {@code bodyType} 字段存在时仅作记录，不影响解码逻辑。
+     *
+     * @param fields     Stream Entry 全部字段
+     * @param targetType 目标 body 类型（仅作签名，实际不做类型转换）
+     * @param message    输出消息
+     * @param bodyStr    body 字段原始字符串值
+     */
     @Override
     @SuppressWarnings("unchecked")
-    public <T> Message<T> fromStreamFields(Map<String, String> fields, Class<T> targetType) {
-        Objects.requireNonNull(fields, "fields");
-        Objects.requireNonNull(targetType, "targetType");
+    protected <T> void decodeBody(Map<String, String> fields, Class<T> targetType, Message<T> message, String bodyStr) {
+        message.setBody((T) bodyStr);
+    }
 
-        // topic 不在 Stream Entry 字段中（由 Stream Key 本身表示），使用无参构造 + setter 回填
-        Message<T> message = new Message<>();
+    // ================================================================
+    // Properties 编解码 —— sys + user 合并为单个 JSON
+    // ================================================================
 
-        String bodyStr = fields.get(FIELD_BODY);
-        if (StringUtils.isNotEmpty(bodyStr)) {
-            // body 直接取字符串，不反序列化
-            message.setBody((T) bodyStr);
-        }
-
-        if (fields.containsKey(FIELD_TAG)) {
-            message.setTag(fields.get(FIELD_TAG));
-        }
-        if (fields.containsKey(FIELD_KEYS)) {
-            message.setKeys(fields.get(FIELD_KEYS));
-        }
-        if (fields.containsKey(FIELD_SHARDING_KEY)) {
-            message.setShardingKey(fields.get(FIELD_SHARDING_KEY));
-        }
-        if (fields.containsKey(FIELD_BORN_HOST)) {
-            message.setBornHost(fields.get(FIELD_BORN_HOST));
-        }
-        if (fields.containsKey(FIELD_TX_ID)) {
-            message.setTransactionId(fields.get(FIELD_TX_ID));
-        }
-
-        String propsJson = fields.get(FIELD_PROPS);
-        if (StringUtils.isNotEmpty(propsJson)) {
-            try {
-                Map<String, String> props = propsMapper.readValue(propsJson, new TypeReference<Map<String, String>>() {
-                });
-                message.setUserProperties(props);
-            } catch (JsonProcessingException ex) {
-                throw new SerializationException("Failed to deserialize message properties", ex);
-            }
-        }
-
-        String bornTs = fields.get(FIELD_BORN_TS);
-        if (StringUtils.isNotEmpty(bornTs)) {
-            try {
-                message.setBornTimestamp(Long.parseLong(bornTs));
-            } catch (NumberFormatException ex) {
-                throw new SerializationException("Failed to parse bornTs: " + bornTs, ex);
-            }
-        }
-
-        String retryTimesStr = fields.get(FIELD_RETRY_TIMES);
-        if (StringUtils.isNotEmpty(retryTimesStr)) {
-            try {
-                message.setReconsumeTimes(Integer.parseInt(retryTimesStr));
-            } catch (NumberFormatException ex) {
-                throw new SerializationException("Failed to parse retryTimes: " + retryTimesStr, ex);
-            }
-        }
-
-        return message;
+    /**
+     * 将系统属性和用户属性合并序列化为单个 JSON 字段。
+     *
+     * @param message 消息载体
+     * @param fields  输出 Map
+     */
+    @Override
+    protected void encodeProperties(Message<?> message, Map<String, String> fields) {
+        writePropsJson(fields, FIELD_PROPS, message.getProperties(), message.getUserProperties());
     }
 
     /**
-     * 为消息回填 topic（消费端从 Stream Key 解析后调用）。
+     * 从单个 JSON 字段反序列化属性并写入 userProperties。
      *
-     * @param message 消息
-     * @param topic 主题
-     * @param <T> body 类型
+     * @param message 输出消息
+     * @param fields  Stream Entry 全部字段
+     */
+    @Override
+    protected <T> void decodeProperties(Message<T> message, Map<String, String> fields) {
+        readPropsJson(fields, FIELD_PROPS, message::setUserProperties);
+    }
+
+    /**
+     * @return {@code "pass-through"}
+     */
+    @Override
+    public String name() { return "pass-through"; }
+
+    // ================================================================
+    // 静态工具
+    // ================================================================
+
+    /**
+     * 为消费端还原的消息回填 topic 字段。
+     *
+     * @param message 消息载体
+     * @param topic   主题名
+     * @param <T>     body 类型
      */
     public static <T> void applyTopic(Message<T> message, String topic) {
         message.setTopic(topic);
     }
 
     /**
-     * 为消息回填 MessageId（消费端从 Stream Entry ID 解析后调用）。
+     * 为消费端还原的消息回填 messageId 字段。
      *
-     * @param message 消息
-     * @param streamEntryId Redis Stream Entry ID 字符串
-     * @param <T> body 类型
+     * @param message       消息载体
+     * @param streamEntryId Redis Stream Entry ID
+     * @param <T>           body 类型
      */
     public static <T> void applyMessageId(Message<T> message, String streamEntryId) {
-        message.setMessageId(new MessageId(streamEntryId));
-    }
-
-    @Override
-    public String name() {
-        return "pass-through";
+        message.setMessageId(MessageId.fromStreamEntry(streamEntryId));
     }
 }

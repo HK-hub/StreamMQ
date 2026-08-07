@@ -89,6 +89,8 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         if (Objects.isNull(action)) {
             action = ConsumeAction.RECONSUME_LATER;
         }
+        LOG.info("handleAction: action={}, isSuccess={}, isDefer={}, dlqMode={}, topic={}, group={}, messageId={}",
+            action, action.isSuccess(), action.isDefer(), reg.isDlqMode(), reg.getTopic(), reg.getGroup(), messageId);
         if (action.isSuccess()) {
             try { listener.ack(messageId); } catch (RuntimeException ex) {
                 LOG.warn("ACK failed (messageId={}): {}", messageId, ex.getMessage(), ex); }
@@ -103,6 +105,8 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             return;
         }
         if (reg.isDlqMode()) {
+            LOG.info("Routing to handleDlqFailureWithStrategy: topic={}, group={}, messageId={}, cause={}",
+                reg.getTopic(), reg.getGroup(), messageId, cause != null ? cause.getMessage() : "null");
             handleDlqFailureWithStrategy(message, reg, listener, messageId, cause);
         } else {
             handleReconsumeLater(message, reg, listener, messageId);
@@ -121,8 +125,11 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
      */
     private void handleDlqFailureWithStrategy(Message<?> message, ListenerRegistration<?> reg,
                                               StreamMQListener listener, MessageId messageId, Throwable cause) {
+        LOG.info("handleDlqFailureWithStrategy called: topic={}, group={}, messageId={}, cause={}",
+            reg.getTopic(), reg.getGroup(), messageId, cause != null ? cause.getMessage() : "null");
         try {
             Map<String, String> fields = messageConverter.toStreamFields(message);
+            LOG.info("handleDlqFailureWithStrategy: fields.size={}", fields.size());
             int dlqRetryCount = parseDlqRetryCount(fields);
             String dlqReason = fields.getOrDefault(RetryScheduler.FIELD_DLQ_REASON, "unknown");
             String originalMsgId = fields.getOrDefault(FIELD_ORIGINAL_MESSAGE_ID, messageId.getStreamEntryId());
@@ -131,7 +138,10 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                 dlqRetryCount, dlqReason, reg.getTopic(), originalMsgId,
                 cause, fields, dlqConfig.getMaxDlqRetryAttempts(), dlqConfig.getDlqRetryDelayMs());
 
+            LOG.info("Calling dlqFailureStrategy.decide: strategy={}, dlqRetryCount={}, dlqReason={}",
+                dlqFailureStrategy.name(), dlqRetryCount, dlqReason);
             DlqFailureDecision decision = dlqFailureStrategy.decide(message, ctx);
+            LOG.info("dlqFailureStrategy.decide returned: decision={}", decision.type());
             if (Objects.isNull(decision)) { decision = DlqFailureDecision.drop(); }
 
             
@@ -215,6 +225,18 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                                      StreamMQListener listener, MessageId messageId) {
         try {
             int retryCount = message.getReconsumeTimes();
+            if (retryCount >= reg.getMaxReconsumeTimes()) {
+                LOG.warn("Retry count exceeded consumer maxReconsumeTimes, routing to DLQ " +
+                        "(topic={}, group={}, messageId={}, retryCount={}, maxReconsumeTimes={})",
+                    reg.getTopic(), reg.getGroup(), messageId, retryCount, reg.getMaxReconsumeTimes());
+                if (routeToDlq(message, reg, messageId, RetryScheduler.DLQ_REASON_MAX_RETRY)) {
+                    listener.ack(messageId);
+                } else {
+                    LOG.error("DLQ routing failed, message kept in PEL for re-delivery " +
+                        "(topic={}, group={}, messageId={})", reg.getTopic(), reg.getGroup(), messageId);
+                }
+                return;
+            }
             Duration delay = retryPolicy.nextRetryDelay(retryCount, message);
             if (Objects.isNull(delay)) {
                 LOG.warn("RetryPolicy returned null delay, routing to DLQ " +

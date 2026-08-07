@@ -93,6 +93,7 @@ public class RedissonStreamProducerFactory implements StreamMessageProducerFacto
                 .defaultTimeoutMillis(timeout)
                 .maxLen(maxLen)
                 .compressThreshold(compressThreshold)
+                .maxMessageSize(config.getMaxMessageSize())
                 .build();
             if (Objects.nonNull(compressionCodec)) {
                 producer.setCompressionCodec(compressionCodec);

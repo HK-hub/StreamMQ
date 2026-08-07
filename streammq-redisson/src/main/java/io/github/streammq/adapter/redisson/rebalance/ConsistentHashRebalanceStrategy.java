@@ -6,21 +6,33 @@ import io.github.streammq.core.policy.RebalanceStrategy;
 import java.util.*;
 
 /**
- * 一致性哈希 Rebalance 策略（默认实现）。
+ * 一致性哈希 Rebalance 策略（默认实现），最小化 Consumer 变动时的分片迁移。
  *
- * <p>使用一致性哈希环将分片映射到 Consumer，减少 Rebalance 时的分片迁移量。
- *
- * <p>算法：
+ * <h3>算法</h3>
  * <ol>
- *   <li>为每个 Consumer 节点生成 {@code virtualNodes} 个虚拟节点（默认 160），
- *       哈希值 = {@code hash(consumerName#vnIndex)}</li>
+ *   <li>为每个 Consumer 生成 {@code virtualNodes} 个虚拟节点（默认 160），
+ *       哈希值 = {@code fnv1a(consumerName#vnIndex)}</li>
  *   <li>构建 {@link TreeMap}（哈希值 → Consumer 名）作为哈希环</li>
- *   <li>对每个分片 ID 计算哈希，沿环顺时针找到第一个节点，即为其归属 Consumer</li>
+ *   <li>对每个分片计算哈希（{@code fnv1a("shard-" + shardId)}），
+ *       沿环顺时针查找第一个节点，即为其归属 Consumer</li>
  * </ol>
  *
- * <p>当 Consumer 数量变化时，仅影响相邻区段分片的归属，迁移量最小。
+ * <h3>Consumer 数量变化行为</h3>
+ * <ul>
+ *   <li><b>添加 Consumer</b>：新节点插入哈希环，仅接管相邻区段的部分分片（约 {@code 1/(N+1)} 比例）</li>
+ *   <li><b>移除 Consumer</b>：该节点的分片被顺时针的下一个节点接管，其他分区不受影响</li>
+ *   <li>虚拟节点越多负载越均衡，但内存和计算开销越大。默认 160 是经验值</li>
+ * </ul>
  *
- * <p>哈希函数使用 FNV-1a 32 位变体，分布均匀、计算快速、无依赖。
+ * <h3>特点</h3>
+ * <ul>
+ *   <li><b>最小迁移</b>：Consumer 变化时仅影响相邻区段的分片</li>
+ *   <li><b>近似均衡</b>：分布不完全均匀（标准差约 5-10%，取决于虚拟节点数和分片数）</li>
+ *   <li><b>哈希函数</b>：FNV-1a 32 位变体，分布均匀、计算快速、无外部依赖</li>
+ * </ul>
+ *
+ * <p>适用场景：分片数多（&gt; 100）、Consumer 频繁弹性伸缩的云原生场景。
+ * 此为 StreamMQ 默认策略。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

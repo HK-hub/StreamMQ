@@ -15,10 +15,12 @@ import io.github.streammq.core.util.StringUtils;
 import lombok.Setter;
 import org.redisson.api.*;
 import org.redisson.api.stream.StreamAddArgs;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -68,6 +70,28 @@ public class TransactionScanner implements StreamMQScheduler {
     public static final String STATE_COMMIT = "COMMIT";
     public static final String STATE_ROLLBACK = "ROLLBACK";
     public static final String STATE_UNKNOWN = "UNKNOWN";
+    /** 中间状态：提交中（实例已原子抢占事务，正在执行转投，其它实例见到此状态应等待或重新执行） */
+    public static final String STATE_COMMITTING = "COMMITTING";
+    /** 中间状态：回滚中（实例已原子抢占事务，正在执行删除，其它实例见到此状态应等待或重新执行） */
+    public static final String STATE_ROLLBACKING = "ROLLBACKING";
+
+    /**
+     * Lua 脚本：原子检查状态并设置目标状态，返回旧状态。
+     *
+     * <p>KEYS[1] = txstate Hash key, ARGV[1] = txId, ARGV[2] = targetState
+     *
+     * <p>返回值：
+     * <ul>
+     *   <li>"COMMIT" / "ROLLBACK" — 已是终态，无需操作</li>
+     *   <li>"COMMITTING" / "ROLLBACKING" — 其它实例正在处理，重新执行</li>
+     *   <li>其他 — 旧状态（PREPARE/UNKNOWN），已原子切换到 targetState</li>
+     * </ul>
+     */
+    private static final String LUA_CAS_STATE =
+        "local current = redis.call('HGET', KEYS[1], ARGV[1]);"
+        + "if current == 'COMMIT' or current == 'ROLLBACK' then return current; end;"
+        + "redis.call('HSET', KEYS[1], ARGV[1], ARGV[2]);"
+        + "if current == false then return 'nil'; else return current; end;";
 
     /** 默认扫描间隔 60s */
     public static final long DEFAULT_CHECK_INTERVAL_MS = StreamMQConstants.DEFAULT_CHECK_INTERVAL_MS;
@@ -77,9 +101,9 @@ public class TransactionScanner implements StreamMQScheduler {
     public static final int DEFAULT_BATCH_SIZE = StreamMQConstants.DEFAULT_BATCH_SIZE;
 
     /** txstate Hash 中目标 Topic 字段后缀 */
-    private static final String FIELD_TARGET_SUFFIX = ".target";
+    private static final String FIELD_TARGET_SUFFIX = StreamMQConstants.TX_FIELD_TARGET_SUFFIX;
     /** txstate Hash 中半消息 Stream Entry ID 字段后缀 */
-    private static final String FIELD_HALF_ID_SUFFIX = ".halfId";
+    private static final String FIELD_HALF_ID_SUFFIX = StreamMQConstants.TX_FIELD_HALF_ID_SUFFIX;
     /** 关闭调度线程池时的等待超时（秒） */
     private static final long AWAIT_TERMINATION_SECONDS = StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
 
@@ -241,7 +265,9 @@ public class TransactionScanner implements StreamMQScheduler {
     /**
      * 显式标记事务为 COMMIT：将半消息转投到目标 Stream 并清理调度元数据。
      *
-     * <p>由 {@code DefaultStreamMQTemplate.executeInTransaction} 在本地事务返回 COMMIT 时调用。
+     * <p>通过 Lua 原子抢占事务执行权（PREPARE/UNKNOWN → COMMITTING），
+     * 多实例并发时只有最先执行 Lua 的实例获得执行权，其余实例见到 COMMITTING 后重新执行。
+     * 无需分布式锁。
      *
      * @param txId 事务 ID
      * @param txGroup 事务组名
@@ -249,15 +275,20 @@ public class TransactionScanner implements StreamMQScheduler {
     public void markCommit(String txId, String txGroup) {
         Objects.requireNonNull(txId, "txId");
         Objects.requireNonNull(txGroup, "txGroup");
+        doMarkCommit(txId, txGroup);
+    }
+
+    private void doMarkCommit(String txId, String txGroup) {
         String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
         RMap<String, String> stateMap = redisson.getMap(stateHashKey);
 
-        // 仅在 PREPARE / UNKNOWN 状态下可 COMMIT
-        String currentState = stateMap.get(txId);
-        if (STATE_COMMIT.equals(currentState) || STATE_ROLLBACK.equals(currentState)) {
-            LOG.debug("markCommit ignored, transaction already terminal: txId={}, state={}", txId, currentState);
+        // 原子抢占：PREPARE/UNKNOWN → COMMITTING
+        String oldState = casState(stateHashKey, txId, STATE_COMMITTING);
+        if (STATE_COMMIT.equals(oldState) || STATE_ROLLBACK.equals(oldState)) {
+            LOG.debug("markCommit ignored, transaction already terminal: txId={}, state={}", txId, oldState);
             return;
         }
+        // COMMITTING/ROLLBACKING 表示其它实例正在处理，我们的执行是幂等的
 
         String targetTopic = stateMap.get(txId + FIELD_TARGET_SUFFIX);
         String halfIdStr = stateMap.get(txId + FIELD_HALF_ID_SUFFIX);
@@ -266,10 +297,10 @@ public class TransactionScanner implements StreamMQScheduler {
             return;
         }
 
-        // 转投半消息到目标 Stream
+        // 转投半消息到目标 Stream（幂等：halfStream XDEL 已删除则无操作）
         publishHalfToBusiness(txGroup, halfIdStr, targetTopic);
 
-        // 更新状态 + 清理调度
+        // 终态
         stateMap.put(txId, STATE_COMMIT);
         removeCheckEntry(txId, txGroup);
         cleanupTerminalState(stateMap, txId);
@@ -282,7 +313,8 @@ public class TransactionScanner implements StreamMQScheduler {
     /**
      * 显式标记事务为 ROLLBACK：从 half Stream 删除半消息并清理调度元数据。
      *
-     * <p>由 {@code DefaultStreamMQTemplate.executeInTransaction} 在本地事务返回 ROLLBACK 时调用。
+     * <p>通过 Lua 原子抢占事务执行权（PREPARE/UNKNOWN → ROLLBACKING），
+     * 无需分布式锁。
      *
      * @param txId 事务 ID
      * @param txGroup 事务组名
@@ -290,12 +322,17 @@ public class TransactionScanner implements StreamMQScheduler {
     public void markRollback(String txId, String txGroup) {
         Objects.requireNonNull(txId, "txId");
         Objects.requireNonNull(txGroup, "txGroup");
+        doMarkRollback(txId, txGroup);
+    }
+
+    private void doMarkRollback(String txId, String txGroup) {
         String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
         RMap<String, String> stateMap = redisson.getMap(stateHashKey);
 
-        String currentState = stateMap.get(txId);
-        if (STATE_COMMIT.equals(currentState) || STATE_ROLLBACK.equals(currentState)) {
-            LOG.debug("markRollback ignored, transaction already terminal: txId={}, state={}", txId, currentState);
+        // 原子抢占：PREPARE/UNKNOWN → ROLLBACKING
+        String oldState = casState(stateHashKey, txId, STATE_ROLLBACKING);
+        if (STATE_COMMIT.equals(oldState) || STATE_ROLLBACK.equals(oldState)) {
+            LOG.debug("markRollback ignored, transaction already terminal: txId={}, state={}", txId, oldState);
             return;
         }
 
@@ -319,6 +356,21 @@ public class TransactionScanner implements StreamMQScheduler {
         recordTransactionRollbackMetrics(txGroup);
 
         LOG.info("Transaction rolled back: txId={}, txGroup={}", txId, txGroup);
+    }
+
+    /**
+     * 原子检查并设置事务状态（Lua CAS）。
+     *
+     * @param stateHashKey txstate Hash 的 Redis key
+     * @param txId 事务 ID
+     * @param targetState 目标状态（COMMITTING / ROLLBACKING）
+     * @return 旧状态值（COMMIT/ROLLBACK 表示已是终态，其余表示已抢占）
+     */
+    private String casState(String stateHashKey, String txId, String targetState) {
+        RScript script = redisson.getScript(StringCodec.INSTANCE);
+        return script.eval(RScript.Mode.READ_WRITE,
+            LUA_CAS_STATE, RScript.ReturnType.STATUS,
+            Collections.singletonList(stateHashKey), txId, targetState);
     }
 
     // ===================== 内部扫描逻辑 =====================
@@ -375,16 +427,27 @@ public class TransactionScanner implements StreamMQScheduler {
             removeCheckEntry(txId, txGroup);
             return;
         }
+        // 中间状态（其它实例正在提交/回滚）：重新执行，幂等安全
+        if (STATE_COMMITTING.equals(currentState)) {
+            LOG.debug("Transaction in COMMITTING state, re-executing commit: txId={}", txId);
+            doMarkCommit(txId, txGroup);
+            return;
+        }
+        if (STATE_ROLLBACKING.equals(currentState)) {
+            LOG.debug("Transaction in ROLLBACKING state, re-executing rollback: txId={}", txId);
+            doMarkRollback(txId, txGroup);
+            return;
+        }
         // 非 PREPARE / UNKNOWN 状态视为异常，强制 ROLLBACK
         if (!STATE_PREPARE.equals(currentState) && !STATE_UNKNOWN.equals(currentState)) {
             LOG.warn("Unexpected tx state, force rollback: txId={}, state={}", txId, currentState);
-            markRollback(txId, txGroup);
+            doMarkRollback(txId, txGroup);
             return;
         }
         // 无 checker 视为回查失败 → ROLLBACK
         if (Objects.isNull(checker)) {
             LOG.warn("No TransactionChecker registered for txGroup={}, force rollback: txId={}", txGroup, txId);
-            markRollback(txId, txGroup);
+            doMarkRollback(txId, txGroup);
             return;
         }
 
@@ -394,7 +457,7 @@ public class TransactionScanner implements StreamMQScheduler {
         Message<?> halfMessage = readHalfMessage(txGroup, halfIdStr, targetTopic);
         if (Objects.isNull(halfMessage)) {
             LOG.warn("Half message not found in half stream, force rollback: txId={}, halfId={}", txId, halfIdStr);
-            markRollback(txId, txGroup);
+            doMarkRollback(txId, txGroup);
             return;
         }
 
@@ -418,13 +481,13 @@ public class TransactionScanner implements StreamMQScheduler {
         int checkCount = getCheckCount(txId, txGroup);
 
         switch (state) {
-            case COMMIT_MESSAGE -> markCommit(txId, txGroup);
-            case ROLLBACK_MESSAGE -> markRollback(txId, txGroup);
+            case COMMIT_MESSAGE -> doMarkCommit(txId, txGroup);
+            case ROLLBACK_MESSAGE -> doMarkRollback(txId, txGroup);
             case UNKNOW -> {
                 if (checkCount >= maxCheckTimes) {
                     LOG.warn("Transaction exceeded maxCheckTimes ({}), force rollback: txId={}",
                         maxCheckTimes, txId);
-                    markRollback(txId, txGroup);
+                    doMarkRollback(txId, txGroup);
                 } else {
                     // 更新状态 + 重新调度 + 递增计数
                     stateMap.put(txId, STATE_UNKNOWN);
@@ -548,24 +611,18 @@ public class TransactionScanner implements StreamMQScheduler {
     }
 
     /**
-     * 递增 txId 的回查次数。
-     *
-     * <p>使用 get-put 而非 {@code merge} 以确保在 Redisson RMap 实现下行为一致。
-     * 单线程扫描场景下无需加锁。
+     * 原子递增 txId 的回查次数（Lua HINCRBY）。
      */
+    private static final String LUA_INCR_COUNT =
+        "local val = redis.call('HINCRBY', KEYS[1], ARGV[1], 1);"
+        + "return val;";
+
     private void incrementCheckCount(String txId, String txGroup) {
         String counterKey = StreamMQKeys.transactionCheckCounter(namespace, txGroup);
-        RMap<String, String> counterMap = redisson.getMap(counterKey);
-        String current = counterMap.get(txId);
-        int newVal = 1;
-        if (StringUtils.isNotEmpty(current)) {
-            try {
-                newVal = Integer.parseInt(current) + 1;
-            } catch (NumberFormatException ex) {
-                LOG.warn("Invalid check count value '{}', resetting to 1: txId={}", current, txId);
-            }
-        }
-        counterMap.put(txId, Integer.toString(newVal));
+        RScript script = redisson.getScript(StringCodec.INSTANCE);
+        script.eval(RScript.Mode.READ_WRITE,
+            LUA_INCR_COUNT, RScript.ReturnType.INTEGER,
+            Collections.singletonList(counterKey), txId);
     }
 
     /**

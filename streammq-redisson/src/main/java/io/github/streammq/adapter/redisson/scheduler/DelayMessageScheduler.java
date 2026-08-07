@@ -25,28 +25,34 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/**
- * 延时消息调度器，周期扫描各 {@link DelayLevel} 的 ZSet，将到期消息转投到目标 Stream。
- *
- * <p>存储模型（对齐 04-detailed-design.md §6）：
- * <ul>
- *   <li>ZSet Key: {@code streammq:{ns}:delay:{level}}，score=deliverAt(ms)，member=msgId</li>
- *   <li>payload Hash Key: {@code streammq:{ns}:delay:payload:{msgId}}，存储消息完整字段 + targetTopic + deliverAt</li>
- * </ul>
- *
- * <p>转投流程（Java 端原子操作，非 Lua）：
- * <ol>
- *   <li>{@code ZRANGEBYSCORE 0 now LIMIT 0 batchSize} 获取到期 msgId</li>
- *   <li>对每个 msgId：{@code ZREM}（返回 1 表示成功获取，避免多实例重复处理）</li>
- *   <li>从 payload Hash 读取字段，{@code XADD} 到目标 Stream</li>
- *   <li>{@code DEL} payload Hash</li>
- * </ol>
- *
- * <p>线程安全：所有字段均为 final 或线程安全类型。
- *
- * @author StreamMQ Contributors
- * @since 0.1.0
- */
+    /**
+     * 延时消息调度器，周期扫描各 {@link DelayLevel} 的 ZSet，将到期消息转投到目标 Stream。
+     *
+     * <p>存储模型（对齐 04-detailed-design.md §6）：
+     * <ul>
+     *   <li>ZSet Key: {@code streammq:{ns}:delay:{level}}，score=deliverAt(ms)，member=msgId</li>
+     *   <li>payload Hash Key: {@code streammq:{ns}:delay:payload:{msgId}}，存储消息完整字段 + targetTopic + deliverAt</li>
+     * </ul>
+     *
+     * <p>转投流程（Java 端原子操作，非 Lua）：
+     * <ol>
+     *   <li>{@code ZRANGEBYSCORE 0 now LIMIT 0 batchSize} 获取到期 msgId</li>
+     *   <li>对每个 msgId：{@code ZREM}（返回 1 表示成功获取，避免多实例重复处理）</li>
+     *   <li>从 payload Hash 读取字段，{@code XADD} 到目标 Stream</li>
+     *   <li>{@code DEL} payload Hash</li>
+     * </ol>
+     *
+     * <p>线程安全：所有字段均为 final 或线程安全类型。
+     *
+     * <p>清理机制：
+     * <ul>
+     *   <li>正常流程：每次转投成功后 ZREM 移除 ZSet entry，DEL 删除 payload Hash</li>
+     *   <li>安全兜底：{@link #cleanupOrphanedEntries()} 可清理无对应 payload 的孤立 entry（防止异常堆积）</li>
+     * </ul>
+     *
+     * @author StreamMQ Contributors
+     * @since 0.1.0
+     */
 public class DelayMessageScheduler implements StreamMQScheduler {
 
     private static final Logger LOG = LoggerFactory.getLogger(DelayMessageScheduler.class);
@@ -324,5 +330,62 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     @Override
     public boolean isRunning() {
         return running.get();
+    }
+
+    /**
+     * 清理所有延时 ZSet 中的孤立 entry（无对应 payload Hash 的条目）。
+     *
+     * <p>正常使用中，ZSet entry 在转投成功后会被 ZREM 移除。但在以下异常场景下可能残留：
+     * <ul>
+     *   <li>ZREM 成功但 payload Hash 读取失败后未 re-add ZSet entry</li>
+     *   <li>Redis 崩溃导致部分操作未完成</li>
+     *   <li>代码 Bug 导致 payload Hash 被提前删除</li>
+     * </ul>
+     *
+     * <p>此方法扫描所有延时级别和自定义延时 ZSet，移除没有对应 payload Hash 的 entry。
+     * 建议在系统空闲期定期调用（如每天凌晨）。
+     */
+    public void cleanupOrphanedEntries() {
+        int totalCleaned = 0;
+        for (DelayLevel level : DelayLevel.values()) {
+            totalCleaned += cleanupOrphanedInZSet(StreamMQKeys.delayZSet(namespace, level.name()), level.name());
+        }
+        totalCleaned += cleanupOrphanedInZSet(StreamMQKeys.delayCustomZSet(namespace), "custom");
+        if (totalCleaned > 0) {
+            LOG.info("Cleaned up {} orphaned delay ZSet entries", totalCleaned);
+        }
+    }
+
+    /**
+     * 清理指定 ZSet 中的孤立 entry。
+     *
+     * @param zsetKey  ZSet 的 Redis key
+     * @param label    日志标签（level 名称或 "custom"）
+     * @return 清理的 entry 数量
+     */
+    private int cleanupOrphanedInZSet(String zsetKey, String label) {
+        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
+        // 获取所有 entry（不限时间范围，用于清理）
+        Collection<String> allMembers = zset.readAll();
+        if (allMembers.isEmpty()) {
+            return 0;
+        }
+        int cleaned = 0;
+        for (String msgId : allMembers) {
+            String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
+            RMap<String, String> payloadMap = redisson.getMap(payloadKey);
+            if (!payloadMap.isExists()) {
+                // payload Hash 不存在，ZSet entry 为孤立条目，安全移除
+                boolean removed = zset.remove(msgId);
+                if (removed) {
+                    cleaned++;
+                    LOG.debug("Removed orphaned delay ZSet entry: zsetKey={}, msgId={}", zsetKey, msgId);
+                }
+            }
+        }
+        if (cleaned > 0) {
+            LOG.warn("Cleaned {} orphaned entries from delay ZSet [label={}]", cleaned, label);
+        }
+        return cleaned;
     }
 }

@@ -341,4 +341,32 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
     public String getInstanceId() {
         return instanceId;
     }
+
+    /**
+     * 清理旧实例残留的过期心跳数据。
+     *
+     * <p>广播消费模式下，每次启动时调用此方法清理已超时的旧实例记录，
+     * 防止 instances Hash 无限增长。
+     */
+    @Override
+    public void cleanupStaleGroups() {
+        String instancesKey = StreamMQKeys.consumerGroupInstances(namespace, group);
+        RMap<String, Long> instances = redisson.getMap(instancesKey);
+        Map<String, Long> all = instances.readAllMap();
+        if (CollectionUtils.isEmpty(all)) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        List<String> staleIds = new ArrayList<>();
+        for (Map.Entry<String, Long> entry : all.entrySet()) {
+            if (now - entry.getValue() > instanceTimeoutMs) {
+                staleIds.add(entry.getKey());
+            }
+        }
+        if (!staleIds.isEmpty()) {
+            instances.fastRemove(staleIds.toArray(new String[0]));
+            LOG.info("Cleaned up {} stale instance records for group={}: {}",
+                staleIds.size(), group, staleIds);
+        }
+    }
 }

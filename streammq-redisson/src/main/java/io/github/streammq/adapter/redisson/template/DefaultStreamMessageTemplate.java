@@ -12,6 +12,8 @@ import io.github.streammq.core.filter.ProducerFilter;
 import io.github.streammq.core.filter.ProducerFilterChain;
 import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.message.*;
+import io.github.streammq.core.event.MessageSentEvent;
+import io.github.streammq.core.event.StreamMQEventBus;
 import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.SendCallback;
@@ -64,17 +66,25 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     private final ProducerConfig defaultConfig;
     private final String transactionGroup;
 
-    /** 事务扫描器（可选注入，用于半消息 + 回查的完整事务流程）
-     * -- SETTER --
-     *  设置事务扫描器（可选注入，启用完整的半消息 + 回查事务流程）。
-     * transactionScanner 事务扫描器，可为 null（回退到简化实现）
+    /**
+     * 事务扫描器（可选注入，用于半消息 + 回查的完整事务流程）。
+     *
+     * <p>为 null 时回退到简化实现（直接发送 + 本地事务，无回查保护）。
      */
     @Setter
     private volatile TransactionScanner transactionScanner;
 
-    /** 指标收集器（可选注入，用于记录发送指标，null 时为 no-op） */
+    /**
+     * 指标收集器（可选注入，用于记录发送指标，null 时为 no-op）。
+     */
     @Setter
     private volatile StreamMQMetrics metrics;
+
+    /**
+     * 事件总线（可选注入，用于异步发布消息发送事件，解耦 Tracing/Metrics）。
+     */
+    @Setter
+    private volatile StreamMQEventBus eventBus;
 
     /**
      * 构造 Template。
@@ -138,7 +148,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
             if (!applyInterceptorsBefore(message)) {
                 // 被拦截器中止
                 SendResult aborted = new SendResult(
-                    new MessageId(System.currentTimeMillis() + "-0"),
+                    MessageId.sentinel(),
                     message.getTopic(), message.getTag(), SendStatus.SEND_FAILED,
                     message.getBornTimestamp(), null, "Aborted by interceptor");
                 applyInterceptorsAfter(message, aborted);
@@ -149,7 +159,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
             if (!producerFilterChain.accept(message)) {
                 // 被过滤器拒绝
                 SendResult filtered = new SendResult(
-                    new MessageId(System.currentTimeMillis() + "-0"),
+                    MessageId.sentinel(),
                     message.getTopic(), message.getTag(), SendStatus.SEND_FAILED,
                     message.getBornTimestamp(), null, "Filtered by producer filter");
                 applyInterceptorsAfter(message, filtered);
@@ -249,6 +259,24 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
             // 清理 MDC 结构化日志上下文
             clearProducerMdc();
         }
+    }
+
+    @Override
+    public <T> SendResult syncSend(Message<T> message, SendOptions options) {
+        Objects.requireNonNull(options, "options");
+        return syncSend(message, options.effectiveTimeoutMillis(), options.effectiveRetryTimes());
+    }
+
+    @Override
+    public <T> CompletableFuture<SendResult> asyncSend(Message<T> message, SendOptions options) {
+        Objects.requireNonNull(options, "options");
+        return asyncSend(message);
+    }
+
+    @Override
+    public <T> void asyncSend(Message<T> message, SendOptions options, SendCallback callback) {
+        Objects.requireNonNull(options, "options");
+        asyncSend(message, callback);
     }
 
     @Override
@@ -399,7 +427,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         }
 
         // 2. 构造半消息发送结果
-        MessageId msgId = new MessageId(halfId.toString());
+        MessageId msgId = MessageId.fromStreamMessageId(halfId);
         message.setMessageId(msgId);
         SendResult halfResult = new SendResult(msgId, message.getTopic(), message.getTag(),
             message.getBornTimestamp());

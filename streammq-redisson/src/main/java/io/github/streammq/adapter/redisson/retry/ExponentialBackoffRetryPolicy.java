@@ -82,12 +82,12 @@ public class ExponentialBackoffRetryPolicy implements RetryPolicy {
         if (reconsumeTimes < 0) {
             reconsumeTimes = 0;
         }
-        // delay = min(initial * (multiplier ^ reconsumeTimes), max)
-        // 为防止 reconsumeTimes 过大导致溢出，使用 Math.pow 后转 long
+        if (reconsumeTimes >= maxReconsumeTimes) {
+            return null;
+        }
         double raw = initialMillis * Math.pow(multiplier, reconsumeTimes);
         long delay = (long) Math.min(raw, maxMillis);
         if (delay < 0) {
-            // 溢出保护
             delay = maxMillis;
         }
         return Duration.ofMillis(delay);

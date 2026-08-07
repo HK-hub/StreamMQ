@@ -10,16 +10,23 @@ import java.util.Objects;
 /**
  * 范围分配 Rebalance 策略，对齐 Kafka {@code RangeAssignor}。
  *
- * <p>将分片连续分配给消费者：
+ * <h3>算法</h3>
+ * <p>与 {@link AverageRebalanceStrategy} 数量分配逻辑完全相同，差异在于分配结果——
+ * 同一 Consumer 获得的分片 ID 是<b>连续</b>的（输入列表的相邻元素），
+ * 便于按分片范围做批量读取或范围操作。
+ *
+ * <h3>前提条件</h3>
+ * <p>要获得真正的范围连续性，调用方应先对分片 ID 列表<b>排序</b>后传入。
+ * 未排序的分片列表将得到与 {@link AverageRebalanceStrategy} 完全相同的结果。
+ *
+ * <h3>特点</h3>
  * <ul>
- *   <li>当 {@code shards.size() >= consumers.size()} 时，前 {@code n mod c} 个消费者各分到
- *       {@code floor(n/c) + 1} 个分片，其余各分到 {@code floor(n/c)} 个</li>
- *   <li>当 {@code shards.size() < consumers.size()} 时，前 {@code n} 个消费者各分一个，
- *       其余消费者不分</li>
+ *   <li>分片<b>连续</b>分配给同一 Consumer（与 Average 的交错分配相对）</li>
+ *   <li>Consumer 变动时分片迁移量与 Average 相同（较大）</li>
  * </ul>
  *
- * <p>与 {@link AverageRebalanceStrategy} 在数量均衡上等价，差异在于分片连续分配
- * （同一消费者持有的分片 ID 相邻），便于按分片范围做批量处理。
+ * <p>适用场景：需要按连续分片范围做批量处理的场景（如按分片区间批量消费），
+ * 或需要对齐 Kafka RangeAssignor 行为做迁移的场景。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

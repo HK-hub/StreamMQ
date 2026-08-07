@@ -287,6 +287,38 @@ public class RetryScheduler implements StreamMQScheduler {
         return targets.size();
     }
 
+    /**
+     * 清理所有重试 ZSet 中的孤立 entry（无对应 payload Hash 的条目）。
+     *
+     * <p>与 {@link DelayMessageScheduler#cleanupOrphanedEntries()} 类似，
+     * 清理因异常导致残留的重试 ZSet entry。
+     */
+    public void cleanupOrphanedEntries() {
+        int totalCleaned = 0;
+        for (RetryTarget target : targets.values()) {
+            String retryKey = StreamMQKeys.retryZSet(namespace, target.topic, target.group);
+            RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
+            Collection<String> allMembers = zset.readAll();
+            if (allMembers.isEmpty()) {
+                continue;
+            }
+            for (String msgId : allMembers) {
+                String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
+                RMap<String, String> payloadMap = redisson.getMap(payloadKey);
+                if (!payloadMap.isExists()) {
+                    boolean removed = zset.remove(msgId);
+                    if (removed) {
+                        totalCleaned++;
+                        LOG.debug("Removed orphaned retry ZSet entry: retryKey={}, msgId={}", retryKey, msgId);
+                    }
+                }
+            }
+        }
+        if (totalCleaned > 0) {
+            LOG.warn("Cleaned {} orphaned entries from retry ZSets", totalCleaned);
+        }
+    }
+
     // ===================== 内部类 =====================
 
     /** 重试目标信息 */

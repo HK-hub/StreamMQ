@@ -12,6 +12,7 @@ import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.producer.StreamMessageProducer;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.util.StringUtils;
 import lombok.Builder;
 import lombok.Getter;
@@ -58,6 +59,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
     private final long defaultTimeoutMillis;
     private final int maxLen;
     private final int compressThreshold;
+    private final long maxMessageSize;
     private final ExecutorService asyncExecutor;
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
@@ -94,11 +96,12 @@ public class RedissonStreamProducer implements StreamMessageProducer {
      * @param defaultTimeoutMillis 默认发送超时（毫秒）
      * @param maxLen Stream 最大长度（0 表示不限制）
      * @param compressThreshold 压缩阈值（字节，0 = 禁用）
+     * @param maxMessageSize 单条消息最大大小（字节），发送时校验
      */
     @Builder
     public RedissonStreamProducer(@NonNull RedissonClient redisson, String namespace, @NonNull String group,
                                   @NonNull MessageConverter converter, long defaultTimeoutMillis, int maxLen,
-                                  int compressThreshold) {
+                                  int compressThreshold, long maxMessageSize) {
         this.redisson = redisson;
         this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.group = group;
@@ -106,6 +109,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         this.defaultTimeoutMillis = defaultTimeoutMillis;
         this.maxLen = maxLen;
         this.compressThreshold = compressThreshold;
+        this.maxMessageSize = maxMessageSize > 0 ? maxMessageSize : StreamMQConstants.MAX_MESSAGE_SIZE_BYTES;
         this.asyncExecutor = Executors.newVirtualThreadPerTaskExecutor();
     }
 
@@ -125,6 +129,15 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         }
 
         Map<String, String> fields = converter.toStreamFields(message);
+
+        // 消息大小预检：避免序列化超大消息导致 Redis 内存压力
+        int estimatedSize = estimateFieldSize(fields);
+        if (estimatedSize > maxMessageSize) {
+            throw new StreamMQBrokerException(
+                "Message size " + estimatedSize + " bytes exceeds max " + maxMessageSize
+                    + " bytes for topic " + message.getTopic(), null, null);
+        }
+
         applyCompression(fields);
         String streamKey = StreamMQKeys.topicStream(namespace, message.getTopic());
 
@@ -136,7 +149,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                     "syncSend timeout after " + elapsed + "ms (limit=" + timeoutMillis + "ms)",
                     message.getTopic(), timeoutMillis);
             }
-            MessageId messageId = new MessageId(streamId.toString());
+            MessageId messageId = MessageId.fromStreamMessageId(streamId);
             message.setMessageId(messageId);
             return new SendResult(messageId, message.getTopic(), message.getTag(), message.getBornTimestamp());
         } catch (ProducerTimeoutException ex) {
@@ -218,8 +231,8 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         List<SendResult> results = new ArrayList<>(messageList.size());
         for (Message<?> message : messageList) {
             // 为每条消息生成唯一 ID，避免批量消息 ID 相同导致幂等失效
-            String uniqueId = System.currentTimeMillis() + "-" + Math.abs(UUID.randomUUID().hashCode());
-            MessageId placeholder = new MessageId(uniqueId);
+            MessageId placeholder = MessageId.of(System.currentTimeMillis(),
+                Math.abs(UUID.randomUUID().hashCode()));
             message.setMessageId(placeholder);
             results.add(new SendResult(placeholder, message.getTopic(), message.getTag(), message.getBornTimestamp()));
         }
@@ -260,7 +273,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                 LOG.debug("Custom delay message queued: msgId={}, delayMs={}, deliverAt={}, topic={}",
                     msgId, delayTimeMillis, deliverAt, message.getTopic());
 
-                MessageId messageId = new MessageId(now + "-" + Math.abs(msgId.hashCode()));
+            MessageId messageId = MessageId.of(now, Math.abs(msgId.hashCode()));
                 message.setMessageId(messageId);
                 return new SendResult(messageId, message.getTopic(), message.getTag(), message.getBornTimestamp());
             } catch (RuntimeException ex) {
@@ -323,7 +336,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         }
         byte[] compressed = compressionCodec.compress(bodyBytes);
         fields.put(DefaultMessageConverter.FIELD_BODY, Base64.getEncoder().encodeToString(compressed));
-        fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
+        fields.put(DefaultMessageConverter.FIELD_COMPRESSED, compressionCodec.name());
         LOG.debug("Body compressed: originalSize={}, compressedSize={}, codec={}",
             bodyBytes.length, compressed.length, compressionCodec.name());
     }
@@ -369,6 +382,23 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             args = args.trimNonStrict().maxLen(maxLen).noLimit();
         }
         return args;
+    }
+
+    /**
+     * 估算序列化后 Stream fields 的近似字节大小。
+     *
+     * <p>使用 key.length + value.length 累加，UTF-8 每字符约 1-3 字节，
+     * 实际值取保守估算（每个字符 3 字节）以避免低估。
+     */
+    static int estimateFieldSize(Map<String, String> fields) {
+        int size = 0;
+        for (Map.Entry<String, String> e : fields.entrySet()) {
+            size += e.getKey().length() * 3;
+            if (e.getValue() != null) {
+                size += e.getValue().length() * 3;
+            }
+        }
+        return size;
     }
 
     private void ensureOpen() {
