@@ -1,6 +1,16 @@
 package io.github.streammq.spring.boot.properties;
 
+import io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy;
+import io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy;
+import io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy;
+import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
+import io.github.streammq.adapter.redisson.trace.NoopTraceCollector;
 import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.core.interceptor.TraceCollector;
+import io.github.streammq.core.policy.DlqFailureStrategy;
+import io.github.streammq.core.policy.RebalanceStrategy;
+import io.github.streammq.core.policy.RetryPolicy;
+import io.github.streammq.core.serializer.MessageSerializer;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -93,6 +103,9 @@ public class StreamMQProperties {
     /** 追踪存储与查询配置（v1.0+） */
     private Trace trace = new Trace();
 
+    /** 事件配置 */
+    private Event event = new Event();
+
     // ===================== 子配置 =====================
 
     /**
@@ -100,7 +113,12 @@ public class StreamMQProperties {
      */
     @Data
     public static class Producer {
-        /** 默认生产者组名 */
+        /**
+         * 默认生产者组名。
+         *
+         * <p>命名规则：仅允许字母、数字、连字符（-）和下划线（_），长度不超过 128 字符。
+         * 中文和特殊字符可能导致 Redis 操作失败。
+         */
         private String group = StreamMQConstants.DEFAULT_PRODUCER_GROUP;
         /** 默认发送超时（毫秒） */
         private long sendMessageTimeout = StreamMQConstants.DEFAULT_SEND_TIMEOUT_MS;
@@ -108,10 +126,15 @@ public class StreamMQProperties {
         private int retryTimes = StreamMQConstants.DEFAULT_SYNC_RETRY_TIMES;
         /** Stream 最大长度（0 = 不限制） */
         private int streamMaxLen = 0;
-        /** 序列化器实现类全限定名（默认 JacksonJsonSerializer） */
-        private String serializer = "io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer";
+        /** 序列化器实现类，默认 {@link JacksonJsonSerializer} */
+        private Class<? extends MessageSerializer> serializer = JacksonJsonSerializer.class;
         /** 消息体压缩阈值（字节），body 超过此值时触发压缩，0 = 禁用（默认禁用） */
         private int compressThreshold = 0;
+        /**
+         * 单条消息最大大小（字节），发送时校验。
+         * 默认 512MB（Redis Stream 上限），推荐不超过 1MB。
+         */
+        private long maxMessageSize = StreamMQConstants.MAX_MESSAGE_SIZE_BYTES;
     }
 
     /**
@@ -138,8 +161,8 @@ public class StreamMQProperties {
      */
     @Data
     public static class Dlq {
-        /** 死信消费失败处理策略实现类全限定名（默认 LogAndDropDlqFailureStrategy） */
-        private String failureStrategy = StreamMQConstants.DEFAULT_DLQ_FAILURE_STRATEGY;
+        /** 死信消费失败处理策略实现类，默认 {@link LogAndDropDlqFailureStrategy} */
+        private Class<? extends DlqFailureStrategy> failureStrategy = LogAndDropDlqFailureStrategy.class;
         /** DLQ 消费失败后的最大重试次数（默认 3） */
         private int maxDlqRetryAttempts = StreamMQConstants.DEFAULT_DLQ_MAX_RETRY_ATTEMPTS;
         /** DLQ 消费重试延迟（毫秒，默认 10000） */
@@ -163,8 +186,8 @@ public class StreamMQProperties {
     public static class Retry {
         /** 重试功能开关 */
         private boolean enabled = true;
-        /** 重试策略实现类全限定名 */
-        private String policy = "io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy";
+        /** 重试策略实现类，默认 {@link FixedArrayRetryPolicy} */
+        private Class<? extends RetryPolicy> policy = FixedArrayRetryPolicy.class;
         /** 默认最大重试次数 */
         private int maxReconsumeTimes = StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
         /** 重试 ZSet 扫描间隔 */
@@ -223,8 +246,8 @@ public class StreamMQProperties {
      */
     @Data
     public static class Rebalance {
-        /** 重平衡策略类名 */
-        private String strategy = "io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy";
+        /** 重平衡策略实现类，默认 {@link ConsistentHashRebalanceStrategy} */
+        private Class<? extends RebalanceStrategy> strategy = ConsistentHashRebalanceStrategy.class;
         /** 虚拟节点数（仅一致性哈希策略生效） */
         private int virtualNodes = StreamMQConstants.DEFAULT_VIRTUAL_NODES;
     }
@@ -234,8 +257,8 @@ public class StreamMQProperties {
      */
     @Data
     public static class Tracing {
-        /** 追踪收集器类名 */
-        private String collector = "io.github.streammq.adapter.redisson.trace.NoopTraceCollector";
+        /** 追踪收集器实现类，默认 {@link NoopTraceCollector} */
+        private Class<? extends TraceCollector> collector = NoopTraceCollector.class;
         /** 追踪日志 Topic（仅 Slf4jTraceCollector 生效） */
         private String traceTopic = "";
     }
@@ -252,5 +275,66 @@ public class StreamMQProperties {
         private boolean enabled = false;
         /** 追踪存储方式（{@code redis} 启用 Redis Stream 存储，其他值禁用） */
         private String storage = "none";
+    }
+
+    /**
+     * 事件总线配置，控制各类领域事件的发布开关。
+     *
+     * <p>关闭不关心的事件可减少系统开销，避免每消息都触发异步发布。
+     */
+    @Data
+    public static class Event {
+        /** 消息发送事件开关（默认 false） */
+        private boolean sendEnabled = false;
+        /** 消息消费事件开关（默认 false） */
+        private boolean consumeEnabled = false;
+    }
+
+    /**
+     * 校验配置属性的合法性，在自动装配时调用。
+     *
+     * @throws IllegalArgumentException 如果配置值不合法
+     */
+    public void validate() {
+        if (producer.sendMessageTimeout <= 0) {
+            throw new IllegalArgumentException("streammq.producer.send-message-timeout must be > 0, got: "
+                + producer.sendMessageTimeout);
+        }
+        if (producer.retryTimes < 0) {
+            throw new IllegalArgumentException("streammq.producer.retry-times must be >= 0, got: "
+                + producer.retryTimes);
+        }
+        if (producer.streamMaxLen < 0) {
+            throw new IllegalArgumentException("streammq.producer.stream-max-len must be >= 0, got: "
+                + producer.streamMaxLen);
+        }
+        if (consumer.batchSize <= 0) {
+            throw new IllegalArgumentException("streammq.consumer.batch-size must be > 0, got: "
+                + consumer.batchSize);
+        }
+        if (consumer.pullInterval < 0) {
+            throw new IllegalArgumentException("streammq.consumer.pull-interval must be >= 0, got: "
+                + consumer.pullInterval);
+        }
+        if (consumer.pausedSleepMillis <= 0) {
+            throw new IllegalArgumentException("streammq.consumer.paused-sleep-millis must be > 0, got: "
+                + consumer.pausedSleepMillis);
+        }
+        if (consumer.brokerErrorBackoffMillis <= 0) {
+            throw new IllegalArgumentException("streammq.consumer.broker-error-backoff-millis must be > 0, got: "
+                + consumer.brokerErrorBackoffMillis);
+        }
+        if (consumer.maxBatchSizeLimit <= 0) {
+            throw new IllegalArgumentException("streammq.consumer.max-batch-size-limit must be > 0, got: "
+                + consumer.maxBatchSizeLimit);
+        }
+        if (transaction.maxCheckTimes <= 0) {
+            throw new IllegalArgumentException("streammq.transaction.max-check-times must be > 0, got: "
+                + transaction.maxCheckTimes);
+        }
+        if (dlq.maxDlqRetryAttempts < 0) {
+            throw new IllegalArgumentException("streammq.dlq.max-dlq-retry-attempts must be >= 0, got: "
+                + dlq.maxDlqRetryAttempts);
+        }
     }
 }

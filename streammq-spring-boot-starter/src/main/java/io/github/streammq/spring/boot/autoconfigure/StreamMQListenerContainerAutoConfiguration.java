@@ -15,6 +15,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.ApplicationContext;
 
+import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -38,6 +39,7 @@ import org.springframework.beans.factory.ObjectProvider;
  * @since 0.1.0
  */
 @Configuration(proxyBeanMethods = false)
+@AutoConfigureAfter(StreamMQCoreAutoConfiguration.class)
 @ConditionalOnProperty(prefix = "streammq", name = "enabled", havingValue = "true", matchIfMissing = true)
 @ConditionalOnClass({DefaultStreamMQListenerContainer.class, RedissonClient.class})
 @ConditionalOnBean(StreamMQListenerFactory.class)

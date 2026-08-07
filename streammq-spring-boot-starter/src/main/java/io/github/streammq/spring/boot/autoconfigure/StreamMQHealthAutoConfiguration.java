@@ -1,6 +1,7 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
+import io.github.streammq.core.StreamMQConstants;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,9 +35,6 @@ public class StreamMQHealthAutoConfiguration {
 
     private static final Logger LOG = LoggerFactory.getLogger(StreamMQHealthAutoConfiguration.class);
 
-    /** Redis 健康探测使用的 AtomicLong Key */
-    private static final String HEALTH_CHECK_KEY = "streammq:health-check";
-
     /**
      * StreamMQ 健康检查器：综合检查 Redis 连通性 + Listener 容器状态。
      *
@@ -48,7 +46,7 @@ public class StreamMQHealthAutoConfiguration {
     @ConditionalOnMissingBean(name = "streamMQHealthIndicator")
     public HealthIndicator streamMQHealthIndicator(RedissonClient redisson,
             org.springframework.beans.factory.ObjectProvider<DefaultStreamMQListenerContainer> listenerContainerProvider) {
-        LOG.info("Creating StreamMQHealthIndicator");
+        LOG.debug("Creating StreamMQHealthIndicator");
         return new StreamMQHealthIndicator(redisson, listenerContainerProvider.getIfAvailable());
     }
 
@@ -60,21 +58,25 @@ public class StreamMQHealthAutoConfiguration {
     public StreamMQAdminEndpoint streamMQAdminEndpoint(RedissonClient redisson,
             org.springframework.beans.factory.ObjectProvider<DefaultStreamMQListenerContainer> listenerContainerProvider,
             io.github.streammq.spring.boot.properties.StreamMQProperties properties) {
-        LOG.info("Creating StreamMQAdminEndpoint");
+        LOG.debug("Creating StreamMQAdminEndpoint");
         return new StreamMQAdminEndpoint(redisson,
             listenerContainerProvider.getIfAvailable(), properties.getNamespace());
     }
 
     /**
      * Actuator 端点 Bean（注册到 /actuator/streammq）。
+     *
+     * <p>注入 {@link StreamMQHealthIndicator} 而非泛型 {@link HealthIndicator}，
+     * 避免当容器中存在多个 {@code HealthIndicator} Bean 时触发
+     * {@code NoUniqueBeanDefinitionException}。
      */
     @Bean
     @ConditionalOnMissingBean(name = "streamMQActuatorEndpoint")
     @ConditionalOnClass(org.springframework.boot.actuate.endpoint.annotation.Endpoint.class)
     public StreamMQActuatorEndpoint streamMQActuatorEndpoint(
             StreamMQAdminEndpoint adminEndpoint,
-            org.springframework.beans.factory.ObjectProvider<HealthIndicator> healthIndicatorProvider) {
-        LOG.info("Creating StreamMQActuatorEndpoint");
+            org.springframework.beans.factory.ObjectProvider<StreamMQHealthIndicator> healthIndicatorProvider) {
+        LOG.debug("Creating StreamMQActuatorEndpoint");
         return new StreamMQActuatorEndpoint(adminEndpoint, healthIndicatorProvider.getIfAvailable());
     }
 
@@ -102,9 +104,9 @@ public class StreamMQHealthAutoConfiguration {
         public Health health() {
             Health.Builder builder = Health.up();
             try {
-                // Redis 连通性检查（通过读取一个不存在的 key 来触发网络请求）
+                // Redis 连通性检查（通过 GET 命令验证真实连通性）
                 long start = System.currentTimeMillis();
-                long val = redisson.getAtomicLong(HEALTH_CHECK_KEY).get();
+                long val = redisson.getAtomicLong(StreamMQConstants.HEALTH_CHECK_KEY).get();
                 long elapsed = System.currentTimeMillis() - start;
                 builder.withDetail("redis.ping.latencyMs", elapsed);
                 builder.withDetail("redis.health.value", val);
