@@ -35,6 +35,12 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- StreamMQ Redisson Adapter（集成测试需要真实实现） -->
+        <dependency>
+            <groupId>io.github.streammq</groupId>
+            <artifactId>streammq-redisson</artifactId>
+        </dependency>
+
         <!-- 以下依赖在本模块为 compile scope，因为 src/main/java 中的测试工具类需要使用 -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>

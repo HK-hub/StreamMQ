@@ -42,6 +42,10 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
         LOG.debug("Test listener received message: topic={}, keys={}, body={}",
                 message.getTopic(), message.getKeys(), message.getBody());
 
+        if (latch != null) {
+            latch.countDown();
+        }
+
         if (shouldFail && successCount.get() >= failAfterCount) {
             Exception ex = new RuntimeException("Intentional test failure");
             synchronized (exceptions) {
@@ -52,10 +56,6 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
         }
 
         successCount.incrementAndGet();
-
-        if (latch != null) {
-            latch.countDown();
-        }
 
         return nextAction;
     }
@@ -115,8 +115,39 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
 
     public void awaitMessages(int expectedCount, long timeoutMillis) throws InterruptedException {
         this.latch = new CountDownLatch(expectedCount);
+        // 检查是否已经收到了足够的消息，补偿已收到的消息
+        int alreadyReceived = getReceivedCount();
+        for (int i = 0; i < Math.min(alreadyReceived, expectedCount); i++) {
+            latch.countDown();
+        }
         if (!latch.await(timeoutMillis, TimeUnit.MILLISECONDS)) {
             throw new AssertionError("Timeout waiting for " + expectedCount + " messages, received " + getReceivedCount());
+        }
+    }
+
+    /**
+     * 预设置 latch，用于在发送消息前初始化等待。
+     * @param expectedCount 期望的消息数量
+     */
+    public void prepareAwait(int expectedCount) {
+        this.latch = new CountDownLatch(expectedCount);
+        // 检查是否已经收到了足够的消息
+        if (getReceivedCount() >= expectedCount) {
+            this.latch.countDown();
+        }
+    }
+
+    /**
+     * 等待预设的 latch。
+     * @param timeoutMillis 超时时间（毫秒）
+     * @throws InterruptedException 如果等待被中断
+     */
+    public void waitForMessages(long timeoutMillis) throws InterruptedException {
+        if (latch == null) {
+            throw new IllegalStateException("prepareAwait must be called before waitForMessages");
+        }
+        if (!latch.await(timeoutMillis, TimeUnit.MILLISECONDS)) {
+            throw new AssertionError("Timeout waiting for messages, received " + getReceivedCount());
         }
     }
 }

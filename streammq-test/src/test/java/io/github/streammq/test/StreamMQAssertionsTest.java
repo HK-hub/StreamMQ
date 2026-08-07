@@ -120,7 +120,7 @@ class StreamMQAssertionsTest {
     @Test
     void assertThatMessage_hasUserProperty() {
         Message<String> message = MessageBuilder.<String>withTopic("topic")
-                .userProperty("source", "sample")
+                .withUserProperty("source", "sample")
                 .body("test").build();
         StreamMQAssertions.assertThat(message).hasUserProperty("source", "sample");
     }
