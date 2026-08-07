@@ -19,9 +19,9 @@
         <module>streammq-core</module>
         <module>streammq-redisson</module>
         <module>streammq-spring-boot-starter</module>
-        <module>streammq-tracing</module>
+        <module>streammq-tracing-opentelemetry</module>
         <module>streammq-diagnostics</module>
-        <module>streammq-cloud-k8s</module>
+        <module>streammq-kubernetes</module>
         <module>streammq-spring-cloud-stream-binder</module>
         <module>streammq-test</module>
         <module>streammq-samples</module>

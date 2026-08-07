@@ -19,6 +19,7 @@ dist/
 # 日志
 *.log
 logs/
+debug-output*.txt
 
 # Maven
 .mvn/wrapper/maven-wrapper.jar
