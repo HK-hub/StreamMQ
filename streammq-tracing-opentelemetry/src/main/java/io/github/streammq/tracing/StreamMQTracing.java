@@ -245,7 +245,12 @@ public class StreamMQTracing {
     // ===================== 上下文注入 / 提取 =====================
 
     /**
-     * 将 Span 的 W3C TraceContext 注入消息属性。
+     * 将 Span 的 W3C TraceContext 注入消息用户属性。
+     *
+     * <p>使用 {@code putUserProperty} 而非 {@code putProperty}（系统属性），因为
+     * {@link io.github.streammq.core.converter.MessageConverter} 在 Redis Stream 往返时
+     * 会将系统属性与用户属性合并存储，反序列化后统一写入 {@code userProperties}。
+     * 若注入到系统属性，消费端将无法从 {@code getProperties()} 读回。
      *
      * @param span    生产者 Span
      * @param message 消息载体
@@ -256,25 +261,33 @@ public class StreamMQTracing {
             return;
         }
         String traceparent = "00-" + ctx.getTraceId() + "-" + ctx.getSpanId() + "-" + ctx.getTraceFlags().asHex();
-        message.putProperty(TRACEPARENT_KEY, traceparent);
+        message.putUserProperty(TRACEPARENT_KEY, traceparent);
         TraceState traceState = ctx.getTraceState();
         if (Objects.nonNull(traceState) && !traceState.isEmpty()) {
-            message.putProperty(TRACESTATE_KEY, serializeTraceState(traceState));
+            message.putUserProperty(TRACESTATE_KEY, serializeTraceState(traceState));
         }
     }
 
     /**
      * 从消息属性提取 W3C TraceContext 并构造父级 Context。
      *
+     * <p>查找顺序：先查用户属性（{@code getUserProperties}，Redis Stream 往返后的存储位置），
+     * 再查系统属性（{@code getProperties}，未经序列化的内存直通场景）。
+     *
      * @param message 消息载体
      * @return 包含远程父级 Span 的 Context，无追踪属性时返回当前 Context
      */
     private Context extractTraceContext(Message<?> message) {
-        String traceparent = message.getProperties().get(TRACEPARENT_KEY);
+        String traceparent = message.getUserProperties().get(TRACEPARENT_KEY);
+        String tracestate = message.getUserProperties().get(TRACESTATE_KEY);
+        if (StringUtils.isEmpty(traceparent)) {
+            traceparent = message.getProperties().get(TRACEPARENT_KEY);
+            tracestate = message.getProperties().get(TRACESTATE_KEY);
+        }
         if (StringUtils.isEmpty(traceparent)) {
             return Context.current();
         }
-        SpanContext remoteParent = parseTraceparent(traceparent, message.getProperties().get(TRACESTATE_KEY));
+        SpanContext remoteParent = parseTraceparent(traceparent, tracestate);
         if (Objects.isNull(remoteParent) || !remoteParent.isValid()) {
             return Context.current();
         }

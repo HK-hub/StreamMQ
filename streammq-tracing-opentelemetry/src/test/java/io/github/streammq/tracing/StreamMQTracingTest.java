@@ -56,7 +56,7 @@ class StreamMQTracingTest {
 
         tracing.injectProducerSpan(message);
 
-        String traceparent = message.getProperties().get(StreamMQTracing.TRACEPARENT_KEY);
+        String traceparent = message.getUserProperties().get(StreamMQTracing.TRACEPARENT_KEY);
         assertThat(traceparent).isNotNull().matches(TRACEPARENT_REGEX);
 
         Span producerSpan = tracing.getCurrentProducerSpan();
@@ -121,7 +121,7 @@ class StreamMQTracingTest {
 
         noopTracing.injectProducerSpan(message);
 
-        assertThat(message.getProperties().get(StreamMQTracing.TRACEPARENT_KEY)).isNull();
+        assertThat(message.getUserProperties().get(StreamMQTracing.TRACEPARENT_KEY)).isNull();
         Span span = noopTracing.getCurrentProducerSpan();
         assertThat(span).isNotNull();
         noopTracing.endSpan(span, true);
