@@ -13,7 +13,6 @@ import org.springframework.messaging.MessageHeaders;
 import org.springframework.messaging.MessagingException;
 import org.springframework.messaging.support.ErrorMessage;
 
-import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -62,26 +61,36 @@ public class StreamMQMessageHandler implements MessageHandler {
     /** 消息头：出生主机 */
     public static final String HEADER_BORN_HOST = "streammq_bornHost";
 
+    /** 用户属性键：Spring Messaging contentType（透传内容类型，确保消费端能正确反序列化） */
+    public static final String USER_PROPERTY_CONTENT_TYPE = "contentType";
+
     private final StreamMessageTemplate template;
     private final String topic;
     private final StreamMQProducerProperties producerProperties;
     private final org.springframework.messaging.MessageChannel errorChannel;
+    private final long sendTimeout;
+    private final int retryTimes;
 
     /**
      * 构造消息处理器。
      *
      * @param template StreamMQ 消息模板
      * @param topic 目标主题
-     * @param producerProperties 生产者属性
+     * @param producerProperties 生产者扩展属性
      * @param errorChannel 错误通道（可为 null）
+     * @param sendTimeout 发送超时（毫秒）
+     * @param retryTimes 同步发送重试次数
      */
     public StreamMQMessageHandler(StreamMessageTemplate template, String topic,
                                   StreamMQProducerProperties producerProperties,
-                                  org.springframework.messaging.MessageChannel errorChannel) {
+                                  org.springframework.messaging.MessageChannel errorChannel,
+                                  long sendTimeout, int retryTimes) {
         this.template = Objects.requireNonNull(template, "template");
         this.topic = Objects.requireNonNull(topic, "topic");
         this.producerProperties = Objects.requireNonNull(producerProperties, "producerProperties");
         this.errorChannel = errorChannel;
+        this.sendTimeout = Math.max(1L, sendTimeout);
+        this.retryTimes = Math.max(0, retryTimes);
     }
 
     @Override
@@ -89,8 +98,7 @@ public class StreamMQMessageHandler implements MessageHandler {
         Objects.requireNonNull(message, "message");
         try {
             io.github.streammq.core.message.Message<Object> streamMessage = convert(message);
-            SendResult result = template.syncSend(streamMessage,
-                producerProperties.getSendTimeout(), producerProperties.getRetryTimes());
+            SendResult result = template.syncSend(streamMessage, sendTimeout, retryTimes);
             if (Objects.nonNull(result) && result.getSendStatus() == SendStatus.SEND_OK) {
                 log.debug("消息发送成功: topic={}, messageId={}", topic,
                     Objects.nonNull(result.getMessageId()) ? result.getMessageId() : "N/A");
@@ -142,30 +150,68 @@ public class StreamMQMessageHandler implements MessageHandler {
 
         // 透传消息头为 userProperties（排除 Spring 框架内置头与 StreamMQ 专属头）
         Map<String, String> userProperties = extractUserProperties(springMessage.getHeaders());
+
+        // 单独保存 contentType，确保消费端能按原始内容类型反序列化。
+        // 若消息未显式设置 contentType，根据 payload 类型推断默认值，避免消费端 Base64 编码无法还原。
+        Object contentType = springMessage.getHeaders().get(MessageHeaders.CONTENT_TYPE);
+        if (Objects.isNull(contentType)) {
+            contentType = inferContentType(payload);
+        }
+        if (Objects.nonNull(contentType)) {
+            userProperties.put(USER_PROPERTY_CONTENT_TYPE, contentType.toString());
+        }
         if (io.github.streammq.core.util.CollectionUtils.isNotEmpty(userProperties)) {
             for (Map.Entry<String, String> entry : userProperties.entrySet()) {
-                builder.userProperty(entry.getKey(), entry.getValue());
+                builder.withUserProperty(entry.getKey(), entry.getValue());
             }
         }
 
         return builder.build();
     }
 
+    /** 默认 contentType：纯文本 */
+    private static final String CONTENT_TYPE_TEXT = "text/plain";
+    /** 默认 contentType：JSON */
+    private static final String CONTENT_TYPE_JSON = "application/json";
+    /** 默认 contentType：二进制 */
+    private static final String CONTENT_TYPE_OCTET_STREAM = "application/octet-stream";
+
     /**
-     * 提取消息体：byte[] 直接使用，String 转为 bytes，其他类型保留原值由模板序列化。
+     * 根据 payload 类型推断默认 contentType。
+     *
+     * <p>推断规则：
+     * <ul>
+     *   <li>{@code String} → {@code text/plain}</li>
+     *   <li>{@code byte[]} → {@code application/octet-stream}</li>
+     *   <li>其他类型 → {@code application/json}</li>
+     * </ul>
+     *
+     * @param payload 消息 payload
+     * @return contentType 字符串
+     */
+    private String inferContentType(Object payload) {
+        if (payload instanceof String) {
+            return CONTENT_TYPE_TEXT;
+        }
+        if (payload instanceof byte[]) {
+            return CONTENT_TYPE_OCTET_STREAM;
+        }
+        return CONTENT_TYPE_JSON;
+    }
+
+    /**
+     * 提取消息体：保留原始 payload 类型，由 {@link io.github.streammq.core.converter.MessageConverter}
+     * 统一负责序列化。
+     *
+     * <p>注意：不应在此处将 {@code String} 转换为 {@code byte[]}，否则 {@code DefaultMessageConverter}
+     * 会用 Jackson 将 {@code byte[]} 序列化为 Base64 字符串，消费端反序列化得到的是 Base64 字符串而非原始文本。
      *
      * @param payload 原始 payload
-     * @return 消息体
+     * @return 消息体（保持原类型）
      */
     private Object extractBody(Object payload) {
         if (Objects.isNull(payload)) {
             return new byte[0];
-        }
-        if (payload instanceof byte[] bytes) {
-            return bytes;
-        }
-        if (payload instanceof String str) {
-            return str.getBytes(StandardCharsets.UTF_8);
         }
         return payload;
     }

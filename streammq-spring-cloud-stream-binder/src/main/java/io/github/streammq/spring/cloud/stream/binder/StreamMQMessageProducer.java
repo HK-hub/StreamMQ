@@ -12,6 +12,7 @@ import io.github.streammq.core.message.Message;
 import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.integration.endpoint.MessageProducerSupport;
+import org.springframework.messaging.MessageHeaders;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.util.Assert;
 
@@ -46,6 +47,7 @@ public class StreamMQMessageProducer extends MessageProducerSupport
     private final String topic;
     private final String group;
     private final StreamMQConsumerProperties consumerProperties;
+    private final StreamMQBinderProperties binderProperties;
 
     /** 构造的 StreamMQConsumer 注解代理实例 */
     private StreamMQConsumer annotation;
@@ -57,13 +59,16 @@ public class StreamMQMessageProducer extends MessageProducerSupport
      * @param topic 消费主题
      * @param group 消费者组名
      * @param consumerProperties 消费者属性
+     * @param binderProperties Binder 全局属性（提供默认值）
      */
     public StreamMQMessageProducer(StreamMQListenerContainer listenerContainer, String topic, String group,
-                                   StreamMQConsumerProperties consumerProperties) {
+                                   StreamMQConsumerProperties consumerProperties,
+                                   StreamMQBinderProperties binderProperties) {
         this.listenerContainer = Objects.requireNonNull(listenerContainer, "listenerContainer");
         this.topic = Objects.requireNonNull(topic, "topic");
         this.group = Objects.requireNonNull(group, "group");
         this.consumerProperties = Objects.requireNonNull(consumerProperties, "consumerProperties");
+        this.binderProperties = Objects.requireNonNull(binderProperties, "binderProperties");
     }
 
     @Override
@@ -111,11 +116,15 @@ public class StreamMQMessageProducer extends MessageProducerSupport
             builder.setHeader(StreamMQMessageHandler.HEADER_BORN_HOST, streamMessage.getBornHost());
         }
 
-        // 透传用户属性
+        // 透传用户属性（contentType 单独处理，设置为 Spring Messaging 的 contentType 头）
         Map<String, String> userProperties = streamMessage.getUserProperties();
         if (io.github.streammq.core.util.CollectionUtils.isNotEmpty(userProperties)) {
             for (Map.Entry<String, String> entry : userProperties.entrySet()) {
-                builder.setHeader(entry.getKey(), entry.getValue());
+                if (StreamMQMessageHandler.USER_PROPERTY_CONTENT_TYPE.equals(entry.getKey())) {
+                    builder.setHeader(MessageHeaders.CONTENT_TYPE, entry.getValue());
+                } else {
+                    builder.setHeader(entry.getKey(), entry.getValue());
+                }
             }
         }
 
@@ -146,6 +155,10 @@ public class StreamMQMessageProducer extends MessageProducerSupport
      */
     private StreamMQConsumer buildAnnotation() {
         SelectorType selectorType = parseSelectorType(consumerProperties.getSelectorType());
+        int concurrency = consumerProperties.getConcurrency() > 0
+            ? consumerProperties.getConcurrency() : binderProperties.getConsumeThreadMin();
+        int maxReconsumeTimes = consumerProperties.getMaxAttempts() > 0
+            ? consumerProperties.getMaxAttempts() : binderProperties.getMaxReconsumeTimes();
         InvocationHandler handler = (proxy, method, args) -> {
             String name = method.getName();
             switch (name) {
@@ -153,18 +166,16 @@ public class StreamMQMessageProducer extends MessageProducerSupport
                 case "consumerGroup": return group;
                 case "consumeMode": return ConsumeMode.CLUSTERING;
                 case "messageModel": return MessageModel.CONCURRENT;
-                case "consumeThreadMin": return consumerProperties.getConcurrency() > 0
-                    ? Math.max(1, consumerProperties.getConcurrency()) : 1;
-                case "consumeThreadMax": return consumerProperties.getConcurrency() > 0
-                    ? Math.max(1, consumerProperties.getConcurrency()) : 64;
-                case "maxReconsumeTimes": return consumerProperties.getMaxAttempts();
-                case "consumeTimeout": return 30000L;
+                case "consumeThreadMin": return Math.max(1, concurrency);
+                case "consumeThreadMax": return Math.max(concurrency, binderProperties.getConsumeThreadMax());
+                case "maxReconsumeTimes": return maxReconsumeTimes;
+                case "consumeTimeout": return binderProperties.getConsumeTimeout();
                 case "selectorExpression": return consumerProperties.getSelectorExpression();
                 case "selectorType": return selectorType;
-                case "pullBatchSize": return 32;
+                case "pullBatchSize": return binderProperties.getPullBatchSize();
                 case "shardCount": return consumerProperties.getShardCount();
                 case "enableMsgTrace": return consumerProperties.isEnableMsgTrace();
-                case "namespace": return "";
+                case "namespace": return binderProperties.getNamespace();
                 case "dlqMode": return false;
                 case "enable": return true;
                 case "annotationType": return StreamMQConsumer.class;

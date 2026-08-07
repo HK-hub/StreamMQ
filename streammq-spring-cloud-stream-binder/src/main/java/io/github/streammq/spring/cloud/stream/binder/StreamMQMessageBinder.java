@@ -8,6 +8,10 @@ import lombok.extern.slf4j.Slf4j;
 
 import org.springframework.cloud.stream.binder.AbstractMessageChannelBinder;
 import org.springframework.cloud.stream.binder.BinderHeaders;
+import org.springframework.cloud.stream.binder.BinderSpecificPropertiesProvider;
+import org.springframework.cloud.stream.binder.ExtendedConsumerProperties;
+import org.springframework.cloud.stream.binder.ExtendedProducerProperties;
+import org.springframework.cloud.stream.binder.ExtendedPropertiesBinder;
 import org.springframework.cloud.stream.provisioning.ConsumerDestination;
 import org.springframework.cloud.stream.provisioning.ProducerDestination;
 import org.springframework.cloud.stream.provisioning.ProvisioningException;
@@ -29,9 +33,18 @@ import java.util.Objects;
  *       注册 StreamMQ 消费者并将收到的消息转换为 Spring Integration 消息输出</li>
  * </ul>
  *
+ * <p>实现 {@link ExtendedPropertiesBinder} 以支持 StreamMQ 特有的扩展属性：
+ * <ul>
+ *   <li>消费者扩展属性 {@link StreamMQConsumerProperties}：selectorExpression / selectorType /
+ *       shardCount / enableMsgTrace / concurrency / maxAttempts</li>
+ *   <li>生产者扩展属性 {@link StreamMQProducerProperties}：tag / keys / shardingKey /
+ *       sendTimeout / retryTimes</li>
+ * </ul>
+ *
  * <p>用户通过 {@code spring.cloud.stream.bindings.<bindingName>.binder: streammq} 指定使用本 Binder，
- * 生产/消费的 StreamMQ 特有配置通过 {@link StreamMQProducerProperties} /
- * {@link StreamMQConsumerProperties} 在 per-binding 级别覆盖。
+ * 生产/消费的 StreamMQ 特有配置通过 {@code spring.cloud.stream.streammq.bindings.<bindingName>.producer.*}
+ * 或 {@code spring.cloud.stream.streammq.bindings.<bindingName>.consumer.*} 在 per-binding 级别覆盖，
+ * 也可通过 {@code spring.cloud.stream.streammq.default.*} 配置全局默认值。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -39,26 +52,22 @@ import java.util.Objects;
 @Getter
 @Slf4j
 public class StreamMQMessageBinder
-        extends AbstractMessageChannelBinder<StreamMQConsumerProperties, StreamMQProducerProperties,
-                StreamMQMessageBinder.StreamMQProvisioningProvider> {
+        extends AbstractMessageChannelBinder<ExtendedConsumerProperties<StreamMQConsumerProperties>,
+                ExtendedProducerProperties<StreamMQProducerProperties>,
+                StreamMQMessageBinder.StreamMQProvisioningProvider>
+        implements ExtendedPropertiesBinder<MessageChannel, StreamMQConsumerProperties, StreamMQProducerProperties> {
 
-    /**
-     * -- GETTER --
-     *  返回 StreamMQ 消息模板。
-     */
+    /** StreamMQ 消息模板（生产端 API） */
     private final StreamMessageTemplate template;
 
-    /**
-     * -- GETTER --
-     *  返回 StreamMQ Listener 容器。
-     */
+    /** StreamMQ Listener 容器（消费端入口） */
     private final StreamMQListenerContainer listenerContainer;
 
-    /**
-     * -- GETTER --
-     *  返回 Binder 全局属性。
-     */
+    /** Binder 全局属性 */
     private final StreamMQBinderProperties binderProperties;
+
+    /** 扩展绑定属性（per-binding 的 StreamMQ 特有属性） */
+    private StreamMQExtendedBindingProperties extendedBindingProperties;
 
     /**
      * 构造 StreamMQ Binder。
@@ -76,24 +85,59 @@ public class StreamMQMessageBinder
         this.binderProperties = Objects.requireNonNull(binderProperties, "binderProperties");
     }
 
+    /**
+     * 注入扩展绑定属性，由 {@link StreamMQBinderConfiguration} 在创建 Binder 时调用。
+     *
+     * @param extendedBindingProperties 扩展绑定属性
+     */
+    public void setExtendedBindingProperties(StreamMQExtendedBindingProperties extendedBindingProperties) {
+        this.extendedBindingProperties = Objects.requireNonNull(extendedBindingProperties, "extendedBindingProperties");
+    }
+
+    @Override
+    public StreamMQConsumerProperties getExtendedConsumerProperties(String bindingName) {
+        return this.extendedBindingProperties.getExtendedConsumerProperties(bindingName);
+    }
+
+    @Override
+    public StreamMQProducerProperties getExtendedProducerProperties(String bindingName) {
+        return this.extendedBindingProperties.getExtendedProducerProperties(bindingName);
+    }
+
+    @Override
+    public String getDefaultsPrefix() {
+        return this.extendedBindingProperties.getDefaultsPrefix();
+    }
+
+    @Override
+    public Class<? extends BinderSpecificPropertiesProvider> getExtendedPropertiesEntryClass() {
+        return this.extendedBindingProperties.getExtendedPropertiesEntryClass();
+    }
+
     @Override
     protected MessageHandler createProducerMessageHandler(ProducerDestination destination,
-                                                          StreamMQProducerProperties producerProperties,
+                                                          ExtendedProducerProperties<StreamMQProducerProperties> producerProperties,
                                                           MessageChannel errorChannel) throws Exception {
+        StreamMQProducerProperties extension = producerProperties.getExtension();
+        long sendTimeout = extension.getSendTimeout() > 0
+            ? extension.getSendTimeout() : binderProperties.getSendTimeout();
+        int retryTimes = extension.getRetryTimes() >= 0
+            ? extension.getRetryTimes() : binderProperties.getRetryTimes();
         log.info("创建 StreamMQ 生产者: destination={}, tag={}, shardingKey={}, sendTimeout={}, retryTimes={}",
-            destination.getName(), producerProperties.getTag(), producerProperties.getShardingKey(),
-            producerProperties.getSendTimeout(), producerProperties.getRetryTimes());
-        return new StreamMQMessageHandler(template, destination.getName(), producerProperties, errorChannel);
+            destination.getName(), extension.getTag(), extension.getShardingKey(), sendTimeout, retryTimes);
+        return new StreamMQMessageHandler(template, destination.getName(), extension, errorChannel,
+            sendTimeout, retryTimes);
     }
 
     @Override
     protected MessageProducer createConsumerEndpoint(ConsumerDestination destination, String group,
-                                                     StreamMQConsumerProperties consumerProperties) throws Exception {
+                                                     ExtendedConsumerProperties<StreamMQConsumerProperties> consumerProperties)
+            throws Exception {
+        StreamMQConsumerProperties extension = consumerProperties.getExtension();
         log.info("创建 StreamMQ 消费者: destination={}, group={}, selectorExpression={}, shardCount={}",
-            destination.getName(), group, consumerProperties.getSelectorExpression(),
-            consumerProperties.getShardCount());
+            destination.getName(), group, extension.getSelectorExpression(), extension.getShardCount());
         return new StreamMQMessageProducer(
-            listenerContainer, destination.getName(), group, consumerProperties);
+            listenerContainer, destination.getName(), group, extension, binderProperties);
     }
 
     /**
@@ -106,11 +150,12 @@ public class StreamMQMessageBinder
      * @since 0.1.0
      */
     public static class StreamMQProvisioningProvider
-            implements ProvisioningProvider<StreamMQConsumerProperties, StreamMQProducerProperties> {
+            implements ProvisioningProvider<ExtendedConsumerProperties<StreamMQConsumerProperties>,
+                    ExtendedProducerProperties<StreamMQProducerProperties>> {
 
         @Override
         public ProducerDestination provisionProducerDestination(String name,
-                                                                 StreamMQProducerProperties properties)
+                                                                 ExtendedProducerProperties<StreamMQProducerProperties> properties)
                 throws ProvisioningException {
             if (StringUtils.isEmpty(name)) {
                 throw new ProvisioningException("Producer destination name must not be empty");
@@ -120,7 +165,7 @@ public class StreamMQMessageBinder
 
         @Override
         public ConsumerDestination provisionConsumerDestination(String name, String group,
-                                                                StreamMQConsumerProperties properties)
+                                                                ExtendedConsumerProperties<StreamMQConsumerProperties> properties)
                 throws ProvisioningException {
             if (StringUtils.isEmpty(name)) {
                 throw new ProvisioningException("Consumer destination name must not be empty");

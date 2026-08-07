@@ -25,6 +25,7 @@ import org.springframework.context.annotation.Configuration;
  *   <li>{@link StreamMQMessageBinder} - 注册为 Spring Bean，由 Spring Cloud Stream 的
  *       {@code BinderFactory} 自动发现并使用</li>
  *   <li>{@link StreamMQBinderHealthIndicator} - 健康检查（仅当 Actuator 在 classpath 时生效）</li>
+ *   <li>{@link StreamMQExtendedBindingProperties} - per-binding 扩展属性</li>
  * </ol>
  *
  * <p>用户在 {@code application.yml} 中通过如下配置指定使用 StreamMQ Binder：
@@ -37,6 +38,11 @@ import org.springframework.context.annotation.Configuration;
  *         binder:
  *           namespace: streammq
  *           send-timeout: 3000
+ *         bindings:
+ *           myBinding-in-0:
+ *             consumer:
+ *               selectorExpression: "tag1 || tag2"
+ *               shardCount: 8
  * }</pre>
  *
  * @author StreamMQ Contributors
@@ -47,7 +53,7 @@ import org.springframework.context.annotation.Configuration;
 @ConditionalOnClass(StreamMessageTemplate.class)
 @ConditionalOnProperty(prefix = "spring.cloud.stream.streammq.binder", name = "enabled",
         havingValue = "true", matchIfMissing = true)
-@EnableConfigurationProperties(StreamMQBinderProperties.class)
+@EnableConfigurationProperties({StreamMQBinderProperties.class, StreamMQExtendedBindingProperties.class})
 public class StreamMQBinderConfiguration {
 
     /**
@@ -60,16 +66,20 @@ public class StreamMQBinderConfiguration {
      * @param template StreamMQ 消息模板
      * @param listenerContainer StreamMQ Listener 容器
      * @param binderProperties Binder 全局属性
+     * @param extendedBindingProperties per-binding 扩展属性
      * @return StreamMQ Binder 实例
      */
     @Bean
     @ConditionalOnMissingBean(StreamMQMessageBinder.class)
     public StreamMQMessageBinder streamMQMessageBinder(StreamMessageTemplate template,
             StreamMQListenerContainer listenerContainer,
-            StreamMQBinderProperties binderProperties) {
+            StreamMQBinderProperties binderProperties,
+            StreamMQExtendedBindingProperties extendedBindingProperties) {
         log.info("创建 StreamMQMessageBinder: namespace={}, sendTimeout={}, retryTimes={}",
             binderProperties.getNamespace(), binderProperties.getSendTimeout(), binderProperties.getRetryTimes());
-        return new StreamMQMessageBinder(template, listenerContainer, binderProperties);
+        StreamMQMessageBinder binder = new StreamMQMessageBinder(template, listenerContainer, binderProperties);
+        binder.setExtendedBindingProperties(extendedBindingProperties);
+        return binder;
     }
 
     /**

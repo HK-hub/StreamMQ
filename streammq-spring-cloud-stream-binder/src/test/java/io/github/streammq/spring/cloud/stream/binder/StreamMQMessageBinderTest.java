@@ -16,6 +16,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import org.springframework.cloud.stream.binder.ExtendedConsumerProperties;
+import org.springframework.cloud.stream.binder.ExtendedProducerProperties;
 import org.springframework.cloud.stream.provisioning.ConsumerDestination;
 import org.springframework.cloud.stream.provisioning.ProducerDestination;
 import org.springframework.messaging.MessageHandler;
@@ -79,6 +81,7 @@ class StreamMQMessageBinderTest {
     void setUp() {
         StreamMQBinderProperties binderProperties = new StreamMQBinderProperties();
         binder = new StreamMQMessageBinder(template, listenerContainer, binderProperties);
+        binder.setExtendedBindingProperties(new StreamMQExtendedBindingProperties());
     }
 
     @Test
@@ -90,10 +93,14 @@ class StreamMQMessageBinderTest {
             SendStatus.SEND_OK, System.currentTimeMillis(), null, null);
         when(template.syncSend(any(), anyLong(), anyInt())).thenReturn(sendResult);
 
-        StreamMQProducerProperties producerProperties = new StreamMQProducerProperties();
-        producerProperties.setTag("tag1");
-        producerProperties.setShardingKey("key1");
-        producerProperties.setKeys("businessKey1");
+        StreamMQProducerProperties extension = new StreamMQProducerProperties();
+        extension.setTag("tag1");
+        extension.setShardingKey("key1");
+        extension.setKeys("businessKey1");
+        extension.setSendTimeout(5000);
+        extension.setRetryTimes(3);
+        ExtendedProducerProperties<StreamMQProducerProperties> producerProperties =
+            new ExtendedProducerProperties<>(extension);
 
         // When
         MessageHandler handler = binder.createProducerMessageHandler(
@@ -108,7 +115,7 @@ class StreamMQMessageBinderTest {
 
         // Then
         verify(template, times(1)).syncSend(any(io.github.streammq.core.message.Message.class),
-            eq(producerProperties.getSendTimeout()), eq(producerProperties.getRetryTimes()));
+            eq(5000L), eq(3));
     }
 
     @Test
@@ -119,7 +126,9 @@ class StreamMQMessageBinderTest {
         when(template.syncSend(any(), anyLong(), anyInt()))
             .thenThrow(new RuntimeException("连接失败"));
 
-        StreamMQProducerProperties producerProperties = new StreamMQProducerProperties();
+        StreamMQProducerProperties extension = new StreamMQProducerProperties();
+        ExtendedProducerProperties<StreamMQProducerProperties> producerProperties =
+            new ExtendedProducerProperties<>(extension);
 
         // When
         MessageHandler handler = binder.createProducerMessageHandler(
@@ -140,9 +149,11 @@ class StreamMQMessageBinderTest {
         String group = "test-group";
         when(consumerDestination.getName()).thenReturn(topic);
 
-        StreamMQConsumerProperties consumerProperties = new StreamMQConsumerProperties();
-        consumerProperties.setSelectorExpression("tag1 || tag2");
-        consumerProperties.setShardCount(8);
+        StreamMQConsumerProperties extension = new StreamMQConsumerProperties();
+        extension.setSelectorExpression("tag1 || tag2");
+        extension.setShardCount(8);
+        ExtendedConsumerProperties<StreamMQConsumerProperties> consumerProperties =
+            new ExtendedConsumerProperties<>(extension);
 
         // When
         org.springframework.integration.core.MessageProducer producer =
@@ -162,7 +173,9 @@ class StreamMQMessageBinderTest {
     void messageProducer_onMessage_shouldConvertAndEmit() throws Exception {
         // Given
         when(consumerDestination.getName()).thenReturn("test-topic");
-        StreamMQConsumerProperties consumerProperties = new StreamMQConsumerProperties();
+        StreamMQConsumerProperties extension = new StreamMQConsumerProperties();
+        ExtendedConsumerProperties<StreamMQConsumerProperties> consumerProperties =
+            new ExtendedConsumerProperties<>(extension);
 
         StreamMQMessageProducer producer = (StreamMQMessageProducer) binder.createConsumerEndpoint(
             consumerDestination, "test-group", consumerProperties);
@@ -204,7 +217,9 @@ class StreamMQMessageBinderTest {
     @DisplayName("StreamMQMessageProducer onMessage 收到空消息返回 RECONSUME_LATER")
     void messageProducer_onMessage_nullMessage_shouldReconsume() throws Exception {
         when(consumerDestination.getName()).thenReturn("test-topic");
-        StreamMQConsumerProperties consumerProperties = new StreamMQConsumerProperties();
+        StreamMQConsumerProperties extension = new StreamMQConsumerProperties();
+        ExtendedConsumerProperties<StreamMQConsumerProperties> consumerProperties =
+            new ExtendedConsumerProperties<>(extension);
 
         StreamMQMessageProducer producer = (StreamMQMessageProducer) binder.createConsumerEndpoint(
             consumerDestination, "test-group", consumerProperties);
@@ -250,7 +265,7 @@ class StreamMQMessageBinderTest {
     @DisplayName("StreamMQBinderProperties 默认值正确")
     void binderProperties_defaultsAreCorrect() {
         StreamMQBinderProperties props = new StreamMQBinderProperties();
-        assertThat(props.getNamespace()).isEqualTo("streammq");
+        assertThat(props.getNamespace()).isEqualTo("");
         assertThat(props.getSendTimeout()).isEqualTo(3000L);
         assertThat(props.getRetryTimes()).isEqualTo(2);
         assertThat(props.getConsumeThreadMin()).isEqualTo(1);
@@ -268,16 +283,34 @@ class StreamMQMessageBinderTest {
         assertThat(props.getSelectorType()).isEqualTo("TAG");
         assertThat(props.getShardCount()).isEqualTo(4);
         assertThat(props.isEnableMsgTrace()).isFalse();
+        assertThat(props.getConcurrency()).isEqualTo(-1);
+        assertThat(props.getMaxAttempts()).isEqualTo(-1);
     }
 
     @Test
     @DisplayName("StreamMQProducerProperties 默认值正确")
     void producerProperties_defaultsAreCorrect() {
         StreamMQProducerProperties props = new StreamMQProducerProperties();
-        assertThat(props.getSendTimeout()).isEqualTo(3000L);
-        assertThat(props.getRetryTimes()).isEqualTo(2);
+        assertThat(props.getSendTimeout()).isEqualTo(-1);
+        assertThat(props.getRetryTimes()).isEqualTo(-1);
         assertThat(props.getTag()).isNull();
         assertThat(props.getKeys()).isNull();
         assertThat(props.getShardingKey()).isNull();
+    }
+
+    @Test
+    @DisplayName("getExtendedConsumerProperties 返回扩展消费者属性")
+    void getExtendedConsumerProperties_shouldReturnExtension() {
+        StreamMQConsumerProperties props = binder.getExtendedConsumerProperties("test-binding");
+        assertThat(props).isNotNull();
+        assertThat(props.getSelectorExpression()).isEqualTo("*");
+    }
+
+    @Test
+    @DisplayName("getExtendedProducerProperties 返回扩展生产者属性")
+    void getExtendedProducerProperties_shouldReturnExtension() {
+        StreamMQProducerProperties props = binder.getExtendedProducerProperties("test-binding");
+        assertThat(props).isNotNull();
+        assertThat(props.getSendTimeout()).isEqualTo(-1);
     }
 }

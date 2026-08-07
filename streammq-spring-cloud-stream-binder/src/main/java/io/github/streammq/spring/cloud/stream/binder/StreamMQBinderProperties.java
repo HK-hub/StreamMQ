@@ -34,8 +34,14 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @Data
 public class StreamMQBinderProperties {
 
-    /** 命名空间（用于多租户/多环境隔离），默认 "streammq" */
-    private String namespace = "streammq";
+    /**
+     * 命名空间（用于多租户/多环境隔离）。
+     *
+     * <p>默认为空字符串，表示使用 {@code streammq.namespace} 配置的全局命名空间
+     * （即 Listener 容器的 defaultNamespace）。设置非空值可让 Binder 使用独立命名空间，
+     * 但通常应保持为空以与生产者（{@link io.github.streammq.core.template.StreamMessageTemplate}）一致。
+     */
+    private String namespace = "";
 
     /** 默认发送超时（毫秒），默认 3000 */
     private long sendTimeout = 3000L;

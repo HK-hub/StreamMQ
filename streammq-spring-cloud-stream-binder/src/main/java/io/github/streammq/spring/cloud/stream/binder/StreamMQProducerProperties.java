@@ -1,32 +1,31 @@
 package io.github.streammq.spring.cloud.stream.binder;
 
-import org.springframework.cloud.stream.binder.ProducerProperties;
-
 /**
- * StreamMQ 生产者扩展属性。
+ * StreamMQ 生产者扩展属性（Plain POJO，不继承 {@link org.springframework.cloud.stream.binder.ProducerProperties}）。
  *
- * <p>继承 Spring Cloud Stream {@link ProducerProperties}，额外暴露 StreamMQ 特有的生产端配置项。
- * 用户可通过 {@code spring.cloud.stream.streammq.bindings.<bindingName>.producer.*} 前缀进行配置。
+ * <p>本类仅承载 StreamMQ 特有的生产端配置项，由 Spring Cloud Stream 的
+ * {@link org.springframework.cloud.stream.binder.ExtendedProducerProperties} 包装后
+ * 传递给 {@link StreamMQMessageBinder}。
+ *
+ * <p>用户可通过 {@code spring.cloud.stream.streammq.bindings.<bindingName>.producer.*} 前缀进行配置，
+ * 或通过 {@code spring.cloud.stream.streammq.default.producer.*} 配置全局默认值。
  *
  * <p>属性说明：
  * <ul>
  *   <li>{@code tag} - 消息标签，默认 null</li>
  *   <li>{@code keys} - 业务键，默认 null</li>
  *   <li>{@code shardingKey} - 分片键（顺序消息路由），默认 null</li>
- *   <li>{@code sendTimeout} - 发送超时（毫秒），默认 3000</li>
- *   <li>{@code retryTimes} - 同步发送重试次数，默认 2</li>
+ *   <li>{@code sendTimeout} - 发送超时（毫秒），&lt;=0 表示使用 Binder 全局默认值</li>
+ *   <li>{@code retryTimes} - 同步发送重试次数，&lt;0 表示使用 Binder 全局默认值</li>
  * </ul>
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public class StreamMQProducerProperties extends ProducerProperties {
+public class StreamMQProducerProperties {
 
-    /** 默认发送超时（毫秒） */
-    public static final long DEFAULT_SEND_TIMEOUT = 3000L;
-
-    /** 默认重试次数 */
-    public static final int DEFAULT_RETRY_TIMES = 2;
+    /** 默认值标记：表示未设置，使用 Binder 全局默认值 */
+    public static final int UNSET = -1;
 
     /** 消息标签 */
     private String tag;
@@ -37,11 +36,11 @@ public class StreamMQProducerProperties extends ProducerProperties {
     /** 分片键（顺序消息路由） */
     private String shardingKey;
 
-    /** 发送超时（毫秒） */
-    private long sendTimeout = DEFAULT_SEND_TIMEOUT;
+    /** 发送超时（毫秒），&lt;=0 表示使用 Binder 全局默认值 */
+    private long sendTimeout = UNSET;
 
-    /** 同步发送重试次数 */
-    private int retryTimes = DEFAULT_RETRY_TIMES;
+    /** 同步发送重试次数，&lt;0 表示使用 Binder 全局默认值 */
+    private int retryTimes = UNSET;
 
     /**
      * 返回消息标签。
@@ -100,7 +99,7 @@ public class StreamMQProducerProperties extends ProducerProperties {
     /**
      * 返回发送超时（毫秒）。
      *
-     * @return 超时毫秒数
+     * @return 超时毫秒数，&lt;=0 表示使用 Binder 全局默认值
      */
     public long getSendTimeout() {
         return sendTimeout;
@@ -109,7 +108,7 @@ public class StreamMQProducerProperties extends ProducerProperties {
     /**
      * 设置发送超时（毫秒）。
      *
-     * @param sendTimeout 超时毫秒数
+     * @param sendTimeout 超时毫秒数，&lt;=0 表示使用 Binder 全局默认值
      */
     public void setSendTimeout(long sendTimeout) {
         this.sendTimeout = sendTimeout;
@@ -118,7 +117,7 @@ public class StreamMQProducerProperties extends ProducerProperties {
     /**
      * 返回同步发送重试次数。
      *
-     * @return 重试次数
+     * @return 重试次数，&lt;0 表示使用 Binder 全局默认值
      */
     public int getRetryTimes() {
         return retryTimes;
@@ -127,7 +126,7 @@ public class StreamMQProducerProperties extends ProducerProperties {
     /**
      * 设置同步发送重试次数。
      *
-     * @param retryTimes 重试次数
+     * @param retryTimes 重试次数，&lt;0 表示使用 Binder 全局默认值
      */
     public void setRetryTimes(int retryTimes) {
         this.retryTimes = retryTimes;

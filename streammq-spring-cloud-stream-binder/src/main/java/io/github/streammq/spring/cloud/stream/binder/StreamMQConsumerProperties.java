@@ -1,12 +1,14 @@
 package io.github.streammq.spring.cloud.stream.binder;
 
-import org.springframework.cloud.stream.binder.ConsumerProperties;
-
 /**
- * StreamMQ 消费者扩展属性。
+ * StreamMQ 消费者扩展属性（Plain POJO，不继承 {@link org.springframework.cloud.stream.binder.ConsumerProperties}）。
  *
- * <p>继承 Spring Cloud Stream {@link ConsumerProperties}，额外暴露 StreamMQ 特有的消费端配置项。
- * 用户可通过 {@code spring.cloud.stream.streammq.bindings.<bindingName>.consumer.*} 前缀进行配置。
+ * <p>本类仅承载 StreamMQ 特有的消费端配置项，由 Spring Cloud Stream 的
+ * {@link org.springframework.cloud.stream.binder.ExtendedConsumerProperties} 包装后
+ * 传递给 {@link StreamMQMessageBinder}。
+ *
+ * <p>用户可通过 {@code spring.cloud.stream.streammq.bindings.<bindingName>.consumer.*} 前缀进行配置，
+ * 或通过 {@code spring.cloud.stream.streammq.default.consumer.*} 配置全局默认值。
  *
  * <p>属性说明：
  * <ul>
@@ -14,12 +16,14 @@ import org.springframework.cloud.stream.binder.ConsumerProperties;
  *   <li>{@code selectorType} - 过滤类型，默认 "TAG"</li>
  *   <li>{@code shardCount} - 顺序消费分区数，默认 4</li>
  *   <li>{@code enableMsgTrace} - 是否启用消息追踪，默认 false</li>
+ *   <li>{@code concurrency} - 消费线程数（覆盖 Binder 全局默认），默认 -1 表示使用全局值</li>
+ *   <li>{@code maxAttempts} - 最大重试次数（覆盖 Binder 全局默认），默认 -1 表示使用全局值</li>
  * </ul>
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public class StreamMQConsumerProperties extends ConsumerProperties {
+public class StreamMQConsumerProperties {
 
     /** 默认 Tag 过滤表达式 */
     public static final String DEFAULT_SELECTOR_EXPRESSION = "*";
@@ -29,6 +33,9 @@ public class StreamMQConsumerProperties extends ConsumerProperties {
 
     /** 默认顺序消费分区数 */
     public static final int DEFAULT_SHARD_COUNT = 4;
+
+    /** 默认值标记：表示未设置，使用 Binder 全局默认值 */
+    public static final int UNSET = -1;
 
     /** Tag 过滤表达式（SQL92 风格子集），"*" 表示全部接收 */
     private String selectorExpression = DEFAULT_SELECTOR_EXPRESSION;
@@ -41,6 +48,12 @@ public class StreamMQConsumerProperties extends ConsumerProperties {
 
     /** 是否启用消息追踪 */
     private boolean enableMsgTrace = false;
+
+    /** 消费线程数（&lt;=0 表示使用 Binder 全局默认值） */
+    private int concurrency = UNSET;
+
+    /** 最大重试次数（&lt;=0 表示使用 Binder 全局默认值） */
+    private int maxAttempts = UNSET;
 
     /**
      * 返回 Tag 过滤表达式。
@@ -112,5 +125,41 @@ public class StreamMQConsumerProperties extends ConsumerProperties {
      */
     public void setEnableMsgTrace(boolean enableMsgTrace) {
         this.enableMsgTrace = enableMsgTrace;
+    }
+
+    /**
+     * 返回消费线程数。
+     *
+     * @return 消费线程数，&lt;=0 表示使用 Binder 全局默认值
+     */
+    public int getConcurrency() {
+        return concurrency;
+    }
+
+    /**
+     * 设置消费线程数。
+     *
+     * @param concurrency 消费线程数，&lt;=0 表示使用 Binder 全局默认值
+     */
+    public void setConcurrency(int concurrency) {
+        this.concurrency = concurrency;
+    }
+
+    /**
+     * 返回最大重试次数。
+     *
+     * @return 最大重试次数，&lt;=0 表示使用 Binder 全局默认值
+     */
+    public int getMaxAttempts() {
+        return maxAttempts;
+    }
+
+    /**
+     * 设置最大重试次数。
+     *
+     * @param maxAttempts 最大重试次数，&lt;=0 表示使用 Binder 全局默认值
+     */
+    public void setMaxAttempts(int maxAttempts) {
+        this.maxAttempts = maxAttempts;
     }
 }
