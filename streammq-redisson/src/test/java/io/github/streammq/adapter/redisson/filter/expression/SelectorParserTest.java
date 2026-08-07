@@ -15,13 +15,13 @@ class SelectorParserTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("a", "b")
+            .withProperty("a", "b")
             .build();
         assertThat(expr.evaluate(message)).isTrue();
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("a", "c")
+            .withProperty("a", "c")
             .build();
         assertThat(expr.evaluate(message)).isFalse();
     }
@@ -33,13 +33,13 @@ class SelectorParserTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("age", "20")
+            .withProperty("age", "20")
             .build();
         assertThat(expr.evaluate(message)).isTrue();
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("age", "18")
+            .withProperty("age", "18")
             .build();
         assertThat(expr.evaluate(message)).isFalse();
     }
@@ -51,15 +51,15 @@ class SelectorParserTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("a", "b")
-            .property("c", "d")
+            .withProperty("a", "b")
+            .withProperty("c", "d")
             .build();
         assertThat(expr.evaluate(message)).isTrue();
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("a", "b")
-            .property("c", "e")
+            .withProperty("a", "b")
+            .withProperty("c", "e")
             .build();
         assertThat(expr.evaluate(message)).isFalse();
     }
@@ -71,15 +71,15 @@ class SelectorParserTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("a", "b")
-            .property("c", "e")
+            .withProperty("a", "b")
+            .withProperty("c", "e")
             .build();
         assertThat(expr.evaluate(message)).isTrue();
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("a", "x")
-            .property("c", "e")
+            .withProperty("a", "x")
+            .withProperty("c", "e")
             .build();
         assertThat(expr.evaluate(message)).isFalse();
     }
@@ -91,13 +91,13 @@ class SelectorParserTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("a", "c")
+            .withProperty("a", "c")
             .build();
         assertThat(expr.evaluate(message)).isTrue();
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("a", "b")
+            .withProperty("a", "b")
             .build();
         assertThat(expr.evaluate(message)).isFalse();
     }
@@ -109,17 +109,17 @@ class SelectorParserTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("a", "b")
-            .property("c", "x")
-            .property("e", "f")
+            .withProperty("a", "b")
+            .withProperty("c", "x")
+            .withProperty("e", "f")
             .build();
         assertThat(expr.evaluate(message)).isTrue();
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("a", "b")
-            .property("c", "x")
-            .property("e", "x")
+            .withProperty("a", "b")
+            .withProperty("c", "x")
+            .withProperty("e", "x")
             .build();
         assertThat(expr.evaluate(message)).isFalse();
     }
@@ -136,7 +136,7 @@ class SelectorParserTest {
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("a", "value")
+            .withProperty("a", "value")
             .build();
         assertThat(expr.evaluate(message)).isFalse();
     }
@@ -148,7 +148,7 @@ class SelectorParserTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("a", "value")
+            .withProperty("a", "value")
             .build();
         assertThat(expr.evaluate(message)).isTrue();
 
@@ -165,7 +165,7 @@ class SelectorParserTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("ANDROID", "test")
+            .withProperty("ANDROID", "test")
             .build();
         assertThat(expr.evaluate(message)).isTrue();
 
@@ -174,7 +174,7 @@ class SelectorParserTest {
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("ISLAND", "test")
+            .withProperty("ISLAND", "test")
             .build();
         assertThat(expr.evaluate(message)).isTrue();
     }

@@ -141,14 +141,14 @@ class OrderlyMessageIT extends AbstractRedisIT {
         AtomicReference<Message<?>> receivedRef = new AtomicReference<>();
         StreamMessageOrderlyConsumer<String> listener = (msg, ctx) -> {
             receivedRef.set(msg);
-            return OrderlyAction.SUCCESS;
+            return ConsumeAction.SUCCESS;
         };
         container.registerOrderlyConsumer(listener, mkOrderlyAnnotation(topic, group, 3));
         createConsumerGroup(topic, group);
         container.start();
 
         RedissonStreamProducer producer =
-            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
+            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
         try {
             producer.syncSend(MessageBuilder.<String>withTopic(topic)
                 .tag("t1")
@@ -190,14 +190,14 @@ class OrderlyMessageIT extends AbstractRedisIT {
         List<String> consumedBodies = new java.util.concurrent.CopyOnWriteArrayList<>();
         StreamMessageOrderlyConsumer<String> listener = (msg, ctx) -> {
             consumedBodies.add((String) msg.getBody());
-            return OrderlyAction.SUCCESS;
+            return ConsumeAction.SUCCESS;
         };
         container.registerOrderlyConsumer(listener, mkOrderlyAnnotation(topic, group, 3));
         createConsumerGroup(topic, group);
         container.start();
 
         RedissonStreamProducer producer =
-            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
+            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
         try {
             // 按顺序发送 5 条消息
             for (int i = 0; i < 5; i++) {
@@ -238,14 +238,14 @@ class OrderlyMessageIT extends AbstractRedisIT {
         StreamMessageOrderlyConsumer<String> listener = (msg, ctx) -> {
             attempt.incrementAndGet();
             // 始终返回 SUSPEND,消息应留在 PEL
-            return OrderlyAction.SUSPEND_CURRENT_QUEUE_A_MOMENT;
+            return ConsumeAction.RECONSUME_LATER;
         };
         container.registerOrderlyConsumer(listener, mkOrderlyAnnotation(topic, group, 16));
         createConsumerGroup(topic, group);
         container.start();
 
         RedissonStreamProducer producer =
-            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
+            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
         try {
             producer.syncSend(MessageBuilder.<String>withTopic(topic)
                 .body("suspend-body")
@@ -286,7 +286,7 @@ class OrderlyMessageIT extends AbstractRedisIT {
         AtomicInteger consumed = new AtomicInteger(0);
         StreamMessageOrderlyConsumer<String> listener = (msg, ctx) -> {
             consumed.incrementAndGet();
-            return OrderlyAction.SUCCESS;
+            return ConsumeAction.SUCCESS;
         };
         container.registerOrderlyConsumer(listener, mkOrderlyAnnotation(topic, group, 3));
         createConsumerGroup(topic, group);
@@ -302,7 +302,7 @@ class OrderlyMessageIT extends AbstractRedisIT {
             assertThat(container.getState()).isEqualTo(ContainerState.RUNNING);
 
             RedissonStreamProducer producer =
-                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
+                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
             try {
                 producer.syncSend(MessageBuilder.<String>withTopic(topic).body("lc-body").build());
 

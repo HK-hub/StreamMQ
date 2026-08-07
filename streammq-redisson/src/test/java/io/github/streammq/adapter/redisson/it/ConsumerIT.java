@@ -36,7 +36,7 @@ class ConsumerIT extends AbstractRedisIT {
 
     @BeforeEach
     void setUpConsumerAndProducer() {
-        producer = new RedissonStreamProducer(redisson, namespace, GROUP + "-p", converter, 3000L, 0, 0);
+        producer = new RedissonStreamProducer(redisson, namespace, GROUP + "-p", converter, 3000L, 0, 0, 0);
         consumer = new RedissonStreamListener(redisson, namespace, TOPIC, GROUP, CONSUMER_NAME, converter);
         // 显式创建消费者组,绕过主代码 StreamMessageId.MIN bug
         createConsumerGroup(TOPIC, GROUP);

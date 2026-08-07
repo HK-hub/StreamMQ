@@ -167,7 +167,7 @@ class DlqConsumerIT extends AbstractRedisIT {
         try {
             // 发送业务消息
             RedissonStreamProducer producer =
-                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
+                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
             producer.syncSend(MessageBuilder.<String>withTopic(topic)
                 .tag("dlq-tag")
                 .keys("dlq-key")
@@ -228,7 +228,7 @@ class DlqConsumerIT extends AbstractRedisIT {
         container.start();
         try {
             RedissonStreamProducer producer =
-                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
+                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("default-group-body").build());
             producer.close();
 
@@ -285,7 +285,7 @@ class DlqConsumerIT extends AbstractRedisIT {
         container.start();
         try {
             RedissonStreamProducer producer =
-                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
+                new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("drop-body").build());
             producer.close();
 

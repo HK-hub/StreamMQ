@@ -116,7 +116,7 @@ class MessageConverterSwitchIT extends AbstractRedisIT {
 
         // 基类已使用 DefaultMessageConverter + JacksonJsonSerializer
         RedissonStreamProducer producer =
-            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0);
+            new RedissonStreamProducer(redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
         RedissonStreamListener consumer =
             new RedissonStreamListener(redisson, namespace, topic, group, "c1", converter);
         createConsumerGroup(topic, group);
@@ -149,7 +149,7 @@ class MessageConverterSwitchIT extends AbstractRedisIT {
         MessageConverter passThroughConverter = new PassThroughMessageConverter();
 
         RedissonStreamProducer producer =
-            new RedissonStreamProducer(redisson, namespace, group + "-p", passThroughConverter, 3000L, 0, 0);
+            new RedissonStreamProducer(redisson, namespace, group + "-p", passThroughConverter, 3000L, 0, 0, 0);
         RedissonStreamListener consumer =
             new RedissonStreamListener(redisson, namespace, topic, group, "c1", passThroughConverter);
         createConsumerGroup(topic, group);
@@ -184,9 +184,9 @@ class MessageConverterSwitchIT extends AbstractRedisIT {
         MessageConverter passThroughConverter = new PassThroughMessageConverter();
 
         RedissonStreamProducer defaultProducer =
-            new RedissonStreamProducer(redisson, namespace, group + "-dp", defaultConverter, 3000L, 0, 0);
+            new RedissonStreamProducer(redisson, namespace, group + "-dp", defaultConverter, 3000L, 0, 0, 0);
         RedissonStreamProducer passProducer =
-            new RedissonStreamProducer(redisson, namespace, group + "-pp", passThroughConverter, 3000L, 0, 0);
+            new RedissonStreamProducer(redisson, namespace, group + "-pp", passThroughConverter, 3000L, 0, 0, 0);
 
         try {
             defaultProducer.syncSend(MessageBuilder.<String>withTopic(topicDefault).body("same-text").build());
@@ -256,7 +256,7 @@ class MessageConverterSwitchIT extends AbstractRedisIT {
         MessageConverter passThroughConverter = new PassThroughMessageConverter();
 
         RedissonStreamProducer producer =
-            new RedissonStreamProducer(redisson, namespace, group + "-p", passThroughConverter, 3000L, 0, 0);
+            new RedissonStreamProducer(redisson, namespace, group + "-p", passThroughConverter, 3000L, 0, 0, 0);
         RedissonStreamListener consumer =
             new RedissonStreamListener(redisson, namespace, topic, group, "c1", passThroughConverter);
         createConsumerGroup(topic, group);

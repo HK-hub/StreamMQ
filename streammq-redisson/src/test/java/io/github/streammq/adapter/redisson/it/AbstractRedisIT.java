@@ -12,6 +12,7 @@ import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.StreamMessageId;
 import org.redisson.api.stream.StreamCreateGroupArgs;
+import org.redisson.client.codec.StringCodec;
 import org.redisson.config.Config;
 
 import java.util.UUID;
@@ -33,6 +34,8 @@ public abstract class AbstractRedisIT {
     void setUpRedis() {
         Config config = new Config();
         config.useSingleServer().setAddress("redis://localhost:6379").setDatabase(0);
+        // 使用 StringCodec 避免 Kryo 反序列化问题（与 Lua 脚本交互时）
+        config.setCodec(StringCodec.INSTANCE);
         redisson = Redisson.create(config);
         namespace = "it-" + UUID.randomUUID().toString().substring(0, 8);
         serializer = new JacksonJsonSerializer<>();

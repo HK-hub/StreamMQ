@@ -14,13 +14,13 @@ class SimpleSqlSelectorFilterTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("name", "John")
+            .withProperty("name", "John")
             .build();
         assertThat(filter.accept(message)).isTrue();
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("name", "Jane")
+            .withProperty("name", "Jane")
             .build();
         assertThat(filter.accept(message)).isFalse();
     }
@@ -31,13 +31,13 @@ class SimpleSqlSelectorFilterTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("age", "20")
+            .withProperty("age", "20")
             .build();
         assertThat(filter.accept(message)).isTrue();
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("age", "17")
+            .withProperty("age", "17")
             .build();
         assertThat(filter.accept(message)).isFalse();
     }
@@ -48,13 +48,13 @@ class SimpleSqlSelectorFilterTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("status", "SUCCESS")
+            .withProperty("status", "SUCCESS")
             .build();
         assertThat(filter.accept(message)).isTrue();
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("status", "FAIL")
+            .withProperty("status", "FAIL")
             .build();
         assertThat(filter.accept(message)).isFalse();
     }
@@ -65,15 +65,15 @@ class SimpleSqlSelectorFilterTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("type", "order")
-            .property("amount", "200")
+            .withProperty("type", "order")
+            .withProperty("amount", "200")
             .build();
         assertThat(filter.accept(message)).isTrue();
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("type", "order")
-            .property("amount", "50")
+            .withProperty("type", "order")
+            .withProperty("amount", "50")
             .build();
         assertThat(filter.accept(message)).isFalse();
     }
@@ -84,19 +84,19 @@ class SimpleSqlSelectorFilterTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("type", "order")
+            .withProperty("type", "order")
             .build();
         assertThat(filter.accept(message)).isTrue();
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("type", "payment")
+            .withProperty("type", "payment")
             .build();
         assertThat(filter.accept(message)).isTrue();
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("type", "refund")
+            .withProperty("type", "refund")
             .build();
         assertThat(filter.accept(message)).isFalse();
     }
@@ -107,13 +107,13 @@ class SimpleSqlSelectorFilterTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("status", "ACTIVE")
+            .withProperty("status", "ACTIVE")
             .build();
         assertThat(filter.accept(message)).isTrue();
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("status", "DELETED")
+            .withProperty("status", "DELETED")
             .build();
         assertThat(filter.accept(message)).isFalse();
     }
@@ -124,15 +124,15 @@ class SimpleSqlSelectorFilterTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("type", "order")
-            .property("amount", "150")
+            .withProperty("type", "order")
+            .withProperty("amount", "150")
             .build();
         assertThat(filter.accept(message)).isTrue();
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("type", "order")
-            .property("amount", "50")
+            .withProperty("type", "order")
+            .withProperty("amount", "50")
             .build();
         assertThat(filter.accept(message)).isFalse();
     }
@@ -148,7 +148,7 @@ class SimpleSqlSelectorFilterTest {
 
         message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("deleted", "true")
+            .withProperty("deleted", "true")
             .build();
         assertThat(filter.accept(message)).isFalse();
     }
@@ -159,7 +159,7 @@ class SimpleSqlSelectorFilterTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("deleted", "true")
+            .withProperty("deleted", "true")
             .build();
         assertThat(filter.accept(message)).isTrue();
 
@@ -175,7 +175,7 @@ class SimpleSqlSelectorFilterTest {
 
         Message<String> message = MessageBuilder.<String>withPayload("test")
             .topic("test-topic")
-            .property("name", "John")
+            .withProperty("name", "John")
             .build();
         assertThat(filter.accept(message)).isTrue();
 

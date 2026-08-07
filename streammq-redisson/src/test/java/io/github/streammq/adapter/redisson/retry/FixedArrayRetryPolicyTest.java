@@ -78,10 +78,17 @@ class FixedArrayRetryPolicyTest {
     }
 
     @Test
-    @DisplayName("nextRetryDelay(100) = 2h（超出数组范围使用最后一个）")
+    @DisplayName("nextRetryDelay(16) = null（达到 maxReconsumeTimes）")
+    void nextRetryDelayAtMax() {
+        FixedArrayRetryPolicy policy = new FixedArrayRetryPolicy();
+        assertThat(policy.nextRetryDelay(16, msg)).isNull();
+    }
+
+    @Test
+    @DisplayName("nextRetryDelay(100) = null（超出 maxReconsumeTimes 返回 null）")
     void nextRetryDelayOverflow() {
         FixedArrayRetryPolicy policy = new FixedArrayRetryPolicy();
-        assertThat(policy.nextRetryDelay(100, msg)).isEqualTo(Duration.ofHours(2));
+        assertThat(policy.nextRetryDelay(100, msg)).isNull();
     }
 
     @Test

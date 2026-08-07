@@ -339,6 +339,6 @@ class DelayMessageIT extends AbstractRedisIT {
      * @return Producer 实例
      */
     private RedissonStreamProducer newProducer(String group) {
-        return new RedissonStreamProducer(redisson, namespace, group, converter, 3000L, 0, 0);
+        return new RedissonStreamProducer(redisson, namespace, group, converter, 3000L, 0, 0, 0);
     }
 }

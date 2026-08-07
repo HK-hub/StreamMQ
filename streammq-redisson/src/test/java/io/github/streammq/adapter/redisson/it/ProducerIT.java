@@ -39,7 +39,7 @@ class ProducerIT extends AbstractRedisIT {
 
     @BeforeEach
     void setUpProducer() {
-        producer = new RedissonStreamProducer(redisson, namespace, GROUP, converter, 3000L, 0, 0);
+        producer = new RedissonStreamProducer(redisson, namespace, GROUP, converter, 3000L, 0, 0, 0);
     }
 
     @AfterEach
@@ -75,7 +75,7 @@ class ProducerIT extends AbstractRedisIT {
             .keys("order-123")
             .shardingKey("shard-1")
             .body("payload-content")
-            .userProperty("traceId", "trace-001")
+            .withUserProperty("traceId", "trace-001")
             .build();
 
         SendResult result = producer.syncSend(msg);
@@ -115,7 +115,7 @@ class ProducerIT extends AbstractRedisIT {
         config.useSingleServer().setAddress("redis://localhost:6379").setDatabase(0);
         RedissonClient failingClient = Redisson.create(config);
         RedissonStreamProducer failingProducer =
-            new RedissonStreamProducer(failingClient, namespace, GROUP + "-fail", converter, 3000L, 0, 0);
+            new RedissonStreamProducer(failingClient, namespace, GROUP + "-fail", converter, 3000L, 0, 0, 0);
         failingClient.shutdown();
 
         Message<String> msg = buildMessage(TOPIC, "fail-tag", "fail-key", "fail-body");
@@ -248,7 +248,7 @@ class ProducerIT extends AbstractRedisIT {
         config.useSingleServer().setAddress("redis://localhost:6379").setDatabase(0);
         RedissonClient closedClient = Redisson.create(config);
         RedissonStreamProducer closedProducer =
-            new RedissonStreamProducer(closedClient, namespace, GROUP + "-closed", converter, 3000L, 0, 0);
+            new RedissonStreamProducer(closedClient, namespace, GROUP + "-closed", converter, 3000L, 0, 0, 0);
         closedClient.shutdown();
 
         Message<String> msg = buildMessage(TOPIC, "x", "y", "z");

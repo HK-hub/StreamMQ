@@ -110,10 +110,17 @@ class ExponentialBackoffRetryPolicyTest {
     }
 
     @Test
-    @DisplayName("nextRetryDelay(100) 不超过 max（7200000ms）")
+    @DisplayName("nextRetryDelay(100) = null（超出 maxReconsumeTimes 返回 null）")
     void nextRetryDelayCappedAtMax() {
         ExponentialBackoffRetryPolicy policy = new ExponentialBackoffRetryPolicy();
-        assertThat(policy.nextRetryDelay(100, msg)).isEqualTo(Duration.ofMillis(7_200_000L));
+        assertThat(policy.nextRetryDelay(100, msg)).isNull();
+    }
+
+    @Test
+    @DisplayName("nextRetryDelay(16) = null（达到 maxReconsumeTimes）")
+    void nextRetryDelayAtMax() {
+        ExponentialBackoffRetryPolicy policy = new ExponentialBackoffRetryPolicy();
+        assertThat(policy.nextRetryDelay(16, msg)).isNull();
     }
 
     @Test
