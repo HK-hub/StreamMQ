@@ -59,12 +59,12 @@
             </dependency>
             <dependency>
                 <groupId>io.github.streammq</groupId>
-                <artifactId>streammq-cloud-k8s</artifactId>
+                <artifactId>streammq-kubernetes</artifactId>
                 <version>${streammq.version}</version>
             </dependency>
             <dependency>
                 <groupId>io.github.streammq</groupId>
-                <artifactId>streammq-tracing</artifactId>
+                <artifactId>streammq-tracing-opentelemetry</artifactId>
                 <version>${streammq.version}</version>
             </dependency>
             <dependency>
