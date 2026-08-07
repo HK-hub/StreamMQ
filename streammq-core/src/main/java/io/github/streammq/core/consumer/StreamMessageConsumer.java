@@ -5,8 +5,7 @@ package io.github.streammq.core.consumer;
  *
  * <p>子接口 {@link StreamMessageConcurrentlyConsumer}（并发消费）与
  * {@link StreamMessageOrderlyConsumer}（顺序消费）分别定义 {@code onMessage} 方法，
- * 返回 {@link io.github.streammq.core.enums.ConsumeAction} /
- * {@link io.github.streammq.core.enums.OrderlyAction} 作为唯一消费结果表达。
+ * 返回 {@link io.github.streammq.core.enums.ConsumeAction} 作为唯一消费结果表达。
  *
  * <p>框架内部以 {@link StreamMessageConsumer} 引用持有所有 Consumer 实例，
  * 便于在容器层面统一调度与扩展。

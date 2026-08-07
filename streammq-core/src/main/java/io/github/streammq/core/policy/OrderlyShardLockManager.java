@@ -2,7 +2,7 @@ package io.github.streammq.core.policy;
 
 import io.github.streammq.core.consumer.ConsumeOrderlyContext;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
-import io.github.streammq.core.enums.OrderlyAction;
+import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.message.Message;
 import org.redisson.api.RLock;
@@ -47,6 +47,6 @@ public interface OrderlyShardLockManager {
      * @throws Exception Listener 抛出的异常
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
-    OrderlyAction consumeWithShardLock(Message<?> message, ListenerRegistration reg,
+    ConsumeAction consumeWithShardLock(Message<?> message, ListenerRegistration reg,
                                        ConsumeOrderlyContext ctx, StreamMessageOrderlyConsumer orderly) throws Exception;
 }

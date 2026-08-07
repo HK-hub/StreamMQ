@@ -25,9 +25,9 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class DlqConfig {
 
-    /** DLQ 消费失败处理策略实现类全限定名（默认 LogAndDropDlqFailureStrategy） */
+    /** DLQ 消费失败处理策略实现类 */
     @Builder.Default
-    private String failureStrategyClass = StreamMQConstants.DEFAULT_DLQ_FAILURE_STRATEGY;
+    private Class<? extends DlqFailureStrategy> failureStrategyClass = DlqFailureStrategy.class;
 
     /** DLQ 消费失败后的最大重试次数（默认 3） */
     @Builder.Default

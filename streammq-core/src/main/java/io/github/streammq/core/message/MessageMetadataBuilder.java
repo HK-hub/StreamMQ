@@ -21,7 +21,7 @@ import java.util.Objects;
  *     .keys("order-123")
  *     .shardingKey("order-123")
  *     .delayLevel(DelayLevel.LEVEL_5)
- *     .userProperty("traceId", "t-001");
+ *     .withUserProperty("traceId", "t-001");
  *
  * service.send("order-topic", order, metadata);
  * }</pre>
@@ -255,7 +255,7 @@ public final class MessageMetadataBuilder {
         }
         if (!userProperties.isEmpty()) {
             for (Map.Entry<String, String> entry : userProperties.entrySet()) {
-                builder.userProperty(entry.getKey(), entry.getValue());
+                builder.withUserProperty(entry.getKey(), entry.getValue());
             }
         }
         if (Objects.nonNull(bornTimestamp)) {

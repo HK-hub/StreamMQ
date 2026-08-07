@@ -1,6 +1,8 @@
 package io.github.streammq.core.listener;
 
 import io.github.streammq.core.annotation.StreamMQConsumer;
+import io.github.streammq.core.annotation.StreamMQDlqConsumer;
+import io.github.streammq.core.consumer.DlqMessageConsumer;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
 
@@ -40,7 +42,7 @@ public interface StreamMQListenerContainer {
     /**
      * 注册一个顺序消费 Consumer。
      *
-     * <p>消费结果由 {@code onMessage} 返回值（{@link io.github.streammq.core.enums.OrderlyAction}）唯一表达。
+     * <p>消费结果由 {@code onMessage} 返回值（{@link ConsumeAction}）唯一表达。
      *
      * @param consumer Consumer 实例（{@link StreamMessageOrderlyConsumer}）
      * @param annotation 注解元数据（{@link StreamMQConsumer}，需 {@code messageModel = ORDERLY}）
@@ -48,6 +50,19 @@ public interface StreamMQListenerContainer {
      */
     <T> void registerOrderlyConsumer(StreamMessageOrderlyConsumer<T> consumer,
                                      StreamMQConsumer annotation);
+
+    /**
+     * 注册一个死信队列（DLQ）Consumer。
+     *
+     * <p>DLQ Consumer 返回 {@code void}，消费失败由 {@code DlqFailureStrategy} 决策。
+     * 与普通 Consumer 完全独立——不注册 ConsumerGroupManager / RetryScheduler / PelClaimScheduler。
+     *
+     * @param consumer Consumer 实例（必须同时实现 {@link DlqMessageConsumer}）
+     * @param annotation DLQ 注解元数据
+     * @param <T> body 类型
+     */
+    <T> void registerDlqConsumer(DlqMessageConsumer<T> consumer,
+                                  StreamMQDlqConsumer annotation);
 
     /**
      * 返回所有已注册的 Consumer 元信息。

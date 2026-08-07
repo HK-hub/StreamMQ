@@ -20,7 +20,7 @@ import java.time.Duration;
  *       DLQ 模式下同 RECONSUME_LATER 处理</li>
  * </ul>
  *
- * <p>顺序消费的 {@link io.github.streammq.core.enums.OrderlyAction#SUSPEND_CURRENT_QUEUE_A_MOMENT}
+ * <p>顺序消费的 {@link ConsumeAction}
  * 由容器直接处理（消息留在 PEL），不进入本处理器。
  *
  * <p>重试超时路由：当 {@link RetryPolicy#nextRetryDelay} 返回 null（不再重试）时，

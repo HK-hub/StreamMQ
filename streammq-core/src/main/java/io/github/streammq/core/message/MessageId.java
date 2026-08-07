@@ -1,5 +1,8 @@
 package io.github.streammq.core.message;
 
+import lombok.Getter;
+
+import java.io.Serial;
 import java.io.Serializable;
 import java.util.Objects;
 
@@ -12,17 +15,25 @@ import java.util.Objects;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
+@Getter
 public final class MessageId implements Serializable, Comparable<MessageId> {
 
+    @Serial
     private static final long serialVersionUID = 1L;
 
-    /** Redis Stream Entry ID 原始字符串，格式：{timestamp}-{sequence} */
+    /** Redis Stream Entry ID 原始字符串，格式：{timestamp}-{sequence}
+     *  返回原始 Redis Stream Entry ID。
+     */
     private final String streamEntryId;
 
-    /** 创建时间戳（用于顺序比较与超时判断） */
+    /** 创建时间戳（用于顺序比较与超时判断）
+     *  返回时间戳部分（毫秒，Unix 时间）。
+     */
     private final long timestamp;
 
-    /** 序列号（同时间戳内递增） */
+    /** 序列号（同时间戳内递增）
+     *  返回序列号部分。
+     */
     private final long sequence;
 
     /**
@@ -36,43 +47,52 @@ public final class MessageId implements Serializable, Comparable<MessageId> {
         this.streamEntryId = Objects.requireNonNull(streamEntryId, "streamEntryId");
         String[] parts = streamEntryId.split("-", 2);
         if (parts.length != 2) {
-            throw new IllegalArgumentException(
-                "Invalid stream entry id format, expected '{timestamp}-{sequence}': " + streamEntryId);
+            throw new IllegalArgumentException("Invalid stream entry id format, expected '{timestamp}-{sequence}': " + streamEntryId);
         }
         try {
             this.timestamp = Long.parseLong(parts[0]);
             this.sequence = Long.parseLong(parts[1]);
         } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException(
-                "Invalid stream entry id numeric parts: " + streamEntryId, ex);
+            throw new IllegalArgumentException("Invalid stream entry id numeric parts: " + streamEntryId, ex);
         }
     }
 
+    private MessageId(long timestamp, long sequence) {
+        this.timestamp = timestamp;
+        this.sequence = sequence;
+        this.streamEntryId = timestamp + "-" + sequence;
+    }
+
+    // ===================== 静态工厂（按场景收口） =====================
+
     /**
-     * 返回原始 Redis Stream Entry ID。
-     *
-     * @return Stream Entry ID 字符串
+     * 从 Redis Stream Entry ID 字符串创建（消费端反序列化 / 从存储还原）。
+     * 等同于 {@code new MessageId(streamEntryId)}。
      */
-    public String getStreamEntryId() {
-        return streamEntryId;
+    public static MessageId fromStreamEntry(String streamEntryId) {
+        return new MessageId(streamEntryId);
     }
 
     /**
-     * 返回时间戳部分（毫秒，Unix 时间）。
-     *
-     * @return 时间戳
+     * 从 Redisson {@code StreamMessageId} 创建（生产端 XADD 成功后的回填）。
      */
-    public long getTimestamp() {
-        return timestamp;
+    public static MessageId fromStreamMessageId(Object streamMessageId) {
+        return new MessageId(streamMessageId.toString());
     }
 
     /**
-     * 返回序列号部分。
-     *
-     * @return 序列号
+     * 生成一个表示发送失败/占位的 MessageId。
+     * 使用当前时间戳 + 序列号 0，表示该消息未经 Redis 分配真实 Entry ID。
      */
-    public long getSequence() {
-        return sequence;
+    public static MessageId sentinel() {
+        return new MessageId(System.currentTimeMillis(), 0);
+    }
+
+    /**
+     * 从时间戳 + 序列号直接构造（延时消息 / 自定义 ID 场景）。
+     */
+    public static MessageId of(long timestamp, long sequence) {
+        return new MessageId(timestamp, sequence);
     }
 
     @Override

@@ -7,7 +7,6 @@ import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.filter.ConsumerFilter;
-import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
 
@@ -18,8 +17,7 @@ import java.lang.annotation.*;
  * {@code StreamMessageOrderlyConsumer} 实现类上。
  *
  * <p>对齐 RocketMQ {@code @RocketMQMessageListener} 体验。本注解为统一入口，
- * 通过 {@link #messageModel()} 区分并发 / 顺序消费，通过 {@link #dlqMode()}
- * 标识 DLQ 消费者。
+ * 通过 {@link #messageModel()} 区分并发 / 顺序消费。
  *
  * <p>使用示例：
  * <pre>{@code
@@ -42,22 +40,12 @@ import java.lang.annotation.*;
  *     @Override
  *     public OrderlyAction onMessage(Message<Order> message, ConsumeOrderlyContext context) {
  *         processOrder(message.getBody());
- *         return OrderlyAction.SUCCESS;
- *     }
- * }
- *
- * // DLQ 消费
- * @Component
- * @StreamMQConsumer(topic = "order-topic", consumerGroup = "order-cg", dlqMode = true)
- * public class OrderDlqHandler implements StreamMessageConcurrentlyConsumer<String> {
- *     @Override
- *     public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
- *         handleDeadLetter(message);
  *         return ConsumeAction.SUCCESS;
  *     }
  * }
- * }</pre>
  *
+ * // DLQ 消费请使用 @StreamMQDlqConsumer + DlqMessageConsumer 接口
+ * 
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
@@ -75,9 +63,6 @@ public @interface StreamMQConsumer {
 
     /**
      * 消费者组名（必填）。
-     *
-     * <p>DLQ 模式下（{@link #dlqMode()} 为 true 时），本字段表示原始消费者组名，
-     * 用于构造 DLQ Stream Key（{@code streammq:{ns}:dlq:{consumerGroup}}）。
      *
      * @return 消费者组
      */
@@ -125,7 +110,12 @@ public @interface StreamMQConsumer {
     /**
      * 单条消息消费超时（毫秒），默认 30000（30 秒）。
      *
-     * @return 超时毫秒数
+     * <p>超时后框架会 ACK 当前消息并调度重试投递。由于消费线程可能仍在执行业务逻辑，
+     * 重试消费与原消费可能并发执行，因此业务层必须实现幂等性。
+     *
+     * <p>仅对并发消费（{@link ConsumeMode#CONCURRENTLY}）生效，顺序消费不支持超时取消。
+     *
+     * @return 超时毫秒数，0 表示不超时
      */
     long consumeTimeout() default StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS;
 
@@ -147,7 +137,17 @@ public @interface StreamMQConsumer {
     /**
      * 命名空间，默认使用全局配置。
      *
-     * @return 命名空间
+     * <p>命名空间用于隔离不同环境/租户的 Stream Key，避免 Key 冲突。
+     * 命名空间会附加到所有 Redis Key 前缀：{@code streammq:{ns}:...}。
+     *
+     * <p><b>作用域规则：</b>
+     * <ul>
+     *   <li>注解中的 {@code namespace} 优先级高于配置文件中的 {@code streammq.namespace}</li>
+     *   <li>不同 namespace 下的消息完全隔离（不同 Stream、不同 Consumer Group、不同 Retry ZSet）</li>
+     *   <li>namespace 会影响 Consumer Group 命名：Group Key 包含 namespace 前缀</li>
+     * </ul>
+     *
+     * @return 命名空间，空字符串表示使用全局配置
      */
     String namespace() default "";
 
@@ -250,38 +250,23 @@ public @interface StreamMQConsumer {
     int shardCount() default StreamMQConstants.DEFAULT_SHARD_COUNT;
 
     /**
-     * 每个消费者专属死信消费失败策略（默认 {@link DlqFailureStrategy} 表示使用全局策略）。
-     *
-     * <p>仅对 {@link #dlqMode()} 为 true 的消费者生效。当死信消息消费也失败时，
-     * 框架调用此策略决策 drop/retry/secondaryDlq。
-     *
-     * @return 死信失败策略类
-     */
-    Class<? extends DlqFailureStrategy> dlqFailureStrategy() default DlqFailureStrategy.class;
-
-    /**
      * 每个消费者专属过滤器（默认 {@link ConsumerFilter} 表示使用全局过滤器）。
      *
      * <p>过滤器从 Spring 容器中获取实例，支持多个过滤器（逗号分隔）。
      * 过滤器执行顺序：先执行 {@link #selectorExpression()} 对应的内置过滤器（order = -1），
      * 再按 {@link ConsumerFilter#order()} 升序执行自定义过滤器。
      *
+     * <p><b>与 selectorExpression 的关系：</b>
+     * <ul>
+     *   <li>{@code selectorExpression} 是内置的 Tag/SQL 过滤，执行优先级最高（order = -1）</li>
+     *   <li>{@code consumerFilter} 是自定义过滤器 SPI，执行优先级低于内置过滤器</li>
+     *   <li>两者是<b>串联</b>关系：先执行 selectorExpression 过滤，再执行 consumerFilter 过滤</li>
+     *   <li>如果用户同时配置了两者，只有同时通过两种过滤的消息才会被消费</li>
+     * </ul>
+     *
      * @return 过滤器类
      */
     Class<? extends ConsumerFilter>[] consumerFilter() default {};
-
-    /**
-     * 是否为 DLQ（死信队列）消费者，默认 false。
-     *
-     * <p>设置为 true 时，消费者从约定的死信 Stream 消费消息：
-     * DLQ Stream Key 为 {@code streammq:{ns}:dlq:{consumerGroup}}（对齐 RocketMQ %DLQ%{group}）。
-     * 此时 {@link #consumerGroup()} 表示原始消费者组名（用于构造 DLQ Stream Key）。
-     *
-     * <p>DLQ 消费者收到的消息体中携带原始 topic 字段，可从 {@link io.github.streammq.core.message.Message#getTopic()} 获取。
-     *
-     * @return true 表示 DLQ 消费者
-     */
-    boolean dlqMode() default false;
 
     /**
      * 消费者实例名（可选，默认空字符串表示自动生成）。
@@ -289,4 +274,17 @@ public @interface StreamMQConsumer {
      * @return 消费者实例名
      */
     String consumerName() default "";
+
+    /**
+     * 是否为 DLQ 消费者（默认 false）。
+     *
+     * <p>当设置为 true 时，消费者将从 DLQ Stream 读取消息（而不是原始 Topic Stream）。
+     * 适用于希望使用统一 {@link StreamMessageConcurrentlyConsumer} 接口处理 DLQ 消息的场景。
+     *
+     * <p>注意：更推荐使用 {@link StreamMQDlqConsumer} 注解 + {@link io.github.streammq.core.consumer.DlqMessageConsumer} 接口，
+     * 这是更类型安全的方式。
+     *
+     * @return true 表示 DLQ 消费者
+     */
+    boolean dlqMode() default false;
 }

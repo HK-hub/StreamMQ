@@ -5,6 +5,9 @@ import io.github.streammq.core.message.Message;
 /**
  * 消费者消息过滤器 SPI。
  *
+ * <p><b>过滤位置：客户端。</b>所有过滤在消费端内存中执行，不利用 Redis Stream 服务端过滤能力。
+ * 这意味着每条消息都会被拉取到客户端，然后在内存中判断是否应该消费。
+ *
  * <p>在消息消费前进行过滤，返回 false 则跳过该消息（自动 ACK）。
  * 支持全局维度（配置文件）和 per-consumer 维度（注解）的过滤器。
  *

@@ -13,6 +13,17 @@ import java.util.Objects;
  * <p>由 {@code StreamMQTemplate.syncSend} / {@code syncSendBatch} 返回，
  * 封装消息 ID、状态、出生时间戳、Region 等信息。
  *
+ * <p><b>持久化保证（重要）：</b>
+ * <ul>
+ *   <li>{@link SendStatus#SEND_OK} 表示 Redis 已确认收到 XADD 命令，消息已写入 Stream</li>
+ *   <li>但这<b>不等于</b>消息已持久化到磁盘——Redis 的 AOF 策略（appendfsync）决定了实际持久化级别</li>
+ *   <li>默认 {@code appendfsync everysec}：最多丢失 1 秒数据（Redis 崩溃时）</li>
+ *   <li>使用 {@code appendfsync always}：每次写入都同步到磁盘，等价于磁盘级持久化</li>
+ *   <li>在 Redis 主从异步复制模式下，从节点可能滞后于主节点</li>
+ * </ul>
+ *
+ * <p>如需更高级别的持久化保证，请配置 Redis 的 AOF 策略或使用 Redis WAIT 命令等待从节点确认。
+ *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */

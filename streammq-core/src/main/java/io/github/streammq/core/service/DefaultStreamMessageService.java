@@ -438,7 +438,7 @@ public class DefaultStreamMessageService implements StreamMessageService {
         }
         Map<String, String> userProps = message.getUserProperties();
         for (Map.Entry<String, String> entry : userProps.entrySet()) {
-            builder.userProperty(entry.getKey(), entry.getValue());
+            builder.withUserProperty(entry.getKey(), entry.getValue());
         }
         return builder.build();
     }

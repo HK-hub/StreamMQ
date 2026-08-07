@@ -16,15 +16,13 @@ import java.util.Objects;
  *     .keys("order-123")
  *     .shardingKey("order-123")
  *     .body("{\"orderId\":123}")
- *     .userProperty("traceId", "t-001")
+ *     .withUserProperty("traceId", "t-001")
  *     .build();
  * }</pre>
  *
- * <p>命名约定：
- * <ul>
- *   <li>静态工厂方法以 {@code with} 前缀：{@link #withTopic(String)} / {@link #withPayload(Object)} / {@link #create()}</li>
- *   <li>实例方法无前缀：{@link #topic(String)} / {@link #tag(String)} / {@link #body(Object)} ...</li>
- * </ul>
+ * <p>命名约定：遵循 Builder 模式，实例方法无前缀（{@link #topic(String)} / {@link #tag(String)} / {@link #body(Object)} 等）。
+ * 仅 {@link #withProperty(String, String)} / {@link #withUserProperty(String, String)} 保留 with 前缀以区分"添加单条"和"批量设置"。
+ * 静态工厂方法使用语义化命名：{@link #withTopic(String)} / {@link #withPayload(Object)} / {@link #create()} / {@link #from(Message)}。
  *
  * @param <T> body 类型
  * @author StreamMQ Contributors
@@ -43,6 +41,7 @@ public final class MessageBuilder<T> {
     private Long delayTimeMillis;
     private long bornTimestamp;
     private String bornHost;
+    private int reconsumeTimes;
     private String transactionId;
 
     private MessageBuilder() {
@@ -81,6 +80,44 @@ public final class MessageBuilder<T> {
     }
 
     /**
+     * 从已有消息复制创建 Builder，预填充所有字段。
+     *
+     * <p>使用示例：
+     * <pre>{@code
+     * Message<String> copy = MessageBuilder.from(original)
+     *     .topic("new-topic")
+     *     .tag("new-tag")
+     *     .build();
+     * }</pre>
+     *
+     * @param message 源消息
+     * @param <T> body 类型
+     * @return 预填充的 Builder 实例
+     */
+    public static <T> MessageBuilder<T> from(Message<T> message) {
+        Objects.requireNonNull(message, "message");
+        MessageBuilder<T> builder = MessageBuilder.<T>create()
+            .topic(message.getTopic())
+            .tag(message.getTag())
+            .keys(message.getKeys())
+            .shardingKey(message.getShardingKey())
+            .body(message.getBody())
+            .bornTimestamp(message.getBornTimestamp())
+            .bornHost(message.getBornHost())
+            .reconsumeTimes(message.getReconsumeTimes())
+            .transactionId(message.getTransactionId());
+        builder.properties.putAll(message.getProperties());
+        builder.userProperties.putAll(message.getUserProperties());
+        if (Objects.nonNull(message.getDelayLevel())) {
+            builder.delayLevel(message.getDelayLevel());
+        }
+        if (Objects.nonNull(message.getDelayTimeMillis())) {
+            builder.delayTimeMillis(message.getDelayTimeMillis());
+        }
+        return builder;
+    }
+
+    /**
      * 设置 Topic（必填）。
      *
      * @param topic 主题
@@ -102,11 +139,6 @@ public final class MessageBuilder<T> {
         return this;
     }
 
-    /** with* 别名，委托到 {@link #tag(String)}。 */
-    public MessageBuilder<T> withTag(String tag) {
-        return tag(tag);
-    }
-
     /**
      * 设置业务键。
      *
@@ -116,11 +148,6 @@ public final class MessageBuilder<T> {
     public MessageBuilder<T> keys(String keys) {
         this.keys = keys;
         return this;
-    }
-
-    /** with* 别名，委托到 {@link #keys(String)}。 */
-    public MessageBuilder<T> withKeys(String keys) {
-        return keys(keys);
     }
 
     /**
@@ -134,11 +161,6 @@ public final class MessageBuilder<T> {
         return this;
     }
 
-    /** with* 别名，委托到 {@link #shardingKey(String)}。 */
-    public MessageBuilder<T> withShardingKey(String shardingKey) {
-        return shardingKey(shardingKey);
-    }
-
     /**
      * 设置消息体（必填）。
      *
@@ -150,28 +172,18 @@ public final class MessageBuilder<T> {
         return this;
     }
 
-    /** with* 别名，委托到 {@link #body(Object)}。 */
-    public MessageBuilder<T> withBody(T body) {
-        return body(body);
-    }
-
     /**
-     * 添加系统属性。
+     * 添加单条系统属性（保留 with 前缀以区分"添加单条"和"批量设置"）。
      *
      * @param key 属性键
      * @param value 属性值
      * @return this
      */
-    public MessageBuilder<T> property(String key, String value) {
+    public MessageBuilder<T> withProperty(String key, String value) {
         this.properties.put(
             Objects.requireNonNull(key, "property key"),
             Objects.requireNonNull(value, "property value"));
         return this;
-    }
-
-    /** with* 别名，委托到 {@link #property(String, String)}。 */
-    public MessageBuilder<T> withProperty(String key, String value) {
-        return property(key, value);
     }
 
     /**
@@ -187,28 +199,31 @@ public final class MessageBuilder<T> {
         return this;
     }
 
-    /** with* 别名，委托到 {@link #properties(Map)}。 */
-    public MessageBuilder<T> withProperties(Map<String, String> properties) {
-        return properties(properties);
-    }
-
     /**
-     * 添加用户属性。
+     * 添加单条用户属性（保留 with 前缀以区分"添加单条"和"批量设置"）。
      *
      * @param key 属性键
      * @param value 属性值
      * @return this
      */
-    public MessageBuilder<T> userProperty(String key, String value) {
+    public MessageBuilder<T> withUserProperty(String key, String value) {
         this.userProperties.put(
             Objects.requireNonNull(key, "userProperty key"),
             Objects.requireNonNull(value, "userProperty value"));
         return this;
     }
 
-    /** with* 别名，委托到 {@link #userProperty(String, String)}。 */
-    public MessageBuilder<T> withUserProperty(String key, String value) {
-        return userProperty(key, value);
+    /**
+     * 批量设置用户属性。
+     *
+     * @param userProperties 用户属性
+     * @return this
+     */
+    public MessageBuilder<T> userProperties(Map<String, String> userProperties) {
+        if (Objects.nonNull(userProperties)) {
+            this.userProperties.putAll(userProperties);
+        }
+        return this;
     }
 
     /**
@@ -220,11 +235,6 @@ public final class MessageBuilder<T> {
     public MessageBuilder<T> delayLevel(DelayLevel delayLevel) {
         this.delayLevel = delayLevel;
         return this;
-    }
-
-    /** with* 别名，委托到 {@link #delayLevel(DelayLevel)}。 */
-    public MessageBuilder<T> withDelayLevel(DelayLevel delayLevel) {
-        return delayLevel(delayLevel);
     }
 
     /**
@@ -239,11 +249,6 @@ public final class MessageBuilder<T> {
         }
         this.delayTimeMillis = delayTimeMillis;
         return this;
-    }
-
-    /** with* 别名，委托到 {@link #delayTimeMillis(long)}。 */
-    public MessageBuilder<T> withDelayTimeMillis(long delayTimeMillis) {
-        return delayTimeMillis(delayTimeMillis);
     }
 
     /**
@@ -280,6 +285,17 @@ public final class MessageBuilder<T> {
     }
 
     /**
+     * 设置已重试消费次数。
+     *
+     * @param reconsumeTimes 重试次数
+     * @return this
+     */
+    public MessageBuilder<T> reconsumeTimes(int reconsumeTimes) {
+        this.reconsumeTimes = reconsumeTimes;
+        return this;
+    }
+
+    /**
      * 构造 {@link Message} 实例。
      *
      * @return 消息对象
@@ -294,7 +310,8 @@ public final class MessageBuilder<T> {
         }
         long ts = bornTimestamp > 0 ? bornTimestamp : System.currentTimeMillis();
         String host = Objects.nonNull(bornHost) ? bornHost : "unknown";
-        return new Message<>(topic, tag, keys, shardingKey, properties, userProperties,
-            body, delayLevel, delayTimeMillis, ts, host, transactionId);
+        Message<T> message = new Message<>(topic, tag, keys, shardingKey, properties, userProperties,
+            body, delayLevel, delayTimeMillis, ts, host, transactionId, reconsumeTimes);
+        return message;
     }
 }

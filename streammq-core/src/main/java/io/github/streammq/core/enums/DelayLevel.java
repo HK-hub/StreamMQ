@@ -4,10 +4,14 @@ import java.time.Duration;
 import java.util.Objects;
 
 /**
- * 延时消息级别（18 级，对齐 RocketMQ）。
+ * 延时消息级别（18 级，对齐 RocketMQ 兼容）。
  *
  * <p>每个级别对应固定的延时时间，{@link #toMillis()} 返回毫秒数。
- * 延时消息底层基于 Redis ZSet + 定时轮询投递实现。
+ * 底层基于 Redis ZSet + {@code DelayMessageScheduler} 定时轮询投递实现。
+ *
+ * <p><b>自定义延时：</b>18 级固定延时为 RocketMQ 兼容设计。如需任意毫秒级延时，
+ * 请使用 {@link io.github.streammq.core.message.Message#delayTimeMillis} 字段，
+ * 支持 1ms ~ 任意时长的精确定时投递。
  *
  * <p>级别清单：
  * <pre>
@@ -17,8 +21,6 @@ import java.util.Objects;
  * MINUTE_9  = 9m     MINUTE_10 = 10m    MINUTE_20 = 20m    MINUTE_30 = 30m
  * HOUR_1    = 1h     HOUR_2    = 2h
  * </pre>
- *
- * <p>v1.0 GA 将增加任意延时支持（{@code delayTimeMillis}）。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

@@ -8,7 +8,7 @@ import java.util.Map;
  * <p>框架在调用 Consumer 时构造此对象，注入到 {@code onMessage} 第二参数。
  * 消费结果统一由 {@code onMessage} 的返回值
  * （{@link io.github.streammq.core.enums.ConsumeAction} /
- * {@link io.github.streammq.core.enums.OrderlyAction}）表达，
+ * {@link ConsumeAction}）表达，
  * 本接口仅提供消息元数据读取，不再提供手动 ACK/nack/defer 调用，
  * 避免返回值与手动调用双模式冲突。
  *

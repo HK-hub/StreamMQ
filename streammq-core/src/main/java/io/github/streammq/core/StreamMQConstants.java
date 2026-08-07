@@ -60,6 +60,17 @@ public final class StreamMQConstants {
     /** 默认背压队列容量（0=不启用背压） */
     public static final int DEFAULT_INFLIGHT_CAPACITY = 0;
 
+    // ==================== 消息大小限制 ====================
+    /**
+     * Redis Stream 单条消息最大大小（字节），512MB。
+     * 实际建议不超过 1MB，超大消息会增加网络传输和内存压力。
+     */
+    public static final long MAX_MESSAGE_SIZE_BYTES = 512L * 1024 * 1024;
+    /**
+     * 推荐的消息体最大大小（字节），超过此值建议使用压缩或分片。
+     */
+    public static final long RECOMMENDED_MAX_BODY_SIZE_BYTES = 1024L * 1024;
+
     // ==================== DLQ 配置默认值 ====================
     /** 默认 DLQ 失败策略实现类全限定名（LogAndDropDlqFailureStrategy） */
     public static final String DEFAULT_DLQ_FAILURE_STRATEGY =
@@ -115,4 +126,12 @@ public final class StreamMQConstants {
     // ==================== 启用模式 ====================
     public static final String MODE_STANDARD = "STANDARD";
     public static final String MODE_LITE = "LITE";
+
+    // ==================== Redis Key / Field 常量 ====================
+    /** 健康检查 Redis Key */
+    public static final String HEALTH_CHECK_KEY = "streammq:health-check";
+    /** 事务状态 Hash 中目标 Topic 字段后缀 */
+    public static final String TX_FIELD_TARGET_SUFFIX = ".target";
+    /** 事务状态 Hash 中半消息 Stream Entry ID 字段后缀 */
+    public static final String TX_FIELD_HALF_ID_SUFFIX = ".halfId";
 }

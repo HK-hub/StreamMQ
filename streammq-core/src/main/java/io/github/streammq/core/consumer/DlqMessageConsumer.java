@@ -29,7 +29,7 @@ import io.github.streammq.core.message.Message;
  * @since 0.1.0
  */
 @FunctionalInterface
-public interface DlqMessageConsumer<T> {
+public interface DlqMessageConsumer<T> extends StreamMessageConsumer<T> {
 
     /**
      * 处理单条死信消息（成功=自动 ACK，异常=触发 {@code DlqFailureStrategy} 决策）。

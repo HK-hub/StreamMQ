@@ -2,6 +2,7 @@ package io.github.streammq.core.template;
 
 import io.github.streammq.core.message.BatchMessage;
 import io.github.streammq.core.message.Message;
+import io.github.streammq.core.message.SendOptions;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.producer.SendCallback;
 import io.github.streammq.core.converter.MessageConverter;
@@ -26,6 +27,19 @@ import java.util.concurrent.CompletableFuture;
  *
  * <p>拦截器链：所有 {@code syncSend} / {@code asyncSend} 调用前后均经过 {@link ProducerInterceptor} 链。
  *
+ * <p><b>可靠性保证模型（05-1.3）：</b>
+ * <ul>
+ *   <li>{@code syncSend}：等待 Redis XADD 命令返回，确认消息已写入 Stream 缓冲区。
+ *       持久化级别取决于 Redis AOF 配置（{@code appendfsync everysec} 默认每秒刷盘）</li>
+ *   <li>{@code asyncSend}：通过 {@link CompletableFuture} 异步获取 XADD 结果，语义与 syncSend 相同</li>
+ *   <li>{@code sendOneway}：Fire-and-forget，不等待 Redis 响应，不保证消息一定写入</li>
+ *   <li>{@code syncSendBatch}：基于 Pipeline 批量发送，Pipeline 本身失败会抛异常，单条失败独立标识</li>
+ *   <li>{@code executeInTransaction}：简化模式在当前线程执行本地事务，完整模式通过 TransactionScanner 回查</li>
+ * </ul>
+ *
+ * <p><b>不支持 Redis WAIT 命令</b>：当前实现不集成 WAIT 命令等待从节点确认。
+ * 如需更强持久化保证，请配置 Redis {@code appendfsync always} 或自行集成 WAIT。
+ *
  * <p><b>泛型设计</b>：泛型参数 {@code <T>} 声明在方法级别而非类级别。一个 Template 单例
  * 可发送不同 body 类型的消息，无需为每种 body 类型创建独立的 Template 实例，
  * 也避免了调用方繁琐的泛型强转。
@@ -48,6 +62,10 @@ public interface StreamMessageTemplate extends TransactionExecutor {
 
     /**
      * 同步发送（默认超时、默认重试次数）。
+     *
+     * <p><b>消息大小限制（02-2.2）：</b>Redis Stream 单条消息最大 512MB，
+     * 但推荐不超过 1MB。超大消息会增加网络传输和内存压力。
+     * 序列化后的消息大小取决于 {@link io.github.streammq.core.serializer.MessageSerializer} 实现。
      *
      * @param message 消息
      * @param <T> body 类型
@@ -116,12 +134,51 @@ public interface StreamMessageTemplate extends TransactionExecutor {
     <T> void sendOneway(Message<T> message);
 
     /**
+     * 同步发送（通过 {@link SendOptions} 指定超时与重试参数）。
+     *
+     * <p>这是推荐的发送方式，通过 {@link SendOptions} 统一管理发送参数，
+     * 避免多个重载方法导致的 API 膨胀。
+     *
+     * @param message 消息
+     * @param options 发送选项（超时、重试等），不能为 null
+     * @param <T> body 类型
+     * @return 发送结果
+     * @throws io.github.streammq.core.exception.StreamMQException 发送失败
+     */
+    <T> SendResult syncSend(Message<T> message, SendOptions options);
+
+    /**
+     * 异步发送（通过 {@link SendOptions} 指定发送参数，返回 {@link CompletableFuture}）。
+     *
+     * @param message 消息
+     * @param options 发送选项，不能为 null
+     * @param <T> body 类型
+     * @return 异步结果
+     */
+    <T> CompletableFuture<SendResult> asyncSend(Message<T> message, SendOptions options);
+
+    /**
+     * 异步发送（通过 {@link SendOptions} 指定发送参数，回调通知）。
+     *
+     * @param message 消息
+     * @param options 发送选项，不能为 null
+     * @param callback 回调
+     * @param <T> body 类型
+     */
+    <T> void asyncSend(Message<T> message, SendOptions options, SendCallback callback);
+
+    /**
      * 批量发送。
+     *
+     * <p>语义：所有消息通过 Pipeline 一次性发送到 Redis，单条失败不会导致整个批次异常。
+     * 返回的 {@link SendResult} 列表与输入消息一一对应，每条结果的状态独立标识成功/失败。
+     * 如果 Pipeline 本身异常（如网络中断），则抛出 {@link io.github.streammq.core.exception.StreamMQException}。
      *
      * @param batch 批量消息
      * @param <T> body 类型
-     * @return 每条消息的发送结果
+     * @return 每条消息的发送结果（与输入顺序一致）
      * @throws IllegalArgumentException 如果 batch 为空
+     * @throws io.github.streammq.core.exception.StreamMQException 如果 Pipeline 本身异常
      */
     <T> List<SendResult> syncSendBatch(BatchMessage<T> batch);
 

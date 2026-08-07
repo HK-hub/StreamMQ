@@ -56,4 +56,14 @@ public interface ConsumerGroupManager {
      * @return 实例 ID
      */
     String getInstanceId();
+
+    /**
+     * 清理旧实例残留的过期数据（如超时的心跳记录）。
+     *
+     * <p>广播消费模式下，每次启动时调用此方法清理旧实例的残留数据，
+     * 防止消费者组无限增长。默认实现为空操作，子类可覆盖。
+     */
+    default void cleanupStaleGroups() {
+        // default no-op
+    }
 }
