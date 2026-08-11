@@ -5,14 +5,6 @@ import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
-import org.redisson.api.PendingEntry;
-import org.redisson.api.RStream;
-import org.redisson.api.RedissonClient;
-import org.redisson.api.StreamMessageId;
-import org.redisson.api.stream.StreamAddArgs;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -23,17 +15,21 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.redisson.api.PendingEntry;
+import org.redisson.api.RStream;
+import org.redisson.api.RedissonClient;
+import org.redisson.api.StreamMessageId;
+import org.redisson.api.stream.StreamAddArgs;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * PEL 认领调度器，用于顺序消费 SUSPEND 后的消息恢复（对齐 RocketMQ 顺序消费的 queue 重投）。
  *
- * <p>顺序消费返回 {@code SUSPEND_CURRENT_QUEUE_A_MOMENT} 时消息留在 PEL 中，
- * 本调度器周期扫描各 orderly 消费组的 PEL，将空闲超过阈值的消息通过
- * {@code XAUTOCLAIM} 重新分配给同组消费者（可能为同一消费者或其他活跃消费者），
- * 保证顺序消息不会因消费者崩溃或 SUSPEND 而永久卡死。
+ * <p>顺序消费返回 {@code SUSPEND_CURRENT_QUEUE_A_MOMENT} 时消息留在 PEL 中， 本调度器周期扫描各 orderly 消费组的
+ * PEL，将空闲超过阈值的消息通过 {@code XAUTOCLAIM} 重新分配给同组消费者（可能为同一消费者或其他活跃消费者）， 保证顺序消息不会因消费者崩溃或 SUSPEND 而永久卡死。
  *
- * <p>当消息的 {@code retryTimes} 字段超过 {@code maxReconsumeTimes} 时，
- * 从 PEL 中 ACK 移除并 XADD 到 DLQ Stream。
+ * <p>当消息的 {@code retryTimes} 字段超过 {@code maxReconsumeTimes} 时， 从 PEL 中 ACK 移除并 XADD 到 DLQ Stream。
  *
  * <p>线程安全：所有字段均为 final 或线程安全类型。
  *
@@ -42,211 +38,244 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public class PelClaimScheduler implements StreamMQScheduler {
 
-    private static final Logger LOG = LoggerFactory.getLogger(PelClaimScheduler.class);
+  private static final Logger LOG = LoggerFactory.getLogger(PelClaimScheduler.class);
 
-    /** PEL 空闲阈值（毫秒）：消息在 PEL 中超过此时间未被 ACK 则触发 XAUTOCLAIM */
-    private static final long DEFAULT_MIN_IDLE_MS = 30_000L;
-    /** 默认扫描间隔（毫秒） */
-    private static final long DEFAULT_SCAN_INTERVAL_MS = 5_000L;
-    /** 默认单次扫描批量 */
-    private static final int DEFAULT_BATCH_SIZE = 100;
-    /** DLQ 原因：顺序消费超限 */
-    private static final String DLQ_REASON_ORDERLY_MAX_RETRY = "maxRetryOrderly";
+  /** PEL 空闲阈值（毫秒）：消息在 PEL 中超过此时间未被 ACK 则触发 XAUTOCLAIM */
+  private static final long DEFAULT_MIN_IDLE_MS = 30_000L;
 
-    private final RedissonClient redisson;
-    private final String namespace;
-    private final long scanIntervalMs;
-    private final int batchSize;
-    private final long minIdleMs;
-    private final ScheduledExecutorService scanExecutor;
-    private final AtomicBoolean running = new AtomicBoolean(false);
-    private final ConcurrentMap<String, PelClaimTarget> targets = new ConcurrentHashMap<>();
-    /** 当前的扫描调度任务，stop 时取消以支持后续 restart */
-    private volatile ScheduledFuture<?> scanFuture;
+  /** 默认扫描间隔（毫秒） */
+  private static final long DEFAULT_SCAN_INTERVAL_MS = 5_000L;
 
-    /**
-     * 构造调度器。
-     *
-     * @param redisson Redisson 客户端
-     * @param namespace 命名空间
-     * @param scanIntervalMs 扫描间隔（毫秒）
-     * @param batchSize 单次扫描批量
-     */
-    public PelClaimScheduler(RedissonClient redisson, String namespace,
-                             long scanIntervalMs, int batchSize) {
-        this(redisson, namespace, scanIntervalMs, batchSize, DEFAULT_MIN_IDLE_MS);
+  /** 默认单次扫描批量 */
+  private static final int DEFAULT_BATCH_SIZE = 100;
+
+  /** DLQ 原因：顺序消费超限 */
+  private static final String DLQ_REASON_ORDERLY_MAX_RETRY = "maxRetryOrderly";
+
+  private final RedissonClient redisson;
+  private final String namespace;
+  private final long scanIntervalMs;
+  private final int batchSize;
+  private final long minIdleMs;
+  private final ScheduledExecutorService scanExecutor;
+  private final AtomicBoolean running = new AtomicBoolean(false);
+  private final ConcurrentMap<String, PelClaimTarget> targets = new ConcurrentHashMap<>();
+
+  /** 当前的扫描调度任务，stop 时取消以支持后续 restart */
+  private volatile ScheduledFuture<?> scanFuture;
+
+  /**
+   * 构造调度器。
+   *
+   * @param redisson Redisson 客户端
+   * @param namespace 命名空间
+   * @param scanIntervalMs 扫描间隔（毫秒）
+   * @param batchSize 单次扫描批量
+   */
+  public PelClaimScheduler(
+      RedissonClient redisson, String namespace, long scanIntervalMs, int batchSize) {
+    this(redisson, namespace, scanIntervalMs, batchSize, DEFAULT_MIN_IDLE_MS);
+  }
+
+  /**
+   * 构造调度器（可指定 PEL 空闲阈值）。
+   *
+   * @param redisson Redisson 客户端
+   * @param namespace 命名空间
+   * @param scanIntervalMs 扫描间隔（毫秒）
+   * @param batchSize 单次扫描批量
+   * @param minIdleMs PEL 空闲阈值（毫秒）
+   */
+  public PelClaimScheduler(
+      RedissonClient redisson,
+      String namespace,
+      long scanIntervalMs,
+      int batchSize,
+      long minIdleMs) {
+    this.redisson = Objects.requireNonNull(redisson, "redisson");
+    this.namespace = Objects.isNull(namespace) ? "" : namespace;
+    this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
+    this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
+    this.minIdleMs = minIdleMs > 0 ? minIdleMs : DEFAULT_MIN_IDLE_MS;
+    this.scanExecutor =
+        new ScheduledThreadPoolExecutor(
+            1,
+            r -> {
+              Thread t = new Thread(r, "streammq-pelclaim-scheduler");
+              t.setDaemon(true);
+              return t;
+            });
+  }
+
+  /**
+   * 注册一个 PEL 认领目标（topic + group）。
+   *
+   * @param topic 主题
+   * @param group 消费者组名
+   * @param maxReconsumeTimes 最大重试次数
+   */
+  public void registerTarget(String topic, String group, int maxReconsumeTimes) {
+    Objects.requireNonNull(topic, "topic");
+    Objects.requireNonNull(group, "group");
+    String key = topic + ":" + group;
+    targets.put(key, new PelClaimTarget(topic, group, maxReconsumeTimes));
+    LOG.info(
+        "Registered PelClaim target: topic={}, group={}, maxReconsumeTimes={}",
+        topic,
+        group,
+        maxReconsumeTimes);
+  }
+
+  @Override
+  public void start() {
+    if (!running.compareAndSet(false, true)) {
+      LOG.warn("PelClaimScheduler already started");
+      return;
     }
+    scanFuture =
+        scanExecutor.scheduleAtFixedRate(
+            this::scanAllTargets, 0, scanIntervalMs, TimeUnit.MILLISECONDS);
+    LOG.info(
+        "PelClaimScheduler started, scanIntervalMs={}, minIdleMs={}, targets={}",
+        scanIntervalMs,
+        minIdleMs,
+        targets.size());
+  }
 
-    /**
-     * 构造调度器（可指定 PEL 空闲阈值）。
-     *
-     * @param redisson Redisson 客户端
-     * @param namespace 命名空间
-     * @param scanIntervalMs 扫描间隔（毫秒）
-     * @param batchSize 单次扫描批量
-     * @param minIdleMs PEL 空闲阈值（毫秒）
-     */
-    public PelClaimScheduler(RedissonClient redisson, String namespace,
-                             long scanIntervalMs, int batchSize, long minIdleMs) {
-        this.redisson = Objects.requireNonNull(redisson, "redisson");
-        this.namespace = Objects.isNull(namespace) ? "" : namespace;
-        this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
-        this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
-        this.minIdleMs = minIdleMs > 0 ? minIdleMs : DEFAULT_MIN_IDLE_MS;
-        this.scanExecutor = new ScheduledThreadPoolExecutor(1, r -> {
-            Thread t = new Thread(r, "streammq-pelclaim-scheduler");
-            t.setDaemon(true);
-            return t;
-        });
+  /** 停止调度器（取消扫描任务但保留线程池，支持后续 restart）。 */
+  @Override
+  public void stop() {
+    if (!running.compareAndSet(true, false)) {
+      return;
     }
-
-    /**
-     * 注册一个 PEL 认领目标（topic + group）。
-     *
-     * @param topic 主题
-     * @param group 消费者组名
-     * @param maxReconsumeTimes 最大重试次数
-     */
-    public void registerTarget(String topic, String group, int maxReconsumeTimes) {
-        Objects.requireNonNull(topic, "topic");
-        Objects.requireNonNull(group, "group");
-        String key = topic + ":" + group;
-        targets.put(key, new PelClaimTarget(topic, group, maxReconsumeTimes));
-        LOG.info("Registered PelClaim target: topic={}, group={}, maxReconsumeTimes={}",
-            topic, group, maxReconsumeTimes);
+    ScheduledFuture<?> future = this.scanFuture;
+    if (Objects.nonNull(future)) {
+      future.cancel(false);
+      this.scanFuture = null;
     }
+    LOG.info("PelClaimScheduler stopped");
+  }
 
-    @Override
-    public void start() {
-        if (!running.compareAndSet(false, true)) {
-            LOG.warn("PelClaimScheduler already started");
-            return;
-        }
-        scanFuture = scanExecutor.scheduleAtFixedRate(this::scanAllTargets, 0, scanIntervalMs, TimeUnit.MILLISECONDS);
-        LOG.info("PelClaimScheduler started, scanIntervalMs={}, minIdleMs={}, targets={}",
-            scanIntervalMs, minIdleMs, targets.size());
+  @Override
+  public boolean isRunning() {
+    return running.get();
+  }
+
+  private void scanAllTargets() {
+    for (PelClaimTarget target : targets.values()) {
+      try {
+        scanPel(target);
+      } catch (RuntimeException ex) {
+        LOG.warn(
+            "scanPel failed for topic={}, group={}: {}",
+            target.topic,
+            target.group,
+            ex.getMessage(),
+            ex);
+      }
     }
+  }
 
-    /**
-     * 停止调度器（取消扫描任务但保留线程池，支持后续 restart）。
-     */
-    @Override
-    public void stop() {
-        if (!running.compareAndSet(true, false)) {
-            return;
-        }
-        ScheduledFuture<?> future = this.scanFuture;
-        if (Objects.nonNull(future)) {
-            future.cancel(false);
-            this.scanFuture = null;
-        }
-        LOG.info("PelClaimScheduler stopped");
-    }
+  /** 扫描指定目标的 PEL，对空闲超阈值的消息执行 XAUTOCLAIM 或 DLQ 路由。 */
+  @SuppressWarnings({"rawtypes", "unchecked"})
+  private void scanPel(PelClaimTarget target) {
+    String streamKey = StreamMQKeys.topicStream(namespace, target.topic);
+    RStream<String, String> stream = redisson.getStream(streamKey);
+    String dlqStreamKey = StreamMQKeys.dlqStream(namespace, target.group);
 
-    @Override
-    public boolean isRunning() {
-        return running.get();
-    }
-
-    private void scanAllTargets() {
-        for (PelClaimTarget target : targets.values()) {
-            try {
-                scanPel(target);
-            } catch (RuntimeException ex) {
-                LOG.warn("scanPel failed for topic={}, group={}: {}",
-                    target.topic, target.group, ex.getMessage(), ex);
-            }
-        }
-    }
-
-    /**
-     * 扫描指定目标的 PEL，对空闲超阈值的消息执行 XAUTOCLAIM 或 DLQ 路由。
-     */
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private void scanPel(PelClaimTarget target) {
-        String streamKey = StreamMQKeys.topicStream(namespace, target.topic);
-        RStream<String, String> stream = redisson.getStream(streamKey);
-        String dlqStreamKey = StreamMQKeys.dlqStream(namespace, target.group);
-
-        // 读取 PEL 中的 pending 消息
-        List<StreamMessageId> pendingIds;
+    // 读取 PEL 中的 pending 消息
+    List<StreamMessageId> pendingIds;
+    try {
+      // listPending 返回 PendingEntry 列表，包含 messageId 和 idleTime
+      var pending =
+          stream.listPending(target.group, StreamMessageId.MIN, StreamMessageId.MAX, batchSize);
+      if (CollectionUtils.isEmpty(pending)) {
+        return;
+      }
+      for (PendingEntry entry : pending) {
         try {
-            // listPending 返回 PendingEntry 列表，包含 messageId 和 idleTime
-            var pending = stream.listPending(target.group,
-                StreamMessageId.MIN, StreamMessageId.MAX, batchSize);
-            if (CollectionUtils.isEmpty(pending)) {
-                return;
-            }
-            for (PendingEntry entry : pending) {
-                try {
-                    StreamMessageId id = entry.getId();
-                    long idleTime = entry.getIdleTime();
-                    if (idleTime < minIdleMs) {
-                        continue;
-                    }
-                    // 读取消息内容判断 retryTimes
-                    var readResult = stream.range(id, id);
-                    if (CollectionUtils.isEmpty(readResult)) {
-                        continue;
-                    }
-                    Map<String, String> fields = (Map<String, String>) readResult.values().iterator().next();
-                    int retryTimes = parseRetryTimes(fields);
-                    if (retryTimes >= target.maxReconsumeTimes) {
-                        // 超限 → ACK 移除 + XADD 到 DLQ
-                        stream.ack(target.group, id);
-                        fields.put(RetryScheduler.FIELD_DLQ_REASON, DLQ_REASON_ORDERLY_MAX_RETRY);
-                        fields.put(RetryScheduler.FIELD_ORIGINAL_RETRY_COUNT, Integer.toString(retryTimes));
-                        RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
-                        dlqStream.add(StreamAddArgs.entries(fields));
-                        LOG.info("Orderly message entered DLQ: topic={}, group={}, id={}, retryTimes={}",
-                            target.topic, target.group, id, retryTimes);
-                    } else {
-                        // XAUTOCLAIM 到同组（重新分配给活跃消费者）
-                        try {
-                            stream.autoClaim(target.group, "pelclaim-consumer",
-                                minIdleMs, java.util.concurrent.TimeUnit.MILLISECONDS,
-                                id, 1);
-                            LOG.debug("XAUTOCLAIM executed for orderly pending: topic={}, group={}, id={}",
-                                target.topic, target.group, id);
-                        } catch (RuntimeException ex) {
-                            LOG.warn("XAUTOCLAIM failed for id={}: {}", id, ex.getMessage());
-                        }
-                    }
-                } catch (Exception ex) {
-                    LOG.warn("Failed to process pending entry: {}", ex.getMessage());
-                }
-            }
-        } catch (RuntimeException ex) {
-            LOG.warn("listPending failed for topic={}, group={}: {}",
-                target.topic, target.group, ex.getMessage());
-        }
-    }
-
-    private int parseRetryTimes(Map<String, String> fields) {
-        String retryTimesStr = fields.get(DefaultMessageConverter.FIELD_RETRY_TIMES);
-        if (StringUtils.isNotEmpty(retryTimesStr)) {
+          StreamMessageId id = entry.getId();
+          long idleTime = entry.getIdleTime();
+          if (idleTime < minIdleMs) {
+            continue;
+          }
+          // 读取消息内容判断 retryTimes
+          var readResult = stream.range(id, id);
+          if (CollectionUtils.isEmpty(readResult)) {
+            continue;
+          }
+          Map<String, String> fields = (Map<String, String>) readResult.values().iterator().next();
+          int retryTimes = parseRetryTimes(fields);
+          if (retryTimes >= target.maxReconsumeTimes) {
+            // 超限 → ACK 移除 + XADD 到 DLQ
+            stream.ack(target.group, id);
+            fields.put(RetryScheduler.FIELD_DLQ_REASON, DLQ_REASON_ORDERLY_MAX_RETRY);
+            fields.put(RetryScheduler.FIELD_ORIGINAL_RETRY_COUNT, Integer.toString(retryTimes));
+            RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
+            dlqStream.add(StreamAddArgs.entries(fields));
+            LOG.info(
+                "Orderly message entered DLQ: topic={}, group={}, id={}, retryTimes={}",
+                target.topic,
+                target.group,
+                id,
+                retryTimes);
+          } else {
+            // XAUTOCLAIM 到同组（重新分配给活跃消费者）
             try {
-                return Integer.parseInt(retryTimesStr);
-            } catch (NumberFormatException ignored) {
-                LOG.debug("Failed to parse retry times: {}", retryTimesStr);
+              stream.autoClaim(
+                  target.group,
+                  "pelclaim-consumer",
+                  minIdleMs,
+                  java.util.concurrent.TimeUnit.MILLISECONDS,
+                  id,
+                  1);
+              LOG.debug(
+                  "XAUTOCLAIM executed for orderly pending: topic={}, group={}, id={}",
+                  target.topic,
+                  target.group,
+                  id);
+            } catch (RuntimeException ex) {
+              LOG.warn("XAUTOCLAIM failed for id={}: {}", id, ex.getMessage());
             }
+          }
+        } catch (Exception ex) {
+          LOG.warn("Failed to process pending entry: {}", ex.getMessage());
         }
-        return 0;
+      }
+    } catch (RuntimeException ex) {
+      LOG.warn(
+          "listPending failed for topic={}, group={}: {}",
+          target.topic,
+          target.group,
+          ex.getMessage());
     }
+  }
 
-    public int getTargetCount() {
-        return targets.size();
+  private int parseRetryTimes(Map<String, String> fields) {
+    String retryTimesStr = fields.get(DefaultMessageConverter.FIELD_RETRY_TIMES);
+    if (StringUtils.isNotEmpty(retryTimesStr)) {
+      try {
+        return Integer.parseInt(retryTimesStr);
+      } catch (NumberFormatException ignored) {
+        LOG.debug("Failed to parse retry times: {}", retryTimesStr);
+      }
     }
+    return 0;
+  }
 
-    private static final class PelClaimTarget {
-        final String topic;
-        final String group;
-        final int maxReconsumeTimes;
+  public int getTargetCount() {
+    return targets.size();
+  }
 
-        PelClaimTarget(String topic, String group, int maxReconsumeTimes) {
-            this.topic = topic;
-            this.group = group;
-            this.maxReconsumeTimes = maxReconsumeTimes;
-        }
+  private static final class PelClaimTarget {
+    final String topic;
+    final String group;
+    final int maxReconsumeTimes;
+
+    PelClaimTarget(String topic, String group, int maxReconsumeTimes) {
+      this.topic = topic;
+      this.group = group;
+      this.maxReconsumeTimes = maxReconsumeTimes;
     }
+  }
 }

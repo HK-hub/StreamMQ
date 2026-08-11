@@ -4,11 +4,10 @@ import io.github.streammq.core.consumer.ConsumeOrderlyContext;
 import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
+import java.util.Map;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
-import java.util.Map;
 
 /**
  * 默认 {@link ConsumeOrderlyContext} 实现，同时兼容普通消费场景。
@@ -26,71 +25,71 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DefaultConsumeContextConsume implements ConsumeOrderlyContext {
 
-    private static final Logger LOG = LoggerFactory.getLogger(DefaultConsumeContextConsume.class);
+  private static final Logger LOG = LoggerFactory.getLogger(DefaultConsumeContextConsume.class);
 
-    /** 默认消费者实例名后缀 */
-    private static final String DEFAULT_CONSUMER_NAME_SUFFIX = "-consumer";
+  /** 默认消费者实例名后缀 */
+  private static final String DEFAULT_CONSUMER_NAME_SUFFIX = "-consumer";
 
-    private final Message<?> message;
-    private final ListenerRegistration<?> registration;
+  private final Message<?> message;
+  private final ListenerRegistration<?> registration;
 
-    @Override
-    public String topic() {
-        return message.getTopic();
-    }
+  @Override
+  public String topic() {
+    return message.getTopic();
+  }
 
-    @Override
-    public String consumerGroup() {
-        return registration.getGroup();
-    }
+  @Override
+  public String consumerGroup() {
+    return registration.getGroup();
+  }
 
-    @Override
-    public String consumerName() {
-        return registration.getGroup() + DEFAULT_CONSUMER_NAME_SUFFIX;
-    }
+  @Override
+  public String consumerName() {
+    return registration.getGroup() + DEFAULT_CONSUMER_NAME_SUFFIX;
+  }
 
-    @Override
-    public int reconsumeTimes() {
-        return message.getReconsumeTimes();
-    }
+  @Override
+  public int reconsumeTimes() {
+    return message.getReconsumeTimes();
+  }
 
-    @Override
-    public long bornTimestamp() {
-        return message.getBornTimestamp();
-    }
+  @Override
+  public long bornTimestamp() {
+    return message.getBornTimestamp();
+  }
 
-    @Override
-    public String bornHost() {
-        return message.getBornHost();
-    }
+  @Override
+  public String bornHost() {
+    return message.getBornHost();
+  }
 
-    @Override
-    public Map<String, String> messageTrack() {
-        return message.getProperties();
-    }
+  @Override
+  public Map<String, String> messageTrack() {
+    return message.getProperties();
+  }
 
-    @Override
-    public String ext(String key) {
-        return message.getProperties().get(key);
-    }
+  @Override
+  public String ext(String key) {
+    return message.getProperties().get(key);
+  }
 
-    @Override
-    public String shardingKey() {
-        return message.getShardingKey();
-    }
+  @Override
+  public String shardingKey() {
+    return message.getShardingKey();
+  }
 
-    @Override
-    public int shardId() {
-        return 0;
-    }
+  @Override
+  public int shardId() {
+    return 0;
+  }
 
-    @Override
-    public MessageId queueOffset() {
-        return message.getMessageId();
-    }
+  @Override
+  public MessageId queueOffset() {
+    return message.getMessageId();
+  }
 
-    @Override
-    public long backlog() {
-        return 0;
-    }
+  @Override
+  public long backlog() {
+    return 0;
+  }
 }
