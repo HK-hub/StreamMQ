@@ -3,14 +3,15 @@ package io.github.streammq.diagnostics.model;
 /**
  * 消息积压诊断报告，反映指定主题+消费者组的积压状况与清积压预估。
  *
- * <p>由 {@link io.github.streammq.diagnostics.StreamMQDiagnosticsService#diagnoseBacklog(String, String)} 生成，
- * 包含当前积压量、增长速率、清积压预估时间、严重级别与优化建议。
+ * <p>由 {@link io.github.streammq.diagnostics.StreamMQDiagnosticsService#diagnoseBacklog(String,
+ * String)} 生成， 包含当前积压量、增长速率、清积压预估时间、严重级别与优化建议。
  *
  * <p>严重级别判定规则：
+ *
  * <ul>
- *   <li>{@link Severity#INFO} - 积压低于警告阈值（backlogWarningThreshold，默认 1000）</li>
- *   <li>{@link Severity#WARNING} - 积压介于警告阈值与严重阈值之间（backlogCriticalThreshold，默认 10000）</li>
- *   <li>{@link Severity#CRITICAL} - 积压超过严重阈值</li>
+ *   <li>{@link Severity#INFO} - 积压低于警告阈值（backlogWarningThreshold，默认 1000）
+ *   <li>{@link Severity#WARNING} - 积压介于警告阈值与严重阈值之间（backlogCriticalThreshold，默认 10000）
+ *   <li>{@link Severity#CRITICAL} - 积压超过严重阈值
  * </ul>
  *
  * @param topic 主题
@@ -34,6 +35,4 @@ public record BacklogReport(
     double produceRate,
     double consumeRate,
     String recommendation,
-    Severity severity
-) {
-}
+    Severity severity) {}

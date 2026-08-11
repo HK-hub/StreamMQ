@@ -12,9 +12,4 @@ package io.github.streammq.diagnostics.model;
  * @author StreamMQ Contributors
  * @since 1.0.0
  */
-public record FailureReason(
-    String reason,
-    long count,
-    double percentage
-) {
-}
+public record FailureReason(String reason, long count, double percentage) {}

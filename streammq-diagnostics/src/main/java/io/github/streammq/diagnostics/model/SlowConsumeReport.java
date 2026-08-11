@@ -3,8 +3,8 @@ package io.github.streammq.diagnostics.model;
 /**
  * 慢消费诊断报告，反映指定主题+消费者组的消费性能状况。
  *
- * <p>由 {@link io.github.streammq.diagnostics.StreamMQDiagnosticsService#diagnoseSlowConsume(String, String)} 生成，
- * 包含消费速率、耗时统计、线程池状态、瓶颈分析与优化建议。
+ * <p>由 {@link io.github.streammq.diagnostics.StreamMQDiagnosticsService#diagnoseSlowConsume(String,
+ * String)} 生成， 包含消费速率、耗时统计、线程池状态、瓶颈分析与优化建议。
  *
  * @param topic 主题
  * @param group 消费者组
@@ -31,6 +31,4 @@ public record SlowConsumeReport(
     int threadPoolActive,
     int threadPoolMax,
     String bottleneck,
-    String recommendation
-) {
-}
+    String recommendation) {}

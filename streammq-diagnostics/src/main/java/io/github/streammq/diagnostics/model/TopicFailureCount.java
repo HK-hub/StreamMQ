@@ -12,9 +12,4 @@ package io.github.streammq.diagnostics.model;
  * @author StreamMQ Contributors
  * @since 1.0.0
  */
-public record TopicFailureCount(
-    String topic,
-    long count,
-    long lastFailureTimestamp
-) {
-}
+public record TopicFailureCount(String topic, long count, long lastFailureTimestamp) {}

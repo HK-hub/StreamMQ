@@ -5,17 +5,17 @@ import java.util.List;
 /**
  * 消息完整生命周期画像，聚合一条消息从发送到消费（含重试）的全部信息。
  *
- * <p>由 {@link io.github.streammq.diagnostics.MessageProfileService} 基于
- * {@link io.github.streammq.core.trace.StreamMQTraceService} 的追踪记录构建，
- * 用于消息链路可视化与问题排查。
+ * <p>由 {@link io.github.streammq.diagnostics.MessageProfileService} 基于 {@link
+ * io.github.streammq.core.trace.StreamMQTraceService} 的追踪记录构建， 用于消息链路可视化与问题排查。
  *
  * <p>典型字段说明：
+ *
  * <ul>
- *   <li>{@link #sendDurationMillis} - 发送耗时（从 bornTimestamp 到发送成功的时间差）</li>
- *   <li>{@link #consumeHistory} - 消费历史，按时间升序排列，每次重试生成一条记录</li>
- *   <li>{@link #retryCount} - 重试次数（consumeHistory.size - 1）</li>
- *   <li>{@link #finalStatus} - 最终状态（SUCCESS / FAILED / DLQ / PROCESSING / UNKNOWN）</li>
- *   <li>{@link #routePath} - 路由路径，记录消息经过的主题流转（如 topic -> retry-topic -> dlq-topic）</li>
+ *   <li>{@link #sendDurationMillis} - 发送耗时（从 bornTimestamp 到发送成功的时间差）
+ *   <li>{@link #consumeHistory} - 消费历史，按时间升序排列，每次重试生成一条记录
+ *   <li>{@link #retryCount} - 重试次数（consumeHistory.size - 1）
+ *   <li>{@link #finalStatus} - 最终状态（SUCCESS / FAILED / DLQ / PROCESSING / UNKNOWN）
+ *   <li>{@link #routePath} - 路由路径，记录消息经过的主题流转（如 topic -> retry-topic -> dlq-topic）
  * </ul>
  *
  * @param messageId 消息 ID
@@ -45,6 +45,4 @@ public record MessageProfile(
     MessageStatus finalStatus,
     List<String> routePath,
     String bodyType,
-    String bornHost
-) {
-}
+    String bornHost) {}

@@ -3,8 +3,8 @@ package io.github.streammq.diagnostics.model;
 /**
  * 单次消费尝试记录，表示消息被某一消费者组消费一次的完整信息。
  *
- * <p>一条消息可能被多次消费（重试场景），每次消费生成一条 {@link ConsumeAttempt}，
- * 按时间顺序组成 {@link MessageProfile#consumeHistory()}。
+ * <p>一条消息可能被多次消费（重试场景），每次消费生成一条 {@link ConsumeAttempt}， 按时间顺序组成 {@link
+ * MessageProfile#consumeHistory()}。
  *
  * @param consumerGroup 消费者组名
  * @param consumerName 消费者实例名
@@ -23,6 +23,4 @@ public record ConsumeAttempt(
     long durationMillis,
     boolean success,
     int reconsumeTimes,
-    String errorMessage
-) {
-}
+    String errorMessage) {}

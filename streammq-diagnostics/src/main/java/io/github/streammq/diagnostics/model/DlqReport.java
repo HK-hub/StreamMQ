@@ -23,6 +23,4 @@ public record DlqReport(
     List<FailureReason> topFailureReasons,
     List<TopicFailureCount> topFailedTopics,
     long oldestDlqMessageTimestamp,
-    String recommendation
-) {
-}
+    String recommendation) {}
