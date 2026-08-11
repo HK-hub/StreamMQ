@@ -19,33 +19,34 @@ import org.springframework.stereotype.Component;
 @Component
 public class OrderProducer {
 
-    private static final Logger log = LoggerFactory.getLogger(OrderProducer.class);
+  private static final Logger log = LoggerFactory.getLogger(OrderProducer.class);
 
-    private final StreamMessageService service;
+  private final StreamMessageService service;
 
-    public OrderProducer(StreamMessageService service) {
-        this.service = service;
-    }
+  public OrderProducer(StreamMessageService service) {
+    this.service = service;
+  }
 
-    /**
-     * 发送订单消息（可能触发死信）。
-     *
-     * @param orderId 订单 ID
-     * @param content 订单内容
-     * @return 发送结果
-     */
-    public SendResult sendOrder(String orderId, String content) {
-        log.info("Producing order message (may enter DLQ): orderId={}", orderId);
+  /**
+   * 发送订单消息（可能触发死信）。
+   *
+   * @param orderId 订单 ID
+   * @param content 订单内容
+   * @return 发送结果
+   */
+  public SendResult sendOrder(String orderId, String content) {
+    log.info("Producing order message (may enter DLQ): orderId={}", orderId);
 
-        Message<String> message = MessageBuilder.<String>withTopic("order-topic")
-                .tag("dlq-test")
-                .keys(orderId)
-                .body(content)
-                .withUserProperty("source", "dlq-sample")
-                .build();
+    Message<String> message =
+        MessageBuilder.<String>withTopic("order-topic")
+            .tag("dlq-test")
+            .keys(orderId)
+            .body(content)
+            .withUserProperty("source", "dlq-sample")
+            .build();
 
-        SendResult result = service.send(message);
-        log.info("Order message sent: orderId={}, msgId={}", orderId, result.getMessageId());
-        return result;
-    }
+    SendResult result = service.send(message);
+    log.info("Order message sent: orderId={}, msgId={}", orderId, result.getMessageId());
+    return result;
+  }
 }
