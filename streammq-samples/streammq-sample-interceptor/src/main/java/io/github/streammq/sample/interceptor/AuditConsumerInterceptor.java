@@ -1,14 +1,13 @@
 package io.github.streammq.sample.interceptor;
 
+import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.interceptor.ConsumerInterceptor;
 import io.github.streammq.core.message.Message;
-import io.github.streammq.core.consumer.ConsumeContext;
+import java.time.LocalDateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-
-import java.time.LocalDateTime;
 
 /**
  * 消费者审计拦截器示例。
@@ -21,31 +20,32 @@ import java.time.LocalDateTime;
 @Component
 public class AuditConsumerInterceptor implements ConsumerInterceptor {
 
-    private static final Logger log = LoggerFactory.getLogger(AuditConsumerInterceptor.class);
+  private static final Logger log = LoggerFactory.getLogger(AuditConsumerInterceptor.class);
 
-    @Override
-    public boolean beforeConsume(Message<?> message, ConsumeContext context) {
-        return true;
-    }
+  @Override
+  public boolean beforeConsume(Message<?> message, ConsumeContext context) {
+    return true;
+  }
 
-    @Override
-    public void afterConsume(Message<?> message, ConsumeAction action, ConsumeContext context) {
-        String auditLog = String.format(
-                "[AUDIT] topic=%s, tag=%s, keys=%s, body=%s, action=%s, group=%s, reconsumeTimes=%d, time=%s",
-                message.getTopic(),
-                message.getTag(),
-                message.getKeys(),
-                message.getBody(),
-                action,
-                context != null ? context.consumerGroup() : null,
-                context != null ? context.reconsumeTimes() : 0,
-                LocalDateTime.now()
-        );
-        log.info(auditLog);
-    }
+  @Override
+  public void afterConsume(Message<?> message, ConsumeAction action, ConsumeContext context) {
+    String auditLog =
+        String.format(
+            "[AUDIT] topic=%s, tag=%s, keys=%s, body=%s, action=%s, group=%s, reconsumeTimes=%d,"
+                + " time=%s",
+            message.getTopic(),
+            message.getTag(),
+            message.getKeys(),
+            message.getBody(),
+            action,
+            context != null ? context.consumerGroup() : null,
+            context != null ? context.reconsumeTimes() : 0,
+            LocalDateTime.now());
+    log.info(auditLog);
+  }
 
-    @Override
-    public int order() {
-        return 2;
-    }
+  @Override
+  public int order() {
+    return 2;
+  }
 }

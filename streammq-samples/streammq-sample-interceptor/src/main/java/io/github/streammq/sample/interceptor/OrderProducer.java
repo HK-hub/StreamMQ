@@ -17,26 +17,30 @@ import org.springframework.stereotype.Component;
 @Component
 public class OrderProducer {
 
-    private static final Logger log = LoggerFactory.getLogger(OrderProducer.class);
+  private static final Logger log = LoggerFactory.getLogger(OrderProducer.class);
 
-    private final StreamMessageService service;
+  private final StreamMessageService service;
 
-    public OrderProducer(StreamMessageService service) {
-        this.service = service;
-    }
+  public OrderProducer(StreamMessageService service) {
+    this.service = service;
+  }
 
-    public SendResult sendOrder(String orderId, String content) {
-        log.info("Producing order message with interceptors: orderId={}", orderId);
+  public SendResult sendOrder(String orderId, String content) {
+    log.info("Producing order message with interceptors: orderId={}", orderId);
 
-        Message<String> message = MessageBuilder.<String>withTopic("interceptor-order-topic")
-                .tag("order")
-                .keys(orderId)
-                .body(content)
-                .build();
+    Message<String> message =
+        MessageBuilder.<String>withTopic("interceptor-order-topic")
+            .tag("order")
+            .keys(orderId)
+            .body(content)
+            .build();
 
-        SendResult result = service.send(message);
-        log.info("Order message sent: orderId={}, msgId={}, success={}",
-                orderId, result.getMessageId(), result.isSuccess());
-        return result;
-    }
+    SendResult result = service.send(message);
+    log.info(
+        "Order message sent: orderId={}, msgId={}, success={}",
+        orderId,
+        result.getMessageId(),
+        result.isSuccess());
+    return result;
+  }
 }

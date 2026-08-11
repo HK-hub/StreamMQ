@@ -7,11 +7,12 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * StreamMQ 拦截器示例启动类。
  *
  * <p>演示拦截器机制：
+ *
  * <ul>
- *   <li>TraceProducerInterceptor - 发送前注入 traceId</li>
- *   <li>RateLimitProducerInterceptor - 发送前限流控制</li>
- *   <li>TraceConsumerInterceptor - 消费前后记录追踪日志</li>
- *   <li>AuditConsumerInterceptor - 消费后记录审计日志</li>
+ *   <li>TraceProducerInterceptor - 发送前注入 traceId
+ *   <li>RateLimitProducerInterceptor - 发送前限流控制
+ *   <li>TraceConsumerInterceptor - 消费前后记录追踪日志
+ *   <li>AuditConsumerInterceptor - 消费后记录审计日志
  * </ul>
  *
  * @author StreamMQ Contributors
@@ -20,7 +21,7 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 @SpringBootApplication
 public class InterceptorSampleApplication {
 
-    public static void main(String[] args) {
-        SpringApplication.run(InterceptorSampleApplication.class, args);
-    }
+  public static void main(String[] args) {
+    SpringApplication.run(InterceptorSampleApplication.class, args);
+  }
 }
