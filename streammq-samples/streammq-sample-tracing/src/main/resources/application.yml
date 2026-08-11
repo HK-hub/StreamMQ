@@ -1,0 +1,21 @@
+spring:
+  application:
+    name: streammq-sample-tracing
+
+streammq:
+  enabled: true
+  namespace: tracing-sample
+  producer:
+    group: tracing-sample-producer
+  tracing:
+    enabled: true
+    otel:
+      enabled: true
+  trace:
+    enabled: true
+    storage: redis
+
+redisson:
+  singleServerConfig:
+    address: "redis://127.0.0.1:6379"
+    database: 0
