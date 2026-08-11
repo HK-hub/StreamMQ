@@ -10,7 +10,7 @@
 [![Java](https://img.shields.io/badge/Java-21%2B-orange.svg)](https://openjdk.java.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.x-green.svg)](https://spring.io/projects/spring-boot)
 [![Redisson](https://img.shields.io/badge/Redisson-3.34.x-red.svg)](https://redisson.org/)
-[![Version](https://img.shields.io/badge/version-0.1.0--SNAPSHOT-blue.svg)](https://github.com/streammq/streammq)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/streammq/streammq)
 [![Tests](https://img.shields.io/badge/tests-651%20passed-brightgreen.svg)](https://github.com/streammq/streammq)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/streammq/streammq/pulls)
 [![Stars](https://img.shields.io/github/stars/streammq/streammq?style=social)](https://github.com/streammq/streammq)
@@ -23,11 +23,25 @@
 
 ---
 
+## 演示视频
+
+| 资源 | 链接 |
+|------|------|
+| 🎬 快速开始演示（60s GIF） | [docs/demo/screenshots/quickstart-demo.gif](docs/demo/screenshots/quickstart-demo.gif) |
+| 📺 YouTube 演示视频 | 即将上线 |
+| 🎯 Product Hunt 展示 | 即将上线 |
+| 📝 GIF 制作指南 | [docs/demo/demo-gif-guide.md](docs/demo/demo-gif-guide.md) |
+| 🖼️ 截图素材清单 | [docs/demo/screenshots/README.md](docs/demo/screenshots/README.md) |
+| 🚀 一键演示脚本 | [docs/demo/quickstart-demo.sh](docs/demo/quickstart-demo.sh) |
+
+---
+
 ## 目录
 
 - [为什么选择 StreamMQ](#为什么选择-streammq)
 - [架构总览](#架构总览)
 - [与同类产品对比](#与同类产品对比)
+- [性能基准测试](#性能基准测试)
 - [快速开始](#快速开始)
 - [核心特性](#核心特性)
 - [模块结构](#模块结构)
@@ -39,6 +53,7 @@
 - [路线图](#路线图)
 - [贡献指南](#贡献指南)
 - [社区](#社区)
+- [安全](#安全)
 - [许可证](#许可证)
 
 ---
@@ -146,6 +161,66 @@
 
 ---
 
+## 性能基准测试
+
+### 测试环境
+
+| 项目 | 配置 |
+|------|------|
+| JDK | OpenJDK 21.0.11 (Eclipse Adoptium) |
+| Spring Boot | 3.3.5 |
+| Redisson | 3.34.1 |
+| Redis | 7.x (本地单机, 无密码) |
+| JMH | 1.37 |
+| 操作系统 | Windows 11 |
+| 连接池 | 16 连接, 4 最小空闲 |
+
+### 序列化性能 (Throughput, ops/s)
+
+测试 1KB 消息体的序列化/反序列化吞吐量（messageCount=1000，批量 1000 次）。
+
+| 序列化器 | Serialize (ops/s) | Deserialize (ops/s) | RoundTrip (ops/s) | 单次序列化 (ops/s) | 单次反序列化 (ops/s) |
+|----------|-------------------|---------------------|-------------------|--------------------|----------------------|
+| **Fury** | **7,749,744** | **4,377,141** | **3,977,079** | **7,879,107** | **4,496,204** |
+| Jackson  | 1,055,039 | 1,978,002 | 680,324 | 1,003,220 | 1,943,087 |
+| JDK      | 457,713 | 148,372 | 103,880 | 454,467 | 148,306 |
+
+> **结论**: Fury 序列化吞吐量是 Jackson 的 **7.3x**，是 JDK 的 **16.9x**。推荐对性能有要求的场景使用 Fury。
+
+### 消息发送性能 (Throughput, ops/s)
+
+使用 `StreamMessageTemplate` 发送消息，批量大小 100 条，负载大小见参数。
+
+| 发送模式 | 100B 负载 (ops/s) | 1KB 负载 (ops/s) | 10KB 负载 (ops/s) |
+|----------|-------------------|------------------|-------------------|
+| **异步批量发送** | **11,948** | **10,062** | **7,863** |
+| 同步批量发送 | 2,587 | 2,703 | 2,344 |
+| 同步单条发送 | 2,309 | 2,188 | 1,877 |
+
+> **结论**: 异步发送性能约为同步的 **4~5 倍**，推荐高吞吐场景使用 `asyncSend`。
+
+### 消息消费性能 (Throughput, ops/s)
+
+测试消费者组从 Redis Stream 拉取并处理消息的吞吐量（批量 100 条）。
+
+| 消费模式 | 1KB 负载 (ops/s) | 10KB 负载 (ops/s) | 说明 |
+|----------|-------------------|-------------------|------|
+| **Stream 消费吞吐** | **269,760** | **285,272** | 直接 Redis Stream 读取 + 回调 |
+| 消息创建+消费 | 14,408,510 | 14,386,861 | 纯内存消息构建+回调（无网络） |
+| 序列化 RoundTrip | 228,011 | 20,601 | Jackson 序列化/反序列化回环 |
+
+> **结论**: Redis Stream 消费性能受网络和序列化双重影响。消息创建+消费的高吞吐（1440 万 ops/s）展示了纯消息处理能力；实际 Stream 消费（~27 万 ops/s）是真实网络场景下的可靠指标。
+
+### 性能优化建议
+
+1. **序列化选择**: 优先 Fury（默认），其吞吐量是 Jackson 的 7 倍以上
+2. **发送策略**: 高吞吐场景使用 `asyncSend`，可提升 4~5 倍性能
+3. **负载大小**: 10KB 大消息建议启用 GZIP 压缩（`MessageCompressor` SPI）
+4. **连接池**: 默认 16 连接可满足多数场景，高并发可调至 32~64
+5. **批量消费**: 使用 `consumeBatchSize` 参数批量拉取，减少网络往返
+
+---
+
 ## 快速开始
 
 ### 环境要求
@@ -165,7 +240,7 @@
         <dependency>
             <groupId>io.github.streammq</groupId>
             <artifactId>streammq-bom</artifactId>
-            <version>0.1.0-SNAPSHOT</version>
+            <version>0.1.0</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -457,7 +532,7 @@ streammq:
 | **streammq-redisson** | Redisson 适配层，基于 Redis Stream 实现核心能力 |
 | **streammq-spring-boot-starter** | Spring Boot 3 自动装配、配置绑定、Actuator 集成 |
 | **streammq-test** | 测试工具包，提供嵌入式 Redis、断言工具、Mock 工具 |
-| **streammq-samples** | 示例工程集合，覆盖快速开始、事务、延时、顺序、DLQ、拦截器 |
+| **streammq-samples** | 示例工程集合，覆盖快速开始、事务、延时、顺序、DLQ、拦截器、诊断、链路追踪 |
 
 ---
 
@@ -655,6 +730,8 @@ template.syncSend(message);  // traceId 自动透传到消费者
 | [streammq-sample-orderly](streammq-samples/streammq-sample-orderly) | 顺序消息示例 |
 | [streammq-sample-dlq](streammq-samples/streammq-sample-dlq) | 死信队列示例 |
 | [streammq-sample-interceptor](streammq-samples/streammq-sample-interceptor) | 拦截器示例 |
+| [streammq-sample-diagnostics](streammq-samples/streammq-sample-diagnostics) | 诊断画像与慢消费示例 |
+| [streammq-sample-tracing](streammq-samples/streammq-sample-tracing) | OpenTelemetry 链路追踪示例 |
 
 ---
 
@@ -798,6 +875,50 @@ git commit -m "feat: add your feature"
 | Lombok | - | 代码简化 |
 | Micrometer | - | 指标收集 |
 | SLF4J | - | 日志门面 |
+
+---
+
+## 安全
+
+StreamMQ 重视您的安全。遵循以下最佳实践以确保安全部署：
+
+### 密钥管理
+
+- **accessKey / secretKey 脱敏**：StreamMQ 在日志输出中自动对 `accessKey` 和 `secretKey` 字段进行脱敏处理（仅显示前 4 位和后 4 位，中间以 `****` 替代），避免敏感凭据泄露。
+- **配置安全存储**：切勿将 `accessKey` 和 `secretKey` 硬编码在代码或公开的配置文件中。生产环境建议使用环境变量、配置中心（如 Nacos、Apollo）或密钥管理服务（如 Vault、AWS Secrets Manager）进行管理。
+- **最小权限原则**：Redis 实例应使用具有最小必要权限的账号，避免使用默认的 `requirepass` 直接复用管理员密码。
+
+### 安全配置
+
+```yaml
+streammq:
+  # accessKey 和 secretKey 推荐通过环境变量注入
+  access-key: ${STREAMMQ_ACCESS_KEY:}
+  secret-key: ${STREAMMQ_SECRET_KEY:}
+
+redisson:
+  singleServerConfig:
+    # 启用 TLS/SSL
+    address: "rediss://127.0.0.1:6379"
+    # 使用认证
+    password: ${REDIS_PASSWORD:}
+```
+
+### 安全策略
+
+- **版本更新**：关注 [GitHub Security Advisories](https://github.com/streammq/streammq/security/advisories) 及时获取安全公告。
+- **依赖扫描**：StreamMQ 在 CI 中集成了 OWASP Dependency-Check，自动检测已知漏洞依赖。
+- **负责任披露**：如发现安全漏洞，请通过 [GitHub Security](https://github.com/streammq/streammq/security) 页面私下报告，我们将在 48 小时内响应。
+
+### 日志脱敏示例
+
+```
+# 正确：日志中自动脱敏
+2026-08-08 10:00:00 INFO  [streammq] 使用 accessKey: sk_a1b2****c3d4 初始化连接
+
+# 错误：不会出现（框架自动保护）
+2026-08-08 10:00:00 INFO  [streammq] 使用 accessKey: sk_a1b2c3d4e5f6g7h8 初始化连接
+```
 
 ---
 

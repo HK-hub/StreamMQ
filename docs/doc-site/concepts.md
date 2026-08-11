@@ -1,8 +1,8 @@
-# 核心概念
+﻿# 核心概念
 
 StreamMQ 是一款基于 Redis Stream + Redisson 构建的轻量级消息中间件 SDK，提供类 RocketMQ 的 API 体验。本文档系统介绍 StreamMQ 的核心概念，帮助开发者建立完整的心智模型。
 
-> **项目信息**：版本 `0.1.0-SNAPSHOT` ｜ Java 21 ｜ Spring Boot 3.3.5 ｜ Redisson 3.34.1 ｜ License MIT
+> **项目信息**：版本 `0.1.0` ｜ Java 21 ｜ Spring Boot 3.3.5 ｜ Redisson 3.34.1 ｜ License MIT
 > **源码仓库**：<https://github.com/streammq/streammq>
 
 ---
@@ -461,7 +461,7 @@ StreamMQ 提供生产者与消费者双向拦截器链，用于在发送 / 消�
 
 ## BackendProvider（规划中）
 
-> **状态**：V2.0 规划概念，当前版本（0.1.0-SNAPSHOT）尚未实现。
+> **状态**：V2.0 规划概念，当前版本（0.1.0）尚未实现。
 
 BackendProvider 是 V2.0 规划的后端存储抽象层，目标是解耦消息存储后端，使 StreamMQ 除了 Redis Stream 之外还能对接其他存储后端（如 Kafka、Pulsar 等），实现一套 API、多后端可切换。
 

@@ -60,7 +60,7 @@ StreamMQ 是一个开源的轻量级消息中间件 SDK，基于 Redis Stream + 
 ## 环境要求
 - **Java**: 21+
 - **Spring Boot**: 3.3.x
-- **Redis**: 5.0+ (需支持 Stream)
+- **Redis**: 7.2+ (需支持 Stream)
 - **Maven**: 3.8+
 
 ---

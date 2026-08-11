@@ -1,4 +1,4 @@
-# FAQ · 常见问题
+﻿# FAQ · 常见问题
 
 > 本文档汇总 StreamMQ 使用过程中的常见问题、故障排查、性能优化与迁移指南，帮助开发者快速定位与解决问题。
 
@@ -655,7 +655,7 @@ StreamMQ 的 API 设计对齐 RocketMQ，迁移成本低。
 <dependency>
     <groupId>io.github.streammq</groupId>
     <artifactId>streammq-spring-boot-starter</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.0</version>
 </dependency>
 <dependency>
     <groupId>org.redisson</groupId>
@@ -699,7 +699,7 @@ StreamMQ 的 API 设计对齐 RocketMQ，迁移成本低。
 
 ### 从 Kafka 迁移
 
-**当前状态：** StreamMQ V2.0 计划提供 Kafka wire protocol 兼容能力，当前版本（0.1.0-SNAPSHOT）暂不支持直接迁移。
+**当前状态：** StreamMQ V2.0 计划提供 Kafka wire protocol 兼容能力，当前版本（0.1.0）暂不支持直接迁移。
 
 **V2.0 规划：**
 
@@ -817,7 +817,7 @@ StreamMQ V2.0 计划引入以下能力，帮助用户从其他 MQ 平滑迁移�
 
 ### 迁移路径建议
 
-**当前阶段（0.1.0-SNAPSHOT）：**
+**当前阶段（0.1.0）：**
 - 已有 Redis 基础设施的用户：直接采用 StreamMQ
 - 从 RocketMQ 迁移：API 高度对齐，迁移成本低
 - 从 Kafka / RabbitMQ 迁移：需手动重写代码
@@ -827,7 +827,7 @@ StreamMQ V2.0 计划引入以下能力，帮助用户从其他 MQ 平滑迁移�
 - 跨数据中心：通过复制能力实现多机房部署
 - 云原生部署：通过 K8s Operator 简化运维
 
-> **注意：** V2.0 仍在规划阶段，特性可能调整。当前版本（0.1.0-SNAPSHOT）不支持上述能力，请勿在生产环境中依赖未实现的特性。
+> **注意：** V2.0 仍在规划阶段，特性可能调整。当前版本（0.1.0）不支持上述能力，请勿在生产环境中依赖未实现的特性。
 
 ---
 
@@ -867,7 +867,7 @@ curl "http://localhost:8080/actuator/streammq/trace?messageId=<messageId>"
 
 ### Q19: StreamMQ 如何与 Spring Cloud 集成？
 
-**A:** StreamMQ 当前版本（0.1.0-SNAPSHOT）通过 `streammq-spring-boot-starter` 与 Spring Boot 3 深度集成。Spring Cloud Stream Binder 集成在 V2.0 路线图中规划。
+**A:** StreamMQ 当前版本（0.1.0）通过 `streammq-spring-boot-starter` 与 Spring Boot 3 深度集成。Spring Cloud Stream Binder 集成在 V2.0 路线图中规划。
 
 当前可在 Spring Cloud 项目中直接使用 StreamMQ Starter，与 Spring Cloud Config / Discovery / Gateway 等组件无冲突。
 

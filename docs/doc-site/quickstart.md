@@ -1,4 +1,4 @@
-# 快速开始
+﻿# 快速开始
 
 本指南将带你用 5 分钟完成 StreamMQ 的接入，从依赖引入到消息收发的完整闭环。
 
@@ -30,7 +30,7 @@
         <dependency>
             <groupId>io.github.streammq</groupId>
             <artifactId>streammq-bom</artifactId>
-            <version>0.1.0-SNAPSHOT</version>
+            <version>0.1.0</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>

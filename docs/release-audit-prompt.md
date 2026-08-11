@@ -1,9 +1,9 @@
-# StreamMQ 发布前全面审计（交叉验证版）
+﻿# StreamMQ 发布前全面审计（交叉验证版）
 
 ## 项目背景
 StreamMQ 是基于 Redis Stream + Redisson 的开箱即用 Redis 消息队列 SDK。
 - 技术栈：Java 21 / Spring Boot 3.3.5 / Redisson 3.34.1 / Maven 多模块（17 个模块）
-- 版本：0.1.0-SNAPSHOT（首个公开发布版本）
+- 版本：0.1.0（首个公开发布版本）
 - 许可证：MIT
 - 模块：bom / core / redisson / spring-boot-starter / tracing-opentelemetry / diagnostics / kubernetes / spring-cloud-stream-binder / test / samples(quickstart, transaction, orderly, delay, dlq, interceptor)
 - 发布渠道：GitHub（开源仓库）/ Product Hunt / X / YouTube（演示）
@@ -63,7 +63,7 @@ L1 .gitignore 完整 / L2 无敏感信息/临时文件提交 / L3 提交历史�
 ### 1. 发现清单
 | ID | 维度 | 严重度 | 位置(file:line) | 证据 | 建议 |
 |----|------|--------|------------------|------|------|
-| BUILD-01 | BUILD | Blocker | pom.xml:11 | 版本 0.1.0-SNAPSHOT | 转 0.1.0 正式版 |
+| BUILD-01 | BUILD | Blocker | pom.xml:11 | 版本 0.1.0 | 转 0.1.0 正式版 |
 
 严重度：
 - **Blocker** 阻塞发布，必须修

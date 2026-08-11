@@ -1,9 +1,9 @@
-# API 参考
+﻿# API 参考
 
 StreamMQ 提供类 RocketMQ 的 API 体验。本文档覆盖所有公共接口与注解，包含方法签名、参数说明、返回类型与代码示例。
 
 > **包根**：`io.github.streammq.core`
-> **版本**：`0.1.0-SNAPSHOT` ｜ Java 21 ｜ Spring Boot 3.3.5
+> **版本**：`0.1.0` ｜ Java 21 ｜ Spring Boot 3.3.5
 
 ---
 

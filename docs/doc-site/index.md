@@ -1,4 +1,4 @@
-# StreamMQ
+﻿# StreamMQ
 
 > 基于 Redis Stream + Redisson 的高性能消息中间件 SDK —— **让 Redis 成为你的消息总线**。
 
@@ -189,7 +189,7 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 
 | 项 | 值 |
 |----|----|
-| 当前版本 | **0.1.0-SNAPSHOT** |
+| 当前版本 | **0.1.0** |
 | JDK | 21+ |
 | Spring Boot | 3.3.5 |
 | Redisson | 3.34.1 |

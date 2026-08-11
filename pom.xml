@@ -7,7 +7,7 @@
     <!-- ========== StreamMQ Parent ========== -->
     <groupId>io.github.streammq</groupId>
     <artifactId>streammq-parent</artifactId>
-    <version>0.1.0-SNAPSHOT</version>
+    <version>0.1.0</version>
     <packaging>pom</packaging>
     <name>StreamMQ</name>
     <description>StreamMQ - 基于 Redis Stream + Redisson 的开箱即用 Redis MQ SDK (Parent POM)</description>
@@ -25,6 +25,7 @@
         <module>streammq-spring-cloud-stream-binder</module>
         <module>streammq-test</module>
         <module>streammq-samples</module>
+        <module>streammq-benchmark</module>
     </modules>
 
     <!-- ========== 许可证 ========== -->
@@ -81,6 +82,7 @@
         <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
         <flatten-maven-plugin.version>1.6.0</flatten-maven-plugin.version>
         <spotless-maven-plugin.version>2.43.0</spotless-maven-plugin.version>
+        <owasp-dependency-check.version>12.1.1</owasp-dependency-check.version>
     </properties>
 
     <!-- ========== 依赖统一管理（默认 provided，子模块按需引入）========== -->
@@ -402,6 +404,22 @@
                     <artifactId>spotless-maven-plugin</artifactId>
                     <version>${spotless-maven-plugin.version}</version>
                 </plugin>
+                <plugin>
+                    <groupId>org.owasp</groupId>
+                    <artifactId>dependency-check-maven</artifactId>
+                    <version>${owasp-dependency-check.version}</version>
+                    <configuration>
+                        <failBuildOnCVSS>7</failBuildOnCVSS>
+                        <suppressionFile>owasp-suppressions.xml</suppressionFile>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>check</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
             </plugins>
         </pluginManagement>
 
@@ -409,6 +427,61 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>com.diffplug.spotless</groupId>
+                <artifactId>spotless-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>spotless-check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <java>
+                        <googleJavaFormat>
+                            <version>1.24.0</version>
+                            <reflowLongStrings>true</reflowLongStrings>
+                            <formatJavadoc>true</formatJavadoc>
+                        </googleJavaFormat>
+                        <includes>
+                            <include>src/main/java/**/*.java</include>
+                            <include>src/test/java/**/*.java</include>
+                        </includes>
+                    </java>
+                    <misc>
+                        <includes>
+                            <include>*.md</include>
+                            <include>*.xml</include>
+                            <include>*.yml</include>
+                            <include>*.yaml</include>
+                            <include>*.properties</include>
+                        </includes>
+                        <trimTrailingWhitespace />
+                        <endWithNewline />
+                    </misc>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.owasp</groupId>
+                <artifactId>dependency-check-maven</artifactId>
+                <executions>
+                    <execution>
+                        <id>owasp-check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <failBuildOnCVSS>7</failBuildOnCVSS>
+                    <suppressionFile>owasp-suppressions.xml</suppressionFile>
+                    <skip>true</skip>
+                </configuration>
             </plugin>
         </plugins>
     </build>

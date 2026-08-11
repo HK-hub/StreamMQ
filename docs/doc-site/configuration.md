@@ -1,8 +1,8 @@
-# 配置参考
+﻿# 配置参考
 
 StreamMQ 通过 `application.yml` 进行配置，所有配置项统一以 `streammq.*` 为前缀。本文档覆盖全部配置项、Redisson 配置、消费模式、过滤器语法及多环境配置。
 
-> **版本**：`0.1.0-SNAPSHOT` ｜ Spring Boot 3.3.5 ｜ Redisson 3.34.1
+> **版本**：`0.1.0` ｜ Spring Boot 3.3.5 ｜ Redisson 3.34.1
 > **配置前缀**：`streammq`
 
 ---

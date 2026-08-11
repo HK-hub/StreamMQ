@@ -1,4 +1,4 @@
-# 部署指南
+﻿# 部署指南
 
 > 本文档面向准备将 StreamMQ 部署到开发、测试、生产环境的工程师，覆盖从环境准备、单机部署到 Kubernetes 集群部署的完整流程，并给出生产环境的最佳实践配置。
 
@@ -248,11 +248,11 @@ mvn clean verify
 
 | 模块                              | 产物                                | 用途                  |
 | --------------------------------- | ----------------------------------- | --------------------- |
-| `streammq-bom`                    | `streammq-bom-0.1.0-SNAPSHOT.pom`   | 版本管理 BOM          |
-| `streammq-core`                   | `streammq-core-0.1.0-SNAPSHOT.jar`  | 核心库                |
-| `streammq-redisson`               | `streammq-redisson-0.1.0-SNAPSHOT.jar` | Redisson 适配器     |
-| `streammq-spring-boot-starter`    | `streammq-spring-boot-starter-0.1.0-SNAPSHOT.jar` | Spring Boot Starter |
-| `streammq-test`                   | `streammq-test-0.1.0-SNAPSHOT.jar`  | 测试工具              |
+| `streammq-bom`                    | `streammq-bom-0.1.0.pom`   | 版本管理 BOM          |
+| `streammq-core`                   | `streammq-core-0.1.0.jar`  | 核心库                |
+| `streammq-redisson`               | `streammq-redisson-0.1.0.jar` | Redisson 适配器     |
+| `streammq-spring-boot-starter`    | `streammq-spring-boot-starter-0.1.0.jar` | Spring Boot Starter |
+| `streammq-test`                   | `streammq-test-0.1.0.jar`  | 测试工具              |
 
 ---
 
@@ -406,8 +406,8 @@ ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar app.jar"]
 ### 构建镜像
 
 ```bash
-docker build -t streammq-app:0.1.0-SNAPSHOT .
-docker tag streammq-app:0.1.0-SNAPSHOT streammq-app:latest
+docker build -t streammq-app:0.1.0 .
+docker tag streammq-app:0.1.0 streammq-app:latest
 ```
 
 ### 运行容器
@@ -426,7 +426,7 @@ docker run -d \
   --memory-swap="1g" \
   --cpus="1.0" \
   --restart=unless-stopped \
-  streammq-app:0.1.0-SNAPSHOT
+  streammq-app:0.1.0
 ```
 
 ### 容器健康检查
@@ -762,7 +762,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: streammq-app
-          image: streammq-app:0.1.0-SNAPSHOT
+          image: streammq-app:0.1.0
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
