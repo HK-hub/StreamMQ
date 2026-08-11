@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="UTF-8"?>
+﻿<?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -7,14 +7,14 @@
     <parent>
         <groupId>io.github.streammq</groupId>
         <artifactId>streammq-parent</artifactId>
-        <version>0.1.0-SNAPSHOT</version>
+        <version>0.1.0</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
     <artifactId>streammq-samples</artifactId>
     <packaging>pom</packaging>
     <name>StreamMQ Samples</name>
-    <description>StreamMQ 示例聚合模块，含 QuickStart / 事务 / 延时 / 顺序 / 死信队列 / 拦截器 六个示例。</description>
+    <description>StreamMQ 示例聚合模块，含 QuickStart / 事务 / 延时 / 顺序 / 死信队列 / 拦截器 / 诊断 / 追踪 八个示例。</description>
 
     <modules>
         <module>streammq-sample-quickstart</module>
@@ -23,6 +23,8 @@
         <module>streammq-sample-orderly</module>
         <module>streammq-sample-dlq</module>
         <module>streammq-sample-interceptor</module>
+        <module>streammq-sample-diagnostics</module>
+        <module>streammq-sample-tracing</module>
     </modules>
 
     <dependencies>
