@@ -16,21 +16,23 @@ import org.springframework.context.annotation.Import;
  * StreamMQ cloud native K8s enhancement module auto-configuration.
  *
  * <p>Enable conditions:
+ *
  * <ul>
- *   <li>Classpath contains {@link StreamMQListenerContainer}</li>
- *   <li>Property {@code streammq.cloud.k8s.enabled=true} (default: true)</li>
+ *   <li>Classpath contains {@link StreamMQListenerContainer}
+ *   <li>Property {@code streammq.cloud.k8s.enabled=true} (default: true)
  * </ul>
  *
  * <p>Components registered:
+ *
  * <ul>
- *   <li>{@link StreamMQHealthIndicator} - Spring Boot Actuator health indicator</li>
- *   <li>{@link StreamMQHealthController} - K8s liveness and readiness probe REST endpoints</li>
- *   <li>{@link NoopConfigRefresher} - Config refresh no-op default (user can override)</li>
- *   <li>{@link GracefulShutdownHandler} - Graceful shutdown handler</li>
- *   <li>{@link HpaMetricsProvider} - HPA metrics provider</li>
- *   <li>{@link StreamMQClusterController} - StreamMQCluster CRD Operator controller</li>
- *   <li>{@link HpaAutoScaler} - HPA auto-scaling controller</li>
- *   <li>{@link ConfigMapConfigRefresher} - ConfigMap watch config refresher</li>
+ *   <li>{@link StreamMQHealthIndicator} - Spring Boot Actuator health indicator
+ *   <li>{@link StreamMQHealthController} - K8s liveness and readiness probe REST endpoints
+ *   <li>{@link NoopConfigRefresher} - Config refresh no-op default (user can override)
+ *   <li>{@link GracefulShutdownHandler} - Graceful shutdown handler
+ *   <li>{@link HpaMetricsProvider} - HPA metrics provider
+ *   <li>{@link StreamMQClusterController} - StreamMQCluster CRD Operator controller
+ *   <li>{@link HpaAutoScaler} - HPA auto-scaling controller
+ *   <li>{@link ConfigMapConfigRefresher} - ConfigMap watch config refresher
  * </ul>
  *
  * @author StreamMQ Contributors
@@ -38,28 +40,32 @@ import org.springframework.context.annotation.Import;
  */
 @AutoConfiguration
 @ConditionalOnClass(StreamMQListenerContainer.class)
-@ConditionalOnProperty(prefix = "streammq.cloud.k8s", name = "enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(
+    prefix = "streammq.cloud.k8s",
+    name = "enabled",
+    havingValue = "true",
+    matchIfMissing = true)
 @EnableConfigurationProperties(CloudK8sProperties.class)
 @Import({
-    StreamMQHealthIndicator.class,
-    StreamMQHealthController.class,
-    GracefulShutdownHandler.class,
-    HpaMetricsProvider.class,
-    StreamMQClusterController.class,
-    HpaAutoScaler.class,
-    ConfigMapConfigRefresher.class
+  StreamMQHealthIndicator.class,
+  StreamMQHealthController.class,
+  GracefulShutdownHandler.class,
+  HpaMetricsProvider.class,
+  StreamMQClusterController.class,
+  HpaAutoScaler.class,
+  ConfigMapConfigRefresher.class
 })
 public class CloudK8sAutoConfiguration {
 
-    /**
-     * Default no-op config refresher, registered only when no other
-     * {@link StreamMQConfigRefresher} bean is present.
-     *
-     * @return no-op config refresher instance
-     */
-    @Bean
-    @ConditionalOnMissingBean(StreamMQConfigRefresher.class)
-    public StreamMQConfigRefresher noopConfigRefresher() {
-        return new NoopConfigRefresher();
-    }
+  /**
+   * Default no-op config refresher, registered only when no other {@link StreamMQConfigRefresher}
+   * bean is present.
+   *
+   * @return no-op config refresher instance
+   */
+  @Bean
+  @ConditionalOnMissingBean(StreamMQConfigRefresher.class)
+  public StreamMQConfigRefresher noopConfigRefresher() {
+    return new NoopConfigRefresher();
+  }
 }

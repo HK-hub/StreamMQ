@@ -9,5 +9,4 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
  * <p>仅在测试范围内使用，不参与生产打包。
  */
 @SpringBootApplication
-class TestApplication {
-}
+class TestApplication {}
