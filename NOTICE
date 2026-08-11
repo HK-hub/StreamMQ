@@ -1,0 +1,213 @@
+StreamMQ Third-Party Notices
+
+This product includes software developed by the following third parties.
+
+================================================================================
+
+1. Spring Boot (https://spring.io/projects/spring-boot)
+
+   License: Apache License, Version 2.0
+   Copyright: Copyright (c) 2005-2026 VMware, Inc. or its affiliates.
+   Version: 3.3.5
+   Used in: streammq-spring-boot-starter, streammq-diagnostics,
+            streammq-tracing-opentelemetry, streammq-kubernetes,
+            streammq-spring-cloud-stream-binder, streammq-test
+
+================================================================================
+
+2. Spring Framework (https://spring.io/projects/spring-framework)
+
+   License: Apache License, Version 2.0
+   Copyright: Copyright (c) 2005-2026 VMware, Inc. or its affiliates.
+   Version: 6.1.14
+   Used in: streammq-spring-boot-starter, streammq-diagnostics,
+            streammq-tracing-opentelemetry, streammq-kubernetes
+
+================================================================================
+
+3. Redisson (https://redisson.org)
+
+   License: Apache License, Version 2.0
+   Copyright: Copyright (c) 2013-2026 Redisson
+   Version: 3.34.1
+   Used in: streammq-redisson (core Redis adapter)
+
+================================================================================
+
+4. Redis (https://redis.io)
+
+   License: BSD 3-Clause License
+   Copyright: Copyright (c) 2008-2026 Redis Ltd.
+   Used in: streammq-redisson (underlying data store)
+
+================================================================================
+
+5. Lettuce (https://github.com/lettuce-io/lettuce-core)
+
+   License: Apache License, Version 2.0
+   Copyright: Copyright (c) 2011-2026 Mark Paluch
+   Version: (managed by Spring Boot BOM)
+   Used in: streammq-redisson (Redisson's Redis client dependency)
+
+================================================================================
+
+6. Jackson (https://github.com/FasterXML/jackson)
+
+   License: Apache License, Version 2.0
+   Copyright: Copyright (c) 2008-2026 FasterXML, LLC
+   Version: 2.18.1
+   Used in: streammq-core (default JSON serializer), all modules
+
+================================================================================
+
+7. SLF4J (http://www.slf4j.org/)
+
+   License: MIT License
+   Copyright: Copyright (c) 2004-2026 QOS.ch
+   Version: 2.0.16
+   Used in: streammq-core (logging facade), all modules
+
+================================================================================
+
+8. Micrometer (https://micrometer.io)
+
+   License: Apache License, Version 2.0
+   Copyright: Copyright (c) 2018-2026 VMware, Inc. or its affiliates.
+   Version: 1.13.6
+   Used in: streammq-core (metrics collection), streammq-spring-boot-starter
+
+================================================================================
+
+9. JUnit (https://junit.org/junit5/)
+
+   License: Eclipse Public License, Version 2.0
+   Copyright: Copyright (c) 2015-2026 the original author or authors.
+   Version: 5.11.3
+   Used in: all modules (testing)
+
+================================================================================
+
+10. Mockito (https://github.com/mockito/mockito)
+
+    License: MIT License
+    Copyright: Copyright (c) 2007-2026 Mockito contributors
+    Version: 5.14.2
+    Used in: all modules (mocking framework for tests)
+
+================================================================================
+
+11. Testcontainers (https://testcontainers.com)
+
+    License: Apache License, Version 2.0
+    Copyright: Copyright (c) 2015-2026 Testcontainers
+    Version: 1.20.3
+    Used in: streammq-spring-boot-starter, streammq-diagnostics,
+             streammq-tracing-opentelemetry (integration testing with Redis)
+
+================================================================================
+
+12. AssertJ (https://assertj.github.io/doc/)
+
+    License: Apache License, Version 2.0
+    Copyright: Copyright (c) 2012-2026 AssertJ
+    Version: 3.26.3
+    Used in: all modules (fluent assertions for tests)
+
+================================================================================
+
+13. Awaitility (https://awaitility.org)
+
+    License: Apache License, Version 2.0
+    Copyright: Copyright (c) 2010-2026 Awaitility
+    Version: 4.2.2
+    Used in: streammq-spring-boot-starter, streammq-test (asynchronous test utilities)
+
+================================================================================
+
+14. Lombok (https://projectlombok.org)
+
+    License: MIT License
+    Copyright: Copyright (c) 2009-2026 Project Lombok
+    Version: 1.18.34
+    Used in: all modules (compile-time annotations)
+
+================================================================================
+
+15. JSR 305 (https://findbugs.sourceforge.net/)
+
+    License: BSD 3-Clause License
+    Copyright: Copyright (c) 2007-2026 Bill Pugh
+    Version: 3.0.2
+    Used in: streammq-core (null-safety annotations)
+
+================================================================================
+
+16. Apache Fury (https://github.com/apache/fury)
+
+    License: Apache License, Version 2.0
+    Copyright: Copyright (c) 2023-2026 Apache Software Foundation
+    Version: 0.9.0
+    Used in: streammq-core (optional high-performance serialization)
+
+================================================================================
+
+17. Protostuff (https://github.com/protostuff/protostuff)
+
+    License: Apache License, Version 2.0
+    Copyright: Copyright (c) 2013-2026 Protostuff
+    Version: 1.8.0
+    Used in: streammq-core (optional Protocol Buffer runtime serialization)
+
+================================================================================
+
+18. Spring Cloud Stream (https://spring.io/projects/spring-cloud-stream)
+
+    License: Apache License, Version 2.0
+    Copyright: Copyright (c) 2019-2026 VMware, Inc. or its affiliates.
+    Version: 4.1.3
+    Used in: streammq-spring-cloud-stream-binder
+
+================================================================================
+
+19. Spring Integration (https://spring.io/projects/spring-integration)
+
+    License: Apache License, Version 2.0
+    Copyright: Copyright (c) 2005-2026 VMware, Inc. or its affiliates.
+    Version: 6.3.4
+    Used in: streammq-spring-cloud-stream-binder
+
+================================================================================
+
+20. OpenTelemetry (https://opentelemetry.io)
+
+    License: Apache License, Version 2.0
+    Copyright: Copyright (c) 2019-2026 OpenTelemetry Authors
+    Version: 1.40.0
+    Used in: streammq-tracing-opentelemetry
+
+================================================================================
+
+21. Spotless (https://github.com/diffplug/spotless)
+
+    License: Apache License, Version 2.0
+    Copyright: Copyright (c) 2016-2026 DiffPlug
+    Version: 2.43.0
+    Used in: build (code formatting enforcement)
+
+================================================================================
+
+22. Google Java Format (https://github.com/google/google-java-format)
+
+    License: Apache License, Version 2.0
+    Copyright: Copyright (c) 2015-2026 Google LLC
+    Version: 1.24.0
+    Used in: build (code formatting enforcement via Spotless)
+
+================================================================================
+
+For full license texts, please refer to:
+
+- Apache License 2.0: https://www.apache.org/licenses/LICENSE-2.0
+- MIT License: https://opensource.org/licenses/MIT
+- BSD 3-Clause: https://opensource.org/licenses/BSD-3-Clause
+- Eclipse Public License 2.0: https://www.eclipse.org/legal/epl-2.0/
