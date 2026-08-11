@@ -13,11 +13,11 @@ package io.github.streammq.core.annotation;
  */
 public interface AnnotationAttributeResolver {
 
-  /**
-   * 解析属性值，支持 ${...} 占位符和 #{...} SpEL 表达式。
-   *
-   * @param value 原始值（可能包含 {@code ${}} 或 {@code #{}} 表达式）
-   * @return 解析后的值；若入参为 {@code null} 或空串则原样返回
-   */
-  String resolve(String value);
+    /**
+     * 解析属性值，支持 ${...} 占位符和 #{...} SpEL 表达式。
+     *
+     * @param value 原始值（可能包含 {@code ${}} 或 {@code #{}} 表达式）
+     * @return 解析后的值；若入参为 {@code null} 或空串则原样返回
+     */
+    String resolve(String value);
 }

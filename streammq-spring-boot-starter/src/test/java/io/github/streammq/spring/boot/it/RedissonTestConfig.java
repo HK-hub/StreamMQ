@@ -25,17 +25,17 @@ import org.springframework.context.annotation.Import;
 @Import(StreamMQAutoConfiguration.class)
 public class RedissonTestConfig {
 
-  /**
-   * 创建连接本地 Redis 的 RedissonClient。
-   *
-   * @return Redisson 客户端
-   */
-  @Bean(destroyMethod = "shutdown")
-  public RedissonClient redissonClient() {
-    Config config = new Config();
-    config.useSingleServer().setAddress("redis://localhost:6379").setDatabase(0);
-    // 使用 StringCodec 避免 Kryo 反序列化问题（与 Lua 脚本交互时）
-    config.setCodec(StringCodec.INSTANCE);
-    return Redisson.create(config);
-  }
+    /**
+     * 创建连接本地 Redis 的 RedissonClient。
+     *
+     * @return Redisson 客户端
+     */
+    @Bean(destroyMethod = "shutdown")
+    public RedissonClient redissonClient() {
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://localhost:6379").setDatabase(0);
+        // 使用 StringCodec 避免 Kryo 反序列化问题（与 Lua 脚本交互时）
+        config.setCodec(StringCodec.INSTANCE);
+        return Redisson.create(config);
+    }
 }

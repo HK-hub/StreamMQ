@@ -22,29 +22,29 @@ import io.github.streammq.core.message.Message;
  */
 public interface ProducerFilter {
 
-  /**
-   * 判断消息是否应被发送。
-   *
-   * @param message 待过滤消息
-   * @return true 不过滤（继续发送），false 过滤（阻止发送）
-   */
-  boolean accept(Message<?> message);
+    /**
+     * 判断消息是否应被发送。
+     *
+     * @param message 待过滤消息
+     * @return true 不过滤（继续发送），false 过滤（阻止发送）
+     */
+    boolean accept(Message<?> message);
 
-  /**
-   * 过滤器名称。
-   *
-   * @return 名称
-   */
-  default String name() {
-    return getClass().getSimpleName();
-  }
+    /**
+     * 过滤器名称。
+     *
+     * @return 名称
+     */
+    default String name() {
+        return getClass().getSimpleName();
+    }
 
-  /**
-   * 过滤器执行顺序（升序，默认 0）。
-   *
-   * @return 顺序值
-   */
-  default int order() {
-    return 0;
-  }
+    /**
+     * 过滤器执行顺序（升序，默认 0）。
+     *
+     * @return 顺序值
+     */
+    default int order() {
+        return 0;
+    }
 }

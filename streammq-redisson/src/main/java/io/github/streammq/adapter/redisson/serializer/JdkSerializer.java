@@ -23,47 +23,48 @@ import java.util.Objects;
  */
 public class JdkSerializer<T extends Serializable> implements MessageSerializer<T> {
 
-  @Override
-  public byte[] serialize(T object, Class<T> type) throws SerializationException {
-    if (object == null) {
-      return new byte[0];
+    @Override
+    public byte[] serialize(T object, Class<T> type) throws SerializationException {
+        if (object == null) {
+            return new byte[0];
+        }
+        try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                ObjectOutputStream oos = new ObjectOutputStream(bos)) {
+            oos.writeObject(object);
+            oos.flush();
+            return bos.toByteArray();
+        } catch (IOException ex) {
+            throw new SerializationException(
+                    "JDK serialize failed for type " + object.getClass().getName(), ex);
+        }
     }
-    try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
-        ObjectOutputStream oos = new ObjectOutputStream(bos)) {
-      oos.writeObject(object);
-      oos.flush();
-      return bos.toByteArray();
-    } catch (IOException ex) {
-      throw new SerializationException(
-          "JDK serialize failed for type " + object.getClass().getName(), ex);
-    }
-  }
 
-  @Override
-  @SuppressWarnings("unchecked")
-  public <R> R deserialize(byte[] bytes, Class<R> type) throws SerializationException {
-    Objects.requireNonNull(type, "type");
-    if (Objects.isNull(bytes) || bytes.length == 0) {
-      return null;
+    @Override
+    @SuppressWarnings("unchecked")
+    public <R> R deserialize(byte[] bytes, Class<R> type) throws SerializationException {
+        Objects.requireNonNull(type, "type");
+        if (Objects.isNull(bytes) || bytes.length == 0) {
+            return null;
+        }
+        try (ByteArrayInputStream bis = new ByteArrayInputStream(bytes);
+                ObjectInputStream ois = new ObjectInputStream(bis)) {
+            Object obj = ois.readObject();
+            if (Objects.nonNull(obj) && !type.isInstance(obj)) {
+                throw new SerializationException(
+                        "JDK deserialize type mismatch: expected "
+                                + type.getName()
+                                + ", got "
+                                + obj.getClass().getName());
+            }
+            return (R) obj;
+        } catch (IOException | ClassNotFoundException ex) {
+            throw new SerializationException(
+                    "JDK deserialize failed for type " + type.getName(), ex);
+        }
     }
-    try (ByteArrayInputStream bis = new ByteArrayInputStream(bytes);
-        ObjectInputStream ois = new ObjectInputStream(bis)) {
-      Object obj = ois.readObject();
-      if (Objects.nonNull(obj) && !type.isInstance(obj)) {
-        throw new SerializationException(
-            "JDK deserialize type mismatch: expected "
-                + type.getName()
-                + ", got "
-                + obj.getClass().getName());
-      }
-      return (R) obj;
-    } catch (IOException | ClassNotFoundException ex) {
-      throw new SerializationException("JDK deserialize failed for type " + type.getName(), ex);
-    }
-  }
 
-  @Override
-  public String name() {
-    return "jdk";
-  }
+    @Override
+    public String name() {
+        return "jdk";
+    }
 }

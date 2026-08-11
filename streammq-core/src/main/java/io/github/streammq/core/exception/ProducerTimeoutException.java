@@ -13,24 +13,24 @@ import lombok.Getter;
 @Getter
 public class ProducerTimeoutException extends StreamMQException {
 
-  private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 1L;
 
-  /** 超时阈值（毫秒） */
-  private final long timeoutMillis;
+    /** 超时阈值（毫秒） */
+    private final long timeoutMillis;
 
-  /** 目标 Topic */
-  private final String topic;
+    /** 目标 Topic */
+    private final String topic;
 
-  public ProducerTimeoutException(String message, String topic, long timeoutMillis) {
-    super(message);
-    this.topic = topic;
-    this.timeoutMillis = timeoutMillis;
-  }
+    public ProducerTimeoutException(String message, String topic, long timeoutMillis) {
+        super(message);
+        this.topic = topic;
+        this.timeoutMillis = timeoutMillis;
+    }
 
-  public ProducerTimeoutException(
-      String message, String topic, long timeoutMillis, Throwable cause) {
-    super(message, cause);
-    this.topic = topic;
-    this.timeoutMillis = timeoutMillis;
-  }
+    public ProducerTimeoutException(
+            String message, String topic, long timeoutMillis, Throwable cause) {
+        super(message, cause);
+        this.topic = topic;
+        this.timeoutMillis = timeoutMillis;
+    }
 }

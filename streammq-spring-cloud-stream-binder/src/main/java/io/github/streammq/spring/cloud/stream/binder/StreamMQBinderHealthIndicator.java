@@ -18,31 +18,31 @@ import org.springframework.boot.actuate.health.Health;
  */
 public class StreamMQBinderHealthIndicator extends AbstractHealthIndicator {
 
-  private final StreamMQListenerContainer listenerContainer;
+    private final StreamMQListenerContainer listenerContainer;
 
-  /**
-   * 构造健康检查指标。
-   *
-   * @param listenerContainer StreamMQ Listener 容器（可为 null，表示未装配）
-   */
-  public StreamMQBinderHealthIndicator(StreamMQListenerContainer listenerContainer) {
-    this.listenerContainer = listenerContainer;
-  }
+    /**
+     * 构造健康检查指标。
+     *
+     * @param listenerContainer StreamMQ Listener 容器（可为 null，表示未装配）
+     */
+    public StreamMQBinderHealthIndicator(StreamMQListenerContainer listenerContainer) {
+        this.listenerContainer = listenerContainer;
+    }
 
-  @Override
-  protected void doHealthCheck(Health.Builder builder) throws Exception {
-    if (Objects.isNull(listenerContainer)) {
-      builder.down().withDetail("error", "StreamMQListenerContainer is not configured");
-      return;
+    @Override
+    protected void doHealthCheck(Health.Builder builder) throws Exception {
+        if (Objects.isNull(listenerContainer)) {
+            builder.down().withDetail("error", "StreamMQListenerContainer is not configured");
+            return;
+        }
+        boolean running = listenerContainer.isRunning();
+        int consumerCount = listenerContainer.getConsumers().size();
+        if (running) {
+            builder.up();
+        } else {
+            builder.down();
+        }
+        builder.withDetail("listenerContainer.running", running);
+        builder.withDetail("listenerContainer.consumerCount", consumerCount);
     }
-    boolean running = listenerContainer.isRunning();
-    int consumerCount = listenerContainer.getConsumers().size();
-    if (running) {
-      builder.up();
-    } else {
-      builder.down();
-    }
-    builder.withDetail("listenerContainer.running", running);
-    builder.withDetail("listenerContainer.consumerCount", consumerCount);
-  }
 }

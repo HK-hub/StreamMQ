@@ -16,32 +16,32 @@ import java.util.Objects;
  */
 public class ByteArraySerializer implements MessageSerializer<byte[]> {
 
-  @Override
-  public byte[] serialize(byte[] object, Class<byte[]> type) {
-    if (Objects.isNull(object)) {
-      return new byte[0];
+    @Override
+    public byte[] serialize(byte[] object, Class<byte[]> type) {
+        if (Objects.isNull(object)) {
+            return new byte[0];
+        }
+        // 零拷贝：直接返回原 byte[]
+        return object;
     }
-    // 零拷贝：直接返回原 byte[]
-    return object;
-  }
 
-  @Override
-  @SuppressWarnings("unchecked")
-  public <R> R deserialize(byte[] bytes, Class<R> type) {
-    Objects.requireNonNull(type, "type");
-    if (type != byte[].class) {
-      throw new IllegalArgumentException(
-          "ByteArraySerializer only supports byte[] target type, got: " + type.getName());
+    @Override
+    @SuppressWarnings("unchecked")
+    public <R> R deserialize(byte[] bytes, Class<R> type) {
+        Objects.requireNonNull(type, "type");
+        if (type != byte[].class) {
+            throw new IllegalArgumentException(
+                    "ByteArraySerializer only supports byte[] target type, got: " + type.getName());
+        }
+        if (bytes == null || bytes.length == 0) {
+            return null;
+        }
+        // 零拷贝：直接返回原 byte[]
+        return (R) bytes;
     }
-    if (bytes == null || bytes.length == 0) {
-      return null;
-    }
-    // 零拷贝：直接返回原 byte[]
-    return (R) bytes;
-  }
 
-  @Override
-  public String name() {
-    return "byte-array";
-  }
+    @Override
+    public String name() {
+        return "byte-array";
+    }
 }

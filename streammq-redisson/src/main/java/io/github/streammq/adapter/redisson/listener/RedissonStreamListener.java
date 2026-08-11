@@ -54,414 +54,428 @@ import org.slf4j.LoggerFactory;
 @EqualsAndHashCode(of = {"namespace", "topic", "group", "consumerName", "dlqMode"})
 public class RedissonStreamListener implements StreamMQListener {
 
-  private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamListener.class);
+    private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamListener.class);
 
-  /** Class.forName 缓存，避免每条消息重复类加载查找（正结果缓存，负结果不缓存） */
-  private static final ConcurrentMap<String, Class<?>> CLASS_CACHE = new ConcurrentHashMap<>();
+    /** Class.forName 缓存，避免每条消息重复类加载查找（正结果缓存，负结果不缓存） */
+    private static final ConcurrentMap<String, Class<?>> CLASS_CACHE = new ConcurrentHashMap<>();
 
-  private final @NonNull RedissonClient redisson;
-  private final String namespace;
-  private final @NonNull String topic;
-  private final @NonNull String group;
-  private final @NonNull String consumerName;
-  private final @NonNull MessageConverter converter;
+    private final @NonNull RedissonClient redisson;
+    private final String namespace;
+    private final @NonNull String topic;
+    private final @NonNull String group;
+    private final @NonNull String consumerName;
+    private final @NonNull MessageConverter converter;
 
-  /** DLQ 模式标志：true=从 DLQ Stream 消费死信消息 */
-  private final boolean dlqMode;
+    /** DLQ 模式标志：true=从 DLQ Stream 消费死信消息 */
+    private final boolean dlqMode;
 
-  /** Retry 模式标志：true=从 retry Stream 消费重试消息（对齐 RocketMQ %RETRY%{group}%） */
-  private final boolean retryMode;
+    /** Retry 模式标志：true=从 retry Stream 消费重试消息（对齐 RocketMQ %RETRY%{group}%） */
+    private final boolean retryMode;
 
-  /** 广播消费模式标志：true=每个消费者实例使用独立的消费者组 */
-  private final boolean broadcast;
+    /** 广播消费模式标志：true=每个消费者实例使用独立的消费者组 */
+    private final boolean broadcast;
 
-  /**
-   * 目标 body 类型（跨平台反序列化回退类型）。
-   *
-   * <p>当 Stream Entry 缺失 {@code bodyType} 字段（发送方非 StreamMQ SDK）， 或 {@code bodyType}
-   * 类不可加载时，回退到此类型。若仍为 null，则回退到 {@link String}。
-   */
-  private final Class<?> targetBodyType;
+    /**
+     * 目标 body 类型（跨平台反序列化回退类型）。
+     *
+     * <p>当 Stream Entry 缺失 {@code bodyType} 字段（发送方非 StreamMQ SDK）， 或 {@code bodyType}
+     * 类不可加载时，回退到此类型。若仍为 null，则回退到 {@link String}。
+     */
+    private final Class<?> targetBodyType;
 
-  private final AtomicBoolean closed = new AtomicBoolean(false);
-  private final AtomicBoolean groupCreated = new AtomicBoolean(false);
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+    private final AtomicBoolean groupCreated = new AtomicBoolean(false);
 
-  /** batchSize 校验上界，对应 Redis Stream 单次 XREADGROUP 的合理上限 */
-  private static final int MAX_BATCH_SIZE = StreamMQConstants.MAX_BATCH_SIZE_LIMIT;
+    /** batchSize 校验上界，对应 Redis Stream 单次 XREADGROUP 的合理上限 */
+    private static final int MAX_BATCH_SIZE = StreamMQConstants.MAX_BATCH_SIZE_LIMIT;
 
-  /** BUSYGROUP 错误标识，用于判断消费者组已存在 */
-  private static final String BUSYGROUP_MARKER = "BUSYGROUP";
+    /** BUSYGROUP 错误标识，用于判断消费者组已存在 */
+    private static final String BUSYGROUP_MARKER = "BUSYGROUP";
 
-  /** NOGROUP 错误标识，用于判断 Stream 或消费者组被删除的情况 */
-  private static final String NOGROUP_MARKER = "NOGROUP";
+    /** NOGROUP 错误标识，用于判断 Stream 或消费者组被删除的情况 */
+    private static final String NOGROUP_MARKER = "NOGROUP";
 
-  /**
-   * 兼容构造器：不启用 DLQ/retry/broadcast 模式（等价于全部 false）。
-   *
-   * @param redisson Redisson 客户端（必填）
-   * @param namespace 命名空间（可为 null，默认空字符串）
-   * @param topic 主题（必填）
-   * @param group 消费者组名（必填）
-   * @param consumerName 消费者实例名（必填）
-   * @param converter 消息转换器（必填）
-   */
-  public RedissonStreamListener(
-      @NonNull RedissonClient redisson,
-      String namespace,
-      @NonNull String topic,
-      @NonNull String group,
-      @NonNull String consumerName,
-      @NonNull MessageConverter converter) {
-    this(redisson, namespace, topic, group, consumerName, converter, false, false, false, null);
-  }
-
-  /**
-   * 构造 Listener，支持 Builder 模式。
-   *
-   * <p>使用示例：
-   *
-   * <pre>{@code
-   * RedissonStreamListener listener = RedissonStreamListener.builder()
-   *     .redisson(redissonClient)
-   *     .topic("my-topic")
-   *     .group("my-group")
-   *     .consumerName("consumer-1")
-   *     .converter(converter)
-   *     .build();
-   * }</pre>
-   *
-   * <p>DLQ 模式示例：
-   *
-   * <pre>{@code
-   * RedissonStreamListener dlqListener = RedissonStreamListener.builder()
-   *     .redisson(redissonClient)
-   *     .topic("my-topic")              // 原始 topic
-   *     .group("my-group")              // 原始消费者组（用于构造 DLQ Stream Key）
-   *     .consumerName("dlq-consumer-1")
-   *     .converter(converter)
-   *     .dlqMode(true)
-   *     .build();
-   * }</pre>
-   *
-   * <p>跨平台 body 类型示例：
-   *
-   * <pre>{@code
-   * RedissonStreamListener listener = RedissonStreamListener.builder()
-   *     .redisson(redissonClient)
-   *     .topic("cross-lang-topic")
-   *     .group("my-group")
-   *     .consumerName("consumer-1")
-   *     .converter(converter)
-   *     .targetBodyType(String.class)   // Go 发送 JSON string，接收为 String 自行解析
-   *     .build();
-   * }</pre>
-   *
-   * @param redisson Redisson 客户端（必填）
-   * @param namespace 命名空间（可为 null，默认空字符串）
-   * @param topic 主题（必填；DLQ 模式下为原始 topic）
-   * @param group 消费者组名（必填；DLQ 模式下为 DLQ 消费者组名）
-   * @param consumerName 消费者实例名（必填）
-   * @param converter 消息转换器（必填）
-   * @param dlqMode DLQ 模式标志（true=从 DLQ Stream 消费）
-   * @param targetBodyType 目标 body 类型（跨平台回退类型，null=最终回退到 String）
-   */
-  @Builder
-  public RedissonStreamListener(
-      @NonNull RedissonClient redisson,
-      String namespace,
-      @NonNull String topic,
-      @NonNull String group,
-      @NonNull String consumerName,
-      @NonNull MessageConverter converter,
-      boolean dlqMode,
-      boolean retryMode,
-      boolean broadcast,
-      Class<?> targetBodyType) {
-    this.redisson = redisson;
-    this.namespace = Objects.isNull(namespace) ? "" : namespace;
-    this.topic = topic;
-    this.group = group;
-    this.consumerName = consumerName;
-    this.converter = converter;
-    this.dlqMode = dlqMode;
-    this.retryMode = retryMode;
-    this.broadcast = broadcast;
-    this.targetBodyType = targetBodyType;
-  }
-
-  @Override
-  public List<Message<?>> pull(int batchSize) {
-    ensureOpen();
-    validateBatchSize(batchSize);
-    ensureGroup();
-    return doRead(batchSize, null);
-  }
-
-  @Override
-  public List<Message<?>> pullBlock(int batchSize, Duration timeout) {
-    ensureOpen();
-    validateBatchSize(batchSize);
-    Objects.requireNonNull(timeout, "timeout");
-    ensureGroup();
-    return doRead(batchSize, timeout);
-  }
-
-  @Override
-  public void ack(MessageId messageId) {
-    ensureOpen();
-    Objects.requireNonNull(messageId, "messageId");
-    RStream<String, String> stream = getStream();
-    try {
-      stream.ack(getEffectiveGroup(), toStreamId(messageId));
-    } catch (RuntimeException ex) {
-      throw new StreamMQBrokerException(
-          "ack failed for topic " + topic + ", messageId=" + messageId, null, ex);
+    /**
+     * 兼容构造器：不启用 DLQ/retry/broadcast 模式（等价于全部 false）。
+     *
+     * @param redisson Redisson 客户端（必填）
+     * @param namespace 命名空间（可为 null，默认空字符串）
+     * @param topic 主题（必填）
+     * @param group 消费者组名（必填）
+     * @param consumerName 消费者实例名（必填）
+     * @param converter 消息转换器（必填）
+     */
+    public RedissonStreamListener(
+            @NonNull RedissonClient redisson,
+            String namespace,
+            @NonNull String topic,
+            @NonNull String group,
+            @NonNull String consumerName,
+            @NonNull MessageConverter converter) {
+        this(redisson, namespace, topic, group, consumerName, converter, false, false, false, null);
     }
-  }
 
-  @Override
-  public void ackBatch(List<MessageId> messageIds) {
-    ensureOpen();
-    Objects.requireNonNull(messageIds, "messageIds");
-    if (messageIds.isEmpty()) {
-      return;
+    /**
+     * 构造 Listener，支持 Builder 模式。
+     *
+     * <p>使用示例：
+     *
+     * <pre>{@code
+     * RedissonStreamListener listener = RedissonStreamListener.builder()
+     *     .redisson(redissonClient)
+     *     .topic("my-topic")
+     *     .group("my-group")
+     *     .consumerName("consumer-1")
+     *     .converter(converter)
+     *     .build();
+     * }</pre>
+     *
+     * <p>DLQ 模式示例：
+     *
+     * <pre>{@code
+     * RedissonStreamListener dlqListener = RedissonStreamListener.builder()
+     *     .redisson(redissonClient)
+     *     .topic("my-topic")              // 原始 topic
+     *     .group("my-group")              // 原始消费者组（用于构造 DLQ Stream Key）
+     *     .consumerName("dlq-consumer-1")
+     *     .converter(converter)
+     *     .dlqMode(true)
+     *     .build();
+     * }</pre>
+     *
+     * <p>跨平台 body 类型示例：
+     *
+     * <pre>{@code
+     * RedissonStreamListener listener = RedissonStreamListener.builder()
+     *     .redisson(redissonClient)
+     *     .topic("cross-lang-topic")
+     *     .group("my-group")
+     *     .consumerName("consumer-1")
+     *     .converter(converter)
+     *     .targetBodyType(String.class)   // Go 发送 JSON string，接收为 String 自行解析
+     *     .build();
+     * }</pre>
+     *
+     * @param redisson Redisson 客户端（必填）
+     * @param namespace 命名空间（可为 null，默认空字符串）
+     * @param topic 主题（必填；DLQ 模式下为原始 topic）
+     * @param group 消费者组名（必填；DLQ 模式下为 DLQ 消费者组名）
+     * @param consumerName 消费者实例名（必填）
+     * @param converter 消息转换器（必填）
+     * @param dlqMode DLQ 模式标志（true=从 DLQ Stream 消费）
+     * @param targetBodyType 目标 body 类型（跨平台回退类型，null=最终回退到 String）
+     */
+    @Builder
+    public RedissonStreamListener(
+            @NonNull RedissonClient redisson,
+            String namespace,
+            @NonNull String topic,
+            @NonNull String group,
+            @NonNull String consumerName,
+            @NonNull MessageConverter converter,
+            boolean dlqMode,
+            boolean retryMode,
+            boolean broadcast,
+            Class<?> targetBodyType) {
+        this.redisson = redisson;
+        this.namespace = Objects.isNull(namespace) ? "" : namespace;
+        this.topic = topic;
+        this.group = group;
+        this.consumerName = consumerName;
+        this.converter = converter;
+        this.dlqMode = dlqMode;
+        this.retryMode = retryMode;
+        this.broadcast = broadcast;
+        this.targetBodyType = targetBodyType;
     }
-    RStream<String, String> stream = getStream();
-    StreamMessageId[] streamIds = new StreamMessageId[messageIds.size()];
-    for (int i = 0; i < messageIds.size(); i++) {
-      streamIds[i] = toStreamId(messageIds.get(i));
-    }
-    try {
-      stream.ack(getEffectiveGroup(), streamIds);
-    } catch (RuntimeException ex) {
-      throw new StreamMQBrokerException(
-          "ackBatch failed for topic " + topic + ", size=" + messageIds.size(), null, ex);
-    }
-  }
 
-  @Override
-  public void close() {
-    if (closed.compareAndSet(false, true)) {
-      LOG.info(
-          "RedissonStreamListener closed: topic={}, group={}, consumer={}",
-          topic,
-          group,
-          consumerName);
+    @Override
+    public List<Message<?>> pull(int batchSize) {
+        ensureOpen();
+        validateBatchSize(batchSize);
+        ensureGroup();
+        return doRead(batchSize, null);
     }
-  }
 
-  /**
-   * 返回 Listener 是否正在运行。
-   *
-   * @return true 如果未关闭
-   */
-  public boolean isRunning() {
-    return !closed.get();
-  }
-
-  // ===================== 内部方法 =====================
-
-  private List<Message<?>> doRead(int batchSize, Duration timeout) {
-    RStream<String, String> stream = getStream();
-    StreamReadGroupArgs args;
-    if (Objects.nonNull(timeout) && !timeout.isZero() && !timeout.isNegative()) {
-      args = StreamReadGroupArgs.neverDelivered().count(batchSize).timeout(timeout);
-    } else {
-      args = StreamReadGroupArgs.neverDelivered().count(batchSize);
+    @Override
+    public List<Message<?>> pullBlock(int batchSize, Duration timeout) {
+        ensureOpen();
+        validateBatchSize(batchSize);
+        Objects.requireNonNull(timeout, "timeout");
+        ensureGroup();
+        return doRead(batchSize, timeout);
     }
-    String effectiveGroup = getEffectiveGroup();
-    LOG.debug(
-        "doRead: streamKey={}, effectiveGroup={}, consumerName={}, batchSize={}, timeout={}",
-        stream.getName(),
-        effectiveGroup,
-        consumerName,
-        batchSize,
-        timeout);
-    try {
-      Map<StreamMessageId, Map<String, String>> result =
-          stream.readGroup(effectiveGroup, consumerName, args);
-      LOG.debug(
-          "doRead result: streamKey={}, resultSize={}",
-          stream.getName(),
-          result != null ? result.size() : 0);
-      if (CollectionUtils.isEmpty(result)) {
-        return List.of();
-      }
-      List<Message<?>> messages = new ArrayList<>(result.size());
-      for (Map.Entry<StreamMessageId, Map<String, String>> entry : result.entrySet()) {
-        LOG.debug(
-            "doRead processing entry: streamKey={}, msgId={}", stream.getName(), entry.getKey());
-        Message<?> message = toMessage(entry.getKey(), entry.getValue());
-        messages.add(message);
-      }
-      return messages;
-    } catch (RuntimeException ex) {
-      String msg = ex.getMessage();
-      if (Objects.nonNull(msg) && msg.contains(NOGROUP_MARKER)) {
-        LOG.warn(
-            "NOGROUP detected, resetting groupCreated flag to trigger re-creation: "
-                + "streamKey={}, effectiveGroup={}, error={}",
-            stream.getName(),
-            effectiveGroup,
-            msg);
-        groupCreated.set(false);
-      }
-      LOG.error(
-          "doRead failed: streamKey={}, effectiveGroup={}, error={}",
-          stream.getName(),
-          effectiveGroup,
-          ex.getMessage());
-      throw new StreamMQBrokerException("readGroup failed for topic " + topic, null, ex);
-    }
-  }
 
-  @SuppressWarnings({"unchecked", "rawtypes"})
-  private Message<?> toMessage(StreamMessageId streamId, Map<String, String> fields) {
-    // 反序列化目标类型回退链（对齐 RocketMQ，优先使用消费者声明的泛型类型）：
-    //   1. targetBodyType（容器解析自 Listener 泛型 T，消费者声明的类型优先级最高）
-    //   2. bodyTypeName 匹配（仅类名匹配，支持跨包/跨模块场景：发送端 com.foo.UserInfo -> 消费端 com.bar.UserInfo）
-    //   3. bodyType（Stream Entry 中的完整类名字段）
-    //   4. String.class（最终回退，由消费者自行反序列化）
-    Class<?> bodyType = targetBodyType;
-    if (Objects.isNull(bodyType)) {
-      String simpleTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE_NAME);
-      if (StringUtils.isNotEmpty(simpleTypeName)) {
-        bodyType = findClassBySimpleName(simpleTypeName);
-      }
-    }
-    if (Objects.isNull(bodyType)) {
-      String fullTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE);
-      if (StringUtils.isNotEmpty(fullTypeName)) {
-        bodyType = findClassBySimpleName(fullTypeName);
-        if (Objects.isNull(bodyType)) {
-          LOG.warn("Body type class not found by full name, fallback to String: {}", fullTypeName);
+    @Override
+    public void ack(MessageId messageId) {
+        ensureOpen();
+        Objects.requireNonNull(messageId, "messageId");
+        RStream<String, String> stream = getStream();
+        try {
+            stream.ack(getEffectiveGroup(), toStreamId(messageId));
+        } catch (RuntimeException ex) {
+            throw new StreamMQBrokerException(
+                    "ack failed for topic " + topic + ", messageId=" + messageId, null, ex);
         }
-      }
     }
-    if (Objects.isNull(bodyType)) {
-      bodyType = String.class;
-    }
-    Message<?> message = converter.fromStreamFields(fields, (Class) bodyType);
-    DefaultMessageConverter.applyTopic(message, topic);
-    DefaultMessageConverter.applyMessageId(message, streamId.toString());
-    return message;
-  }
 
-  private Class<?> findClassBySimpleName(String simpleName) {
-    Class<?> cached = CLASS_CACHE.get(simpleName);
-    if (Objects.nonNull(cached)) {
-      return cached;
+    @Override
+    public void ackBatch(List<MessageId> messageIds) {
+        ensureOpen();
+        Objects.requireNonNull(messageIds, "messageIds");
+        if (messageIds.isEmpty()) {
+            return;
+        }
+        RStream<String, String> stream = getStream();
+        StreamMessageId[] streamIds = new StreamMessageId[messageIds.size()];
+        for (int i = 0; i < messageIds.size(); i++) {
+            streamIds[i] = toStreamId(messageIds.get(i));
+        }
+        try {
+            stream.ack(getEffectiveGroup(), streamIds);
+        } catch (RuntimeException ex) {
+            throw new StreamMQBrokerException(
+                    "ackBatch failed for topic " + topic + ", size=" + messageIds.size(), null, ex);
+        }
     }
-    try {
-      ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
-      if (Objects.isNull(classLoader)) {
-        classLoader = getClass().getClassLoader();
-      }
-      Class<?> clazz = Class.forName(simpleName, false, classLoader);
-      CLASS_CACHE.put(simpleName, clazz);
-      return clazz;
-    } catch (ClassNotFoundException e) {
-      LOG.debug(
-          "Body type class not found by simple name '{}', will try full name or fallback",
-          simpleName);
-      return null;
-    }
-  }
 
-  private void ensureGroup() {
-    if (groupCreated.get()) {
-      return;
+    @Override
+    public void close() {
+        if (closed.compareAndSet(false, true)) {
+            LOG.info(
+                    "RedissonStreamListener closed: topic={}, group={}, consumer={}",
+                    topic,
+                    group,
+                    consumerName);
+        }
     }
-    if (groupCreated.compareAndSet(false, true)) {
-      RStream<String, String> stream = getStream();
-      // 广播模式下使用独立消费者组名（每个实例一个组，均接收全量消息）
-      String effectiveGroup = getEffectiveGroup();
-      LOG.info(
-          "Ensuring consumer group: namespace={}, topic={}, group={}, effectiveGroup={},"
-              + " dlqMode={}, retryMode={}, streamKey={}",
-          namespace,
-          topic,
-          group,
-          effectiveGroup,
-          dlqMode,
-          retryMode,
-          stream.getName());
-      try {
-        // makeStream：如果 Stream 不存在则创建
-        // id(0-0)：从头开始消费
-        stream.createGroup(
-            StreamCreateGroupArgs.name(effectiveGroup).makeStream().id(new StreamMessageId(0, 0)));
-        LOG.info(
-            "Consumer group created: topic={}, group={}{}",
-            topic,
-            effectiveGroup,
-            broadcast ? " (broadcast, unique per instance)" : "");
-      } catch (RuntimeException ex) {
-        // BUSYGROUP 表示 group 已存在，属于正常情况
-        String msg = ex.getMessage();
-        if (Objects.nonNull(msg) && msg.contains(BUSYGROUP_MARKER)) {
-          LOG.debug("Consumer group already exists: topic={}, group={}", topic, effectiveGroup);
+
+    /**
+     * 返回 Listener 是否正在运行。
+     *
+     * @return true 如果未关闭
+     */
+    public boolean isRunning() {
+        return !closed.get();
+    }
+
+    // ===================== 内部方法 =====================
+
+    private List<Message<?>> doRead(int batchSize, Duration timeout) {
+        RStream<String, String> stream = getStream();
+        StreamReadGroupArgs args;
+        if (Objects.nonNull(timeout) && !timeout.isZero() && !timeout.isNegative()) {
+            args = StreamReadGroupArgs.neverDelivered().count(batchSize).timeout(timeout);
         } else {
-          // 其他错误重置标志位，允许下次重试
-          groupCreated.set(false);
-          LOG.error(
-              "createGroup failed: streamKey={}, effectiveGroup={}, error={}",
-              stream.getName(),
-              effectiveGroup,
-              ex.getMessage());
-          throw new StreamMQBrokerException(
-              "createGroup failed for topic " + topic + ", group " + effectiveGroup, null, ex);
+            args = StreamReadGroupArgs.neverDelivered().count(batchSize);
         }
-      }
+        String effectiveGroup = getEffectiveGroup();
+        LOG.debug(
+                "doRead: streamKey={}, effectiveGroup={}, consumerName={}, batchSize={},"
+                        + " timeout={}",
+                stream.getName(),
+                effectiveGroup,
+                consumerName,
+                batchSize,
+                timeout);
+        try {
+            Map<StreamMessageId, Map<String, String>> result =
+                    stream.readGroup(effectiveGroup, consumerName, args);
+            LOG.debug(
+                    "doRead result: streamKey={}, resultSize={}",
+                    stream.getName(),
+                    result != null ? result.size() : 0);
+            if (CollectionUtils.isEmpty(result)) {
+                return List.of();
+            }
+            List<Message<?>> messages = new ArrayList<>(result.size());
+            for (Map.Entry<StreamMessageId, Map<String, String>> entry : result.entrySet()) {
+                LOG.debug(
+                        "doRead processing entry: streamKey={}, msgId={}",
+                        stream.getName(),
+                        entry.getKey());
+                Message<?> message = toMessage(entry.getKey(), entry.getValue());
+                messages.add(message);
+            }
+            return messages;
+        } catch (RuntimeException ex) {
+            String msg = ex.getMessage();
+            if (Objects.nonNull(msg) && msg.contains(NOGROUP_MARKER)) {
+                LOG.warn(
+                        "NOGROUP detected, resetting groupCreated flag to trigger re-creation: "
+                                + "streamKey={}, effectiveGroup={}, error={}",
+                        stream.getName(),
+                        effectiveGroup,
+                        msg);
+                groupCreated.set(false);
+            }
+            LOG.error(
+                    "doRead failed: streamKey={}, effectiveGroup={}, error={}",
+                    stream.getName(),
+                    effectiveGroup,
+                    ex.getMessage());
+            throw new StreamMQBrokerException("readGroup failed for topic " + topic, null, ex);
+        }
     }
-  }
 
-  /**
-   * 获取实际使用的消费者组名。 广播模式下，每个消费者实例使用独立组名（{@code {group}:{consumerName}}）， 确保每个实例都能接收到全量消息。
-   *
-   * @return 实际的消费者组名
-   */
-  private String getEffectiveGroup() {
-    if (broadcast) {
-      return group + ":" + consumerName;
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private Message<?> toMessage(StreamMessageId streamId, Map<String, String> fields) {
+        // 反序列化目标类型回退链（对齐 RocketMQ，优先使用消费者声明的泛型类型）：
+        //   1. targetBodyType（容器解析自 Listener 泛型 T，消费者声明的类型优先级最高）
+        //   2. bodyTypeName 匹配（仅类名匹配，支持跨包/跨模块场景：发送端 com.foo.UserInfo -> 消费端 com.bar.UserInfo）
+        //   3. bodyType（Stream Entry 中的完整类名字段）
+        //   4. String.class（最终回退，由消费者自行反序列化）
+        Class<?> bodyType = targetBodyType;
+        if (Objects.isNull(bodyType)) {
+            String simpleTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE_NAME);
+            if (StringUtils.isNotEmpty(simpleTypeName)) {
+                bodyType = findClassBySimpleName(simpleTypeName);
+            }
+        }
+        if (Objects.isNull(bodyType)) {
+            String fullTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE);
+            if (StringUtils.isNotEmpty(fullTypeName)) {
+                bodyType = findClassBySimpleName(fullTypeName);
+                if (Objects.isNull(bodyType)) {
+                    LOG.warn(
+                            "Body type class not found by full name, fallback to String: {}",
+                            fullTypeName);
+                }
+            }
+        }
+        if (Objects.isNull(bodyType)) {
+            bodyType = String.class;
+        }
+        Message<?> message = converter.fromStreamFields(fields, (Class) bodyType);
+        DefaultMessageConverter.applyTopic(message, topic);
+        DefaultMessageConverter.applyMessageId(message, streamId.toString());
+        return message;
     }
-    return group;
-  }
 
-  private RStream<String, String> getStream() {
-    String streamKey;
-    if (dlqMode) {
-      streamKey = StreamMQKeys.dlqStream(namespace, group);
-    } else if (retryMode) {
-      streamKey = StreamMQKeys.retryStream(namespace, topic, group);
-    } else {
-      streamKey = StreamMQKeys.topicStream(namespace, topic);
+    private Class<?> findClassBySimpleName(String simpleName) {
+        Class<?> cached = CLASS_CACHE.get(simpleName);
+        if (Objects.nonNull(cached)) {
+            return cached;
+        }
+        try {
+            ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+            if (Objects.isNull(classLoader)) {
+                classLoader = getClass().getClassLoader();
+            }
+            Class<?> clazz = Class.forName(simpleName, false, classLoader);
+            CLASS_CACHE.put(simpleName, clazz);
+            return clazz;
+        } catch (ClassNotFoundException e) {
+            LOG.debug(
+                    "Body type class not found by simple name '{}', will try full name or fallback",
+                    simpleName);
+            return null;
+        }
     }
-    LOG.debug(
-        "getStream: streamKey={}, namespace={}, topic={}, group={}, dlqMode={}, retryMode={}",
-        streamKey,
-        namespace,
-        topic,
-        group,
-        dlqMode,
-        retryMode);
-    return redisson.getStream(streamKey);
-  }
 
-  private static StreamMessageId toStreamId(MessageId messageId) {
-    return new StreamMessageId(messageId.getTimestamp(), messageId.getSequence());
-  }
-
-  private void ensureOpen() {
-    if (closed.get()) {
-      throw new IllegalStateException("Listener is closed: topic=" + topic + ", group=" + group);
+    private void ensureGroup() {
+        if (groupCreated.get()) {
+            return;
+        }
+        if (groupCreated.compareAndSet(false, true)) {
+            RStream<String, String> stream = getStream();
+            // 广播模式下使用独立消费者组名（每个实例一个组，均接收全量消息）
+            String effectiveGroup = getEffectiveGroup();
+            LOG.info(
+                    "Ensuring consumer group: namespace={}, topic={}, group={}, effectiveGroup={},"
+                            + " dlqMode={}, retryMode={}, streamKey={}",
+                    namespace,
+                    topic,
+                    group,
+                    effectiveGroup,
+                    dlqMode,
+                    retryMode,
+                    stream.getName());
+            try {
+                // makeStream：如果 Stream 不存在则创建
+                // id(0-0)：从头开始消费
+                stream.createGroup(
+                        StreamCreateGroupArgs.name(effectiveGroup)
+                                .makeStream()
+                                .id(new StreamMessageId(0, 0)));
+                LOG.info(
+                        "Consumer group created: topic={}, group={}{}",
+                        topic,
+                        effectiveGroup,
+                        broadcast ? " (broadcast, unique per instance)" : "");
+            } catch (RuntimeException ex) {
+                // BUSYGROUP 表示 group 已存在，属于正常情况
+                String msg = ex.getMessage();
+                if (Objects.nonNull(msg) && msg.contains(BUSYGROUP_MARKER)) {
+                    LOG.debug(
+                            "Consumer group already exists: topic={}, group={}",
+                            topic,
+                            effectiveGroup);
+                } else {
+                    // 其他错误重置标志位，允许下次重试
+                    groupCreated.set(false);
+                    LOG.error(
+                            "createGroup failed: streamKey={}, effectiveGroup={}, error={}",
+                            stream.getName(),
+                            effectiveGroup,
+                            ex.getMessage());
+                    throw new StreamMQBrokerException(
+                            "createGroup failed for topic " + topic + ", group " + effectiveGroup,
+                            null,
+                            ex);
+                }
+            }
+        }
     }
-  }
 
-  private static void validateBatchSize(int batchSize) {
-    if (batchSize <= 0 || batchSize > MAX_BATCH_SIZE) {
-      throw new IllegalArgumentException(
-          "batchSize must be between 1 and " + MAX_BATCH_SIZE + ", got " + batchSize);
+    /**
+     * 获取实际使用的消费者组名。 广播模式下，每个消费者实例使用独立组名（{@code {group}:{consumerName}}）， 确保每个实例都能接收到全量消息。
+     *
+     * @return 实际的消费者组名
+     */
+    private String getEffectiveGroup() {
+        if (broadcast) {
+            return group + ":" + consumerName;
+        }
+        return group;
     }
-  }
+
+    private RStream<String, String> getStream() {
+        String streamKey;
+        if (dlqMode) {
+            streamKey = StreamMQKeys.dlqStream(namespace, group);
+        } else if (retryMode) {
+            streamKey = StreamMQKeys.retryStream(namespace, topic, group);
+        } else {
+            streamKey = StreamMQKeys.topicStream(namespace, topic);
+        }
+        LOG.debug(
+                "getStream: streamKey={}, namespace={}, topic={}, group={}, dlqMode={},"
+                        + " retryMode={}",
+                streamKey,
+                namespace,
+                topic,
+                group,
+                dlqMode,
+                retryMode);
+        return redisson.getStream(streamKey);
+    }
+
+    private static StreamMessageId toStreamId(MessageId messageId) {
+        return new StreamMessageId(messageId.getTimestamp(), messageId.getSequence());
+    }
+
+    private void ensureOpen() {
+        if (closed.get()) {
+            throw new IllegalStateException(
+                    "Listener is closed: topic=" + topic + ", group=" + group);
+        }
+    }
+
+    private static void validateBatchSize(int batchSize) {
+        if (batchSize <= 0 || batchSize > MAX_BATCH_SIZE) {
+            throw new IllegalArgumentException(
+                    "batchSize must be between 1 and " + MAX_BATCH_SIZE + ", got " + batchSize);
+        }
+    }
 }

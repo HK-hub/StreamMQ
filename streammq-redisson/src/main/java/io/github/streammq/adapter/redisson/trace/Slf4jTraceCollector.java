@@ -22,75 +22,76 @@ import org.slf4j.LoggerFactory;
  */
 public class Slf4jTraceCollector implements TraceCollector {
 
-  private static final Logger LOG = LoggerFactory.getLogger(Slf4jTraceCollector.class);
+    private static final Logger LOG = LoggerFactory.getLogger(Slf4jTraceCollector.class);
 
-  /** 用户属性中的 traceId 键名 */
-  public static final String TRACE_ID_KEY = "traceId";
+    /** 用户属性中的 traceId 键名 */
+    public static final String TRACE_ID_KEY = "traceId";
 
-  @Override
-  public void recordSend(SendTraceContext context) {
-    if (Objects.isNull(context)) {
-      return;
+    @Override
+    public void recordSend(SendTraceContext context) {
+        if (Objects.isNull(context)) {
+            return;
+        }
+        if (context.success()) {
+            LOG.debug(
+                    "发送追踪: topic={}, messageId={}, producerGroup={}, success={}, durationMs={},"
+                            + " traceId={}",
+                    context.topic(),
+                    context.messageId(),
+                    context.producerGroup(),
+                    context.success(),
+                    context.durationMillis(),
+                    context.traceId());
+        } else {
+            LOG.info(
+                    "发送追踪(失败): topic={}, messageId={}, producerGroup={}, success={}, durationMs={},"
+                            + " traceId={}",
+                    context.topic(),
+                    context.messageId(),
+                    context.producerGroup(),
+                    context.success(),
+                    context.durationMillis(),
+                    context.traceId());
+        }
     }
-    if (context.success()) {
-      LOG.debug(
-          "发送追踪: topic={}, messageId={}, producerGroup={}, success={}, durationMs={}, traceId={}",
-          context.topic(),
-          context.messageId(),
-          context.producerGroup(),
-          context.success(),
-          context.durationMillis(),
-          context.traceId());
-    } else {
-      LOG.info(
-          "发送追踪(失败): topic={}, messageId={}, producerGroup={}, success={}, durationMs={},"
-              + " traceId={}",
-          context.topic(),
-          context.messageId(),
-          context.producerGroup(),
-          context.success(),
-          context.durationMillis(),
-          context.traceId());
-    }
-  }
 
-  @Override
-  public void recordConsume(ConsumeTraceContext context) {
-    if (Objects.isNull(context)) {
-      return;
+    @Override
+    public void recordConsume(ConsumeTraceContext context) {
+        if (Objects.isNull(context)) {
+            return;
+        }
+        if (context.success()) {
+            LOG.debug(
+                    "消费追踪: topic={}, messageId={}, consumerGroup={}, reconsumeTimes={}, success={},"
+                            + " durationMs={}, traceId={}",
+                    context.topic(),
+                    context.messageId(),
+                    context.consumerGroup(),
+                    context.reconsumeTimes(),
+                    context.success(),
+                    context.durationMillis(),
+                    context.traceId());
+        } else {
+            LOG.info(
+                    "消费追踪(失败): topic={}, messageId={}, consumerGroup={}, reconsumeTimes={},"
+                            + " success={}, durationMs={}, traceId={}",
+                    context.topic(),
+                    context.messageId(),
+                    context.consumerGroup(),
+                    context.reconsumeTimes(),
+                    context.success(),
+                    context.durationMillis(),
+                    context.traceId());
+        }
     }
-    if (context.success()) {
-      LOG.debug(
-          "消费追踪: topic={}, messageId={}, consumerGroup={}, reconsumeTimes={}, success={},"
-              + " durationMs={}, traceId={}",
-          context.topic(),
-          context.messageId(),
-          context.consumerGroup(),
-          context.reconsumeTimes(),
-          context.success(),
-          context.durationMillis(),
-          context.traceId());
-    } else {
-      LOG.info(
-          "消费追踪(失败): topic={}, messageId={}, consumerGroup={}, reconsumeTimes={}, success={},"
-              + " durationMs={}, traceId={}",
-          context.topic(),
-          context.messageId(),
-          context.consumerGroup(),
-          context.reconsumeTimes(),
-          context.success(),
-          context.durationMillis(),
-          context.traceId());
+
+    @Override
+    public boolean isEnabled() {
+        return true;
     }
-  }
 
-  @Override
-  public boolean isEnabled() {
-    return true;
-  }
-
-  @Override
-  public String name() {
-    return "slf4j";
-  }
+    @Override
+    public String name() {
+        return "slf4j";
+    }
 }

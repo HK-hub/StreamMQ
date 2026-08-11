@@ -18,9 +18,9 @@ import java.util.Map;
  * @since 1.0.0
  */
 public record TraceEvent(
-    TraceEventType type,
-    long timestamp,
-    long durationMillis,
-    boolean success,
-    String detail,
-    Map<String, String> attributes) {}
+        TraceEventType type,
+        long timestamp,
+        long durationMillis,
+        boolean success,
+        String detail,
+        Map<String, String> attributes) {}

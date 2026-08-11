@@ -24,55 +24,55 @@ import org.springframework.beans.factory.ObjectProvider;
 @ExtendWith(MockitoExtension.class)
 class GracefulShutdownHandlerTest {
 
-  @Mock private ObjectProvider<StreamMQListenerContainer> containerProvider;
+    @Mock private ObjectProvider<StreamMQListenerContainer> containerProvider;
 
-  @Mock private StreamMQListenerContainer container;
+    @Mock private StreamMQListenerContainer container;
 
-  private CloudK8sProperties properties;
+    private CloudK8sProperties properties;
 
-  private GracefulShutdownHandler handler;
+    private GracefulShutdownHandler handler;
 
-  @BeforeEach
-  void setUp() {
-    properties = new CloudK8sProperties();
-    properties.setGracefulShutdownTimeoutMs(0L);
-    handler = new GracefulShutdownHandler(containerProvider, properties);
-  }
+    @BeforeEach
+    void setUp() {
+        properties = new CloudK8sProperties();
+        properties.setGracefulShutdownTimeoutMs(0L);
+        handler = new GracefulShutdownHandler(containerProvider, properties);
+    }
 
-  @Test
-  @DisplayName("初始状态 isShuttingDown 为 false")
-  void isShuttingDown_initiallyFalse() {
-    assertThat(handler.isShuttingDown()).isFalse();
-  }
+    @Test
+    @DisplayName("初始状态 isShuttingDown 为 false")
+    void isShuttingDown_initiallyFalse() {
+        assertThat(handler.isShuttingDown()).isFalse();
+    }
 
-  @Test
-  @DisplayName("destroy - 容器不存在时安全完成并标记关闭")
-  void destroy_whenContainerAbsent_completesSafely() {
-    when(containerProvider.getIfAvailable()).thenReturn(null);
-    handler.destroy();
-    assertThat(handler.isShuttingDown()).isTrue();
-    verify(container, never()).pause();
-    verify(container, never()).stop();
-  }
+    @Test
+    @DisplayName("destroy - 容器不存在时安全完成并标记关闭")
+    void destroy_whenContainerAbsent_completesSafely() {
+        when(containerProvider.getIfAvailable()).thenReturn(null);
+        handler.destroy();
+        assertThat(handler.isShuttingDown()).isTrue();
+        verify(container, never()).pause();
+        verify(container, never()).stop();
+    }
 
-  @Test
-  @DisplayName("destroy - 容器存在时调用 pause 与 stop")
-  void destroy_whenContainerPresent_callsPauseAndStop() {
-    when(containerProvider.getIfAvailable()).thenReturn(container);
-    handler.destroy();
-    verify(container).pause();
-    verify(container).stop();
-    assertThat(handler.isShuttingDown()).isTrue();
-  }
+    @Test
+    @DisplayName("destroy - 容器存在时调用 pause 与 stop")
+    void destroy_whenContainerPresent_callsPauseAndStop() {
+        when(containerProvider.getIfAvailable()).thenReturn(container);
+        handler.destroy();
+        verify(container).pause();
+        verify(container).stop();
+        assertThat(handler.isShuttingDown()).isTrue();
+    }
 
-  @Test
-  @DisplayName("destroy - 重复调用只触发一次关闭流程")
-  void destroy_calledTwice_onlyTriggersOnce() {
-    when(containerProvider.getIfAvailable()).thenReturn(container);
-    handler.destroy();
-    handler.destroy();
-    verify(container).pause();
-    verify(container).stop();
-    assertThat(handler.isShuttingDown()).isTrue();
-  }
+    @Test
+    @DisplayName("destroy - 重复调用只触发一次关闭流程")
+    void destroy_calledTwice_onlyTriggersOnce() {
+        when(containerProvider.getIfAvailable()).thenReturn(container);
+        handler.destroy();
+        handler.destroy();
+        verify(container).pause();
+        verify(container).stop();
+        assertThat(handler.isShuttingDown()).isTrue();
+    }
 }

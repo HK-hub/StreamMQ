@@ -14,21 +14,21 @@ import org.springframework.stereotype.Component;
 @Component
 public class OrderProducer {
 
-  private static final String TOPIC = "order-events";
+    private static final String TOPIC = "order-events";
 
-  private final StreamMessageTemplate template;
+    private final StreamMessageTemplate template;
 
-  public OrderProducer(StreamMessageTemplate template) {
-    this.template = template;
-  }
+    public OrderProducer(StreamMessageTemplate template) {
+        this.template = template;
+    }
 
-  public SendResult createOrder(String orderId, String content) {
-    return template.syncSend(
-        MessageBuilder.<String>withTopic(TOPIC)
-            .tag("created")
-            .keys(orderId)
-            .body(content)
-            .withUserProperty("source", "diagnostics-sample")
-            .build());
-  }
+    public SendResult createOrder(String orderId, String content) {
+        return template.syncSend(
+                MessageBuilder.<String>withTopic(TOPIC)
+                        .tag("created")
+                        .keys(orderId)
+                        .body(content)
+                        .withUserProperty("source", "diagnostics-sample")
+                        .build());
+    }
 }

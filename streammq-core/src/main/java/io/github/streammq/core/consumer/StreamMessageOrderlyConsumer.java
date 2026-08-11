@@ -27,13 +27,13 @@ import io.github.streammq.core.message.Message;
  */
 public interface StreamMessageOrderlyConsumer<T> extends StreamMessageConsumer<T> {
 
-  /**
-   * 处理单条顺序消息。
-   *
-   * @param message 消息载体
-   * @param context 顺序消费上下文
-   * @return 处理结果动作，返回 null 视为 {@link ConsumeAction#RECONSUME_LATER}
-   * @throws Exception 业务异常，框架将其视为 {@link ConsumeAction#RECONSUME_LATER}
-   */
-  ConsumeAction onMessage(Message<T> message, ConsumeOrderlyContext context) throws Exception;
+    /**
+     * 处理单条顺序消息。
+     *
+     * @param message 消息载体
+     * @param context 顺序消费上下文
+     * @return 处理结果动作，返回 null 视为 {@link ConsumeAction#RECONSUME_LATER}
+     * @throws Exception 业务异常，框架将其视为 {@link ConsumeAction#RECONSUME_LATER}
+     */
+    ConsumeAction onMessage(Message<T> message, ConsumeOrderlyContext context) throws Exception;
 }

@@ -20,12 +20,12 @@ import java.util.Map;
  * @since 1.0.0
  */
 public record TraceRecord(
-    String messageId,
-    String topic,
-    String group,
-    TraceType type,
-    boolean success,
-    long timestamp,
-    long durationMillis,
-    String traceId,
-    Map<String, String> attributes) {}
+        String messageId,
+        String topic,
+        String group,
+        TraceType type,
+        boolean success,
+        long timestamp,
+        long durationMillis,
+        String traceId,
+        Map<String, String> attributes) {}

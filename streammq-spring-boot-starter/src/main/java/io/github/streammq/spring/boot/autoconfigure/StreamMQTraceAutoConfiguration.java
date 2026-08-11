@@ -42,70 +42,71 @@ import org.springframework.context.annotation.Configuration;
 @EnableConfigurationProperties(StreamMQProperties.class)
 public class StreamMQTraceAutoConfiguration {
 
-  private static final Logger LOG = LoggerFactory.getLogger(StreamMQTraceAutoConfiguration.class);
+    private static final Logger LOG = LoggerFactory.getLogger(StreamMQTraceAutoConfiguration.class);
 
-  /**
-   * Redis 追踪收集器：将追踪记录写入 Redis Stream。
-   *
-   * <p>当 {@code streammq.trace.storage=redis} 时注册，覆盖默认的 Noop/Slf4j 收集器。
-   *
-   * @param redisson Redisson 客户端
-   * @param properties 配置属性
-   * @return RedisTraceCollector 实例
-   */
-  @Bean
-  @ConditionalOnMissingBean(TraceCollector.class)
-  @ConditionalOnProperty(prefix = "streammq.trace", name = "storage", havingValue = "redis")
-  public TraceCollector redisTraceCollector(
-      RedissonClient redisson, StreamMQProperties properties) {
-    LOG.info(
-        "Using RedisTraceCollector (trace storage=redis, namespace={})", properties.getNamespace());
-    return new RedisTraceCollector(redisson, properties.getNamespace());
-  }
+    /**
+     * Redis 追踪收集器：将追踪记录写入 Redis Stream。
+     *
+     * <p>当 {@code streammq.trace.storage=redis} 时注册，覆盖默认的 Noop/Slf4j 收集器。
+     *
+     * @param redisson Redisson 客户端
+     * @param properties 配置属性
+     * @return RedisTraceCollector 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean(TraceCollector.class)
+    @ConditionalOnProperty(prefix = "streammq.trace", name = "storage", havingValue = "redis")
+    public TraceCollector redisTraceCollector(
+            RedissonClient redisson, StreamMQProperties properties) {
+        LOG.info(
+                "Using RedisTraceCollector (trace storage=redis, namespace={})",
+                properties.getNamespace());
+        return new RedisTraceCollector(redisson, properties.getNamespace());
+    }
 
-  /**
-   * Redis 追踪查询服务：从 Redis Stream 查询追踪记录。
-   *
-   * @param redisson Redisson 客户端
-   * @param properties 配置属性
-   * @return RedisStreamMQTraceService 实例
-   */
-  @Bean
-  @ConditionalOnMissingBean(StreamMQTraceService.class)
-  @ConditionalOnProperty(prefix = "streammq.trace", name = "storage", havingValue = "redis")
-  public StreamMQTraceService redisStreamMQTraceService(
-      RedissonClient redisson, StreamMQProperties properties) {
-    LOG.info(
-        "Using RedisStreamMQTraceService (trace storage=redis, namespace={})",
-        properties.getNamespace());
-    return new RedisStreamMQTraceService(redisson, properties.getNamespace());
-  }
+    /**
+     * Redis 追踪查询服务：从 Redis Stream 查询追踪记录。
+     *
+     * @param redisson Redisson 客户端
+     * @param properties 配置属性
+     * @return RedisStreamMQTraceService 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean(StreamMQTraceService.class)
+    @ConditionalOnProperty(prefix = "streammq.trace", name = "storage", havingValue = "redis")
+    public StreamMQTraceService redisStreamMQTraceService(
+            RedissonClient redisson, StreamMQProperties properties) {
+        LOG.info(
+                "Using RedisStreamMQTraceService (trace storage=redis, namespace={})",
+                properties.getNamespace());
+        return new RedisStreamMQTraceService(redisson, properties.getNamespace());
+    }
 
-  /**
-   * 追踪上下文生产者拦截器：在 trace.enabled 时注册。
-   *
-   * @param traceCollector 追踪收集器
-   * @return TraceContextProducerInterceptor 实例
-   */
-  @Bean
-  @ConditionalOnMissingBean(TraceContextProducerInterceptor.class)
-  public TraceContextProducerInterceptor streamMQTraceProducerInterceptor(
-      TraceCollector traceCollector) {
-    LOG.info("Using TraceContextProducerInterceptor (trace enabled)");
-    return new TraceContextProducerInterceptor(traceCollector);
-  }
+    /**
+     * 追踪上下文生产者拦截器：在 trace.enabled 时注册。
+     *
+     * @param traceCollector 追踪收集器
+     * @return TraceContextProducerInterceptor 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean(TraceContextProducerInterceptor.class)
+    public TraceContextProducerInterceptor streamMQTraceProducerInterceptor(
+            TraceCollector traceCollector) {
+        LOG.info("Using TraceContextProducerInterceptor (trace enabled)");
+        return new TraceContextProducerInterceptor(traceCollector);
+    }
 
-  /**
-   * 追踪上下文消费者拦截器：在 trace.enabled 时注册。
-   *
-   * @param traceCollector 追踪收集器
-   * @return TraceContextConsumerInterceptor 实例
-   */
-  @Bean
-  @ConditionalOnMissingBean(TraceContextConsumerInterceptor.class)
-  public TraceContextConsumerInterceptor streamMQTraceConsumerInterceptor(
-      TraceCollector traceCollector) {
-    LOG.info("Using TraceContextConsumerInterceptor (trace enabled)");
-    return new TraceContextConsumerInterceptor(traceCollector);
-  }
+    /**
+     * 追踪上下文消费者拦截器：在 trace.enabled 时注册。
+     *
+     * @param traceCollector 追踪收集器
+     * @return TraceContextConsumerInterceptor 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean(TraceContextConsumerInterceptor.class)
+    public TraceContextConsumerInterceptor streamMQTraceConsumerInterceptor(
+            TraceCollector traceCollector) {
+        LOG.info("Using TraceContextConsumerInterceptor (trace enabled)");
+        return new TraceContextConsumerInterceptor(traceCollector);
+    }
 }

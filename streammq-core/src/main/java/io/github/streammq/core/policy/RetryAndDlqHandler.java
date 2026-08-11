@@ -32,89 +32,89 @@ import java.time.Duration;
  */
 public interface RetryAndDlqHandler {
 
-  /**
-   * 根据消费动作路由消息。
-   *
-   * @param action 消费动作
-   * @param message 消息
-   * @param reg Listener 注册信息
-   * @param listener 监听器实例
-   * @param cause 失败原因；消费者返回 RECONSUME_LATER/DEFER 时为 {@code null}，抛出异常时为该异常
-   */
-  void handleAction(
-      ConsumeAction action,
-      Message<?> message,
-      ListenerRegistration<?> reg,
-      StreamMQListener listener,
-      Throwable cause);
+    /**
+     * 根据消费动作路由消息。
+     *
+     * @param action 消费动作
+     * @param message 消息
+     * @param reg Listener 注册信息
+     * @param listener 监听器实例
+     * @param cause 失败原因；消费者返回 RECONSUME_LATER/DEFER 时为 {@code null}，抛出异常时为该异常
+     */
+    void handleAction(
+            ConsumeAction action,
+            Message<?> message,
+            ListenerRegistration<?> reg,
+            StreamMQListener listener,
+            Throwable cause);
 
-  /**
-   * 根据消费动作路由消息（无失败原因）。
-   *
-   * @param action 消费动作
-   * @param message 消息
-   * @param reg Listener 注册信息
-   * @param listener 监听器实例
-   */
-  default void handleAction(
-      ConsumeAction action,
-      Message<?> message,
-      ListenerRegistration<?> reg,
-      StreamMQListener listener) {
-    handleAction(action, message, reg, listener, null);
-  }
+    /**
+     * 根据消费动作路由消息（无失败原因）。
+     *
+     * @param action 消费动作
+     * @param message 消息
+     * @param reg Listener 注册信息
+     * @param listener 监听器实例
+     */
+    default void handleAction(
+            ConsumeAction action,
+            Message<?> message,
+            ListenerRegistration<?> reg,
+            StreamMQListener listener) {
+        handleAction(action, message, reg, listener, null);
+    }
 
-  /**
-   * 处理 RECONSUME_LATER：将消息写入 retry ZSet + payload Hash，并 ACK 原消息。
-   *
-   * <p>流程：
-   *
-   * <ol>
-   *   <li>将 {@link Message} 转换回 Stream Entry 字段
-   *   <li>调用 {@link RetryPolicy#nextRetryDelay} 计算下一次重试延迟
-   *   <li>若延迟为 null（不再重试），路由到 DLQ Stream
-   *   <li>否则写入 payload Hash + retry ZSet，ACK 原消息
-   * </ol>
-   *
-   * @param message 消息
-   * @param reg Listener 注册信息
-   * @param listener 监听器实例
-   * @param messageId 消息 ID
-   */
-  void handleReconsumeLater(
-      Message<?> message,
-      ListenerRegistration<?> reg,
-      StreamMQListener listener,
-      MessageId messageId);
+    /**
+     * 处理 RECONSUME_LATER：将消息写入 retry ZSet + payload Hash，并 ACK 原消息。
+     *
+     * <p>流程：
+     *
+     * <ol>
+     *   <li>将 {@link Message} 转换回 Stream Entry 字段
+     *   <li>调用 {@link RetryPolicy#nextRetryDelay} 计算下一次重试延迟
+     *   <li>若延迟为 null（不再重试），路由到 DLQ Stream
+     *   <li>否则写入 payload Hash + retry ZSet，ACK 原消息
+     * </ol>
+     *
+     * @param message 消息
+     * @param reg Listener 注册信息
+     * @param listener 监听器实例
+     * @param messageId 消息 ID
+     */
+    void handleReconsumeLater(
+            Message<?> message,
+            ListenerRegistration<?> reg,
+            StreamMQListener listener,
+            MessageId messageId);
 
-  /**
-   * 处理 defer：将消息写入 retry ZSet + payload Hash（使用指定延迟），并 ACK 原消息。
-   *
-   * <p>流程类似 {@link #handleReconsumeLater}，但用指定的 delay 而非 {@link RetryPolicy#nextRetryDelay}
-   * 计算的延迟。当重试次数达到 {@link ListenerRegistration#getMaxReconsumeTimes()} 时路由到 DLQ Stream。
-   *
-   * @param message 消息
-   * @param reg Listener 注册信息
-   * @param listener 监听器实例
-   * @param messageId 消息 ID
-   * @param delay 指定的延迟时长
-   */
-  void handleDefer(
-      Message<?> message,
-      ListenerRegistration<?> reg,
-      StreamMQListener listener,
-      MessageId messageId,
-      Duration delay);
+    /**
+     * 处理 defer：将消息写入 retry ZSet + payload Hash（使用指定延迟），并 ACK 原消息。
+     *
+     * <p>流程类似 {@link #handleReconsumeLater}，但用指定的 delay 而非 {@link RetryPolicy#nextRetryDelay}
+     * 计算的延迟。当重试次数达到 {@link ListenerRegistration#getMaxReconsumeTimes()} 时路由到 DLQ Stream。
+     *
+     * @param message 消息
+     * @param reg Listener 注册信息
+     * @param listener 监听器实例
+     * @param messageId 消息 ID
+     * @param delay 指定的延迟时长
+     */
+    void handleDefer(
+            Message<?> message,
+            ListenerRegistration<?> reg,
+            StreamMQListener listener,
+            MessageId messageId,
+            Duration delay);
 
-  /**
-   * 将消息路由到 DLQ Stream。
-   *
-   * @param message 原始消息
-   * @param reg Listener 注册信息
-   * @param messageId 消息 ID
-   * @param reason 进入 DLQ 的原因
-   * @return true 表示 DLQ 写入成功；false 表示失败，调用方不应 ACK
-   */
-  boolean routeToDlq(
-      Message<?> message, ListenerRegistration<?> reg, MessageId messageId, String reason);
+    /**
+     * 将消息路由到 DLQ Stream。
+     *
+     * @param message 原始消息
+     * @param reg Listener 注册信息
+     * @param messageId 消息 ID
+     * @param reason 进入 DLQ 的原因
+     * @return true 表示 DLQ 写入成功；false 表示失败，调用方不应 ACK
+     */
+    boolean routeToDlq(
+            Message<?> message, ListenerRegistration<?> reg, MessageId messageId, String reason);
 }

@@ -33,12 +33,12 @@ import io.github.streammq.core.message.Message;
 @FunctionalInterface
 public interface DlqMessageConsumer<T> extends StreamMessageConsumer<T> {
 
-  /**
-   * 处理单条死信消息（成功=自动 ACK，异常=触发 {@code DlqFailureStrategy} 决策）。
-   *
-   * @param message 死信消息载体
-   * @param context 消费上下文（仅元数据）
-   * @throws Exception 业务异常，框架捕获后将上下文传给 {@code DlqFailureStrategy#decide}
-   */
-  void onDlqMessage(Message<T> message, ConsumeContext context) throws Exception;
+    /**
+     * 处理单条死信消息（成功=自动 ACK，异常=触发 {@code DlqFailureStrategy} 决策）。
+     *
+     * @param message 死信消息载体
+     * @param context 消费上下文（仅元数据）
+     * @throws Exception 业务异常，框架捕获后将上下文传给 {@code DlqFailureStrategy#decide}
+     */
+    void onDlqMessage(Message<T> message, ConsumeContext context) throws Exception;
 }

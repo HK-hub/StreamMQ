@@ -24,81 +24,81 @@ import java.util.Collection;
  */
 public interface StreamMQListenerContainer {
 
-  /**
-   * 注册一个并发消费 Consumer（包含普通、DLQ 场景；通过 annotation 的 dlqMode 区分）。
-   *
-   * <p>消费结果由 {@code onMessage} 返回值（{@link io.github.streammq.core.enums.ConsumeAction}）唯一表达， 框架据此执行
-   * ACK / 重试 / DLQ 路由。
-   *
-   * @param consumer Consumer 实例（{@link StreamMessageConcurrentlyConsumer}）
-   * @param annotation 注解元数据（{@link StreamMQConsumer}）
-   * @param <T> body 类型
-   */
-  <T> void registerConsumer(
-      StreamMessageConcurrentlyConsumer<T> consumer, StreamMQConsumer annotation);
+    /**
+     * 注册一个并发消费 Consumer（包含普通、DLQ 场景；通过 annotation 的 dlqMode 区分）。
+     *
+     * <p>消费结果由 {@code onMessage} 返回值（{@link io.github.streammq.core.enums.ConsumeAction}）唯一表达，
+     * 框架据此执行 ACK / 重试 / DLQ 路由。
+     *
+     * @param consumer Consumer 实例（{@link StreamMessageConcurrentlyConsumer}）
+     * @param annotation 注解元数据（{@link StreamMQConsumer}）
+     * @param <T> body 类型
+     */
+    <T> void registerConsumer(
+            StreamMessageConcurrentlyConsumer<T> consumer, StreamMQConsumer annotation);
 
-  /**
-   * 注册一个顺序消费 Consumer。
-   *
-   * <p>消费结果由 {@code onMessage} 返回值（{@link ConsumeAction}）唯一表达。
-   *
-   * @param consumer Consumer 实例（{@link StreamMessageOrderlyConsumer}）
-   * @param annotation 注解元数据（{@link StreamMQConsumer}，需 {@code messageModel = ORDERLY}）
-   * @param <T> body 类型
-   */
-  <T> void registerOrderlyConsumer(
-      StreamMessageOrderlyConsumer<T> consumer, StreamMQConsumer annotation);
+    /**
+     * 注册一个顺序消费 Consumer。
+     *
+     * <p>消费结果由 {@code onMessage} 返回值（{@link ConsumeAction}）唯一表达。
+     *
+     * @param consumer Consumer 实例（{@link StreamMessageOrderlyConsumer}）
+     * @param annotation 注解元数据（{@link StreamMQConsumer}，需 {@code messageModel = ORDERLY}）
+     * @param <T> body 类型
+     */
+    <T> void registerOrderlyConsumer(
+            StreamMessageOrderlyConsumer<T> consumer, StreamMQConsumer annotation);
 
-  /**
-   * 注册一个死信队列（DLQ）Consumer。
-   *
-   * <p>DLQ Consumer 返回 {@code void}，消费失败由 {@code DlqFailureStrategy} 决策。 与普通 Consumer 完全独立——不注册
-   * ConsumerGroupManager / RetryScheduler / PelClaimScheduler。
-   *
-   * @param consumer Consumer 实例（必须同时实现 {@link DlqMessageConsumer}）
-   * @param annotation DLQ 注解元数据
-   * @param <T> body 类型
-   */
-  <T> void registerDlqConsumer(DlqMessageConsumer<T> consumer, StreamMQDlqConsumer annotation);
+    /**
+     * 注册一个死信队列（DLQ）Consumer。
+     *
+     * <p>DLQ Consumer 返回 {@code void}，消费失败由 {@code DlqFailureStrategy} 决策。 与普通 Consumer 完全独立——不注册
+     * ConsumerGroupManager / RetryScheduler / PelClaimScheduler。
+     *
+     * @param consumer Consumer 实例（必须同时实现 {@link DlqMessageConsumer}）
+     * @param annotation DLQ 注解元数据
+     * @param <T> body 类型
+     */
+    <T> void registerDlqConsumer(DlqMessageConsumer<T> consumer, StreamMQDlqConsumer annotation);
 
-  /**
-   * 返回所有已注册的 Consumer 元信息。
-   *
-   * @return 不可修改的元信息集合
-   */
-  Collection<ConsumerMetadata> getConsumers();
+    /**
+     * 返回所有已注册的 Consumer 元信息。
+     *
+     * @return 不可修改的元信息集合
+     */
+    Collection<ConsumerMetadata> getConsumers();
 
-  /**
-   * 启动所有 Listener。
-   *
-   * @throws io.github.streammq.core.exception.StreamMQException 如果启动失败
-   */
-  void start();
+    /**
+     * 启动所有 Listener。
+     *
+     * @throws io.github.streammq.core.exception.StreamMQException 如果启动失败
+     */
+    void start();
 
-  /** 停止所有 Listener，释放线程与连接。 */
-  void stop();
+    /** 停止所有 Listener，释放线程与连接。 */
+    void stop();
 
-  /** 暂停所有 Listener（不释放资源，可恢复）。 */
-  void pause();
+    /** 暂停所有 Listener（不释放资源，可恢复）。 */
+    void pause();
 
-  /** 恢复所有暂停的 Listener。 */
-  void resume();
+    /** 恢复所有暂停的 Listener。 */
+    void resume();
 
-  /**
-   * 返回容器是否正在运行。
-   *
-   * @return true 如果运行中
-   */
-  boolean isRunning();
+    /**
+     * 返回容器是否正在运行。
+     *
+     * @return true 如果运行中
+     */
+    boolean isRunning();
 
-  /**
-   * Consumer 元信息。
-   *
-   * @param topic 主题
-   * @param consumerGroup 消费者组
-   * @param consumerType consumer 类型
-   * @param bodyType body 类型
-   */
-  record ConsumerMetadata(
-      String topic, String consumerGroup, Class<?> consumerType, Class<?> bodyType) {}
+    /**
+     * Consumer 元信息。
+     *
+     * @param topic 主题
+     * @param consumerGroup 消费者组
+     * @param consumerType consumer 类型
+     * @param bodyType body 类型
+     */
+    record ConsumerMetadata(
+            String topic, String consumerGroup, Class<?> consumerType, Class<?> bodyType) {}
 }

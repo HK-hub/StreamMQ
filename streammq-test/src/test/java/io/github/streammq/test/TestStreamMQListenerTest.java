@@ -1,17 +1,16 @@
 package io.github.streammq.test;
 
-import io.github.streammq.core.enums.ConsumeAction;
-import io.github.streammq.core.consumer.ConsumeContext;
-import io.github.streammq.core.message.Message;
-import io.github.streammq.core.message.MessageBuilder;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-
-import java.util.List;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+
+import io.github.streammq.core.consumer.ConsumeContext;
+import io.github.streammq.core.enums.ConsumeAction;
+import io.github.streammq.core.message.Message;
+import io.github.streammq.core.message.MessageBuilder;
+import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 /**
  * TestStreamMQListener 单元测试。
@@ -74,7 +73,8 @@ class TestStreamMQListenerTest {
         listener.onMessage(createTestMessage("key1", "body1"), mockContext);
         listener.onMessage(createTestMessage("key2", "body2"), mockContext);
 
-        assertThatThrownBy(() -> listener.onMessage(createTestMessage("key3", "body3"), mockContext))
+        assertThatThrownBy(
+                        () -> listener.onMessage(createTestMessage("key3", "body3"), mockContext))
                 .isInstanceOf(RuntimeException.class)
                 .hasMessage("Intentional test failure");
 
@@ -88,7 +88,8 @@ class TestStreamMQListenerTest {
         listener.setShouldFail(true);
         listener.setFailAfterCount(0);
 
-        assertThatThrownBy(() -> listener.onMessage(createTestMessage("key1", "body1"), mockContext))
+        assertThatThrownBy(
+                        () -> listener.onMessage(createTestMessage("key1", "body1"), mockContext))
                 .isInstanceOf(RuntimeException.class);
 
         assertThat(listener.getFailCount()).isEqualTo(1);
@@ -133,14 +134,16 @@ class TestStreamMQListenerTest {
 
     @Test
     void awaitMessages_success() throws Exception {
-        new Thread(() -> {
-            try {
-                Thread.sleep(100);
-                listener.onMessage(createTestMessage("key1", "body1"), mockContext);
-            } catch (Exception e) {
-                Thread.currentThread().interrupt();
-            }
-        }).start();
+        new Thread(
+                        () -> {
+                            try {
+                                Thread.sleep(100);
+                                listener.onMessage(createTestMessage("key1", "body1"), mockContext);
+                            } catch (Exception e) {
+                                Thread.currentThread().interrupt();
+                            }
+                        })
+                .start();
 
         listener.awaitMessages(1, 5000);
 
@@ -156,16 +159,18 @@ class TestStreamMQListenerTest {
 
     @Test
     void awaitMessages_multiple() throws Exception {
-        new Thread(() -> {
-            try {
-                Thread.sleep(100);
-                listener.onMessage(createTestMessage("key1", "body1"), mockContext);
-                Thread.sleep(50);
-                listener.onMessage(createTestMessage("key2", "body2"), mockContext);
-            } catch (Exception e) {
-                Thread.currentThread().interrupt();
-            }
-        }).start();
+        new Thread(
+                        () -> {
+                            try {
+                                Thread.sleep(100);
+                                listener.onMessage(createTestMessage("key1", "body1"), mockContext);
+                                Thread.sleep(50);
+                                listener.onMessage(createTestMessage("key2", "body2"), mockContext);
+                            } catch (Exception e) {
+                                Thread.currentThread().interrupt();
+                            }
+                        })
+                .start();
 
         listener.awaitMessages(2, 5000);
 
@@ -204,9 +209,6 @@ class TestStreamMQListenerTest {
     }
 
     private Message<String> createTestMessage(String keys, String body) {
-        return MessageBuilder.<String>withTopic("test-topic")
-                .keys(keys)
-                .body(body)
-                .build();
+        return MessageBuilder.<String>withTopic("test-topic").keys(keys).body(body).build();
     }
 }

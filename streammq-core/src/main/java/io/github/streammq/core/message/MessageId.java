@@ -16,92 +16,93 @@ import lombok.Getter;
 @Getter
 public final class MessageId implements Serializable, Comparable<MessageId> {
 
-  @Serial private static final long serialVersionUID = 1L;
+    @Serial private static final long serialVersionUID = 1L;
 
-  /** Redis Stream Entry ID 原始字符串，格式：{timestamp}-{sequence} 返回原始 Redis Stream Entry ID。 */
-  private final String streamEntryId;
+    /** Redis Stream Entry ID 原始字符串，格式：{timestamp}-{sequence} 返回原始 Redis Stream Entry ID。 */
+    private final String streamEntryId;
 
-  /** 创建时间戳（用于顺序比较与超时判断） 返回时间戳部分（毫秒，Unix 时间）。 */
-  private final long timestamp;
+    /** 创建时间戳（用于顺序比较与超时判断） 返回时间戳部分（毫秒，Unix 时间）。 */
+    private final long timestamp;
 
-  /** 序列号（同时间戳内递增） 返回序列号部分。 */
-  private final long sequence;
+    /** 序列号（同时间戳内递增） 返回序列号部分。 */
+    private final long sequence;
 
-  /**
-   * 构造 MessageId。
-   *
-   * @param streamEntryId Redis Stream Entry ID 字符串，格式：{timestamp}-{sequence}
-   * @throws NullPointerException 如果 streamEntryId 为 null
-   * @throws IllegalArgumentException 如果 streamEntryId 格式不合法
-   */
-  public MessageId(String streamEntryId) {
-    this.streamEntryId = Objects.requireNonNull(streamEntryId, "streamEntryId");
-    String[] parts = streamEntryId.split("-", 2);
-    if (parts.length != 2) {
-      throw new IllegalArgumentException(
-          "Invalid stream entry id format, expected '{timestamp}-{sequence}': " + streamEntryId);
+    /**
+     * 构造 MessageId。
+     *
+     * @param streamEntryId Redis Stream Entry ID 字符串，格式：{timestamp}-{sequence}
+     * @throws NullPointerException 如果 streamEntryId 为 null
+     * @throws IllegalArgumentException 如果 streamEntryId 格式不合法
+     */
+    public MessageId(String streamEntryId) {
+        this.streamEntryId = Objects.requireNonNull(streamEntryId, "streamEntryId");
+        String[] parts = streamEntryId.split("-", 2);
+        if (parts.length != 2) {
+            throw new IllegalArgumentException(
+                    "Invalid stream entry id format, expected '{timestamp}-{sequence}': "
+                            + streamEntryId);
+        }
+        try {
+            this.timestamp = Long.parseLong(parts[0]);
+            this.sequence = Long.parseLong(parts[1]);
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException(
+                    "Invalid stream entry id numeric parts: " + streamEntryId, ex);
+        }
     }
-    try {
-      this.timestamp = Long.parseLong(parts[0]);
-      this.sequence = Long.parseLong(parts[1]);
-    } catch (NumberFormatException ex) {
-      throw new IllegalArgumentException(
-          "Invalid stream entry id numeric parts: " + streamEntryId, ex);
+
+    private MessageId(long timestamp, long sequence) {
+        this.timestamp = timestamp;
+        this.sequence = sequence;
+        this.streamEntryId = timestamp + "-" + sequence;
     }
-  }
 
-  private MessageId(long timestamp, long sequence) {
-    this.timestamp = timestamp;
-    this.sequence = sequence;
-    this.streamEntryId = timestamp + "-" + sequence;
-  }
+    // ===================== 静态工厂（按场景收口） =====================
 
-  // ===================== 静态工厂（按场景收口） =====================
-
-  /** 从 Redis Stream Entry ID 字符串创建（消费端反序列化 / 从存储还原）。 等同于 {@code new MessageId(streamEntryId)}。 */
-  public static MessageId fromStreamEntry(String streamEntryId) {
-    return new MessageId(streamEntryId);
-  }
-
-  /** 从 Redisson {@code StreamMessageId} 创建（生产端 XADD 成功后的回填）。 */
-  public static MessageId fromStreamMessageId(Object streamMessageId) {
-    return new MessageId(streamMessageId.toString());
-  }
-
-  /** 生成一个表示发送失败/占位的 MessageId。 使用当前时间戳 + 序列号 0，表示该消息未经 Redis 分配真实 Entry ID。 */
-  public static MessageId sentinel() {
-    return new MessageId(System.currentTimeMillis(), 0);
-  }
-
-  /** 从时间戳 + 序列号直接构造（延时消息 / 自定义 ID 场景）。 */
-  public static MessageId of(long timestamp, long sequence) {
-    return new MessageId(timestamp, sequence);
-  }
-
-  @Override
-  public int compareTo(MessageId other) {
-    int ts = Long.compare(this.timestamp, other.timestamp);
-    return ts != 0 ? ts : Long.compare(this.sequence, other.sequence);
-  }
-
-  @Override
-  public boolean equals(Object o) {
-    if (this == o) {
-      return true;
+    /** 从 Redis Stream Entry ID 字符串创建（消费端反序列化 / 从存储还原）。 等同于 {@code new MessageId(streamEntryId)}。 */
+    public static MessageId fromStreamEntry(String streamEntryId) {
+        return new MessageId(streamEntryId);
     }
-    if (!(o instanceof MessageId other)) {
-      return false;
+
+    /** 从 Redisson {@code StreamMessageId} 创建（生产端 XADD 成功后的回填）。 */
+    public static MessageId fromStreamMessageId(Object streamMessageId) {
+        return new MessageId(streamMessageId.toString());
     }
-    return streamEntryId.equals(other.streamEntryId);
-  }
 
-  @Override
-  public int hashCode() {
-    return streamEntryId.hashCode();
-  }
+    /** 生成一个表示发送失败/占位的 MessageId。 使用当前时间戳 + 序列号 0，表示该消息未经 Redis 分配真实 Entry ID。 */
+    public static MessageId sentinel() {
+        return new MessageId(System.currentTimeMillis(), 0);
+    }
 
-  @Override
-  public String toString() {
-    return streamEntryId;
-  }
+    /** 从时间戳 + 序列号直接构造（延时消息 / 自定义 ID 场景）。 */
+    public static MessageId of(long timestamp, long sequence) {
+        return new MessageId(timestamp, sequence);
+    }
+
+    @Override
+    public int compareTo(MessageId other) {
+        int ts = Long.compare(this.timestamp, other.timestamp);
+        return ts != 0 ? ts : Long.compare(this.sequence, other.sequence);
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof MessageId other)) {
+            return false;
+        }
+        return streamEntryId.equals(other.streamEntryId);
+    }
+
+    @Override
+    public int hashCode() {
+        return streamEntryId.hashCode();
+    }
+
+    @Override
+    public String toString() {
+        return streamEntryId;
+    }
 }

@@ -24,22 +24,22 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass(MeterRegistry.class)
 @ConditionalOnProperty(
-    prefix = "streammq",
-    name = "enabled",
-    havingValue = "true",
-    matchIfMissing = true)
+        prefix = "streammq",
+        name = "enabled",
+        havingValue = "true",
+        matchIfMissing = true)
 public class StreamMQMetricsAutoConfiguration {
 
-  /**
-   * 注册 StreamMQ 指标收集器。
-   *
-   * @param meterRegistry Micrometer 注册表（由 Spring Boot Actuator 自动提供）
-   * @return StreamMQMetrics 实例
-   */
-  @Bean
-  @ConditionalOnBean(MeterRegistry.class)
-  @ConditionalOnMissingBean(StreamMQMetrics.class)
-  public StreamMQMetrics streamMQMetrics(MeterRegistry meterRegistry) {
-    return new MicrometerStreamMQMetrics(meterRegistry);
-  }
+    /**
+     * 注册 StreamMQ 指标收集器。
+     *
+     * @param meterRegistry Micrometer 注册表（由 Spring Boot Actuator 自动提供）
+     * @return StreamMQMetrics 实例
+     */
+    @Bean
+    @ConditionalOnBean(MeterRegistry.class)
+    @ConditionalOnMissingBean(StreamMQMetrics.class)
+    public StreamMQMetrics streamMQMetrics(MeterRegistry meterRegistry) {
+        return new MicrometerStreamMQMetrics(meterRegistry);
+    }
 }

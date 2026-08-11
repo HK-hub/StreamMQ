@@ -14,48 +14,48 @@ import java.util.Objects;
  */
 public abstract class SqlSelectorFilter implements ExpressionSelectorFilter {
 
-  protected static final String WILD_CARD = "*";
+    protected static final String WILD_CARD = "*";
 
-  protected final String selectorExpression;
+    protected final String selectorExpression;
 
-  protected SqlSelectorFilter(String selectorExpression) {
-    this.selectorExpression =
-        Objects.nonNull(selectorExpression) ? selectorExpression.trim() : WILD_CARD;
-  }
-
-  @Override
-  public boolean accept(Message<?> message) {
-    if (WILD_CARD.equals(selectorExpression)) {
-      return true;
+    protected SqlSelectorFilter(String selectorExpression) {
+        this.selectorExpression =
+                Objects.nonNull(selectorExpression) ? selectorExpression.trim() : WILD_CARD;
     }
-    return evaluate(message);
-  }
 
-  /**
-   * 评估 SQL92 表达式。
-   *
-   * @param message 消息
-   * @return 是否匹配
-   */
-  protected abstract boolean evaluate(Message<?> message);
+    @Override
+    public boolean accept(Message<?> message) {
+        if (WILD_CARD.equals(selectorExpression)) {
+            return true;
+        }
+        return evaluate(message);
+    }
 
-  @Override
-  public String getSelectorExpression() {
-    return selectorExpression;
-  }
+    /**
+     * 评估 SQL92 表达式。
+     *
+     * @param message 消息
+     * @return 是否匹配
+     */
+    protected abstract boolean evaluate(Message<?> message);
 
-  @Override
-  public SelectorType getSelectorType() {
-    return SelectorType.SQL92;
-  }
+    @Override
+    public String getSelectorExpression() {
+        return selectorExpression;
+    }
 
-  @Override
-  public String name() {
-    return "sql-selector-filter";
-  }
+    @Override
+    public SelectorType getSelectorType() {
+        return SelectorType.SQL92;
+    }
 
-  @Override
-  public int order() {
-    return -1;
-  }
+    @Override
+    public String name() {
+        return "sql-selector-filter";
+    }
+
+    @Override
+    public int order() {
+        return -1;
+    }
 }

@@ -22,40 +22,40 @@ import org.slf4j.LoggerFactory;
  */
 public class AsyncStreamMQEventBus implements StreamMQEventBus {
 
-  private static final Logger LOG = LoggerFactory.getLogger(AsyncStreamMQEventBus.class);
+    private static final Logger LOG = LoggerFactory.getLogger(AsyncStreamMQEventBus.class);
 
-  private final Map<Class<?>, List<Consumer<?>>> subscribers = new ConcurrentHashMap<>();
-  private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private final Map<Class<?>, List<Consumer<?>>> subscribers = new ConcurrentHashMap<>();
+    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
-  @Override
-  public <E> void publish(E event) {
-    Objects.requireNonNull(event, "event");
-    List<Consumer<?>> list = subscribers.get(event.getClass());
-    if (list == null || list.isEmpty()) {
-      return;
+    @Override
+    public <E> void publish(E event) {
+        Objects.requireNonNull(event, "event");
+        List<Consumer<?>> list = subscribers.get(event.getClass());
+        if (list == null || list.isEmpty()) {
+            return;
+        }
+        for (Consumer<?> subscriber : list) {
+            @SuppressWarnings("unchecked")
+            Consumer<E> typed = (Consumer<E>) subscriber;
+            executor.submit(
+                    () -> {
+                        try {
+                            typed.accept(event);
+                        } catch (Exception ex) {
+                            LOG.debug(
+                                    "Event subscriber error for {}: {}",
+                                    event.getClass().getSimpleName(),
+                                    ex.getMessage());
+                        }
+                    });
+        }
     }
-    for (Consumer<?> subscriber : list) {
-      @SuppressWarnings("unchecked")
-      Consumer<E> typed = (Consumer<E>) subscriber;
-      executor.submit(
-          () -> {
-            try {
-              typed.accept(event);
-            } catch (Exception ex) {
-              LOG.debug(
-                  "Event subscriber error for {}: {}",
-                  event.getClass().getSimpleName(),
-                  ex.getMessage());
-            }
-          });
-    }
-  }
 
-  @Override
-  public <E> void subscribe(Class<E> eventType, Consumer<E> subscriber) {
-    Objects.requireNonNull(eventType, "eventType");
-    Objects.requireNonNull(subscriber, "subscriber");
-    subscribers.computeIfAbsent(eventType, k -> new CopyOnWriteArrayList<>()).add(subscriber);
-    LOG.debug("Subscribed to event: {}", eventType.getSimpleName());
-  }
+    @Override
+    public <E> void subscribe(Class<E> eventType, Consumer<E> subscriber) {
+        Objects.requireNonNull(eventType, "eventType");
+        Objects.requireNonNull(subscriber, "subscriber");
+        subscribers.computeIfAbsent(eventType, k -> new CopyOnWriteArrayList<>()).add(subscriber);
+        LOG.debug("Subscribed to event: {}", eventType.getSimpleName());
+    }
 }

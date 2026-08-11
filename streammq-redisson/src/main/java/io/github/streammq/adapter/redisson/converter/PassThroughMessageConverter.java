@@ -38,193 +38,193 @@ import java.util.*;
  */
 public class PassThroughMessageConverter extends AbstractMessageConverter {
 
-  // ================================================================
-  // 字段名常量
-  // ================================================================
+    // ================================================================
+    // 字段名常量
+    // ================================================================
 
-  /** Stream Entry 字段名：消息体（原始字符串） */
-  public static final String FIELD_BODY = "body";
+    /** Stream Entry 字段名：消息体（原始字符串） */
+    public static final String FIELD_BODY = "body";
 
-  /** Stream Entry 字段名：消息体类型全限定名 */
-  public static final String FIELD_BODY_TYPE = "bodyType";
+    /** Stream Entry 字段名：消息体类型全限定名 */
+    public static final String FIELD_BODY_TYPE = "bodyType";
 
-  /** Stream Entry 字段名：标签 */
-  public static final String FIELD_TAG = "tag";
+    /** Stream Entry 字段名：标签 */
+    public static final String FIELD_TAG = "tag";
 
-  /** Stream Entry 字段名：业务键 */
-  public static final String FIELD_KEYS = "keys";
+    /** Stream Entry 字段名：业务键 */
+    public static final String FIELD_KEYS = "keys";
 
-  /** Stream Entry 字段名：分片键 */
-  public static final String FIELD_SHARDING_KEY = "shardingKey";
+    /** Stream Entry 字段名：分片键 */
+    public static final String FIELD_SHARDING_KEY = "shardingKey";
 
-  /** Stream Entry 字段名：属性 JSON（sys + user 合并） */
-  public static final String FIELD_PROPS = "props";
+    /** Stream Entry 字段名：属性 JSON（sys + user 合并） */
+    public static final String FIELD_PROPS = "props";
 
-  /** Stream Entry 字段名：出生时间戳（毫秒） */
-  public static final String FIELD_BORN_TS = "bornTs";
+    /** Stream Entry 字段名：出生时间戳（毫秒） */
+    public static final String FIELD_BORN_TS = "bornTs";
 
-  /** Stream Entry 字段名：出生主机 */
-  public static final String FIELD_BORN_HOST = "bornHost";
+    /** Stream Entry 字段名：出生主机 */
+    public static final String FIELD_BORN_HOST = "bornHost";
 
-  /** Stream Entry 字段名：事务 ID */
-  public static final String FIELD_TX_ID = "txId";
+    /** Stream Entry 字段名：事务 ID */
+    public static final String FIELD_TX_ID = "txId";
 
-  /** Stream Entry 字段名：重试次数 */
-  public static final String FIELD_RETRY_TIMES = "retryTimes";
+    /** Stream Entry 字段名：重试次数 */
+    public static final String FIELD_RETRY_TIMES = "retryTimes";
 
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldBody() {
-    return FIELD_BODY;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldBodyType() {
-    return FIELD_BODY_TYPE;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldTag() {
-    return FIELD_TAG;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldKeys() {
-    return FIELD_KEYS;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldShardingKey() {
-    return FIELD_SHARDING_KEY;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldBornTs() {
-    return FIELD_BORN_TS;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldBornHost() {
-    return FIELD_BORN_HOST;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldRetryTimes() {
-    return FIELD_RETRY_TIMES;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldTxId() {
-    return FIELD_TX_ID;
-  }
-
-  /** 无参构造。 */
-  public PassThroughMessageConverter() {}
-
-  // ================================================================
-  // Body 编解码 —— toString / 直接 String 赋值
-  // ================================================================
-
-  /**
-   * 将消息体通过 {@code toString()} 转换为字符串写入字段。
-   *
-   * <p>同时写入 {@code bodyType} 字段以记录原始类型全限定名。 body 为 null 时不做任何写入。
-   *
-   * @param message 消息载体
-   * @param fields 输出 Map
-   */
-  @Override
-  protected void encodeBody(Message<?> message, Map<String, String> fields) {
-    Object body = message.getBody();
-    if (Objects.isNull(body)) {
-      return;
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldBody() {
+        return FIELD_BODY;
     }
-    fields.put(FIELD_BODY, body.toString());
-    fields.put(FIELD_BODY_TYPE, body.getClass().getName());
-  }
 
-  /**
-   * 从字段中读取字符串并直接赋值为 body。
-   *
-   * <p>不经过反序列化，不做类型校验。调用方需确保目标类型与 body 字符串兼容。 {@code bodyType} 字段存在时仅作记录，不影响解码逻辑。
-   *
-   * @param fields Stream Entry 全部字段
-   * @param targetType 目标 body 类型（仅作签名，实际不做类型转换）
-   * @param message 输出消息
-   * @param bodyStr body 字段原始字符串值
-   */
-  @Override
-  @SuppressWarnings("unchecked")
-  protected <T> void decodeBody(
-      Map<String, String> fields, Class<T> targetType, Message<T> message, String bodyStr) {
-    message.setBody((T) bodyStr);
-  }
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldBodyType() {
+        return FIELD_BODY_TYPE;
+    }
 
-  // ================================================================
-  // Properties 编解码 —— sys + user 合并为单个 JSON
-  // ================================================================
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldTag() {
+        return FIELD_TAG;
+    }
 
-  /**
-   * 将系统属性和用户属性合并序列化为单个 JSON 字段。
-   *
-   * @param message 消息载体
-   * @param fields 输出 Map
-   */
-  @Override
-  protected void encodeProperties(Message<?> message, Map<String, String> fields) {
-    writePropsJson(fields, FIELD_PROPS, message.getProperties(), message.getUserProperties());
-  }
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldKeys() {
+        return FIELD_KEYS;
+    }
 
-  /**
-   * 从单个 JSON 字段反序列化属性并写入 userProperties。
-   *
-   * @param message 输出消息
-   * @param fields Stream Entry 全部字段
-   */
-  @Override
-  protected <T> void decodeProperties(Message<T> message, Map<String, String> fields) {
-    readPropsJson(fields, FIELD_PROPS, message::setUserProperties);
-  }
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldShardingKey() {
+        return FIELD_SHARDING_KEY;
+    }
 
-  /**
-   * @return {@code "pass-through"}
-   */
-  @Override
-  public String name() {
-    return "pass-through";
-  }
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldBornTs() {
+        return FIELD_BORN_TS;
+    }
 
-  // ================================================================
-  // 静态工具
-  // ================================================================
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldBornHost() {
+        return FIELD_BORN_HOST;
+    }
 
-  /**
-   * 为消费端还原的消息回填 topic 字段。
-   *
-   * @param message 消息载体
-   * @param topic 主题名
-   * @param <T> body 类型
-   */
-  public static <T> void applyTopic(Message<T> message, String topic) {
-    message.setTopic(topic);
-  }
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldRetryTimes() {
+        return FIELD_RETRY_TIMES;
+    }
 
-  /**
-   * 为消费端还原的消息回填 messageId 字段。
-   *
-   * @param message 消息载体
-   * @param streamEntryId Redis Stream Entry ID
-   * @param <T> body 类型
-   */
-  public static <T> void applyMessageId(Message<T> message, String streamEntryId) {
-    message.setMessageId(MessageId.fromStreamEntry(streamEntryId));
-  }
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldTxId() {
+        return FIELD_TX_ID;
+    }
+
+    /** 无参构造。 */
+    public PassThroughMessageConverter() {}
+
+    // ================================================================
+    // Body 编解码 —— toString / 直接 String 赋值
+    // ================================================================
+
+    /**
+     * 将消息体通过 {@code toString()} 转换为字符串写入字段。
+     *
+     * <p>同时写入 {@code bodyType} 字段以记录原始类型全限定名。 body 为 null 时不做任何写入。
+     *
+     * @param message 消息载体
+     * @param fields 输出 Map
+     */
+    @Override
+    protected void encodeBody(Message<?> message, Map<String, String> fields) {
+        Object body = message.getBody();
+        if (Objects.isNull(body)) {
+            return;
+        }
+        fields.put(FIELD_BODY, body.toString());
+        fields.put(FIELD_BODY_TYPE, body.getClass().getName());
+    }
+
+    /**
+     * 从字段中读取字符串并直接赋值为 body。
+     *
+     * <p>不经过反序列化，不做类型校验。调用方需确保目标类型与 body 字符串兼容。 {@code bodyType} 字段存在时仅作记录，不影响解码逻辑。
+     *
+     * @param fields Stream Entry 全部字段
+     * @param targetType 目标 body 类型（仅作签名，实际不做类型转换）
+     * @param message 输出消息
+     * @param bodyStr body 字段原始字符串值
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    protected <T> void decodeBody(
+            Map<String, String> fields, Class<T> targetType, Message<T> message, String bodyStr) {
+        message.setBody((T) bodyStr);
+    }
+
+    // ================================================================
+    // Properties 编解码 —— sys + user 合并为单个 JSON
+    // ================================================================
+
+    /**
+     * 将系统属性和用户属性合并序列化为单个 JSON 字段。
+     *
+     * @param message 消息载体
+     * @param fields 输出 Map
+     */
+    @Override
+    protected void encodeProperties(Message<?> message, Map<String, String> fields) {
+        writePropsJson(fields, FIELD_PROPS, message.getProperties(), message.getUserProperties());
+    }
+
+    /**
+     * 从单个 JSON 字段反序列化属性并写入 userProperties。
+     *
+     * @param message 输出消息
+     * @param fields Stream Entry 全部字段
+     */
+    @Override
+    protected <T> void decodeProperties(Message<T> message, Map<String, String> fields) {
+        readPropsJson(fields, FIELD_PROPS, message::setUserProperties);
+    }
+
+    /**
+     * @return {@code "pass-through"}
+     */
+    @Override
+    public String name() {
+        return "pass-through";
+    }
+
+    // ================================================================
+    // 静态工具
+    // ================================================================
+
+    /**
+     * 为消费端还原的消息回填 topic 字段。
+     *
+     * @param message 消息载体
+     * @param topic 主题名
+     * @param <T> body 类型
+     */
+    public static <T> void applyTopic(Message<T> message, String topic) {
+        message.setTopic(topic);
+    }
+
+    /**
+     * 为消费端还原的消息回填 messageId 字段。
+     *
+     * @param message 消息载体
+     * @param streamEntryId Redis Stream Entry ID
+     * @param <T> body 类型
+     */
+    public static <T> void applyMessageId(Message<T> message, String streamEntryId) {
+        message.setMessageId(MessageId.fromStreamEntry(streamEntryId));
+    }
 }

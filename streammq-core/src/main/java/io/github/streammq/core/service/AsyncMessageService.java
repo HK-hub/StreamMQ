@@ -16,37 +16,38 @@ import java.util.concurrent.CompletableFuture;
  */
 public interface AsyncMessageService {
 
-  <T> CompletableFuture<SendResult> asyncSend(Message<T> message);
+    <T> CompletableFuture<SendResult> asyncSend(Message<T> message);
 
-  <T> CompletableFuture<SendResult> asyncSend(String topic, T body);
+    <T> CompletableFuture<SendResult> asyncSend(String topic, T body);
 
-  <T> CompletableFuture<SendResult> asyncSend(String topic, T body, String tag);
+    <T> CompletableFuture<SendResult> asyncSend(String topic, T body, String tag);
 
-  <T> CompletableFuture<SendResult> asyncSend(String topic, T body, String tag, String keys);
+    <T> CompletableFuture<SendResult> asyncSend(String topic, T body, String tag, String keys);
 
-  <T> CompletableFuture<SendResult> asyncSend(
-      String topic, T body, String tag, String keys, String shardingKey);
+    <T> CompletableFuture<SendResult> asyncSend(
+            String topic, T body, String tag, String keys, String shardingKey);
 
-  <T> CompletableFuture<SendResult> asyncSend(String topic, T body, long timeoutMillis);
+    <T> CompletableFuture<SendResult> asyncSend(String topic, T body, long timeoutMillis);
 
-  <T> CompletableFuture<SendResult> asyncSend(
-      String topic, T body, MessageMetadataBuilder metadata);
+    <T> CompletableFuture<SendResult> asyncSend(
+            String topic, T body, MessageMetadataBuilder metadata);
 
-  <T> CompletableFuture<SendResult> asyncSend(
-      String topic, T body, MessageMetadataBuilder metadata, long timeoutMillis);
+    <T> CompletableFuture<SendResult> asyncSend(
+            String topic, T body, MessageMetadataBuilder metadata, long timeoutMillis);
 
-  <T> void asyncSend(String topic, T body, SendCallback callback);
+    <T> void asyncSend(String topic, T body, SendCallback callback);
 
-  <T> void asyncSend(String topic, T body, String tag, SendCallback callback);
+    <T> void asyncSend(String topic, T body, String tag, SendCallback callback);
 
-  <T> void asyncSend(String topic, T body, SendCallback callback, long timeoutMillis);
+    <T> void asyncSend(String topic, T body, SendCallback callback, long timeoutMillis);
 
-  <T> void asyncSend(String topic, T body, MessageMetadataBuilder metadata, SendCallback callback);
+    <T> void asyncSend(
+            String topic, T body, MessageMetadataBuilder metadata, SendCallback callback);
 
-  <T> void asyncSend(
-      String topic,
-      T body,
-      MessageMetadataBuilder metadata,
-      SendCallback callback,
-      long timeoutMillis);
+    <T> void asyncSend(
+            String topic,
+            T body,
+            MessageMetadataBuilder metadata,
+            SendCallback callback,
+            long timeoutMillis);
 }

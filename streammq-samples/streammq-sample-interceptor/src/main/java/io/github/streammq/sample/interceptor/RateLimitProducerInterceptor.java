@@ -20,42 +20,42 @@ import org.springframework.stereotype.Component;
 @Component
 public class RateLimitProducerInterceptor implements ProducerInterceptor {
 
-  private static final Logger log = LoggerFactory.getLogger(RateLimitProducerInterceptor.class);
+    private static final Logger log = LoggerFactory.getLogger(RateLimitProducerInterceptor.class);
 
-  private static final int MAX_RATE_PER_SECOND = 100;
+    private static final int MAX_RATE_PER_SECOND = 100;
 
-  private final AtomicInteger counter = new AtomicInteger(0);
-  private final AtomicLong lastResetTime = new AtomicLong(System.currentTimeMillis());
+    private final AtomicInteger counter = new AtomicInteger(0);
+    private final AtomicLong lastResetTime = new AtomicLong(System.currentTimeMillis());
 
-  @Override
-  public boolean beforeSend(Message<?> message) {
-    long now = System.currentTimeMillis();
-    long elapsed = now - lastResetTime.get();
+    @Override
+    public boolean beforeSend(Message<?> message) {
+        long now = System.currentTimeMillis();
+        long elapsed = now - lastResetTime.get();
 
-    if (elapsed > 1000) {
-      counter.set(0);
-      lastResetTime.set(now);
+        if (elapsed > 1000) {
+            counter.set(0);
+            lastResetTime.set(now);
+        }
+
+        int currentCount = counter.incrementAndGet();
+        if (currentCount > MAX_RATE_PER_SECOND) {
+            log.warn(
+                    "Rate limit exceeded: current={}/{} for topic={}",
+                    currentCount,
+                    MAX_RATE_PER_SECOND,
+                    message.getTopic());
+            return false;
+        }
+
+        log.debug("Rate limit check passed: current={}/{}", currentCount, MAX_RATE_PER_SECOND);
+        return true;
     }
 
-    int currentCount = counter.incrementAndGet();
-    if (currentCount > MAX_RATE_PER_SECOND) {
-      log.warn(
-          "Rate limit exceeded: current={}/{} for topic={}",
-          currentCount,
-          MAX_RATE_PER_SECOND,
-          message.getTopic());
-      return false;
+    @Override
+    public void afterSend(Message<?> message, SendResult result) {}
+
+    @Override
+    public int order() {
+        return 2;
     }
-
-    log.debug("Rate limit check passed: current={}/{}", currentCount, MAX_RATE_PER_SECOND);
-    return true;
-  }
-
-  @Override
-  public void afterSend(Message<?> message, SendResult result) {}
-
-  @Override
-  public int order() {
-    return 2;
-  }
 }

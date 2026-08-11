@@ -20,32 +20,32 @@ import org.springframework.stereotype.Component;
 @Component
 public class AuditConsumerInterceptor implements ConsumerInterceptor {
 
-  private static final Logger log = LoggerFactory.getLogger(AuditConsumerInterceptor.class);
+    private static final Logger log = LoggerFactory.getLogger(AuditConsumerInterceptor.class);
 
-  @Override
-  public boolean beforeConsume(Message<?> message, ConsumeContext context) {
-    return true;
-  }
+    @Override
+    public boolean beforeConsume(Message<?> message, ConsumeContext context) {
+        return true;
+    }
 
-  @Override
-  public void afterConsume(Message<?> message, ConsumeAction action, ConsumeContext context) {
-    String auditLog =
-        String.format(
-            "[AUDIT] topic=%s, tag=%s, keys=%s, body=%s, action=%s, group=%s, reconsumeTimes=%d,"
-                + " time=%s",
-            message.getTopic(),
-            message.getTag(),
-            message.getKeys(),
-            message.getBody(),
-            action,
-            context != null ? context.consumerGroup() : null,
-            context != null ? context.reconsumeTimes() : 0,
-            LocalDateTime.now());
-    log.info(auditLog);
-  }
+    @Override
+    public void afterConsume(Message<?> message, ConsumeAction action, ConsumeContext context) {
+        String auditLog =
+                String.format(
+                        "[AUDIT] topic=%s, tag=%s, keys=%s, body=%s, action=%s, group=%s,"
+                                + " reconsumeTimes=%d, time=%s",
+                        message.getTopic(),
+                        message.getTag(),
+                        message.getKeys(),
+                        message.getBody(),
+                        action,
+                        context != null ? context.consumerGroup() : null,
+                        context != null ? context.reconsumeTimes() : 0,
+                        LocalDateTime.now());
+        log.info(auditLog);
+    }
 
-  @Override
-  public int order() {
-    return 2;
-  }
+    @Override
+    public int order() {
+        return 2;
+    }
 }

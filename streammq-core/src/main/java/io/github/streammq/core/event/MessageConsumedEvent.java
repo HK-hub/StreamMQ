@@ -16,16 +16,16 @@ import java.util.Objects;
  * @param timestamp 事件时间
  */
 public record MessageConsumedEvent(
-    String topic,
-    String group,
-    MessageId messageId,
-    boolean success,
-    int reconsumeTimes,
-    long durationMillis,
-    Instant timestamp) {
-  public MessageConsumedEvent {
-    Objects.requireNonNull(topic, "topic");
-    Objects.requireNonNull(group, "group");
-    Objects.requireNonNull(timestamp, "timestamp");
-  }
+        String topic,
+        String group,
+        MessageId messageId,
+        boolean success,
+        int reconsumeTimes,
+        long durationMillis,
+        Instant timestamp) {
+    public MessageConsumedEvent {
+        Objects.requireNonNull(topic, "topic");
+        Objects.requireNonNull(group, "group");
+        Objects.requireNonNull(timestamp, "timestamp");
+    }
 }

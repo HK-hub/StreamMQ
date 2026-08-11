@@ -39,91 +39,91 @@ import java.util.*;
  */
 public class ConsistentHashRebalanceStrategy implements RebalanceStrategy {
 
-  /** 默认虚拟节点数 */
-  public static final int DEFAULT_VIRTUAL_NODES = StreamMQConstants.DEFAULT_VIRTUAL_NODES;
+    /** 默认虚拟节点数 */
+    public static final int DEFAULT_VIRTUAL_NODES = StreamMQConstants.DEFAULT_VIRTUAL_NODES;
 
-  private final int virtualNodes;
+    private final int virtualNodes;
 
-  /** 使用默认虚拟节点数（160）。 */
-  public ConsistentHashRebalanceStrategy() {
-    this(DEFAULT_VIRTUAL_NODES);
-  }
-
-  /**
-   * 自定义虚拟节点数。
-   *
-   * @param virtualNodes 每个真实节点的虚拟节点数，必须 > 0
-   */
-  public ConsistentHashRebalanceStrategy(int virtualNodes) {
-    if (virtualNodes <= 0) {
-      throw new IllegalArgumentException("virtualNodes must be positive: " + virtualNodes);
-    }
-    this.virtualNodes = virtualNodes;
-  }
-
-  @Override
-  public Map<Integer, String> assign(
-      List<Integer> shards, List<String> consumers, String consumerGroup) {
-    Objects.requireNonNull(shards, "shards");
-    Objects.requireNonNull(consumers, "consumers");
-    Objects.requireNonNull(consumerGroup, "consumerGroup");
-
-    if (shards.isEmpty() || consumers.isEmpty()) {
-      return Collections.emptyMap();
+    /** 使用默认虚拟节点数（160）。 */
+    public ConsistentHashRebalanceStrategy() {
+        this(DEFAULT_VIRTUAL_NODES);
     }
 
-    TreeMap<Long, String> ring = buildRing(consumers);
-    Map<Integer, String> assignment = new java.util.HashMap<>(shards.size() * 2);
-    for (Integer shardId : shards) {
-      String owner = findOwner(ring, shardId);
-      assignment.put(shardId, owner);
+    /**
+     * 自定义虚拟节点数。
+     *
+     * @param virtualNodes 每个真实节点的虚拟节点数，必须 > 0
+     */
+    public ConsistentHashRebalanceStrategy(int virtualNodes) {
+        if (virtualNodes <= 0) {
+            throw new IllegalArgumentException("virtualNodes must be positive: " + virtualNodes);
+        }
+        this.virtualNodes = virtualNodes;
     }
-    return assignment;
-  }
 
-  private TreeMap<Long, String> buildRing(List<String> consumers) {
-    TreeMap<Long, String> ring = new TreeMap<>();
-    for (String consumer : consumers) {
-      for (int i = 0; i < virtualNodes; i++) {
-        String vn = consumer + "#" + i;
-        ring.put(fnv1aHash(vn), consumer);
-      }
-    }
-    return ring;
-  }
+    @Override
+    public Map<Integer, String> assign(
+            List<Integer> shards, List<String> consumers, String consumerGroup) {
+        Objects.requireNonNull(shards, "shards");
+        Objects.requireNonNull(consumers, "consumers");
+        Objects.requireNonNull(consumerGroup, "consumerGroup");
 
-  private String findOwner(TreeMap<Long, String> ring, int shardId) {
-    if (ring.isEmpty()) {
-      return null;
-    }
-    long hash = fnv1aHash("shard-" + shardId);
-    // 顺时针查找第一个 >= hash 的节点
-    Map.Entry<Long, String> entry = ring.ceilingEntry(hash);
-    if (Objects.isNull(entry)) {
-      // 环绕到环首
-      entry = ring.firstEntry();
-    }
-    return entry.getValue();
-  }
+        if (shards.isEmpty() || consumers.isEmpty()) {
+            return Collections.emptyMap();
+        }
 
-  /**
-   * FNV-1a 32 位哈希算法。
-   *
-   * @param key 输入字符串
-   * @return 哈希值（无符号 32 位，存于 long）
-   */
-  private static long fnv1aHash(String key) {
-    long hash = 0x811C9DC5L;
-    for (int i = 0; i < key.length(); i++) {
-      hash ^= key.charAt(i);
-      hash *= 0x01000193L;
-      hash &= 0xFFFFFFFFL;
+        TreeMap<Long, String> ring = buildRing(consumers);
+        Map<Integer, String> assignment = new java.util.HashMap<>(shards.size() * 2);
+        for (Integer shardId : shards) {
+            String owner = findOwner(ring, shardId);
+            assignment.put(shardId, owner);
+        }
+        return assignment;
     }
-    return hash;
-  }
 
-  @Override
-  public String name() {
-    return "consistent-hash";
-  }
+    private TreeMap<Long, String> buildRing(List<String> consumers) {
+        TreeMap<Long, String> ring = new TreeMap<>();
+        for (String consumer : consumers) {
+            for (int i = 0; i < virtualNodes; i++) {
+                String vn = consumer + "#" + i;
+                ring.put(fnv1aHash(vn), consumer);
+            }
+        }
+        return ring;
+    }
+
+    private String findOwner(TreeMap<Long, String> ring, int shardId) {
+        if (ring.isEmpty()) {
+            return null;
+        }
+        long hash = fnv1aHash("shard-" + shardId);
+        // 顺时针查找第一个 >= hash 的节点
+        Map.Entry<Long, String> entry = ring.ceilingEntry(hash);
+        if (Objects.isNull(entry)) {
+            // 环绕到环首
+            entry = ring.firstEntry();
+        }
+        return entry.getValue();
+    }
+
+    /**
+     * FNV-1a 32 位哈希算法。
+     *
+     * @param key 输入字符串
+     * @return 哈希值（无符号 32 位，存于 long）
+     */
+    private static long fnv1aHash(String key) {
+        long hash = 0x811C9DC5L;
+        for (int i = 0; i < key.length(); i++) {
+            hash ^= key.charAt(i);
+            hash *= 0x01000193L;
+            hash &= 0xFFFFFFFFL;
+        }
+        return hash;
+    }
+
+    @Override
+    public String name() {
+        return "consistent-hash";
+    }
 }

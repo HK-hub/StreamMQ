@@ -27,25 +27,25 @@ import lombok.NonNull;
 @Builder
 public class ProducerConfig {
 
-  /** 生产者组名（必填） */
-  @NonNull private final String group;
+    /** 生产者组名（必填） */
+    @NonNull private final String group;
 
-  /** 命名空间（可选，默认空字符串） */
-  @Builder.Default private final String namespace = "";
+    /** 命名空间（可选，默认空字符串） */
+    @Builder.Default private final String namespace = "";
 
-  /** 发送超时毫秒（可选，默认 {@link StreamMQConstants#DEFAULT_SEND_TIMEOUT_MS}） */
-  @Builder.Default
-  private final long sendMessageTimeout = StreamMQConstants.DEFAULT_SEND_TIMEOUT_MS;
+    /** 发送超时毫秒（可选，默认 {@link StreamMQConstants#DEFAULT_SEND_TIMEOUT_MS}） */
+    @Builder.Default
+    private final long sendMessageTimeout = StreamMQConstants.DEFAULT_SEND_TIMEOUT_MS;
 
-  /** Stream 最大长度，0 表示不限制（可选，默认 {@link StreamMQConstants#DEFAULT_STREAM_MAX_LEN}） */
-  @Builder.Default private final int streamMaxLen = StreamMQConstants.DEFAULT_STREAM_MAX_LEN;
+    /** Stream 最大长度，0 表示不限制（可选，默认 {@link StreamMQConstants#DEFAULT_STREAM_MAX_LEN}） */
+    @Builder.Default private final int streamMaxLen = StreamMQConstants.DEFAULT_STREAM_MAX_LEN;
 
-  /** 压缩阈值（字节），body 字节数超过此值时触发压缩，0 = 禁用（默认禁用） */
-  @Builder.Default private final int compressThreshold = 0;
+    /** 压缩阈值（字节），body 字节数超过此值时触发压缩，0 = 禁用（默认禁用） */
+    @Builder.Default private final int compressThreshold = 0;
 
-  /** 单条消息最大大小（字节），发送时校验（默认 512MB = Redis Stream 上限） */
-  @Builder.Default private final long maxMessageSize = StreamMQConstants.MAX_MESSAGE_SIZE_BYTES;
+    /** 单条消息最大大小（字节），发送时校验（默认 512MB = Redis Stream 上限） */
+    @Builder.Default private final long maxMessageSize = StreamMQConstants.MAX_MESSAGE_SIZE_BYTES;
 
-  /** 序列化器类（可选，为 null 表示使用全局配置） */
-  private final Class<? extends MessageSerializer<?>> serializer;
+    /** 序列化器类（可选，为 null 表示使用全局配置） */
+    private final Class<? extends MessageSerializer<?>> serializer;
 }

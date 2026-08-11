@@ -8,15 +8,15 @@ package io.github.streammq.core.message;
  */
 public enum SendStatus {
 
-  /** 发送成功 */
-  SEND_OK,
+    /** 发送成功 */
+    SEND_OK,
 
-  /** 发送失败（异常、超时等） */
-  SEND_FAILED,
+    /** 发送失败（异常、超时等） */
+    SEND_FAILED,
 
-  /** 从节点未就绪（多副本场景，v1.0+） */
-  SLAVE_NOT_READY,
+    /** 从节点未就绪（多副本场景，v1.0+） */
+    SLAVE_NOT_READY,
 
-  /** 刷盘超时（v1.0+，预留） */
-  FLUSH_DISK_TIMEOUT
+    /** 刷盘超时（v1.0+，预留） */
+    FLUSH_DISK_TIMEOUT
 }

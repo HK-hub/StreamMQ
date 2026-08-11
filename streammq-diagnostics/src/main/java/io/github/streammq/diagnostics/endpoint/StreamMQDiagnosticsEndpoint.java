@@ -47,112 +47,112 @@ import org.springframework.web.bind.annotation.ResponseBody;
 @RequestMapping("/streammq/diagnostics")
 public class StreamMQDiagnosticsEndpoint {
 
-  private static final Logger log = LoggerFactory.getLogger(StreamMQDiagnosticsEndpoint.class);
+    private static final Logger log = LoggerFactory.getLogger(StreamMQDiagnosticsEndpoint.class);
 
-  private final StreamMQDiagnosticsService diagnosticsService;
-  private final MessageProfileService profileService;
+    private final StreamMQDiagnosticsService diagnosticsService;
+    private final MessageProfileService profileService;
 
-  /**
-   * 构造诊断端点。
-   *
-   * @param diagnosticsService 诊断服务
-   * @param profileService 消息画像服务
-   */
-  public StreamMQDiagnosticsEndpoint(
-      StreamMQDiagnosticsService diagnosticsService, MessageProfileService profileService) {
-    this.diagnosticsService = Objects.requireNonNull(diagnosticsService, "diagnosticsService");
-    this.profileService = Objects.requireNonNull(profileService, "profileService");
-  }
-
-  /**
-   * 获取消息完整生命周期画像。
-   *
-   * @param messageId 消息 ID
-   * @return 消息画像，若不存在则返回 404
-   */
-  @GetMapping("/profile/{messageId}")
-  public ResponseEntity<MessageProfile> getProfile(@PathVariable String messageId) {
-    MessageProfile profile = profileService.getProfile(messageId);
-    if (Objects.isNull(profile)) {
-      return ResponseEntity.notFound().build();
+    /**
+     * 构造诊断端点。
+     *
+     * @param diagnosticsService 诊断服务
+     * @param profileService 消息画像服务
+     */
+    public StreamMQDiagnosticsEndpoint(
+            StreamMQDiagnosticsService diagnosticsService, MessageProfileService profileService) {
+        this.diagnosticsService = Objects.requireNonNull(diagnosticsService, "diagnosticsService");
+        this.profileService = Objects.requireNonNull(profileService, "profileService");
     }
-    return ResponseEntity.ok(profile);
-  }
 
-  /**
-   * 诊断慢消费。
-   *
-   * @param topic 主题
-   * @param group 消费者组
-   * @return 慢消费诊断报告
-   */
-  @GetMapping("/slow-consume")
-  public SlowConsumeReport diagnoseSlowConsume(
-      @RequestParam String topic, @RequestParam String group) {
-    return diagnosticsService.diagnoseSlowConsume(topic, group);
-  }
+    /**
+     * 获取消息完整生命周期画像。
+     *
+     * @param messageId 消息 ID
+     * @return 消息画像，若不存在则返回 404
+     */
+    @GetMapping("/profile/{messageId}")
+    public ResponseEntity<MessageProfile> getProfile(@PathVariable String messageId) {
+        MessageProfile profile = profileService.getProfile(messageId);
+        if (Objects.isNull(profile)) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok(profile);
+    }
 
-  /**
-   * 诊断消息积压。
-   *
-   * @param topic 主题
-   * @param group 消费者组
-   * @return 积压诊断报告
-   */
-  @GetMapping("/backlog")
-  public BacklogReport diagnoseBacklog(@RequestParam String topic, @RequestParam String group) {
-    return diagnosticsService.diagnoseBacklog(topic, group);
-  }
+    /**
+     * 诊断慢消费。
+     *
+     * @param topic 主题
+     * @param group 消费者组
+     * @return 慢消费诊断报告
+     */
+    @GetMapping("/slow-consume")
+    public SlowConsumeReport diagnoseSlowConsume(
+            @RequestParam String topic, @RequestParam String group) {
+        return diagnosticsService.diagnoseSlowConsume(topic, group);
+    }
 
-  /**
-   * 诊断死信队列。
-   *
-   * @param group 消费者组
-   * @return 死信队列诊断报告
-   */
-  @GetMapping("/dlq")
-  public DlqReport diagnoseDlq(@RequestParam String group) {
-    return diagnosticsService.diagnoseDlq(group);
-  }
+    /**
+     * 诊断消息积压。
+     *
+     * @param topic 主题
+     * @param group 消费者组
+     * @return 积压诊断报告
+     */
+    @GetMapping("/backlog")
+    public BacklogReport diagnoseBacklog(@RequestParam String topic, @RequestParam String group) {
+        return diagnosticsService.diagnoseBacklog(topic, group);
+    }
 
-  /**
-   * 列出所有慢消费者。
-   *
-   * @return 慢消费者标识列表（格式：topic:group）
-   */
-  @GetMapping("/slow-consumers")
-  public List<String> getSlowConsumers() {
-    return diagnosticsService.getSlowConsumers();
-  }
+    /**
+     * 诊断死信队列。
+     *
+     * @param group 消费者组
+     * @return 死信队列诊断报告
+     */
+    @GetMapping("/dlq")
+    public DlqReport diagnoseDlq(@RequestParam String group) {
+        return diagnosticsService.diagnoseDlq(group);
+    }
 
-  /**
-   * 列出所有消费者组的积压报告。
-   *
-   * @return 积压报告列表
-   */
-  @GetMapping("/all-backlogs")
-  public List<BacklogReport> getAllBacklogs() {
-    return diagnosticsService.getAllBacklogs();
-  }
+    /**
+     * 列出所有慢消费者。
+     *
+     * @return 慢消费者标识列表（格式：topic:group）
+     */
+    @GetMapping("/slow-consumers")
+    public List<String> getSlowConsumers() {
+        return diagnosticsService.getSlowConsumers();
+    }
 
-  /**
-   * 诊断健康概览，聚合所有诊断数据为单一视图。
-   *
-   * @return 健康概览 Map
-   */
-  @GetMapping("/health")
-  public Map<String, Object> health() {
-    List<String> slowConsumers = diagnosticsService.getSlowConsumers();
-    List<BacklogReport> backlogs = diagnosticsService.getAllBacklogs();
-    long totalBacklog = backlogs.stream().mapToLong(BacklogReport::currentBacklog).sum();
+    /**
+     * 列出所有消费者组的积压报告。
+     *
+     * @return 积压报告列表
+     */
+    @GetMapping("/all-backlogs")
+    public List<BacklogReport> getAllBacklogs() {
+        return diagnosticsService.getAllBacklogs();
+    }
 
-    Map<String, Object> summary = new LinkedHashMap<>();
-    summary.put("status", "UP");
-    summary.put("slowConsumerCount", slowConsumers.size());
-    summary.put("slowConsumers", slowConsumers);
-    summary.put("totalBacklog", totalBacklog);
-    summary.put("backlogReports", backlogs);
-    summary.put("timestamp", System.currentTimeMillis());
-    return summary;
-  }
+    /**
+     * 诊断健康概览，聚合所有诊断数据为单一视图。
+     *
+     * @return 健康概览 Map
+     */
+    @GetMapping("/health")
+    public Map<String, Object> health() {
+        List<String> slowConsumers = diagnosticsService.getSlowConsumers();
+        List<BacklogReport> backlogs = diagnosticsService.getAllBacklogs();
+        long totalBacklog = backlogs.stream().mapToLong(BacklogReport::currentBacklog).sum();
+
+        Map<String, Object> summary = new LinkedHashMap<>();
+        summary.put("status", "UP");
+        summary.put("slowConsumerCount", slowConsumers.size());
+        summary.put("slowConsumers", slowConsumers);
+        summary.put("totalBacklog", totalBacklog);
+        summary.put("backlogReports", backlogs);
+        summary.put("timestamp", System.currentTimeMillis());
+        return summary;
+    }
 }

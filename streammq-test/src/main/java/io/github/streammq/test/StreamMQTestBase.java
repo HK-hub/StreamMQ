@@ -13,11 +13,12 @@ import org.slf4j.LoggerFactory;
  * StreamMQ 测试基类，提供 Redis 连接支持。
  *
  * <p>支持两种模式：
+ *
  * <ul>
- *   <li><b>本地 Redis（默认）</b>：通过系统属性 {@code streammq.test.redis.host} /
- *       {@code streammq.test.redis.port} 指定本地 Redis 地址（默认 localhost:6379）。</li>
- *   <li><b>Docker Testcontainers</b>：设置 {@code streammq.test.redis.mode=docker} 切换到
- *       Testcontainers 模式，自动拉起 Redis 容器。</li>
+ *   <li><b>本地 Redis（默认）</b>：通过系统属性 {@code streammq.test.redis.host} / {@code
+ *       streammq.test.redis.port} 指定本地 Redis 地址（默认 localhost:6379）。
+ *   <li><b>Docker Testcontainers</b>：设置 {@code streammq.test.redis.mode=docker} 切换到 Testcontainers
+ *       模式，自动拉起 Redis 容器。
  * </ul>
  *
  * <p>所有集成测试应继承此类，获得预配置的 RedissonClient。

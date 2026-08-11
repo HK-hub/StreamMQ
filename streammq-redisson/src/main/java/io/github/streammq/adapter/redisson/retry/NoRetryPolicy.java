@@ -17,18 +17,18 @@ import java.time.Duration;
  */
 public class NoRetryPolicy implements RetryPolicy {
 
-  @Override
-  public Duration nextRetryDelay(int reconsumeTimes, Message<?> message) {
-    return null;
-  }
+    @Override
+    public Duration nextRetryDelay(int reconsumeTimes, Message<?> message) {
+        return null;
+    }
 
-  @Override
-  public boolean shouldStopRetry(int reconsumeTimes, Message<?> message) {
-    return true;
-  }
+    @Override
+    public boolean shouldStopRetry(int reconsumeTimes, Message<?> message) {
+        return true;
+    }
 
-  @Override
-  public String name() {
-    return "no-retry";
-  }
+    @Override
+    public String name() {
+        return "no-retry";
+    }
 }

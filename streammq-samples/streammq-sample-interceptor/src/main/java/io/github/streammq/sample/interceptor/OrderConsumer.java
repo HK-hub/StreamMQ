@@ -17,25 +17,26 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @StreamMQConsumer(
-    topic = "interceptor-order-topic",
-    consumerGroup = "interceptor-order-consumer-group")
+        topic = "interceptor-order-topic",
+        consumerGroup = "interceptor-order-consumer-group")
 public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> {
 
-  private static final Logger log = LoggerFactory.getLogger(OrderConsumer.class);
+    private static final Logger log = LoggerFactory.getLogger(OrderConsumer.class);
 
-  @Override
-  public ConsumeAction onMessage(Message<String> message, ConsumeContext context) throws Exception {
-    log.info(
-        "Processing order message: keys={}, body={}, traceId={}",
-        message.getKeys(),
-        message.getBody(),
-        message.getUserProperties().get("traceId"));
+    @Override
+    public ConsumeAction onMessage(Message<String> message, ConsumeContext context)
+            throws Exception {
+        log.info(
+                "Processing order message: keys={}, body={}, traceId={}",
+                message.getKeys(),
+                message.getBody(),
+                message.getUserProperties().get("traceId"));
 
-    processOrder(message);
-    return ConsumeAction.SUCCESS;
-  }
+        processOrder(message);
+        return ConsumeAction.SUCCESS;
+    }
 
-  private void processOrder(Message<String> message) {
-    log.debug("Processing order: body={}", message.getBody());
-  }
+    private void processOrder(Message<String> message) {
+        log.debug("Processing order: body={}", message.getBody());
+    }
 }

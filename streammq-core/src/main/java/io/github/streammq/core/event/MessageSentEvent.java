@@ -15,14 +15,14 @@ import java.util.Objects;
  * @param timestamp 事件时间
  */
 public record MessageSentEvent(
-    String topic,
-    String tag,
-    MessageId messageId,
-    boolean success,
-    long durationMillis,
-    Instant timestamp) {
-  public MessageSentEvent {
-    Objects.requireNonNull(topic, "topic");
-    Objects.requireNonNull(timestamp, "timestamp");
-  }
+        String topic,
+        String tag,
+        MessageId messageId,
+        boolean success,
+        long durationMillis,
+        Instant timestamp) {
+    public MessageSentEvent {
+        Objects.requireNonNull(topic, "topic");
+        Objects.requireNonNull(timestamp, "timestamp");
+    }
 }

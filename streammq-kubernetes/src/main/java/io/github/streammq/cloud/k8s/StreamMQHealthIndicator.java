@@ -30,31 +30,33 @@ import org.springframework.boot.actuate.health.HealthIndicator;
  */
 public class StreamMQHealthIndicator implements HealthIndicator {
 
-  private final ObjectProvider<StreamMQListenerContainer> containerProvider;
+    private final ObjectProvider<StreamMQListenerContainer> containerProvider;
 
-  /**
-   * 构造健康指标。
-   *
-   * @param containerProvider 监听器容器的可选注入提供者
-   */
-  public StreamMQHealthIndicator(ObjectProvider<StreamMQListenerContainer> containerProvider) {
-    this.containerProvider = Objects.requireNonNull(containerProvider, "containerProvider");
-  }
+    /**
+     * 构造健康指标。
+     *
+     * @param containerProvider 监听器容器的可选注入提供者
+     */
+    public StreamMQHealthIndicator(ObjectProvider<StreamMQListenerContainer> containerProvider) {
+        this.containerProvider = Objects.requireNonNull(containerProvider, "containerProvider");
+    }
 
-  @Override
-  public Health health() {
-    StreamMQListenerContainer container = containerProvider.getIfAvailable();
-    if (Objects.isNull(container)) {
-      return Health.down().withDetail("reason", "StreamMQListenerContainer not available").build();
+    @Override
+    public Health health() {
+        StreamMQListenerContainer container = containerProvider.getIfAvailable();
+        if (Objects.isNull(container)) {
+            return Health.down()
+                    .withDetail("reason", "StreamMQListenerContainer not available")
+                    .build();
+        }
+        boolean running = container.isRunning();
+        int activeConsumers = container.getConsumers().size();
+        Map<String, Object> details = new LinkedHashMap<>();
+        details.put("activeConsumers", activeConsumers);
+        details.put("running", running);
+        if (running) {
+            return Health.up().withDetails(details).build();
+        }
+        return Health.down().withDetails(details).build();
     }
-    boolean running = container.isRunning();
-    int activeConsumers = container.getConsumers().size();
-    Map<String, Object> details = new LinkedHashMap<>();
-    details.put("activeConsumers", activeConsumers);
-    details.put("running", running);
-    if (running) {
-      return Health.up().withDetails(details).build();
-    }
-    return Health.down().withDetails(details).build();
-  }
 }

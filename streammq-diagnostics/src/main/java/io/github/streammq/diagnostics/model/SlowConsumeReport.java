@@ -21,14 +21,14 @@ package io.github.streammq.diagnostics.model;
  * @since 1.0.0
  */
 public record SlowConsumeReport(
-    String topic,
-    String group,
-    double consumeRate,
-    double produceRate,
-    double avgConsumeTimeMillis,
-    long maxConsumeTimeMillis,
-    long p99ConsumeTimeMillis,
-    int threadPoolActive,
-    int threadPoolMax,
-    String bottleneck,
-    String recommendation) {}
+        String topic,
+        String group,
+        double consumeRate,
+        double produceRate,
+        double avgConsumeTimeMillis,
+        long maxConsumeTimeMillis,
+        long p99ConsumeTimeMillis,
+        int threadPoolActive,
+        int threadPoolMax,
+        String bottleneck,
+        String recommendation) {}

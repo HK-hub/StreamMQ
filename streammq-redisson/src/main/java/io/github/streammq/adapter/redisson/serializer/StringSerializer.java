@@ -17,27 +17,27 @@ import java.util.Objects;
  */
 public class StringSerializer implements MessageSerializer<String> {
 
-  @Override
-  public byte[] serialize(String object, Class<String> type) {
-    if (Objects.isNull(object)) {
-      return new byte[0];
+    @Override
+    public byte[] serialize(String object, Class<String> type) {
+        if (Objects.isNull(object)) {
+            return new byte[0];
+        }
+        return object.getBytes(StandardCharsets.UTF_8);
     }
-    return object.getBytes(StandardCharsets.UTF_8);
-  }
 
-  @Override
-  @SuppressWarnings("unchecked")
-  public <R> R deserialize(byte[] bytes, Class<R> type) {
-    Objects.requireNonNull(type, "type");
-    if (Objects.isNull(bytes) || bytes.length == 0) {
-      return null;
+    @Override
+    @SuppressWarnings("unchecked")
+    public <R> R deserialize(byte[] bytes, Class<R> type) {
+        Objects.requireNonNull(type, "type");
+        if (Objects.isNull(bytes) || bytes.length == 0) {
+            return null;
+        }
+        String str = new String(bytes, StandardCharsets.UTF_8);
+        return (R) str;
     }
-    String str = new String(bytes, StandardCharsets.UTF_8);
-    return (R) str;
-  }
 
-  @Override
-  public String name() {
-    return "string";
-  }
+    @Override
+    public String name() {
+        return "string";
+    }
 }

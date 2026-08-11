@@ -12,12 +12,12 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 @SpringBootApplication
 public class QuickStartApplication {
 
-  /**
-   * 程序入口。
-   *
-   * @param args 启动参数
-   */
-  public static void main(String[] args) {
-    SpringApplication.run(QuickStartApplication.class, args);
-  }
+    /**
+     * 程序入口。
+     *
+     * @param args 启动参数
+     */
+    public static void main(String[] args) {
+        SpringApplication.run(QuickStartApplication.class, args);
+    }
 }

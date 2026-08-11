@@ -15,51 +15,51 @@ import java.util.Objects;
  */
 public abstract class TagSelectorFilter implements ExpressionSelectorFilter {
 
-  protected static final String WILD_CARD = "*";
+    protected static final String WILD_CARD = "*";
 
-  protected final String selectorExpression;
+    protected final String selectorExpression;
 
-  protected TagSelectorFilter(String selectorExpression) {
-    this.selectorExpression =
-        Objects.nonNull(selectorExpression) ? selectorExpression.trim() : WILD_CARD;
-  }
-
-  @Override
-  public boolean accept(Message<?> message) {
-    if (WILD_CARD.equals(selectorExpression) || selectorExpression.isEmpty()) {
-      return true;
+    protected TagSelectorFilter(String selectorExpression) {
+        this.selectorExpression =
+                Objects.nonNull(selectorExpression) ? selectorExpression.trim() : WILD_CARD;
     }
-    if (StringUtils.isEmpty(message.getTag())) {
-      return false;
+
+    @Override
+    public boolean accept(Message<?> message) {
+        if (WILD_CARD.equals(selectorExpression) || selectorExpression.isEmpty()) {
+            return true;
+        }
+        if (StringUtils.isEmpty(message.getTag())) {
+            return false;
+        }
+        return matchTag(message.getTag());
     }
-    return matchTag(message.getTag());
-  }
 
-  /**
-   * 匹配 Tag 表达式。
-   *
-   * @param tag 消息的 tag
-   * @return 是否匹配
-   */
-  protected abstract boolean matchTag(String tag);
+    /**
+     * 匹配 Tag 表达式。
+     *
+     * @param tag 消息的 tag
+     * @return 是否匹配
+     */
+    protected abstract boolean matchTag(String tag);
 
-  @Override
-  public String getSelectorExpression() {
-    return selectorExpression;
-  }
+    @Override
+    public String getSelectorExpression() {
+        return selectorExpression;
+    }
 
-  @Override
-  public SelectorType getSelectorType() {
-    return SelectorType.TAG;
-  }
+    @Override
+    public SelectorType getSelectorType() {
+        return SelectorType.TAG;
+    }
 
-  @Override
-  public String name() {
-    return "tag-selector-filter";
-  }
+    @Override
+    public String name() {
+        return "tag-selector-filter";
+    }
 
-  @Override
-  public int order() {
-    return -1;
-  }
+    @Override
+    public int order() {
+        return -1;
+    }
 }

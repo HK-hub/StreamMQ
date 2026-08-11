@@ -32,51 +32,51 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/streammq/health")
 public class StreamMQHealthController {
 
-  private final ObjectProvider<StreamMQListenerContainer> containerProvider;
+    private final ObjectProvider<StreamMQListenerContainer> containerProvider;
 
-  /**
-   * 构造健康探针控制器。
-   *
-   * @param containerProvider 监听器容器的可选注入提供者
-   */
-  public StreamMQHealthController(ObjectProvider<StreamMQListenerContainer> containerProvider) {
-    this.containerProvider = Objects.requireNonNull(containerProvider, "containerProvider");
-  }
-
-  /**
-   * 存活探针端点。
-   *
-   * <p>K8s livenessProbe 调用，返回 Pod 是否存活。存活状态恒为 UP， 仅在后端不可达等极端场景下由上层网关降级。
-   *
-   * @return 存活状态响应，包含 {@code status} 与 {@code backend} 字段
-   */
-  @GetMapping("/liveness")
-  public ResponseEntity<Map<String, Object>> liveness() {
-    Map<String, Object> body = new LinkedHashMap<>();
-    body.put("status", "UP");
-    body.put("backend", "unknown");
-    return ResponseEntity.ok(body);
-  }
-
-  /**
-   * 就绪探针端点。
-   *
-   * <p>K8s readinessProbe 调用，返回 Pod 是否准备好接收流量。当监听器容器 不存在或未运行时返回 {@code ready=false}，否则返回 {@code
-   * ready=true} 与当前消费者数量。
-   *
-   * @return 就绪状态响应，包含 {@code ready} 与 {@code consumerCount} 字段
-   */
-  @GetMapping("/readiness")
-  public ResponseEntity<Map<String, Object>> readiness() {
-    StreamMQListenerContainer container = containerProvider.getIfAvailable();
-    Map<String, Object> body = new LinkedHashMap<>();
-    if (Objects.isNull(container)) {
-      body.put("ready", false);
-      body.put("consumerCount", 0);
-      return ResponseEntity.ok(body);
+    /**
+     * 构造健康探针控制器。
+     *
+     * @param containerProvider 监听器容器的可选注入提供者
+     */
+    public StreamMQHealthController(ObjectProvider<StreamMQListenerContainer> containerProvider) {
+        this.containerProvider = Objects.requireNonNull(containerProvider, "containerProvider");
     }
-    body.put("ready", container.isRunning());
-    body.put("consumerCount", container.getConsumers().size());
-    return ResponseEntity.ok(body);
-  }
+
+    /**
+     * 存活探针端点。
+     *
+     * <p>K8s livenessProbe 调用，返回 Pod 是否存活。存活状态恒为 UP， 仅在后端不可达等极端场景下由上层网关降级。
+     *
+     * @return 存活状态响应，包含 {@code status} 与 {@code backend} 字段
+     */
+    @GetMapping("/liveness")
+    public ResponseEntity<Map<String, Object>> liveness() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", "UP");
+        body.put("backend", "unknown");
+        return ResponseEntity.ok(body);
+    }
+
+    /**
+     * 就绪探针端点。
+     *
+     * <p>K8s readinessProbe 调用，返回 Pod 是否准备好接收流量。当监听器容器 不存在或未运行时返回 {@code ready=false}，否则返回 {@code
+     * ready=true} 与当前消费者数量。
+     *
+     * @return 就绪状态响应，包含 {@code ready} 与 {@code consumerCount} 字段
+     */
+    @GetMapping("/readiness")
+    public ResponseEntity<Map<String, Object>> readiness() {
+        StreamMQListenerContainer container = containerProvider.getIfAvailable();
+        Map<String, Object> body = new LinkedHashMap<>();
+        if (Objects.isNull(container)) {
+            body.put("ready", false);
+            body.put("consumerCount", 0);
+            return ResponseEntity.ok(body);
+        }
+        body.put("ready", container.isRunning());
+        body.put("consumerCount", container.getConsumers().size());
+        return ResponseEntity.ok(body);
+    }
 }

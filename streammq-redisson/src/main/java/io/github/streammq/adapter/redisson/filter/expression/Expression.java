@@ -12,11 +12,11 @@ import io.github.streammq.core.message.Message;
  */
 public interface Expression {
 
-  /**
-   * 评估表达式。
-   *
-   * @param message 消息
-   * @return 评估结果
-   */
-  boolean evaluate(Message<?> message);
+    /**
+     * 评估表达式。
+     *
+     * @param message 消息
+     * @return 评估结果
+     */
+    boolean evaluate(Message<?> message);
 }

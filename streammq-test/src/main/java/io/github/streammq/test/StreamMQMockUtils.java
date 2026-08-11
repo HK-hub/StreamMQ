@@ -14,15 +14,10 @@ import io.github.streammq.core.message.SendStatus;
  */
 public final class StreamMQMockUtils {
 
-    private StreamMQMockUtils() {
-    }
+    private StreamMQMockUtils() {}
 
     public static <T> Message<T> createMockMessage(String topic, String tag, String keys, T body) {
-        return MessageBuilder.<T>withTopic(topic)
-                .tag(tag)
-                .keys(keys)
-                .body(body)
-                .build();
+        return MessageBuilder.<T>withTopic(topic).tag(tag).keys(keys).body(body).build();
     }
 
     public static <T> Message<T> createMockMessage(String topic, T body) {
@@ -34,7 +29,8 @@ public final class StreamMQMockUtils {
     }
 
     public static SendResult createSuccessResult(String topic, String tag) {
-        return new SendResult(new MessageId("1234567890-0"), topic, tag, System.currentTimeMillis());
+        return new SendResult(
+                new MessageId("1234567890-0"), topic, tag, System.currentTimeMillis());
     }
 
     public static SendResult createSuccessResult(String topic) {
@@ -42,8 +38,14 @@ public final class StreamMQMockUtils {
     }
 
     public static SendResult createFailedResult(String topic, String tag, String errorMessage) {
-        return new SendResult(new MessageId("1234567890-0"), topic, tag,
-                SendStatus.SEND_FAILED, System.currentTimeMillis(), null, errorMessage);
+        return new SendResult(
+                new MessageId("1234567890-0"),
+                topic,
+                tag,
+                SendStatus.SEND_FAILED,
+                System.currentTimeMillis(),
+                null,
+                errorMessage);
     }
 
     public static SendResult createFailedResult(String topic, String errorMessage) {

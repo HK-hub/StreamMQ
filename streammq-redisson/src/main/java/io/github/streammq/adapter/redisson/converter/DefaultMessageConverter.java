@@ -50,341 +50,345 @@ import lombok.Setter;
  */
 public class DefaultMessageConverter extends AbstractMessageConverter {
 
-  // ================================================================
-  // 字段名常量（public 供外部如 RedissonStreamProducer / RedissonStreamListener 引用）
-  // ================================================================
+    // ================================================================
+    // 字段名常量（public 供外部如 RedissonStreamProducer / RedissonStreamListener 引用）
+    // ================================================================
 
-  /** Stream Entry 字段名：消息体（Base64 编码） */
-  public static final String FIELD_BODY = "body";
+    /** Stream Entry 字段名：消息体（Base64 编码） */
+    public static final String FIELD_BODY = "body";
 
-  /** Stream Entry 字段名：消息体类型全限定名 */
-  public static final String FIELD_BODY_TYPE = "bodyType";
+    /** Stream Entry 字段名：消息体类型全限定名 */
+    public static final String FIELD_BODY_TYPE = "bodyType";
 
-  /** Stream Entry 字段名：消息体类型简称 */
-  public static final String FIELD_BODY_TYPE_NAME = "bodyTypeName";
+    /** Stream Entry 字段名：消息体类型简称 */
+    public static final String FIELD_BODY_TYPE_NAME = "bodyTypeName";
 
-  /** Stream Entry 字段名：标签 */
-  public static final String FIELD_TAG = "tag";
+    /** Stream Entry 字段名：标签 */
+    public static final String FIELD_TAG = "tag";
 
-  /** Stream Entry 字段名：业务键 */
-  public static final String FIELD_KEYS = "keys";
+    /** Stream Entry 字段名：业务键 */
+    public static final String FIELD_KEYS = "keys";
 
-  /** Stream Entry 字段名：分片键 */
-  public static final String FIELD_SHARDING_KEY = "shardingKey";
+    /** Stream Entry 字段名：分片键 */
+    public static final String FIELD_SHARDING_KEY = "shardingKey";
 
-  /** Stream Entry 字段名：属性 JSON（sys + user 合并） */
-  public static final String FIELD_PROPS = "props";
+    /** Stream Entry 字段名：属性 JSON（sys + user 合并） */
+    public static final String FIELD_PROPS = "props";
 
-  /** Stream Entry 字段名：出生时间戳（毫秒） */
-  public static final String FIELD_BORN_TS = "bornTs";
+    /** Stream Entry 字段名：出生时间戳（毫秒） */
+    public static final String FIELD_BORN_TS = "bornTs";
 
-  /** Stream Entry 字段名：出生主机 */
-  public static final String FIELD_BORN_HOST = "bornHost";
+    /** Stream Entry 字段名：出生主机 */
+    public static final String FIELD_BORN_HOST = "bornHost";
 
-  /** Stream Entry 字段名：重试次数 */
-  public static final String FIELD_RETRY_TIMES = "retryTimes";
+    /** Stream Entry 字段名：重试次数 */
+    public static final String FIELD_RETRY_TIMES = "retryTimes";
 
-  /** Stream Entry 字段名：事务 ID */
-  public static final String FIELD_TX_ID = "txId";
+    /** Stream Entry 字段名：事务 ID */
+    public static final String FIELD_TX_ID = "txId";
 
-  /** Stream Entry 字段名：原始 Topic（重试/DLQ 场景） */
-  public static final String FIELD_ORIGIN_TOPIC = "originTopic";
+    /** Stream Entry 字段名：原始 Topic（重试/DLQ 场景） */
+    public static final String FIELD_ORIGIN_TOPIC = "originTopic";
 
-  /** Stream Entry 字段名：压缩算法标识（"gzip" 或旧格式 "true"） */
-  public static final String FIELD_COMPRESSED = "compressed";
+    /** Stream Entry 字段名：压缩算法标识（"gzip" 或旧格式 "true"） */
+    public static final String FIELD_COMPRESSED = "compressed";
 
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldBody() {
-    return FIELD_BODY;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldBodyType() {
-    return FIELD_BODY_TYPE;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldBodyTypeName() {
-    return FIELD_BODY_TYPE_NAME;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldTag() {
-    return FIELD_TAG;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldKeys() {
-    return FIELD_KEYS;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldShardingKey() {
-    return FIELD_SHARDING_KEY;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldBornTs() {
-    return FIELD_BORN_TS;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldBornHost() {
-    return FIELD_BORN_HOST;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldRetryTimes() {
-    return FIELD_RETRY_TIMES;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldTxId() {
-    return FIELD_TX_ID;
-  }
-
-  /** {@inheritDoc} */
-  @Override
-  protected String fieldOriginTopic() {
-    return FIELD_ORIGIN_TOPIC;
-  }
-
-  /** 消息体序列化器 */
-  private final MessageSerializer<Object> serializer;
-
-  /**
-   * 压缩编解码器（可选注入）。
-   *
-   * <p>用于解压旧格式 {@code compressed=true} 的消息体。 新格式消息通过 {@link #compressionCodecRegistry} 按名称查找 Codec。
-   */
-  @Setter private CompressionCodec compressionCodec;
-
-  /**
-   * 压缩编解码器注册表（可选注入）。
-   *
-   * <p>用于按名称（如 {@code "gzip"}）查找对应的 {@link CompressionCodec} 实例解压新格式消息。
-   */
-  @Setter private CompressionCodecRegistry compressionCodecRegistry;
-
-  /**
-   * 构造默认转换器。
-   *
-   * @param serializer body 序列化器，不能为 null（通常为 {@code JacksonJsonSerializer}）
-   */
-  @SuppressWarnings({"unchecked", "rawtypes"})
-  public DefaultMessageConverter(MessageSerializer<?> serializer) {
-    this.serializer = (MessageSerializer<Object>) Objects.requireNonNull(serializer, "serializer");
-  }
-
-  // ================================================================
-  // Body 编解码 —— 序列化 + Base64 + 压缩支持
-  // ================================================================
-
-  /**
-   * 将消息体序列化为 byte[] → Base64 编码 → 写入 fields。
-   *
-   * <p>特殊处理：若 body 已是 {@code byte[]}，则跳过序列化直接编码，避免二次编码。 同时写入 {@code bodyType} 和 {@code
-   * bodyTypeName} 字段以支持消费端类型定位。
-   *
-   * @param message 消息载体
-   * @param fields 输出 Map（已初始化，直接 put）
-   */
-  @Override
-  @SuppressWarnings({"unchecked", "rawtypes"})
-  protected void encodeBody(Message<?> message, Map<String, String> fields) {
-    Object body = message.getBody();
-    if (Objects.isNull(body)) {
-      return;
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldBody() {
+        return FIELD_BODY;
     }
-    Class<?> bodyType = body.getClass();
-    byte[] bodyBytes;
-    if (body instanceof byte[] bytes) {
-      bodyBytes = bytes;
-    } else {
-      bodyBytes = serializer.serialize(body, (Class<Object>) (Class) bodyType);
+
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldBodyType() {
+        return FIELD_BODY_TYPE;
     }
-    fields.put(FIELD_BODY, Base64.getEncoder().encodeToString(bodyBytes));
-    fields.put(FIELD_BODY_TYPE, bodyType.getName());
-    fields.put(FIELD_BODY_TYPE_NAME, bodyType.getSimpleName());
-  }
 
-  /**
-   * 从 Stream Entry 字段解码消息体。
-   *
-   * <p>支持两种来源路径：
-   *
-   * <ol>
-   *   <li><b>SDK 发送方</b>（{@code bodyType} 非空）：Base64 解码 → 可选的解压 → 反序列化 → 设置 body
-   *   <li><b>跨平台发送方</b>（{@code bodyType} 为空）：原始字符串处理 → 可选的解压 → 反序列化或直接 String
-   * </ol>
-   *
-   * @param fields Stream Entry 全部字段
-   * @param targetType 目标 body 类型
-   * @param message 输出消息
-   * @param bodyStr body 字段原始值
-   */
-  @Override
-  @SuppressWarnings("unchecked")
-  protected <T> void decodeBody(
-      Map<String, String> fields, Class<T> targetType, Message<T> message, String bodyStr) {
-    String compressedFlag = fields.get(FIELD_COMPRESSED);
-    String bodyTypeField = fields.get(FIELD_BODY_TYPE);
-    boolean compressed = StringUtils.isNotEmpty(compressedFlag);
-
-    if (StringUtils.isNotEmpty(bodyTypeField)) {
-      byte[] bodyBytes = Base64.getDecoder().decode(bodyStr);
-      if (compressed) {
-        bodyBytes = decompressBody(bodyBytes, compressedFlag);
-      }
-      if (targetType == byte[].class || targetType == Object.class && "[B".equals(bodyTypeField)) {
-        message.setBody((T) bodyBytes);
-        return;
-      }
-      message.setBody(serializer.deserialize(bodyBytes, targetType));
-      return;
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldBodyTypeName() {
+        return FIELD_BODY_TYPE_NAME;
     }
-    if (compressed) {
-      byte[] bodyBytes = Base64.getDecoder().decode(bodyStr);
-      bodyBytes = decompressBody(bodyBytes, compressedFlag);
-      if (targetType == String.class) {
-        message.setBody((T) new String(bodyBytes, StandardCharsets.UTF_8));
-        return;
-      }
-      message.setBody(serializer.deserialize(bodyBytes, targetType));
-      return;
+
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldTag() {
+        return FIELD_TAG;
     }
-    if (targetType == String.class) {
-      message.setBody((T) bodyStr);
-      return;
+
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldKeys() {
+        return FIELD_KEYS;
     }
-    message.setBody(serializer.deserialize(bodyStr.getBytes(StandardCharsets.UTF_8), targetType));
-  }
 
-  // ================================================================
-  // Properties 编解码 —— sys + user 合并为单个 JSON
-  // ================================================================
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldShardingKey() {
+        return FIELD_SHARDING_KEY;
+    }
 
-  /**
-   * 将系统属性和用户属性合并序列化为单个 JSON 字段写入。
-   *
-   * @param message 消息载体
-   * @param fields 输出 Map
-   */
-  @Override
-  protected void encodeProperties(Message<?> message, Map<String, String> fields) {
-    writePropsJson(fields, FIELD_PROPS, message.getProperties(), message.getUserProperties());
-  }
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldBornTs() {
+        return FIELD_BORN_TS;
+    }
 
-  /**
-   * 从单个 JSON 字段反序列化属性（sys + user 合并 → 写入 userProperties）。
-   *
-   * @param message 输出消息
-   * @param fields Stream Entry 全部字段
-   */
-  @Override
-  protected <T> void decodeProperties(Message<T> message, Map<String, String> fields) {
-    readPropsJson(fields, FIELD_PROPS, message::setUserProperties);
-  }
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldBornHost() {
+        return FIELD_BORN_HOST;
+    }
 
-  // ================================================================
-  // 压缩解压 —— 旧格式 ("true") + 新格式 (codec 名称) + 注册表
-  // ================================================================
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldRetryTimes() {
+        return FIELD_RETRY_TIMES;
+    }
 
-  /**
-   * 按压缩标识字符串解压消息体。
-   *
-   * <p>三种查找路径（优先级从高到低）：
-   *
-   * <ol>
-   *   <li>{@code "true"}（旧格式）→ 使用注入的 {@link #compressionCodec}
-   *   <li>Codec 名称（如 {@code "gzip"}）→ 从 {@link #compressionCodecRegistry} 按名称查找
-   *   <li>未知标识 → 回退到注入的 {@link #compressionCodec}（兼容无注册表场景）
-   * </ol>
-   *
-   * @param compressedBytes 压缩后的字节
-   * @param compressedFlag {@code compressed} 字段值
-   * @return 解压后的原始字节
-   * @throws SerializationException 当无法找到 Codec 进行解压时
-   */
-  private byte[] decompressBody(byte[] compressedBytes, String compressedFlag) {
-    if ("true".equals(compressedFlag)) {
-      if (Objects.isNull(compressionCodec)) {
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldTxId() {
+        return FIELD_TX_ID;
+    }
+
+    /** {@inheritDoc} */
+    @Override
+    protected String fieldOriginTopic() {
+        return FIELD_ORIGIN_TOPIC;
+    }
+
+    /** 消息体序列化器 */
+    private final MessageSerializer<Object> serializer;
+
+    /**
+     * 压缩编解码器（可选注入）。
+     *
+     * <p>用于解压旧格式 {@code compressed=true} 的消息体。 新格式消息通过 {@link #compressionCodecRegistry} 按名称查找
+     * Codec。
+     */
+    @Setter private CompressionCodec compressionCodec;
+
+    /**
+     * 压缩编解码器注册表（可选注入）。
+     *
+     * <p>用于按名称（如 {@code "gzip"}）查找对应的 {@link CompressionCodec} 实例解压新格式消息。
+     */
+    @Setter private CompressionCodecRegistry compressionCodecRegistry;
+
+    /**
+     * 构造默认转换器。
+     *
+     * @param serializer body 序列化器，不能为 null（通常为 {@code JacksonJsonSerializer}）
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public DefaultMessageConverter(MessageSerializer<?> serializer) {
+        this.serializer =
+                (MessageSerializer<Object>) Objects.requireNonNull(serializer, "serializer");
+    }
+
+    // ================================================================
+    // Body 编解码 —— 序列化 + Base64 + 压缩支持
+    // ================================================================
+
+    /**
+     * 将消息体序列化为 byte[] → Base64 编码 → 写入 fields。
+     *
+     * <p>特殊处理：若 body 已是 {@code byte[]}，则跳过序列化直接编码，避免二次编码。 同时写入 {@code bodyType} 和 {@code
+     * bodyTypeName} 字段以支持消费端类型定位。
+     *
+     * @param message 消息载体
+     * @param fields 输出 Map（已初始化，直接 put）
+     */
+    @Override
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    protected void encodeBody(Message<?> message, Map<String, String> fields) {
+        Object body = message.getBody();
+        if (Objects.isNull(body)) {
+            return;
+        }
+        Class<?> bodyType = body.getClass();
+        byte[] bodyBytes;
+        if (body instanceof byte[] bytes) {
+            bodyBytes = bytes;
+        } else {
+            bodyBytes = serializer.serialize(body, (Class<Object>) (Class) bodyType);
+        }
+        fields.put(FIELD_BODY, Base64.getEncoder().encodeToString(bodyBytes));
+        fields.put(FIELD_BODY_TYPE, bodyType.getName());
+        fields.put(FIELD_BODY_TYPE_NAME, bodyType.getSimpleName());
+    }
+
+    /**
+     * 从 Stream Entry 字段解码消息体。
+     *
+     * <p>支持两种来源路径：
+     *
+     * <ol>
+     *   <li><b>SDK 发送方</b>（{@code bodyType} 非空）：Base64 解码 → 可选的解压 → 反序列化 → 设置 body
+     *   <li><b>跨平台发送方</b>（{@code bodyType} 为空）：原始字符串处理 → 可选的解压 → 反序列化或直接 String
+     * </ol>
+     *
+     * @param fields Stream Entry 全部字段
+     * @param targetType 目标 body 类型
+     * @param message 输出消息
+     * @param bodyStr body 字段原始值
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    protected <T> void decodeBody(
+            Map<String, String> fields, Class<T> targetType, Message<T> message, String bodyStr) {
+        String compressedFlag = fields.get(FIELD_COMPRESSED);
+        String bodyTypeField = fields.get(FIELD_BODY_TYPE);
+        boolean compressed = StringUtils.isNotEmpty(compressedFlag);
+
+        if (StringUtils.isNotEmpty(bodyTypeField)) {
+            byte[] bodyBytes = Base64.getDecoder().decode(bodyStr);
+            if (compressed) {
+                bodyBytes = decompressBody(bodyBytes, compressedFlag);
+            }
+            if (targetType == byte[].class
+                    || targetType == Object.class && "[B".equals(bodyTypeField)) {
+                message.setBody((T) bodyBytes);
+                return;
+            }
+            message.setBody(serializer.deserialize(bodyBytes, targetType));
+            return;
+        }
+        if (compressed) {
+            byte[] bodyBytes = Base64.getDecoder().decode(bodyStr);
+            bodyBytes = decompressBody(bodyBytes, compressedFlag);
+            if (targetType == String.class) {
+                message.setBody((T) new String(bodyBytes, StandardCharsets.UTF_8));
+                return;
+            }
+            message.setBody(serializer.deserialize(bodyBytes, targetType));
+            return;
+        }
+        if (targetType == String.class) {
+            message.setBody((T) bodyStr);
+            return;
+        }
+        message.setBody(
+                serializer.deserialize(bodyStr.getBytes(StandardCharsets.UTF_8), targetType));
+    }
+
+    // ================================================================
+    // Properties 编解码 —— sys + user 合并为单个 JSON
+    // ================================================================
+
+    /**
+     * 将系统属性和用户属性合并序列化为单个 JSON 字段写入。
+     *
+     * @param message 消息载体
+     * @param fields 输出 Map
+     */
+    @Override
+    protected void encodeProperties(Message<?> message, Map<String, String> fields) {
+        writePropsJson(fields, FIELD_PROPS, message.getProperties(), message.getUserProperties());
+    }
+
+    /**
+     * 从单个 JSON 字段反序列化属性（sys + user 合并 → 写入 userProperties）。
+     *
+     * @param message 输出消息
+     * @param fields Stream Entry 全部字段
+     */
+    @Override
+    protected <T> void decodeProperties(Message<T> message, Map<String, String> fields) {
+        readPropsJson(fields, FIELD_PROPS, message::setUserProperties);
+    }
+
+    // ================================================================
+    // 压缩解压 —— 旧格式 ("true") + 新格式 (codec 名称) + 注册表
+    // ================================================================
+
+    /**
+     * 按压缩标识字符串解压消息体。
+     *
+     * <p>三种查找路径（优先级从高到低）：
+     *
+     * <ol>
+     *   <li>{@code "true"}（旧格式）→ 使用注入的 {@link #compressionCodec}
+     *   <li>Codec 名称（如 {@code "gzip"}）→ 从 {@link #compressionCodecRegistry} 按名称查找
+     *   <li>未知标识 → 回退到注入的 {@link #compressionCodec}（兼容无注册表场景）
+     * </ol>
+     *
+     * @param compressedBytes 压缩后的字节
+     * @param compressedFlag {@code compressed} 字段值
+     * @return 解压后的原始字节
+     * @throws SerializationException 当无法找到 Codec 进行解压时
+     */
+    private byte[] decompressBody(byte[] compressedBytes, String compressedFlag) {
+        if ("true".equals(compressedFlag)) {
+            if (Objects.isNull(compressionCodec)) {
+                throw new SerializationException(
+                        "Message body is marked as compressed (legacy format) but no"
+                                + " CompressionCodec is configured",
+                        null);
+            }
+            return compressionCodec.decompress(compressedBytes);
+        }
+        if (Objects.nonNull(compressionCodecRegistry)) {
+            CompressionCodec codec = compressionCodecRegistry.lookup(compressedFlag);
+            if (Objects.nonNull(codec)) {
+                return codec.decompress(compressedBytes);
+            }
+            throw new SerializationException(
+                    "Unknown compression codec: '"
+                            + compressedFlag
+                            + "'. Available: "
+                            + compressionCodecRegistry.availableCodecs(),
+                    null);
+        }
+        if (Objects.nonNull(compressionCodec)) {
+            return compressionCodec.decompress(compressedBytes);
+        }
         throw new SerializationException(
-            "Message body is marked as compressed (legacy format) but no CompressionCodec is"
-                + " configured",
-            null);
-      }
-      return compressionCodec.decompress(compressedBytes);
+                "Message body is compressed with '"
+                        + compressedFlag
+                        + "' but no CompressionCodecRegistry or CompressionCodec is configured",
+                null);
     }
-    if (Objects.nonNull(compressionCodecRegistry)) {
-      CompressionCodec codec = compressionCodecRegistry.lookup(compressedFlag);
-      if (Objects.nonNull(codec)) {
-        return codec.decompress(compressedBytes);
-      }
-      throw new SerializationException(
-          "Unknown compression codec: '"
-              + compressedFlag
-              + "'. Available: "
-              + compressionCodecRegistry.availableCodecs(),
-          null);
+
+    /**
+     * 返回 Converter 标识名称。
+     *
+     * @return {@code "default"}
+     */
+    @Override
+    public String name() {
+        return "default";
     }
-    if (Objects.nonNull(compressionCodec)) {
-      return compressionCodec.decompress(compressedBytes);
+
+    // ================================================================
+    // 静态工具方法（向后兼容，供 RedissonStreamListener / TransactionScanner 等调用）
+    // ================================================================
+
+    /**
+     * 为消费端还原的消息回填 topic 字段。
+     *
+     * <p><b>向后兼容：</b>此静态方法供外部调用方直接引用， 内部等同于 {@code message.setTopic(topic)}。
+     *
+     * @param message 消息载体
+     * @param topic 主题名
+     * @param <T> body 类型
+     */
+    public static <T> void applyTopic(Message<T> message, String topic) {
+        message.setTopic(topic);
     }
-    throw new SerializationException(
-        "Message body is compressed with '"
-            + compressedFlag
-            + "' but no CompressionCodecRegistry or CompressionCodec is configured",
-        null);
-  }
 
-  /**
-   * 返回 Converter 标识名称。
-   *
-   * @return {@code "default"}
-   */
-  @Override
-  public String name() {
-    return "default";
-  }
-
-  // ================================================================
-  // 静态工具方法（向后兼容，供 RedissonStreamListener / TransactionScanner 等调用）
-  // ================================================================
-
-  /**
-   * 为消费端还原的消息回填 topic 字段。
-   *
-   * <p><b>向后兼容：</b>此静态方法供外部调用方直接引用， 内部等同于 {@code message.setTopic(topic)}。
-   *
-   * @param message 消息载体
-   * @param topic 主题名
-   * @param <T> body 类型
-   */
-  public static <T> void applyTopic(Message<T> message, String topic) {
-    message.setTopic(topic);
-  }
-
-  /**
-   * 为消费端还原的消息回填 messageId 字段。
-   *
-   * <p>从 Redis Stream Entry ID 字符串构造 {@link MessageId} 并设置到消息上。
-   *
-   * @param message 消息载体
-   * @param streamEntryId Redis Stream Entry ID（格式 {@code {timestamp}-{sequence}}）
-   * @param <T> body 类型
-   */
-  public static <T> void applyMessageId(Message<T> message, String streamEntryId) {
-    message.setMessageId(MessageId.fromStreamEntry(streamEntryId));
-  }
+    /**
+     * 为消费端还原的消息回填 messageId 字段。
+     *
+     * <p>从 Redis Stream Entry ID 字符串构造 {@link MessageId} 并设置到消息上。
+     *
+     * @param message 消息载体
+     * @param streamEntryId Redis Stream Entry ID（格式 {@code {timestamp}-{sequence}}）
+     * @param <T> body 类型
+     */
+    public static <T> void applyMessageId(Message<T> message, String streamEntryId) {
+        message.setMessageId(MessageId.fromStreamEntry(streamEntryId));
+    }
 }

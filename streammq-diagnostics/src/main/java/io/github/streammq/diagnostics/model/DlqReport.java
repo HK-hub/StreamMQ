@@ -18,9 +18,9 @@ import java.util.List;
  * @since 1.0.0
  */
 public record DlqReport(
-    String group,
-    long totalDlqCount,
-    List<FailureReason> topFailureReasons,
-    List<TopicFailureCount> topFailedTopics,
-    long oldestDlqMessageTimestamp,
-    String recommendation) {}
+        String group,
+        long totalDlqCount,
+        List<FailureReason> topFailureReasons,
+        List<TopicFailureCount> topFailedTopics,
+        long oldestDlqMessageTimestamp,
+        String recommendation) {}

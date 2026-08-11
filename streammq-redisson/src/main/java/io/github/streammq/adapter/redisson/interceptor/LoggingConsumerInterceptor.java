@@ -29,50 +29,50 @@ import org.slf4j.LoggerFactory;
  */
 public class LoggingConsumerInterceptor implements ConsumerInterceptor {
 
-  private static final Logger LOG = LoggerFactory.getLogger(LoggingConsumerInterceptor.class);
+    private static final Logger LOG = LoggerFactory.getLogger(LoggingConsumerInterceptor.class);
 
-  @Override
-  public boolean beforeConsume(Message<?> message, ConsumeContext context) {
-    Objects.requireNonNull(message, "message");
-    LOG.info(
-        "[ConsumerLog] beforeConsume topic={}, keys={}, group={}",
-        message.getTopic(),
-        message.getKeys(),
-        Objects.nonNull(context) ? context.consumerGroup() : null);
-    return true;
-  }
+    @Override
+    public boolean beforeConsume(Message<?> message, ConsumeContext context) {
+        Objects.requireNonNull(message, "message");
+        LOG.info(
+                "[ConsumerLog] beforeConsume topic={}, keys={}, group={}",
+                message.getTopic(),
+                message.getKeys(),
+                Objects.nonNull(context) ? context.consumerGroup() : null);
+        return true;
+    }
 
-  @Override
-  public void afterConsume(Message<?> message, ConsumeAction action, ConsumeContext context) {
-    Objects.requireNonNull(message, "message");
-    Objects.requireNonNull(action, "action");
-    LOG.info(
-        "[ConsumerLog] afterConsume topic={}, action={}, group={}, reconsumeTimes={}",
-        message.getTopic(),
-        action,
-        Objects.nonNull(context) ? context.consumerGroup() : null,
-        Objects.nonNull(context) ? context.reconsumeTimes() : 0);
-  }
+    @Override
+    public void afterConsume(Message<?> message, ConsumeAction action, ConsumeContext context) {
+        Objects.requireNonNull(message, "message");
+        Objects.requireNonNull(action, "action");
+        LOG.info(
+                "[ConsumerLog] afterConsume topic={}, action={}, group={}, reconsumeTimes={}",
+                message.getTopic(),
+                action,
+                Objects.nonNull(context) ? context.consumerGroup() : null,
+                Objects.nonNull(context) ? context.reconsumeTimes() : 0);
+    }
 
-  @Override
-  public void onException(
-      Message<?> message, Exception exception, InvokeTiming timing, ConsumeContext context) {
-    LOG.error(
-        "[ConsumerLog] onException topic={}, keys={}, timing={}, group={}",
-        Objects.nonNull(message) ? message.getTopic() : null,
-        Objects.nonNull(message) ? message.getKeys() : null,
-        timing,
-        Objects.nonNull(context) ? context.consumerGroup() : null,
-        exception);
-  }
+    @Override
+    public void onException(
+            Message<?> message, Exception exception, InvokeTiming timing, ConsumeContext context) {
+        LOG.error(
+                "[ConsumerLog] onException topic={}, keys={}, timing={}, group={}",
+                Objects.nonNull(message) ? message.getTopic() : null,
+                Objects.nonNull(message) ? message.getKeys() : null,
+                timing,
+                Objects.nonNull(context) ? context.consumerGroup() : null,
+                exception);
+    }
 
-  @Override
-  public int order() {
-    return 1000;
-  }
+    @Override
+    public int order() {
+        return 1000;
+    }
 
-  @Override
-  public String name() {
-    return "logging-consumer";
-  }
+    @Override
+    public String name() {
+        return "logging-consumer";
+    }
 }

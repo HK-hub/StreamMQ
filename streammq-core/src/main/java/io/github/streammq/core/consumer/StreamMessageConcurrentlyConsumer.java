@@ -29,14 +29,14 @@ import io.github.streammq.core.message.Message;
  */
 public interface StreamMessageConcurrentlyConsumer<T> extends StreamMessageConsumer<T> {
 
-  /**
-   * 处理单条消息。
-   *
-   * @param message 消息载体
-   * @param context 消费上下文（仅提供元数据，不提供手动 ACK）
-   * @return 处理结果动作（{@link ConsumeAction#SUCCESS} / {@link ConsumeAction#RECONSUME_LATER} / {@code
-   *     ConsumeAction.defer(Duration)}），返回 null 视为 RECONSUME_LATER
-   * @throws Exception 业务异常，框架将其视为 {@link ConsumeAction#RECONSUME_LATER}
-   */
-  ConsumeAction onMessage(Message<T> message, ConsumeContext context) throws Exception;
+    /**
+     * 处理单条消息。
+     *
+     * @param message 消息载体
+     * @param context 消费上下文（仅提供元数据，不提供手动 ACK）
+     * @return 处理结果动作（{@link ConsumeAction#SUCCESS} / {@link ConsumeAction#RECONSUME_LATER} / {@code
+     *     ConsumeAction.defer(Duration)}），返回 null 视为 RECONSUME_LATER
+     * @throws Exception 业务异常，框架将其视为 {@link ConsumeAction#RECONSUME_LATER}
+     */
+    ConsumeAction onMessage(Message<T> message, ConsumeContext context) throws Exception;
 }

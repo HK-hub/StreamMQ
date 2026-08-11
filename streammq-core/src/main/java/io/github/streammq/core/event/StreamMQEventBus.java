@@ -14,20 +14,20 @@ import java.util.function.Consumer;
  */
 public interface StreamMQEventBus {
 
-  /**
-   * 发布事件（异步，不阻塞主流程）。
-   *
-   * @param event 事件对象
-   * @param <E> 事件类型
-   */
-  <E> void publish(E event);
+    /**
+     * 发布事件（异步，不阻塞主流程）。
+     *
+     * @param event 事件对象
+     * @param <E> 事件类型
+     */
+    <E> void publish(E event);
 
-  /**
-   * 订阅指定类型的事件。
-   *
-   * @param eventType 事件类型
-   * @param subscriber 事件消费者（在异步线程中执行）
-   * @param <E> 事件类型
-   */
-  <E> void subscribe(Class<E> eventType, Consumer<E> subscriber);
+    /**
+     * 订阅指定类型的事件。
+     *
+     * @param eventType 事件类型
+     * @param subscriber 事件消费者（在异步线程中执行）
+     * @param <E> 事件类型
+     */
+    <E> void subscribe(Class<E> eventType, Consumer<E> subscriber);
 }

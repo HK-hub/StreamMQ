@@ -38,81 +38,84 @@ import org.slf4j.LoggerFactory;
 @RequiredArgsConstructor
 public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
 
-  private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamListenerFactory.class);
+    private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamListenerFactory.class);
 
-  @NonNull private final RedissonClient redisson;
-  @NonNull private final MessageConverter converter;
-  private final ConcurrentMap<RedissonStreamListener, Boolean> listeners =
-      new ConcurrentHashMap<>();
-  private volatile boolean closed = false;
+    @NonNull private final RedissonClient redisson;
+    @NonNull private final MessageConverter converter;
+    private final ConcurrentMap<RedissonStreamListener, Boolean> listeners =
+            new ConcurrentHashMap<>();
+    private volatile boolean closed = false;
 
-  @Override
-  public StreamMQListener createListener(ListenerConfig config) {
-    if (closed) {
-      throw new IllegalStateException("ListenerFactory is closed");
-    }
-    Objects.requireNonNull(config, "config");
-    String topic = config.getTopic();
-    if (StringUtils.isEmpty(topic)) {
-      throw new IllegalArgumentException("Missing required property: topic");
-    }
-    String group = config.getConsumerGroup();
-    if (StringUtils.isEmpty(group)) {
-      throw new IllegalArgumentException("Missing required property: consumerGroup");
-    }
-    String consumerName = config.getConsumerName();
-    if (StringUtils.isEmpty(consumerName)) {
-      consumerName = group + "-" + UUID.randomUUID().toString().substring(0, 8);
-    }
-    String namespace = config.getNamespace();
-    if (Objects.isNull(namespace)) {
-      namespace = "";
+    @Override
+    public StreamMQListener createListener(ListenerConfig config) {
+        if (closed) {
+            throw new IllegalStateException("ListenerFactory is closed");
+        }
+        Objects.requireNonNull(config, "config");
+        String topic = config.getTopic();
+        if (StringUtils.isEmpty(topic)) {
+            throw new IllegalArgumentException("Missing required property: topic");
+        }
+        String group = config.getConsumerGroup();
+        if (StringUtils.isEmpty(group)) {
+            throw new IllegalArgumentException("Missing required property: consumerGroup");
+        }
+        String consumerName = config.getConsumerName();
+        if (StringUtils.isEmpty(consumerName)) {
+            consumerName = group + "-" + UUID.randomUUID().toString().substring(0, 8);
+        }
+        String namespace = config.getNamespace();
+        if (Objects.isNull(namespace)) {
+            namespace = "";
+        }
+
+        RedissonStreamListener listener =
+                RedissonStreamListener.builder()
+                        .redisson(redisson)
+                        .namespace(namespace)
+                        .topic(topic)
+                        .group(group)
+                        .consumerName(consumerName)
+                        .converter(
+                                Objects.nonNull(config.getConverter())
+                                        ? config.getConverter()
+                                        : converter)
+                        .dlqMode(config.isDlqMode())
+                        .retryMode(config.isRetryMode())
+                        .broadcast(config.isBroadcast())
+                        .targetBodyType(config.getTargetBodyType())
+                        .build();
+        listeners.put(listener, Boolean.TRUE);
+        LOG.debug(
+                "Listener created: topic={}, group={}, consumer={}, dlqMode={}, retryMode={}",
+                topic,
+                group,
+                consumerName,
+                config.isDlqMode(),
+                config.isRetryMode());
+        return listener;
     }
 
-    RedissonStreamListener listener =
-        RedissonStreamListener.builder()
-            .redisson(redisson)
-            .namespace(namespace)
-            .topic(topic)
-            .group(group)
-            .consumerName(consumerName)
-            .converter(Objects.nonNull(config.getConverter()) ? config.getConverter() : converter)
-            .dlqMode(config.isDlqMode())
-            .retryMode(config.isRetryMode())
-            .broadcast(config.isBroadcast())
-            .targetBodyType(config.getTargetBodyType())
-            .build();
-    listeners.put(listener, Boolean.TRUE);
-    LOG.debug(
-        "Listener created: topic={}, group={}, consumer={}, dlqMode={}, retryMode={}",
-        topic,
-        group,
-        consumerName,
-        config.isDlqMode(),
-        config.isRetryMode());
-    return listener;
-  }
-
-  @Override
-  public void close() {
-    if (closed) {
-      return;
+    @Override
+    public void close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        int total = listeners.size();
+        for (RedissonStreamListener listener : listeners.keySet()) {
+            try {
+                listener.close();
+            } catch (RuntimeException ex) {
+                LOG.warn("Failed to close listener: {}", ex.getMessage(), ex);
+            }
+        }
+        listeners.clear();
+        LOG.info("RedissonStreamListenerFactory closed, total listeners: {}", total);
     }
-    closed = true;
-    int total = listeners.size();
-    for (RedissonStreamListener listener : listeners.keySet()) {
-      try {
-        listener.close();
-      } catch (RuntimeException ex) {
-        LOG.warn("Failed to close listener: {}", ex.getMessage(), ex);
-      }
-    }
-    listeners.clear();
-    LOG.info("RedissonStreamListenerFactory closed, total listeners: {}", total);
-  }
 
-  @Override
-  public boolean isClosed() {
-    return closed;
-  }
+    @Override
+    public boolean isClosed() {
+        return closed;
+    }
 }

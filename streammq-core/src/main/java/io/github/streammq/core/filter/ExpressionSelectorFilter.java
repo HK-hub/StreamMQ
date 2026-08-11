@@ -12,17 +12,17 @@ import io.github.streammq.core.enums.SelectorType;
  */
 public interface ExpressionSelectorFilter extends ConsumerFilter {
 
-  /**
-   * 获取选择器表达式。
-   *
-   * @return 表达式字符串
-   */
-  String getSelectorExpression();
+    /**
+     * 获取选择器表达式。
+     *
+     * @return 表达式字符串
+     */
+    String getSelectorExpression();
 
-  /**
-   * 获取选择器类型。
-   *
-   * @return 选择器类型
-   */
-  SelectorType getSelectorType();
+    /**
+     * 获取选择器类型。
+     *
+     * @return 选择器类型
+     */
+    SelectorType getSelectorType();
 }

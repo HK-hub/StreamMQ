@@ -36,59 +36,59 @@ import org.springframework.test.annotation.DirtiesContext;
 @DisplayName("Diagnostics 示例集成测试")
 class DiagnosticsSampleIT {
 
-  private static final String TEST_CONSUMER_GROUP = "diagnostics-test-consumer";
+    private static final String TEST_CONSUMER_GROUP = "diagnostics-test-consumer";
 
-  @Autowired private OrderProducer orderProducer;
+    @Autowired private OrderProducer orderProducer;
 
-  @Autowired private StreamMQDiagnosticsService diagnosticsService;
+    @Autowired private StreamMQDiagnosticsService diagnosticsService;
 
-  @Autowired private TestMessageCollector testCollector;
+    @Autowired private TestMessageCollector testCollector;
 
-  @BeforeEach
-  void clear() {
-    testCollector.receivedMessages.clear();
-  }
-
-  @Test
-  @DisplayName("发送订单后应能生成慢消费报告")
-  void shouldDiagnoseSlowConsume() {
-    SendResult result = orderProducer.createOrder("ORD-001", "order-content");
-    assertThat(result.isSuccess()).isTrue();
-
-    await()
-        .atMost(10, TimeUnit.SECONDS)
-        .untilAsserted(() -> assertThat(testCollector.receivedMessages).hasSize(1));
-
-    SlowConsumeReport report =
-        diagnosticsService.diagnoseSlowConsume("order-events", TEST_CONSUMER_GROUP);
-    assertThat(report).isNotNull();
-    assertThat(report.topic()).isEqualTo("order-events");
-  }
-
-  @Test
-  @DisplayName("发送订单后应能生成积压报告")
-  void shouldDiagnoseBacklog() {
-    orderProducer.createOrder("ORD-002", "order-content");
-
-    await()
-        .atMost(10, TimeUnit.SECONDS)
-        .untilAsserted(() -> assertThat(testCollector.receivedMessages).hasSize(1));
-
-    BacklogReport report = diagnosticsService.diagnoseBacklog("order-events", TEST_CONSUMER_GROUP);
-    assertThat(report).isNotNull();
-    assertThat(report.topic()).isEqualTo("order-events");
-  }
-
-  /** 测试专用消息收集器，使用独立消费者组避免干扰。 */
-  @StreamMQConsumer(topic = "order-events", consumerGroup = TEST_CONSUMER_GROUP)
-  static class TestMessageCollector implements StreamMessageConcurrentlyConsumer<String> {
-
-    final ConcurrentLinkedQueue<Message<String>> receivedMessages = new ConcurrentLinkedQueue<>();
-
-    @Override
-    public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
-      receivedMessages.add(message);
-      return ConsumeAction.SUCCESS;
+    @BeforeEach
+    void clear() {
+        testCollector.receivedMessages.clear();
     }
-  }
+
+    @Test
+    @DisplayName("发送订单后应能生成慢消费报告")
+    void shouldDiagnoseSlowConsume() {
+        SendResult result = orderProducer.createOrder("ORD-001", "order-content");
+        assertThat(result.isSuccess()).isTrue();
+
+        await().atMost(10, TimeUnit.SECONDS)
+                .untilAsserted(() -> assertThat(testCollector.receivedMessages).hasSize(1));
+
+        SlowConsumeReport report =
+                diagnosticsService.diagnoseSlowConsume("order-events", TEST_CONSUMER_GROUP);
+        assertThat(report).isNotNull();
+        assertThat(report.topic()).isEqualTo("order-events");
+    }
+
+    @Test
+    @DisplayName("发送订单后应能生成积压报告")
+    void shouldDiagnoseBacklog() {
+        orderProducer.createOrder("ORD-002", "order-content");
+
+        await().atMost(10, TimeUnit.SECONDS)
+                .untilAsserted(() -> assertThat(testCollector.receivedMessages).hasSize(1));
+
+        BacklogReport report =
+                diagnosticsService.diagnoseBacklog("order-events", TEST_CONSUMER_GROUP);
+        assertThat(report).isNotNull();
+        assertThat(report.topic()).isEqualTo("order-events");
+    }
+
+    /** 测试专用消息收集器，使用独立消费者组避免干扰。 */
+    @StreamMQConsumer(topic = "order-events", consumerGroup = TEST_CONSUMER_GROUP)
+    static class TestMessageCollector implements StreamMessageConcurrentlyConsumer<String> {
+
+        final ConcurrentLinkedQueue<Message<String>> receivedMessages =
+                new ConcurrentLinkedQueue<>();
+
+        @Override
+        public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
+            receivedMessages.add(message);
+            return ConsumeAction.SUCCESS;
+        }
+    }
 }

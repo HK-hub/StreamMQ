@@ -27,39 +27,39 @@ import java.util.List;
  */
 public interface StreamMQListener {
 
-  /**
-   * 非阻塞拉取消息。
-   *
-   * @param batchSize 批量大小（1-1000）
-   * @return 消息列表，可能为空
-   */
-  List<Message<?>> pull(int batchSize);
+    /**
+     * 非阻塞拉取消息。
+     *
+     * @param batchSize 批量大小（1-1000）
+     * @return 消息列表，可能为空
+     */
+    List<Message<?>> pull(int batchSize);
 
-  /**
-   * 阻塞拉取消息。
-   *
-   * @param batchSize 批量大小
-   * @param timeout 阻塞超时时长
-   * @return 消息列表，超时后可能为空
-   */
-  List<Message<?>> pullBlock(int batchSize, Duration timeout);
+    /**
+     * 阻塞拉取消息。
+     *
+     * @param batchSize 批量大小
+     * @param timeout 阻塞超时时长
+     * @return 消息列表，超时后可能为空
+     */
+    List<Message<?>> pullBlock(int batchSize, Duration timeout);
 
-  /**
-   * 确认单条消息（从 PEL 中移除）。
-   *
-   * @param messageId 消息 ID
-   * @throws io.github.streammq.core.exception.StreamMQBrokerException 如果 XACK 失败
-   */
-  void ack(MessageId messageId);
+    /**
+     * 确认单条消息（从 PEL 中移除）。
+     *
+     * @param messageId 消息 ID
+     * @throws io.github.streammq.core.exception.StreamMQBrokerException 如果 XACK 失败
+     */
+    void ack(MessageId messageId);
 
-  /**
-   * 批量确认消息。
-   *
-   * @param messageIds 消息 ID 列表
-   * @throws io.github.streammq.core.exception.StreamMQBrokerException 如果 XACK 失败
-   */
-  void ackBatch(List<MessageId> messageIds);
+    /**
+     * 批量确认消息。
+     *
+     * @param messageIds 消息 ID 列表
+     * @throws io.github.streammq.core.exception.StreamMQBrokerException 如果 XACK 失败
+     */
+    void ackBatch(List<MessageId> messageIds);
 
-  /** 关闭监听器，释放资源。 */
-  void close();
+    /** 关闭监听器，释放资源。 */
+    void close();
 }

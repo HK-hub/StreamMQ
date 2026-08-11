@@ -28,43 +28,46 @@ import org.slf4j.LoggerFactory;
  */
 public class LoggingProducerInterceptor implements ProducerInterceptor {
 
-  private static final Logger LOG = LoggerFactory.getLogger(LoggingProducerInterceptor.class);
+    private static final Logger LOG = LoggerFactory.getLogger(LoggingProducerInterceptor.class);
 
-  @Override
-  public boolean beforeSend(Message<?> message) {
-    Objects.requireNonNull(message, "message");
-    LOG.info("[ProducerLog] beforeSend topic={}, keys={}", message.getTopic(), message.getKeys());
-    return true;
-  }
+    @Override
+    public boolean beforeSend(Message<?> message) {
+        Objects.requireNonNull(message, "message");
+        LOG.info(
+                "[ProducerLog] beforeSend topic={}, keys={}",
+                message.getTopic(),
+                message.getKeys());
+        return true;
+    }
 
-  @Override
-  public void afterSend(Message<?> message, SendResult result) {
-    Objects.requireNonNull(message, "message");
-    Objects.requireNonNull(result, "result");
-    LOG.info(
-        "[ProducerLog] afterSend topic={}, msgId={}, status={}",
-        message.getTopic(),
-        result.getMessageId(),
-        result.getSendStatus());
-  }
+    @Override
+    public void afterSend(Message<?> message, SendResult result) {
+        Objects.requireNonNull(message, "message");
+        Objects.requireNonNull(result, "result");
+        LOG.info(
+                "[ProducerLog] afterSend topic={}, msgId={}, status={}",
+                message.getTopic(),
+                result.getMessageId(),
+                result.getSendStatus());
+    }
 
-  @Override
-  public void onException(Message<?> message, Exception exception, InvokeTiming timing) {
-    LOG.error(
-        "[ProducerLog] onException topic={}, keys={}, timing={}",
-        Objects.nonNull(message) ? message.getTopic() : null,
-        Objects.nonNull(message) ? message.getKeys() : null,
-        timing,
-        exception);
-  }
+    @Override
+    public void onException(Message<?> message, Exception exception, InvokeTiming timing) {
+        LOG.error(
+                "[ProducerLog] onException topic={}, keys={}, timing={}",
+                Objects.nonNull(message) ? message.getTopic() : null,
+                Objects.nonNull(message) ? message.getKeys() : null,
+                timing,
+                exception);
+    }
 
-  @Override
-  public int order() {
-    return 1000;
-  }
+    @Override
+    public int order() {
+        return 1000;
+    }
 
-  @Override
-  public String name() {
-    return "logging-producer";
-  }
+    @Override
+    public String name() {
+        return "logging-producer";
+    }
 }

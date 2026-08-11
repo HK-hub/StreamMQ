@@ -45,14 +45,14 @@ import io.github.streammq.core.message.SendResult;
  */
 public interface TransactionExecutor {
 
-  /**
-   * 在事务中执行消息发送。
-   *
-   * @param message 半消息载体（topic 必填，body 必填）
-   * @param callback 本地事务回调
-   * @param <T> body 类型
-   * @return 发送结果（仅在 COMMIT_MESSAGE 时为 SEND_OK，其他状态为 SEND_FAILED）
-   * @throws io.github.streammq.core.exception.TransactionException 如果半消息发送失败
-   */
-  <T> SendResult executeInTransaction(Message<T> message, TransactionCallback<T> callback);
+    /**
+     * 在事务中执行消息发送。
+     *
+     * @param message 半消息载体（topic 必填，body 必填）
+     * @param callback 本地事务回调
+     * @param <T> body 类型
+     * @return 发送结果（仅在 COMMIT_MESSAGE 时为 SEND_OK，其他状态为 SEND_FAILED）
+     * @throws io.github.streammq.core.exception.TransactionException 如果半消息发送失败
+     */
+    <T> SendResult executeInTransaction(Message<T> message, TransactionCallback<T> callback);
 }

@@ -16,25 +16,25 @@ import java.util.List;
  */
 public interface BatchMessageService {
 
-  <T> List<SendResult> sendBatch(BatchMessage<T> batch);
+    <T> List<SendResult> sendBatch(BatchMessage<T> batch);
 
-  <T> List<SendResult> sendBatch(String topic, List<T> bodies);
+    <T> List<SendResult> sendBatch(String topic, List<T> bodies);
 
-  <T> List<SendResult> sendBatch(String topic, String tag, List<T> bodies);
+    <T> List<SendResult> sendBatch(String topic, String tag, List<T> bodies);
 
-  <T> List<SendResult> sendBatch(String topic, List<T> bodies, MessageMetadataBuilder metadata);
+    <T> List<SendResult> sendBatch(String topic, List<T> bodies, MessageMetadataBuilder metadata);
 
-  <T> List<SendResult> sendBatch(List<Message<T>> messages);
+    <T> List<SendResult> sendBatch(List<Message<T>> messages);
 
-  <T> List<SendResult> sendBatch(List<Message<T>> messages, long timeoutMillis, int retryTimes);
+    <T> List<SendResult> sendBatch(List<Message<T>> messages, long timeoutMillis, int retryTimes);
 
-  @SuppressWarnings("unchecked")
-  <T> List<SendResult> sendBatch(Message<T>... messages);
+    @SuppressWarnings("unchecked")
+    <T> List<SendResult> sendBatch(Message<T>... messages);
 
-  @SuppressWarnings("unchecked")
-  <T> List<SendResult> sendBatch(String topic, Message<T>... messages);
+    @SuppressWarnings("unchecked")
+    <T> List<SendResult> sendBatch(String topic, Message<T>... messages);
 
-  @SuppressWarnings("unchecked")
-  <T> List<SendResult> sendBatch(
-      String topic, long timeoutMillis, int retryTimes, Message<T>... messages);
+    @SuppressWarnings("unchecked")
+    <T> List<SendResult> sendBatch(
+            String topic, long timeoutMillis, int retryTimes, Message<T>... messages);
 }

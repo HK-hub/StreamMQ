@@ -10,11 +10,11 @@ package io.github.streammq.core.filter;
  */
 public interface ConsumerFilterResolver {
 
-  /**
-   * 根据过滤器类获取过滤器实例。
-   *
-   * @param filterClass 过滤器类
-   * @return 过滤器实例，可为 null
-   */
-  ConsumerFilter resolve(Class<? extends ConsumerFilter> filterClass);
+    /**
+     * 根据过滤器类获取过滤器实例。
+     *
+     * @param filterClass 过滤器类
+     * @return 过滤器实例，可为 null
+     */
+    ConsumerFilter resolve(Class<? extends ConsumerFilter> filterClass);
 }

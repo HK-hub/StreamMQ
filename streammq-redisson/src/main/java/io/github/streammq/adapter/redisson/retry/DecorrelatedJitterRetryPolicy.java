@@ -37,104 +37,104 @@ import java.util.concurrent.ThreadLocalRandom;
  */
 public class DecorrelatedJitterRetryPolicy implements RetryPolicy {
 
-  /** 默认初始延迟 1s */
-  public static final Duration DEFAULT_BASE = Duration.ofSeconds(1);
+    /** 默认初始延迟 1s */
+    public static final Duration DEFAULT_BASE = Duration.ofSeconds(1);
 
-  /** 默认最大延迟 2h */
-  public static final Duration DEFAULT_CAP = Duration.ofHours(2);
+    /** 默认最大延迟 2h */
+    public static final Duration DEFAULT_CAP = Duration.ofHours(2);
 
-  /** 默认最大重试次数 16 */
-  public static final int DEFAULT_MAX_RECONSUME_TIMES =
-      StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
+    /** 默认最大重试次数 16 */
+    public static final int DEFAULT_MAX_RECONSUME_TIMES =
+            StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
 
-  private final long baseMillis;
-  private final long capMillis;
-  private final int maxReconsumeTimes;
+    private final long baseMillis;
+    private final long capMillis;
+    private final int maxReconsumeTimes;
 
-  /** 使用默认参数构造（base=1s, cap=2h, maxReconsumeTimes=16）。 */
-  public DecorrelatedJitterRetryPolicy() {
-    this(DEFAULT_BASE.toMillis(), DEFAULT_CAP.toMillis(), DEFAULT_MAX_RECONSUME_TIMES);
-  }
-
-  /**
-   * 自定义参数构造。
-   *
-   * @param baseMillis 初始延迟（毫秒），必须 > 0
-   * @param capMillis 最大延迟（毫秒），必须 >= baseMillis
-   * @param maxReconsumeTimes 最大重试次数，必须 > 0
-   */
-  public DecorrelatedJitterRetryPolicy(long baseMillis, long capMillis, int maxReconsumeTimes) {
-    if (baseMillis <= 0) {
-      throw new IllegalArgumentException("baseMillis must be positive: " + baseMillis);
-    }
-    if (capMillis < baseMillis) {
-      throw new IllegalArgumentException("capMillis must be >= baseMillis: " + capMillis);
-    }
-    if (maxReconsumeTimes <= 0) {
-      throw new IllegalArgumentException(
-          "maxReconsumeTimes must be positive: " + maxReconsumeTimes);
-    }
-    this.baseMillis = baseMillis;
-    this.capMillis = capMillis;
-    this.maxReconsumeTimes = maxReconsumeTimes;
-  }
-
-  @Override
-  public Duration nextRetryDelay(int reconsumeTimes, Message<?> message) {
-    Objects.requireNonNull(message, "message");
-    if (reconsumeTimes < 0) {
-      reconsumeTimes = 0;
-    }
-    if (reconsumeTimes >= maxReconsumeTimes) {
-      return null;
-    }
-    double upperDouble = baseMillis * Math.pow(3.0, reconsumeTimes);
-    long upper = (long) Math.min(upperDouble, capMillis);
-    if (upper < 0) {
-      upper = capMillis;
+    /** 使用默认参数构造（base=1s, cap=2h, maxReconsumeTimes=16）。 */
+    public DecorrelatedJitterRetryPolicy() {
+        this(DEFAULT_BASE.toMillis(), DEFAULT_CAP.toMillis(), DEFAULT_MAX_RECONSUME_TIMES);
     }
 
-    long high = Math.min(upper, capMillis);
-    high = Math.min(high, Long.MAX_VALUE - 1);
-    long delay;
-    if (high <= baseMillis) {
-      delay = baseMillis;
-    } else {
-      delay = ThreadLocalRandom.current().nextLong(baseMillis, high + 1);
+    /**
+     * 自定义参数构造。
+     *
+     * @param baseMillis 初始延迟（毫秒），必须 > 0
+     * @param capMillis 最大延迟（毫秒），必须 >= baseMillis
+     * @param maxReconsumeTimes 最大重试次数，必须 > 0
+     */
+    public DecorrelatedJitterRetryPolicy(long baseMillis, long capMillis, int maxReconsumeTimes) {
+        if (baseMillis <= 0) {
+            throw new IllegalArgumentException("baseMillis must be positive: " + baseMillis);
+        }
+        if (capMillis < baseMillis) {
+            throw new IllegalArgumentException("capMillis must be >= baseMillis: " + capMillis);
+        }
+        if (maxReconsumeTimes <= 0) {
+            throw new IllegalArgumentException(
+                    "maxReconsumeTimes must be positive: " + maxReconsumeTimes);
+        }
+        this.baseMillis = baseMillis;
+        this.capMillis = capMillis;
+        this.maxReconsumeTimes = maxReconsumeTimes;
     }
-    return Duration.ofMillis(Math.min(delay, capMillis));
-  }
 
-  @Override
-  public boolean shouldStopRetry(int reconsumeTimes, Message<?> message) {
-    Objects.requireNonNull(message, "message");
-    return reconsumeTimes >= maxReconsumeTimes;
-  }
+    @Override
+    public Duration nextRetryDelay(int reconsumeTimes, Message<?> message) {
+        Objects.requireNonNull(message, "message");
+        if (reconsumeTimes < 0) {
+            reconsumeTimes = 0;
+        }
+        if (reconsumeTimes >= maxReconsumeTimes) {
+            return null;
+        }
+        double upperDouble = baseMillis * Math.pow(3.0, reconsumeTimes);
+        long upper = (long) Math.min(upperDouble, capMillis);
+        if (upper < 0) {
+            upper = capMillis;
+        }
 
-  /**
-   * 返回初始延迟（毫秒）。
-   *
-   * @return 初始延迟
-   */
-  public long getBaseMillis() {
-    return baseMillis;
-  }
+        long high = Math.min(upper, capMillis);
+        high = Math.min(high, Long.MAX_VALUE - 1);
+        long delay;
+        if (high <= baseMillis) {
+            delay = baseMillis;
+        } else {
+            delay = ThreadLocalRandom.current().nextLong(baseMillis, high + 1);
+        }
+        return Duration.ofMillis(Math.min(delay, capMillis));
+    }
 
-  /**
-   * 返回最大延迟（毫秒）。
-   *
-   * @return 最大延迟
-   */
-  public long getCapMillis() {
-    return capMillis;
-  }
+    @Override
+    public boolean shouldStopRetry(int reconsumeTimes, Message<?> message) {
+        Objects.requireNonNull(message, "message");
+        return reconsumeTimes >= maxReconsumeTimes;
+    }
 
-  /**
-   * 返回最大重试次数。
-   *
-   * @return 最大重试次数
-   */
-  public int getMaxReconsumeTimes() {
-    return maxReconsumeTimes;
-  }
+    /**
+     * 返回初始延迟（毫秒）。
+     *
+     * @return 初始延迟
+     */
+    public long getBaseMillis() {
+        return baseMillis;
+    }
+
+    /**
+     * 返回最大延迟（毫秒）。
+     *
+     * @return 最大延迟
+     */
+    public long getCapMillis() {
+        return capMillis;
+    }
+
+    /**
+     * 返回最大重试次数。
+     *
+     * @return 最大重试次数
+     */
+    public int getMaxReconsumeTimes() {
+        return maxReconsumeTimes;
+    }
 }

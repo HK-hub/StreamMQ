@@ -19,12 +19,12 @@ import org.springframework.stereotype.Component;
 @StreamMQConsumer(topic = "tracing-events", consumerGroup = "tracing-sample-consumer")
 public class EventConsumer implements StreamMessageConcurrentlyConsumer<String> {
 
-  private static final Logger log = LoggerFactory.getLogger(EventConsumer.class);
+    private static final Logger log = LoggerFactory.getLogger(EventConsumer.class);
 
-  @Override
-  public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
-    String traceparent = message.getUserProperties().get("traceparent");
-    log.info("Received event: keys={}, traceparent={}", message.getKeys(), traceparent);
-    return ConsumeAction.SUCCESS;
-  }
+    @Override
+    public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
+        String traceparent = message.getUserProperties().get("traceparent");
+        log.info("Received event: keys={}, traceparent={}", message.getKeys(), traceparent);
+        return ConsumeAction.SUCCESS;
+    }
 }

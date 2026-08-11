@@ -14,16 +14,20 @@ import org.springframework.stereotype.Component;
 @Component
 public class EventProducer {
 
-  private static final String TOPIC = "tracing-events";
+    private static final String TOPIC = "tracing-events";
 
-  private final StreamMessageTemplate template;
+    private final StreamMessageTemplate template;
 
-  public EventProducer(StreamMessageTemplate template) {
-    this.template = template;
-  }
+    public EventProducer(StreamMessageTemplate template) {
+        this.template = template;
+    }
 
-  public SendResult emitEvent(String eventId, String payload) {
-    return template.syncSend(
-        MessageBuilder.<String>withTopic(TOPIC).tag("event").keys(eventId).body(payload).build());
-  }
+    public SendResult emitEvent(String eventId, String payload) {
+        return template.syncSend(
+                MessageBuilder.<String>withTopic(TOPIC)
+                        .tag("event")
+                        .keys(eventId)
+                        .body(payload)
+                        .build());
+    }
 }

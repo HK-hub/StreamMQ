@@ -11,21 +11,21 @@ package io.github.streammq.core.listener;
  */
 public interface StreamMQListenerFactory {
 
-  /**
-   * 创建监听器。
-   *
-   * @param config 监听器配置（主题、消费者组、命名空间等）
-   * @return 监听器实例
-   */
-  StreamMQListener createListener(ListenerConfig config);
+    /**
+     * 创建监听器。
+     *
+     * @param config 监听器配置（主题、消费者组、命名空间等）
+     * @return 监听器实例
+     */
+    StreamMQListener createListener(ListenerConfig config);
 
-  /** 关闭工厂，释放底层资源。 */
-  void close();
+    /** 关闭工厂，释放底层资源。 */
+    void close();
 
-  /**
-   * 返回工厂是否已关闭。
-   *
-   * @return true 如果已关闭
-   */
-  boolean isClosed();
+    /**
+     * 返回工厂是否已关闭。
+     *
+     * @return true 如果已关闭
+     */
+    boolean isClosed();
 }

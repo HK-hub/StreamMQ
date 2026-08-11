@@ -40,411 +40,411 @@ import java.util.Objects;
  */
 public final class StreamMQKeys {
 
-  /** Key 全局前缀 */
-  public static final String PREFIX = "streammq";
+    /** Key 全局前缀 */
+    public static final String PREFIX = "streammq";
 
-  /** 分隔符 */
-  public static final String SEP = ":";
+    /** 分隔符 */
+    public static final String SEP = ":";
 
-  /** 顺序消息分片 Stream 前缀（拼接在 topic 之后） */
-  public static final String SHARD_PREFIX = ":shard";
+    /** 顺序消息分片 Stream 前缀（拼接在 topic 之后） */
+    public static final String SHARD_PREFIX = ":shard";
 
-  // ==================== Key 类型段（type segment） ====================
-  /** 业务消息类型段 */
-  public static final String TYPE_MSG = "msg";
+    // ==================== Key 类型段（type segment） ====================
+    /** 业务消息类型段 */
+    public static final String TYPE_MSG = "msg";
 
-  /** 消费组类型段 */
-  public static final String TYPE_CG = "cg";
+    /** 消费组类型段 */
+    public static final String TYPE_CG = "cg";
 
-  /** 重试队列类型段 */
-  public static final String TYPE_RETRY = "retry";
+    /** 重试队列类型段 */
+    public static final String TYPE_RETRY = "retry";
 
-  /** 死信队列类型段 */
-  public static final String TYPE_DLQ = "dlq";
+    /** 死信队列类型段 */
+    public static final String TYPE_DLQ = "dlq";
 
-  /** 延时类型段 */
-  public static final String TYPE_DELAY = "delay";
+    /** 延时类型段 */
+    public static final String TYPE_DELAY = "delay";
 
-  /** 半消息暂存类型段 */
-  public static final String TYPE_HALF = "half";
+    /** 半消息暂存类型段 */
+    public static final String TYPE_HALF = "half";
 
-  /** 事务状态类型段 */
-  public static final String TYPE_TXSTATE = "txstate";
+    /** 事务状态类型段 */
+    public static final String TYPE_TXSTATE = "txstate";
 
-  /** 事务回查类型段 */
-  public static final String TYPE_TXCHECK = "txcheck";
+    /** 事务回查类型段 */
+    public static final String TYPE_TXCHECK = "txcheck";
 
-  /** 顺序消费分片锁类型段 */
-  public static final String TYPE_SHARDLOCK = "shardlock";
+    /** 顺序消费分片锁类型段 */
+    public static final String TYPE_SHARDLOCK = "shardlock";
 
-  /** 元数据类型段 */
-  public static final String TYPE_META = "meta";
+    /** 元数据类型段 */
+    public static final String TYPE_META = "meta";
 
-  /** 追踪类型段 */
-  public static final String TYPE_TRACE = "trace";
+    /** 追踪类型段 */
+    public static final String TYPE_TRACE = "trace";
 
-  // ==================== Key 后缀段（suffix segment） ====================
-  /** 实例列表后缀 */
-  public static final String SEG_INSTANCES = "instances";
+    // ==================== Key 后缀段（suffix segment） ====================
+    /** 实例列表后缀 */
+    public static final String SEG_INSTANCES = "instances";
 
-  /** 信号量后缀 */
-  public static final String SEG_SEMAPHORE = "semaphore";
+    /** 信号量后缀 */
+    public static final String SEG_SEMAPHORE = "semaphore";
 
-  /** 分片分配后缀 */
-  public static final String SEG_ASSIGNMENT = "assignment";
+    /** 分片分配后缀 */
+    public static final String SEG_ASSIGNMENT = "assignment";
 
-  /** 通知频道后缀 */
-  public static final String SEG_NOTIFY = "notify";
+    /** 通知频道后缀 */
+    public static final String SEG_NOTIFY = "notify";
 
-  /** 重试转移后缀 */
-  public static final String SEG_TRANSFER = "transfer";
+    /** 重试转移后缀 */
+    public static final String SEG_TRANSFER = "transfer";
 
-  /** 锁后缀 */
-  public static final String SEG_LOCK = "lock";
+    /** 锁后缀 */
+    public static final String SEG_LOCK = "lock";
 
-  /** payload 后缀 */
-  public static final String SEG_PAYLOAD = "payload";
+    /** payload 后缀 */
+    public static final String SEG_PAYLOAD = "payload";
 
-  /** 已投递计数后缀 */
-  public static final String SEG_DELIVERED = "delivered";
+    /** 已投递计数后缀 */
+    public static final String SEG_DELIVERED = "delivered";
 
-  /** 计数后缀 */
-  public static final String SEG_COUNTER = "counter";
+    /** 计数后缀 */
+    public static final String SEG_COUNTER = "counter";
 
-  /** 位点后缀 */
-  public static final String SEG_OFFSET = "offset";
+    /** 位点后缀 */
+    public static final String SEG_OFFSET = "offset";
 
-  /** 统计后缀 */
-  public static final String SEG_STATS = "stats";
+    /** 统计后缀 */
+    public static final String SEG_STATS = "stats";
 
-  /** 配置后缀 */
-  public static final String SEG_CONFIG = "config";
+    /** 配置后缀 */
+    public static final String SEG_CONFIG = "config";
 
-  private StreamMQKeys() {}
+    private StreamMQKeys() {}
 
-  /**
-   * 拼接命名空间前缀段：{@code streammq:{ns}}。 当 ns 为空时返回 {@code streammq}。
-   *
-   * @param namespace 命名空间，可为 null 或空字符串
-   * @return 前缀段
-   */
-  public static String prefix(String namespace) {
-    if (StringUtils.isEmpty(namespace)) {
-      return PREFIX;
+    /**
+     * 拼接命名空间前缀段：{@code streammq:{ns}}。 当 ns 为空时返回 {@code streammq}。
+     *
+     * @param namespace 命名空间，可为 null 或空字符串
+     * @return 前缀段
+     */
+    public static String prefix(String namespace) {
+        if (StringUtils.isEmpty(namespace)) {
+            return PREFIX;
+        }
+        return PREFIX + SEP + namespace;
     }
-    return PREFIX + SEP + namespace;
-  }
 
-  /**
-   * 业务消息 Stream Key：{@code streammq:{ns}:msg:{topic}}。
-   *
-   * @param namespace 命名空间
-   * @param topic 主题
-   * @return Stream Key
-   */
-  public static String topicStream(String namespace, String topic) {
-    return prefix(namespace) + SEP + TYPE_MSG + SEP + requireNonEmpty(topic, "topic");
-  }
+    /**
+     * 业务消息 Stream Key：{@code streammq:{ns}:msg:{topic}}。
+     *
+     * @param namespace 命名空间
+     * @param topic 主题
+     * @return Stream Key
+     */
+    public static String topicStream(String namespace, String topic) {
+        return prefix(namespace) + SEP + TYPE_MSG + SEP + requireNonEmpty(topic, "topic");
+    }
 
-  /**
-   * 顺序消息分片 Stream Key：{@code streammq:{ns}:msg:{topic}:shard{shardId}}。
-   *
-   * @param namespace 命名空间
-   * @param topic 主题
-   * @param shardId 分片 ID
-   * @return 分片 Stream Key
-   */
-  public static String shardStream(String namespace, String topic, int shardId) {
-    return topicStream(namespace, topic) + SHARD_PREFIX + shardId;
-  }
+    /**
+     * 顺序消息分片 Stream Key：{@code streammq:{ns}:msg:{topic}:shard{shardId}}。
+     *
+     * @param namespace 命名空间
+     * @param topic 主题
+     * @param shardId 分片 ID
+     * @return 分片 Stream Key
+     */
+    public static String shardStream(String namespace, String topic, int shardId) {
+        return topicStream(namespace, topic) + SHARD_PREFIX + shardId;
+    }
 
-  /** 消费组实例列表 Hash Key：{@code streammq:{ns}:cg:{group}:instances}。 */
-  public static String consumerGroupInstances(String namespace, String group) {
-    return prefix(namespace)
-        + SEP
-        + TYPE_CG
-        + SEP
-        + requireNonEmpty(group, "group")
-        + SEP
-        + SEG_INSTANCES;
-  }
+    /** 消费组实例列表 Hash Key：{@code streammq:{ns}:cg:{group}:instances}。 */
+    public static String consumerGroupInstances(String namespace, String group) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_CG
+                + SEP
+                + requireNonEmpty(group, "group")
+                + SEP
+                + SEG_INSTANCES;
+    }
 
-  /** 消费组信号量 Key：{@code streammq:{ns}:cg:{group}:semaphore}。 */
-  public static String consumerGroupSemaphore(String namespace, String group) {
-    return prefix(namespace)
-        + SEP
-        + TYPE_CG
-        + SEP
-        + requireNonEmpty(group, "group")
-        + SEP
-        + SEG_SEMAPHORE;
-  }
+    /** 消费组信号量 Key：{@code streammq:{ns}:cg:{group}:semaphore}。 */
+    public static String consumerGroupSemaphore(String namespace, String group) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_CG
+                + SEP
+                + requireNonEmpty(group, "group")
+                + SEP
+                + SEG_SEMAPHORE;
+    }
 
-  /** 消费组分片分配 Hash Key：{@code streammq:{ns}:cg:{group}:assignment}。 */
-  public static String consumerGroupAssignment(String namespace, String group) {
-    return prefix(namespace)
-        + SEP
-        + TYPE_CG
-        + SEP
-        + requireNonEmpty(group, "group")
-        + SEP
-        + SEG_ASSIGNMENT;
-  }
+    /** 消费组分片分配 Hash Key：{@code streammq:{ns}:cg:{group}:assignment}。 */
+    public static String consumerGroupAssignment(String namespace, String group) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_CG
+                + SEP
+                + requireNonEmpty(group, "group")
+                + SEP
+                + SEG_ASSIGNMENT;
+    }
 
-  /** 消费组通知频道 Key：{@code streammq:{ns}:cg:{group}:notify}。 */
-  public static String consumerGroupNotify(String namespace, String group) {
-    return prefix(namespace)
-        + SEP
-        + TYPE_CG
-        + SEP
-        + requireNonEmpty(group, "group")
-        + SEP
-        + SEG_NOTIFY;
-  }
+    /** 消费组通知频道 Key：{@code streammq:{ns}:cg:{group}:notify}。 */
+    public static String consumerGroupNotify(String namespace, String group) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_CG
+                + SEP
+                + requireNonEmpty(group, "group")
+                + SEP
+                + SEG_NOTIFY;
+    }
 
-  /**
-   * 重试队列 ZSet Key：{@code streammq:{ns}:retry:{topic}:{group}}。
-   * 用于调度延迟重试，score=nextRetryAt(ms)，member=msgId。
-   */
-  public static String retryZSet(String namespace, String topic, String group) {
-    return prefix(namespace)
-        + SEP
-        + TYPE_RETRY
-        + SEP
-        + requireNonEmpty(topic, "topic")
-        + SEP
-        + requireNonEmpty(group, "group");
-  }
+    /**
+     * 重试队列 ZSet Key：{@code streammq:{ns}:retry:{topic}:{group}}。
+     * 用于调度延迟重试，score=nextRetryAt(ms)，member=msgId。
+     */
+    public static String retryZSet(String namespace, String topic, String group) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_RETRY
+                + SEP
+                + requireNonEmpty(topic, "topic")
+                + SEP
+                + requireNonEmpty(group, "group");
+    }
 
-  /**
-   * 重试消息 Stream Key：{@code streammq:{ns}:retry:msg:{topic}:{group}}（对齐 RocketMQ %RETRY%{group}%）。
-   *
-   * <p>并发消费失败的消息经 RetryScheduler 延迟后 XADD 到此 Stream（非原 topic Stream）， 消费者同时订阅原 Stream 和此 retry
-   * Stream，实现 retry 与新消息隔离。 消费组与原 Stream 相同，retryTimes 字段递增标识重试次数。
-   *
-   * @param namespace 命名空间
-   * @param topic 原始主题
-   * @param group 消费者组名
-   * @return retry Stream Key
-   */
-  public static String retryStream(String namespace, String topic, String group) {
-    return prefix(namespace)
-        + SEP
-        + TYPE_RETRY
-        + SEP
-        + TYPE_MSG
-        + SEP
-        + requireNonEmpty(topic, "topic")
-        + SEP
-        + requireNonEmpty(group, "group");
-  }
+    /**
+     * 重试消息 Stream Key：{@code streammq:{ns}:retry:msg:{topic}:{group}}（对齐 RocketMQ %RETRY%{group}%）。
+     *
+     * <p>并发消费失败的消息经 RetryScheduler 延迟后 XADD 到此 Stream（非原 topic Stream）， 消费者同时订阅原 Stream 和此 retry
+     * Stream，实现 retry 与新消息隔离。 消费组与原 Stream 相同，retryTimes 字段递增标识重试次数。
+     *
+     * @param namespace 命名空间
+     * @param topic 原始主题
+     * @param group 消费者组名
+     * @return retry Stream Key
+     */
+    public static String retryStream(String namespace, String topic, String group) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_RETRY
+                + SEP
+                + TYPE_MSG
+                + SEP
+                + requireNonEmpty(topic, "topic")
+                + SEP
+                + requireNonEmpty(group, "group");
+    }
 
-  /**
-   * 死信队列 Stream Key：{@code streammq:{ns}:dlq:{group}}（对齐 RocketMQ %DLQ%{group}）。 按消费者组隔离，一个组的所有
-   * topic 的死信消息混在同一 DLQ Stream 中， 消息本身携带 topic 字段，消费时可从消息字段获取原 topic。
-   */
-  public static String dlqStream(String namespace, String group) {
-    return prefix(namespace) + SEP + TYPE_DLQ + SEP + requireNonEmpty(group, "group");
-  }
+    /**
+     * 死信队列 Stream Key：{@code streammq:{ns}:dlq:{group}}（对齐 RocketMQ %DLQ%{group}）。 按消费者组隔离，一个组的所有
+     * topic 的死信消息混在同一 DLQ Stream 中， 消息本身携带 topic 字段，消费时可从消息字段获取原 topic。
+     */
+    public static String dlqStream(String namespace, String group) {
+        return prefix(namespace) + SEP + TYPE_DLQ + SEP + requireNonEmpty(group, "group");
+    }
 
-  /**
-   * 二级死信队列 Stream Key：{@code streammq:{ns}:{prefix}:{group}}。 当 DLQ 消费重试耗尽时（配合 {@code
-   * SecondaryDlqFailureStrategy}），消息转投到此 Stream。
-   *
-   * @param namespace 命名空间
-   * @param group 消费者组名
-   * @param prefix 二级 DLQ 前缀段（默认 "dlq2"）
-   * @return 二级 DLQ Stream Key
-   */
-  public static String secondaryDlqStream(String namespace, String group, String prefix) {
-    return prefix(namespace)
-        + SEP
-        + requireNonEmpty(prefix, "prefix")
-        + SEP
-        + requireNonEmpty(group, "group");
-  }
+    /**
+     * 二级死信队列 Stream Key：{@code streammq:{ns}:{prefix}:{group}}。 当 DLQ 消费重试耗尽时（配合 {@code
+     * SecondaryDlqFailureStrategy}），消息转投到此 Stream。
+     *
+     * @param namespace 命名空间
+     * @param group 消费者组名
+     * @param prefix 二级 DLQ 前缀段（默认 "dlq2"）
+     * @return 二级 DLQ Stream Key
+     */
+    public static String secondaryDlqStream(String namespace, String group, String prefix) {
+        return prefix(namespace)
+                + SEP
+                + requireNonEmpty(prefix, "prefix")
+                + SEP
+                + requireNonEmpty(group, "group");
+    }
 
-  /** 重试转移降级锁 Key：{@code streammq:{ns}:retry:{topic}:{group}:transfer:lock}。 */
-  public static String retryTransferLock(String namespace, String topic, String group) {
-    return retryZSet(namespace, topic, group) + SEP + SEG_TRANSFER + SEP + SEG_LOCK;
-  }
+    /** 重试转移降级锁 Key：{@code streammq:{ns}:retry:{topic}:{group}:transfer:lock}。 */
+    public static String retryTransferLock(String namespace, String topic, String group) {
+        return retryZSet(namespace, topic, group) + SEP + SEG_TRANSFER + SEP + SEG_LOCK;
+    }
 
-  /**
-   * 延时级别 ZSet Key：{@code streammq:{ns}:delay:{level}}。
-   *
-   * @param namespace 命名空间
-   * @param level 延时级别标识（如 {@code SEC_1}, {@code MINUTE_5}）
-   * @return ZSet Key
-   */
-  public static String delayZSet(String namespace, String level) {
-    return prefix(namespace) + SEP + TYPE_DELAY + SEP + requireNonEmpty(level, "level");
-  }
+    /**
+     * 延时级别 ZSet Key：{@code streammq:{ns}:delay:{level}}。
+     *
+     * @param namespace 命名空间
+     * @param level 延时级别标识（如 {@code SEC_1}, {@code MINUTE_5}）
+     * @return ZSet Key
+     */
+    public static String delayZSet(String namespace, String level) {
+        return prefix(namespace) + SEP + TYPE_DELAY + SEP + requireNonEmpty(level, "level");
+    }
 
-  /**
-   * 自定义延时 ZSet Key（v1.0+ 任意延时）：{@code streammq:{ns}:delay:custom}。
-   *
-   * <p>用于支持 {@code delayTimeMillis} 任意延时，不依赖固定 {@link io.github.streammq.core.enums.DelayLevel}。
-   *
-   * @param namespace 命名空间
-   * @return ZSet Key
-   */
-  public static String delayCustomZSet(String namespace) {
-    return prefix(namespace) + SEP + TYPE_DELAY + SEP + "custom";
-  }
+    /**
+     * 自定义延时 ZSet Key（v1.0+ 任意延时）：{@code streammq:{ns}:delay:custom}。
+     *
+     * <p>用于支持 {@code delayTimeMillis} 任意延时，不依赖固定 {@link io.github.streammq.core.enums.DelayLevel}。
+     *
+     * @param namespace 命名空间
+     * @return ZSet Key
+     */
+    public static String delayCustomZSet(String namespace) {
+        return prefix(namespace) + SEP + TYPE_DELAY + SEP + "custom";
+    }
 
-  /**
-   * 延时消息 payload Hash Key：{@code streammq:{ns}:delay:payload:{msgId}}。
-   *
-   * @param namespace 命名空间
-   * @param msgId 消息 ID
-   * @return Hash Key
-   */
-  public static String delayPayloadHash(String namespace, String msgId) {
-    return prefix(namespace)
-        + SEP
-        + TYPE_DELAY
-        + SEP
-        + SEG_PAYLOAD
-        + SEP
-        + requireNonEmpty(msgId, "msgId");
-  }
+    /**
+     * 延时消息 payload Hash Key：{@code streammq:{ns}:delay:payload:{msgId}}。
+     *
+     * @param namespace 命名空间
+     * @param msgId 消息 ID
+     * @return Hash Key
+     */
+    public static String delayPayloadHash(String namespace, String msgId) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_DELAY
+                + SEP
+                + SEG_PAYLOAD
+                + SEP
+                + requireNonEmpty(msgId, "msgId");
+    }
 
-  /** 延时已投递计数 Hash Key：{@code streammq:{ns}:delay:meta:delivered}。 */
-  public static String delayDeliveredCounter(String namespace) {
-    return prefix(namespace) + SEP + TYPE_DELAY + SEP + TYPE_META + SEP + SEG_DELIVERED;
-  }
+    /** 延时已投递计数 Hash Key：{@code streammq:{ns}:delay:meta:delivered}。 */
+    public static String delayDeliveredCounter(String namespace) {
+        return prefix(namespace) + SEP + TYPE_DELAY + SEP + TYPE_META + SEP + SEG_DELIVERED;
+    }
 
-  /** 半消息暂存 Stream Key：{@code streammq:{ns}:half:{txGroup}}。 */
-  public static String halfStream(String namespace, String txGroup) {
-    return prefix(namespace) + SEP + TYPE_HALF + SEP + requireNonEmpty(txGroup, "txGroup");
-  }
+    /** 半消息暂存 Stream Key：{@code streammq:{ns}:half:{txGroup}}。 */
+    public static String halfStream(String namespace, String txGroup) {
+        return prefix(namespace) + SEP + TYPE_HALF + SEP + requireNonEmpty(txGroup, "txGroup");
+    }
 
-  /** 事务状态 Hash Key：{@code streammq:{ns}:txstate:{txGroup}}。 */
-  public static String transactionStateHash(String namespace, String txGroup) {
-    return prefix(namespace) + SEP + TYPE_TXSTATE + SEP + requireNonEmpty(txGroup, "txGroup");
-  }
+    /** 事务状态 Hash Key：{@code streammq:{ns}:txstate:{txGroup}}。 */
+    public static String transactionStateHash(String namespace, String txGroup) {
+        return prefix(namespace) + SEP + TYPE_TXSTATE + SEP + requireNonEmpty(txGroup, "txGroup");
+    }
 
-  /** 事务回查 ZSet Key：{@code streammq:{ns}:txcheck:{txGroup}}。 */
-  public static String transactionCheckZSet(String namespace, String txGroup) {
-    return prefix(namespace) + SEP + TYPE_TXCHECK + SEP + requireNonEmpty(txGroup, "txGroup");
-  }
+    /** 事务回查 ZSet Key：{@code streammq:{ns}:txcheck:{txGroup}}。 */
+    public static String transactionCheckZSet(String namespace, String txGroup) {
+        return prefix(namespace) + SEP + TYPE_TXCHECK + SEP + requireNonEmpty(txGroup, "txGroup");
+    }
 
-  /** 事务回查计数 Hash Key：{@code streammq:{ns}:txcheck:{txGroup}:counter}。 */
-  public static String transactionCheckCounter(String namespace, String txGroup) {
-    return transactionCheckZSet(namespace, txGroup) + SEP + SEG_COUNTER;
-  }
+    /** 事务回查计数 Hash Key：{@code streammq:{ns}:txcheck:{txGroup}:counter}。 */
+    public static String transactionCheckCounter(String namespace, String txGroup) {
+        return transactionCheckZSet(namespace, txGroup) + SEP + SEG_COUNTER;
+    }
 
-  /**
-   * 事务分布式锁 Key：{@code streammq:{ns}:txlock:{txGroup}:{txId}}。
-   *
-   * <p>用于防止多实例并发提交/回滚同一事务（TOCTOU 保护）。
-   *
-   * @param namespace 命名空间
-   * @param txGroup 事务组名
-   * @param txId 事务 ID
-   * @return 锁 Key
-   */
-  public static String transactionLock(String namespace, String txGroup, String txId) {
-    return prefix(namespace)
-        + SEP
-        + "txlock"
-        + SEP
-        + requireNonEmpty(txGroup, "txGroup")
-        + SEP
-        + requireNonEmpty(txId, "txId");
-  }
+    /**
+     * 事务分布式锁 Key：{@code streammq:{ns}:txlock:{txGroup}:{txId}}。
+     *
+     * <p>用于防止多实例并发提交/回滚同一事务（TOCTOU 保护）。
+     *
+     * @param namespace 命名空间
+     * @param txGroup 事务组名
+     * @param txId 事务 ID
+     * @return 锁 Key
+     */
+    public static String transactionLock(String namespace, String txGroup, String txId) {
+        return prefix(namespace)
+                + SEP
+                + "txlock"
+                + SEP
+                + requireNonEmpty(txGroup, "txGroup")
+                + SEP
+                + requireNonEmpty(txId, "txId");
+    }
 
-  /** 顺序消费分片锁 Key：{@code streammq:{ns}:shardlock:{topic}:{group}:{shardId}}。 */
-  public static String shardLock(String namespace, String topic, String group, int shardId) {
-    return prefix(namespace)
-        + SEP
-        + TYPE_SHARDLOCK
-        + SEP
-        + requireNonEmpty(topic, "topic")
-        + SEP
-        + requireNonEmpty(group, "group")
-        + SEP
-        + shardId;
-  }
+    /** 顺序消费分片锁 Key：{@code streammq:{ns}:shardlock:{topic}:{group}:{shardId}}。 */
+    public static String shardLock(String namespace, String topic, String group, int shardId) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_SHARDLOCK
+                + SEP
+                + requireNonEmpty(topic, "topic")
+                + SEP
+                + requireNonEmpty(group, "group")
+                + SEP
+                + shardId;
+    }
 
-  /** 消费位点 String Key：{@code streammq:{ns}:meta:offset:{group}:{topic}}。 */
-  public static String metaOffset(String namespace, String group, String topic) {
-    return prefix(namespace)
-        + SEP
-        + TYPE_META
-        + SEP
-        + SEG_OFFSET
-        + SEP
-        + requireNonEmpty(group, "group")
-        + SEP
-        + requireNonEmpty(topic, "topic");
-  }
+    /** 消费位点 String Key：{@code streammq:{ns}:meta:offset:{group}:{topic}}。 */
+    public static String metaOffset(String namespace, String group, String topic) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_META
+                + SEP
+                + SEG_OFFSET
+                + SEP
+                + requireNonEmpty(group, "group")
+                + SEP
+                + requireNonEmpty(topic, "topic");
+    }
 
-  /** 消费计数 Hash Key：{@code streammq:{ns}:meta:counter:{group}:{topic}}。 */
-  public static String metaCounter(String namespace, String group, String topic) {
-    return prefix(namespace)
-        + SEP
-        + TYPE_META
-        + SEP
-        + SEG_COUNTER
-        + SEP
-        + requireNonEmpty(group, "group")
-        + SEP
-        + requireNonEmpty(topic, "topic");
-  }
+    /** 消费计数 Hash Key：{@code streammq:{ns}:meta:counter:{group}:{topic}}。 */
+    public static String metaCounter(String namespace, String group, String topic) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_META
+                + SEP
+                + SEG_COUNTER
+                + SEP
+                + requireNonEmpty(group, "group")
+                + SEP
+                + requireNonEmpty(topic, "topic");
+    }
 
-  /** 运行时统计 Hash Key：{@code streammq:{ns}:meta:stats:{group}:{topic}}。 */
-  public static String metaStats(String namespace, String group, String topic) {
-    return prefix(namespace)
-        + SEP
-        + TYPE_META
-        + SEP
-        + SEG_STATS
-        + SEP
-        + requireNonEmpty(group, "group")
-        + SEP
-        + requireNonEmpty(topic, "topic");
-  }
+    /** 运行时统计 Hash Key：{@code streammq:{ns}:meta:stats:{group}:{topic}}。 */
+    public static String metaStats(String namespace, String group, String topic) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_META
+                + SEP
+                + SEG_STATS
+                + SEP
+                + requireNonEmpty(group, "group")
+                + SEP
+                + requireNonEmpty(topic, "topic");
+    }
 
-  /**
-   * 消费组配置 Hash Key：{@code streammq:{ns}:meta:config:{group}}。
-   *
-   * <p>用于存储消费组的可变配置（如并发度、重试次数等），通过管理端点动态更新。
-   *
-   * @param namespace 命名空间
-   * @param group 消费者组名
-   * @return 配置 Hash Key
-   */
-  public static String metaConfig(String namespace, String group) {
-    return prefix(namespace)
-        + SEP
-        + TYPE_META
-        + SEP
-        + SEG_CONFIG
-        + SEP
-        + requireNonEmpty(group, "group");
-  }
+    /**
+     * 消费组配置 Hash Key：{@code streammq:{ns}:meta:config:{group}}。
+     *
+     * <p>用于存储消费组的可变配置（如并发度、重试次数等），通过管理端点动态更新。
+     *
+     * @param namespace 命名空间
+     * @param group 消费者组名
+     * @return 配置 Hash Key
+     */
+    public static String metaConfig(String namespace, String group) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_META
+                + SEP
+                + SEG_CONFIG
+                + SEP
+                + requireNonEmpty(group, "group");
+    }
 
-  /**
-   * 追踪数据 Stream Key：{@code streammq:{ns}:trace:{date}}。
-   *
-   * <p>按日期分片存储追踪记录，date 格式为 {@code yyyyMMdd}。 便于按天查询与过期清理。
-   *
-   * @param namespace 命名空间
-   * @param date 日期字符串（格式 yyyyMMdd）
-   * @return 追踪 Stream Key
-   */
-  public static String traceStream(String namespace, String date) {
-    return prefix(namespace) + SEP + TYPE_TRACE + SEP + requireNonEmpty(date, "date");
-  }
+    /**
+     * 追踪数据 Stream Key：{@code streammq:{ns}:trace:{date}}。
+     *
+     * <p>按日期分片存储追踪记录，date 格式为 {@code yyyyMMdd}。 便于按天查询与过期清理。
+     *
+     * @param namespace 命名空间
+     * @param date 日期字符串（格式 yyyyMMdd）
+     * @return 追踪 Stream Key
+     */
+    public static String traceStream(String namespace, String date) {
+        return prefix(namespace) + SEP + TYPE_TRACE + SEP + requireNonEmpty(date, "date");
+    }
 
-  private static String requireNonEmpty(String value, String name) {
-    return Objects.requireNonNull(value, name + " must not be null").isEmpty()
-        ? throwEmpty(name)
-        : value;
-  }
+    private static String requireNonEmpty(String value, String name) {
+        return Objects.requireNonNull(value, name + " must not be null").isEmpty()
+                ? throwEmpty(name)
+                : value;
+    }
 
-  private static String throwEmpty(String name) {
-    throw new IllegalArgumentException(name + " must not be empty");
-  }
+    private static String throwEmpty(String name) {
+        throw new IllegalArgumentException(name + " must not be empty");
+    }
 }

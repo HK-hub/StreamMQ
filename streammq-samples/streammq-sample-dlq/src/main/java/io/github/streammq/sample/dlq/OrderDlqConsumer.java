@@ -25,33 +25,37 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @StreamMQDlqConsumer(
-    consumerGroup = "order-consumer-group",
-    namespace = "dlq",
-    maxDlqRetryAttempts = 3,
-    dlqRetryDelayMs = 10000)
+        consumerGroup = "order-consumer-group",
+        namespace = "dlq",
+        maxDlqRetryAttempts = 3,
+        dlqRetryDelayMs = 10000)
 public class OrderDlqConsumer extends AbstractDlqMessageConsumer<String> {
 
-  @Override
-  public void onDlqMessage(Message<String> message, ConsumeContext context) throws Exception {
-    log.info(
-        "Received DLQ message: topic={}, keys={}, body={}, reconsumeTimes={}, consumerGroup={}",
-        message.getTopic(),
-        message.getKeys(),
-        message.getBody(),
-        context.reconsumeTimes(),
-        context.consumerGroup());
+    @Override
+    public void onDlqMessage(Message<String> message, ConsumeContext context) throws Exception {
+        log.info(
+                "Received DLQ message: topic={}, keys={}, body={}, reconsumeTimes={},"
+                        + " consumerGroup={}",
+                message.getTopic(),
+                message.getKeys(),
+                message.getBody(),
+                context.reconsumeTimes(),
+                context.consumerGroup());
 
-    try {
-      processDlqMessage(message);
-      log.info("DLQ message processed successfully: keys={}", message.getKeys());
-    } catch (Exception e) {
-      log.error(
-          "Failed to process DLQ message: keys={}, error={}", message.getKeys(), e.getMessage(), e);
-      throw e;
+        try {
+            processDlqMessage(message);
+            log.info("DLQ message processed successfully: keys={}", message.getKeys());
+        } catch (Exception e) {
+            log.error(
+                    "Failed to process DLQ message: keys={}, error={}",
+                    message.getKeys(),
+                    e.getMessage(),
+                    e);
+            throw e;
+        }
     }
-  }
 
-  private void processDlqMessage(Message<String> message) {
-    log.debug("Processing DLQ message: body={}", message.getBody());
-  }
+    private void processDlqMessage(Message<String> message) {
+        log.debug("Processing DLQ message: body={}", message.getBody());
+    }
 }

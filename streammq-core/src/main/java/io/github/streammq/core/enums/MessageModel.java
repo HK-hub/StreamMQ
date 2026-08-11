@@ -15,9 +15,9 @@ package io.github.streammq.core.enums;
  */
 public enum MessageModel {
 
-  /** 并发消息：多线程并发消费，最大化吞吐，不保证消息顺序。 适用于绝大多数业务场景。 */
-  CONCURRENT,
+    /** 并发消息：多线程并发消费，最大化吞吐，不保证消息顺序。 适用于绝大多数业务场景。 */
+    CONCURRENT,
 
-  /** 顺序消息：同一 shardingKey 的消息路由到同一 shard，shard 内单线程串行消费。 适用于订单状态机、流程引擎等需要严格顺序的场景。 */
-  ORDERLY
+    /** 顺序消息：同一 shardingKey 的消息路由到同一 shard，shard 内单线程串行消费。 适用于订单状态机、流程引擎等需要严格顺序的场景。 */
+    ORDERLY
 }

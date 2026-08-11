@@ -33,62 +33,63 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class OpenTelemetryConsumerInterceptor implements ConsumerInterceptor {
 
-  /** 拦截器执行顺序（高优先级，早于业务拦截器执行） */
-  public static final int ORDER = -100;
+    /** 拦截器执行顺序（高优先级，早于业务拦截器执行） */
+    public static final int ORDER = -100;
 
-  private final StreamMQTracing tracing;
+    private final StreamMQTracing tracing;
 
-  /** 当前线程的消费者 Span */
-  private final ThreadLocal<Span> currentSpan = new ThreadLocal<>();
+    /** 当前线程的消费者 Span */
+    private final ThreadLocal<Span> currentSpan = new ThreadLocal<>();
 
-  @Override
-  public boolean beforeConsume(Message<?> message, ConsumeContext context) {
-    try {
-      Span span = tracing.startConsumerSpan(message, context);
-      currentSpan.set(span);
-    } catch (Exception ex) {
-      log.warn("消费者追踪启动失败，不影响消费: {}", ex.getMessage());
+    @Override
+    public boolean beforeConsume(Message<?> message, ConsumeContext context) {
+        try {
+            Span span = tracing.startConsumerSpan(message, context);
+            currentSpan.set(span);
+        } catch (Exception ex) {
+            log.warn("消费者追踪启动失败，不影响消费: {}", ex.getMessage());
+        }
+        return true;
     }
-    return true;
-  }
 
-  @Override
-  public void afterConsume(Message<?> message, ConsumeAction action, ConsumeContext context) {
-    try {
-      Span span = currentSpan.get();
-      if (Objects.nonNull(span)) {
-        boolean success = Objects.nonNull(action) && action.isSuccess();
-        tracing.endSpan(span, success);
-      }
-    } catch (Exception ex) {
-      log.warn("消费者追踪结束失败: {}", ex.getMessage());
-    } finally {
-      currentSpan.remove();
+    @Override
+    public void afterConsume(Message<?> message, ConsumeAction action, ConsumeContext context) {
+        try {
+            Span span = currentSpan.get();
+            if (Objects.nonNull(span)) {
+                boolean success = Objects.nonNull(action) && action.isSuccess();
+                tracing.endSpan(span, success);
+            }
+        } catch (Exception ex) {
+            log.warn("消费者追踪结束失败: {}", ex.getMessage());
+        } finally {
+            currentSpan.remove();
+        }
     }
-  }
 
-  @Override
-  public void onException(
-      Message<?> message, Exception exception, InvokeTiming timing, ConsumeContext context) {
-    try {
-      Span span = currentSpan.get();
-      if (Objects.nonNull(span)) {
-        tracing.endSpan(span, false, Objects.nonNull(exception) ? exception.getMessage() : "消费异常");
-      }
-    } catch (Exception ex) {
-      log.warn("消费者异常追踪结束失败: {}", ex.getMessage());
-    } finally {
-      currentSpan.remove();
+    @Override
+    public void onException(
+            Message<?> message, Exception exception, InvokeTiming timing, ConsumeContext context) {
+        try {
+            Span span = currentSpan.get();
+            if (Objects.nonNull(span)) {
+                tracing.endSpan(
+                        span, false, Objects.nonNull(exception) ? exception.getMessage() : "消费异常");
+            }
+        } catch (Exception ex) {
+            log.warn("消费者异常追踪结束失败: {}", ex.getMessage());
+        } finally {
+            currentSpan.remove();
+        }
     }
-  }
 
-  @Override
-  public String name() {
-    return "openTelemetryConsumerInterceptor";
-  }
+    @Override
+    public String name() {
+        return "openTelemetryConsumerInterceptor";
+    }
 
-  @Override
-  public int order() {
-    return ORDER;
-  }
+    @Override
+    public int order() {
+        return ORDER;
+    }
 }

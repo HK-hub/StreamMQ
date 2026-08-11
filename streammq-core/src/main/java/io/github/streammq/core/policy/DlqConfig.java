@@ -26,33 +26,34 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class DlqConfig {
 
-  /** DLQ 消费失败处理策略实现类 */
-  @Builder.Default
-  private Class<? extends DlqFailureStrategy> failureStrategyClass = DlqFailureStrategy.class;
+    /** DLQ 消费失败处理策略实现类 */
+    @Builder.Default
+    private Class<? extends DlqFailureStrategy> failureStrategyClass = DlqFailureStrategy.class;
 
-  /** DLQ 消费失败后的最大重试次数（默认 3） */
-  @Builder.Default
-  private int maxDlqRetryAttempts = StreamMQConstants.DEFAULT_DLQ_MAX_RETRY_ATTEMPTS;
+    /** DLQ 消费失败后的最大重试次数（默认 3） */
+    @Builder.Default
+    private int maxDlqRetryAttempts = StreamMQConstants.DEFAULT_DLQ_MAX_RETRY_ATTEMPTS;
 
-  /** DLQ 消费重试延迟（毫秒，默认 10000） */
-  @Builder.Default private long dlqRetryDelayMs = StreamMQConstants.DEFAULT_DLQ_RETRY_DELAY_MS;
+    /** DLQ 消费重试延迟（毫秒，默认 10000） */
+    @Builder.Default private long dlqRetryDelayMs = StreamMQConstants.DEFAULT_DLQ_RETRY_DELAY_MS;
 
-  /** 是否启用二级死信队列（默认 false） */
-  @Builder.Default
-  private boolean secondaryDlqEnabled = StreamMQConstants.DEFAULT_SECONDARY_DLQ_ENABLED;
+    /** 是否启用二级死信队列（默认 false） */
+    @Builder.Default
+    private boolean secondaryDlqEnabled = StreamMQConstants.DEFAULT_SECONDARY_DLQ_ENABLED;
 
-  /** 二级死信 Stream Key 前缀段（默认 "dlq2"，构成 streammq:{ns}:dlq2:{group}） */
-  @Builder.Default
-  private String secondaryDlqKeyPrefix = StreamMQConstants.DEFAULT_SECONDARY_DLQ_KEY_PREFIX;
+    /** 二级死信 Stream Key 前缀段（默认 "dlq2"，构成 streammq:{ns}:dlq2:{group}） */
+    @Builder.Default
+    private String secondaryDlqKeyPrefix = StreamMQConstants.DEFAULT_SECONDARY_DLQ_KEY_PREFIX;
 
-  /** 告警阈值：DLQ 消费失败超过此次数后触发额外告警（默认 1，即每次 DLQ 失败都告警） */
-  @Builder.Default private int dlqAlertThreshold = StreamMQConstants.DEFAULT_DLQ_ALERT_THRESHOLD;
+    /** 告警阈值：DLQ 消费失败超过此次数后触发额外告警（默认 1，即每次 DLQ 失败都告警） */
+    @Builder.Default private int dlqAlertThreshold = StreamMQConstants.DEFAULT_DLQ_ALERT_THRESHOLD;
 
-  /** 重试策略的退避倍数（LimitedRetryDlqFailureStrategy 使用，默认 1.0 = 固定延迟） */
-  @Builder.Default
-  private double dlqRetryBackoffMultiplier = StreamMQConstants.DEFAULT_DLQ_RETRY_BACKOFF_MULTIPLIER;
+    /** 重试策略的退避倍数（LimitedRetryDlqFailureStrategy 使用，默认 1.0 = 固定延迟） */
+    @Builder.Default
+    private double dlqRetryBackoffMultiplier =
+            StreamMQConstants.DEFAULT_DLQ_RETRY_BACKOFF_MULTIPLIER;
 
-  /** 重试延迟上限（毫秒，默认 300000 = 5 分钟） */
-  @Builder.Default
-  private long dlqRetryMaxDelayMs = StreamMQConstants.DEFAULT_DLQ_RETRY_MAX_DELAY_MS;
+    /** 重试延迟上限（毫秒，默认 300000 = 5 分钟） */
+    @Builder.Default
+    private long dlqRetryMaxDelayMs = StreamMQConstants.DEFAULT_DLQ_RETRY_MAX_DELAY_MS;
 }

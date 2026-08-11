@@ -33,59 +33,61 @@ import lombok.extern.slf4j.Slf4j;
 @RequiredArgsConstructor
 public class OpenTelemetryProducerInterceptor implements ProducerInterceptor {
 
-  /** 拦截器执行顺序（高优先级，早于业务拦截器执行） */
-  public static final int ORDER = -100;
+    /** 拦截器执行顺序（高优先级，早于业务拦截器执行） */
+    public static final int ORDER = -100;
 
-  private final StreamMQTracing tracing;
+    private final StreamMQTracing tracing;
 
-  @Override
-  public boolean beforeSend(Message<?> message) {
-    try {
-      tracing.injectProducerSpan(message);
-    } catch (Exception ex) {
-      log.warn("生产者追踪注入失败，不影响发送: {}", ex.getMessage());
+    @Override
+    public boolean beforeSend(Message<?> message) {
+        try {
+            tracing.injectProducerSpan(message);
+        } catch (Exception ex) {
+            log.warn("生产者追踪注入失败，不影响发送: {}", ex.getMessage());
+        }
+        return true;
     }
-    return true;
-  }
 
-  @Override
-  public void afterSend(Message<?> message, SendResult result) {
-    try {
-      Span span = tracing.getCurrentProducerSpan();
-      if (Objects.isNull(span)) {
-        return;
-      }
-      boolean success = Objects.nonNull(result) && result.isSuccess();
-      String errorMessage = Objects.nonNull(result) ? result.getErrorMessage() : null;
-      tracing.endSpan(span, success, StringUtils.isNotEmpty(errorMessage) ? errorMessage : null);
-    } catch (Exception ex) {
-      log.warn("生产者追踪结束失败: {}", ex.getMessage());
-    } finally {
-      tracing.clearCurrentProducerSpan();
+    @Override
+    public void afterSend(Message<?> message, SendResult result) {
+        try {
+            Span span = tracing.getCurrentProducerSpan();
+            if (Objects.isNull(span)) {
+                return;
+            }
+            boolean success = Objects.nonNull(result) && result.isSuccess();
+            String errorMessage = Objects.nonNull(result) ? result.getErrorMessage() : null;
+            tracing.endSpan(
+                    span, success, StringUtils.isNotEmpty(errorMessage) ? errorMessage : null);
+        } catch (Exception ex) {
+            log.warn("生产者追踪结束失败: {}", ex.getMessage());
+        } finally {
+            tracing.clearCurrentProducerSpan();
+        }
     }
-  }
 
-  @Override
-  public void onException(Message<?> message, Exception exception, InvokeTiming timing) {
-    try {
-      Span span = tracing.getCurrentProducerSpan();
-      if (Objects.nonNull(span)) {
-        tracing.endSpan(span, false, Objects.nonNull(exception) ? exception.getMessage() : "发送异常");
-      }
-    } catch (Exception ex) {
-      log.warn("生产者异常追踪结束失败: {}", ex.getMessage());
-    } finally {
-      tracing.clearCurrentProducerSpan();
+    @Override
+    public void onException(Message<?> message, Exception exception, InvokeTiming timing) {
+        try {
+            Span span = tracing.getCurrentProducerSpan();
+            if (Objects.nonNull(span)) {
+                tracing.endSpan(
+                        span, false, Objects.nonNull(exception) ? exception.getMessage() : "发送异常");
+            }
+        } catch (Exception ex) {
+            log.warn("生产者异常追踪结束失败: {}", ex.getMessage());
+        } finally {
+            tracing.clearCurrentProducerSpan();
+        }
     }
-  }
 
-  @Override
-  public String name() {
-    return "openTelemetryProducerInterceptor";
-  }
+    @Override
+    public String name() {
+        return "openTelemetryProducerInterceptor";
+    }
 
-  @Override
-  public int order() {
-    return ORDER;
-  }
+    @Override
+    public int order() {
+        return ORDER;
+    }
 }

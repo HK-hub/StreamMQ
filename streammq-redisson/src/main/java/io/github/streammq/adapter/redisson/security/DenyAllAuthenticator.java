@@ -14,13 +14,13 @@ import io.github.streammq.core.policy.ManagementAuthenticator;
  */
 public class DenyAllAuthenticator implements ManagementAuthenticator {
 
-  @Override
-  public boolean authenticate(String username, String password, String resource) {
-    return false;
-  }
+    @Override
+    public boolean authenticate(String username, String password, String resource) {
+        return false;
+    }
 
-  @Override
-  public String name() {
-    return "deny-all";
-  }
+    @Override
+    public String name() {
+        return "deny-all";
+    }
 }

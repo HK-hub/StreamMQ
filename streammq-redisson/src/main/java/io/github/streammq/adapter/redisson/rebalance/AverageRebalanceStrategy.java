@@ -33,44 +33,44 @@ import java.util.Objects;
  */
 public class AverageRebalanceStrategy implements RebalanceStrategy {
 
-  @Override
-  public Map<Integer, String> assign(
-      List<Integer> shards, List<String> consumers, String consumerGroup) {
-    Objects.requireNonNull(shards, "shards");
-    Objects.requireNonNull(consumers, "consumers");
-    Objects.requireNonNull(consumerGroup, "consumerGroup");
+    @Override
+    public Map<Integer, String> assign(
+            List<Integer> shards, List<String> consumers, String consumerGroup) {
+        Objects.requireNonNull(shards, "shards");
+        Objects.requireNonNull(consumers, "consumers");
+        Objects.requireNonNull(consumerGroup, "consumerGroup");
 
-    if (shards.isEmpty() || consumers.isEmpty()) {
-      return Collections.emptyMap();
-    }
-
-    int shardCount = shards.size();
-    int consumerCount = consumers.size();
-    Map<Integer, String> assignment = new java.util.HashMap<>(shardCount * 2);
-
-    if (shardCount >= consumerCount) {
-      // 分片多于消费者：均分
-      int base = shardCount / consumerCount;
-      int remainder = shardCount % consumerCount;
-      int index = 0;
-      for (int c = 0; c < consumerCount; c++) {
-        int count = base + (c < remainder ? 1 : 0);
-        String consumer = consumers.get(c);
-        for (int i = 0; i < count && index < shardCount; i++) {
-          assignment.put(shards.get(index++), consumer);
+        if (shards.isEmpty() || consumers.isEmpty()) {
+            return Collections.emptyMap();
         }
-      }
-    } else {
-      // 分片少于消费者：前 N 个消费者各分一个
-      for (int i = 0; i < shardCount; i++) {
-        assignment.put(shards.get(i), consumers.get(i));
-      }
-    }
-    return assignment;
-  }
 
-  @Override
-  public String name() {
-    return "average";
-  }
+        int shardCount = shards.size();
+        int consumerCount = consumers.size();
+        Map<Integer, String> assignment = new java.util.HashMap<>(shardCount * 2);
+
+        if (shardCount >= consumerCount) {
+            // 分片多于消费者：均分
+            int base = shardCount / consumerCount;
+            int remainder = shardCount % consumerCount;
+            int index = 0;
+            for (int c = 0; c < consumerCount; c++) {
+                int count = base + (c < remainder ? 1 : 0);
+                String consumer = consumers.get(c);
+                for (int i = 0; i < count && index < shardCount; i++) {
+                    assignment.put(shards.get(index++), consumer);
+                }
+            }
+        } else {
+            // 分片少于消费者：前 N 个消费者各分一个
+            for (int i = 0; i < shardCount; i++) {
+                assignment.put(shards.get(i), consumers.get(i));
+            }
+        }
+        return assignment;
+    }
+
+    @Override
+    public String name() {
+        return "average";
+    }
 }

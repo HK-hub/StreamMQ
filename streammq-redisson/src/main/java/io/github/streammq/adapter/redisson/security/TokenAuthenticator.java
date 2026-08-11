@@ -20,30 +20,30 @@ import java.util.Objects;
  */
 public class TokenAuthenticator implements ManagementAuthenticator {
 
-  private final byte[] expectedToken;
+    private final byte[] expectedToken;
 
-  /**
-   * 构造 Token 鉴权器。
-   *
-   * @param expectedToken 期望的 token 字符串，不能为 null
-   */
-  public TokenAuthenticator(String expectedToken) {
-    Objects.requireNonNull(expectedToken, "expectedToken");
-    this.expectedToken = expectedToken.getBytes(StandardCharsets.UTF_8);
-  }
-
-  @Override
-  public boolean authenticate(String username, String password, String resource) {
-    if (Objects.isNull(password)) {
-      return false;
+    /**
+     * 构造 Token 鉴权器。
+     *
+     * @param expectedToken 期望的 token 字符串，不能为 null
+     */
+    public TokenAuthenticator(String expectedToken) {
+        Objects.requireNonNull(expectedToken, "expectedToken");
+        this.expectedToken = expectedToken.getBytes(StandardCharsets.UTF_8);
     }
-    byte[] credential = password.getBytes(StandardCharsets.UTF_8);
-    // MessageDigest.isEqual 进行时间安全比较，防止时序攻击
-    return MessageDigest.isEqual(credential, expectedToken);
-  }
 
-  @Override
-  public String name() {
-    return "token";
-  }
+    @Override
+    public boolean authenticate(String username, String password, String resource) {
+        if (Objects.isNull(password)) {
+            return false;
+        }
+        byte[] credential = password.getBytes(StandardCharsets.UTF_8);
+        // MessageDigest.isEqual 进行时间安全比较，防止时序攻击
+        return MessageDigest.isEqual(credential, expectedToken);
+    }
+
+    @Override
+    public String name() {
+        return "token";
+    }
 }

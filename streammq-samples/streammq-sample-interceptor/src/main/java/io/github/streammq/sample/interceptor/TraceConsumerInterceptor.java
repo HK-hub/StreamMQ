@@ -19,36 +19,37 @@ import org.springframework.stereotype.Component;
 @Component
 public class TraceConsumerInterceptor implements ConsumerInterceptor {
 
-  private static final Logger log = LoggerFactory.getLogger(TraceConsumerInterceptor.class);
+    private static final Logger log = LoggerFactory.getLogger(TraceConsumerInterceptor.class);
 
-  @Override
-  public boolean beforeConsume(Message<?> message, ConsumeContext context) {
-    String traceId = message.getUserProperties().get("traceId");
-    log.info(
-        "Trace consumer interceptor beforeConsume: traceId={}, topic={}, tag={}, keys={}, group={}",
-        traceId,
-        message.getTopic(),
-        message.getTag(),
-        message.getKeys(),
-        context != null ? context.consumerGroup() : null);
-    return true;
-  }
+    @Override
+    public boolean beforeConsume(Message<?> message, ConsumeContext context) {
+        String traceId = message.getUserProperties().get("traceId");
+        log.info(
+                "Trace consumer interceptor beforeConsume: traceId={}, topic={}, tag={}, keys={},"
+                        + " group={}",
+                traceId,
+                message.getTopic(),
+                message.getTag(),
+                message.getKeys(),
+                context != null ? context.consumerGroup() : null);
+        return true;
+    }
 
-  @Override
-  public void afterConsume(Message<?> message, ConsumeAction action, ConsumeContext context) {
-    String traceId = message.getUserProperties().get("traceId");
-    log.info(
-        "Trace consumer interceptor afterConsume: traceId={}, topic={}, action={}, group={},"
-            + " reconsumeTimes={}",
-        traceId,
-        message.getTopic(),
-        action,
-        context != null ? context.consumerGroup() : null,
-        context != null ? context.reconsumeTimes() : 0);
-  }
+    @Override
+    public void afterConsume(Message<?> message, ConsumeAction action, ConsumeContext context) {
+        String traceId = message.getUserProperties().get("traceId");
+        log.info(
+                "Trace consumer interceptor afterConsume: traceId={}, topic={}, action={},"
+                        + " group={}, reconsumeTimes={}",
+                traceId,
+                message.getTopic(),
+                action,
+                context != null ? context.consumerGroup() : null,
+                context != null ? context.reconsumeTimes() : 0);
+    }
 
-  @Override
-  public int order() {
-    return 1;
-  }
+    @Override
+    public int order() {
+        return 1;
+    }
 }

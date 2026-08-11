@@ -14,25 +14,25 @@ import java.util.Set;
  */
 public interface CompressionCodecRegistry {
 
-  /**
-   * 注册一个 Codec。若同名 Codec 已存在则覆盖。
-   *
-   * @param codec 编解码器实例
-   */
-  void register(CompressionCodec codec);
+    /**
+     * 注册一个 Codec。若同名 Codec 已存在则覆盖。
+     *
+     * @param codec 编解码器实例
+     */
+    void register(CompressionCodec codec);
 
-  /**
-   * 按名称查找 Codec。
-   *
-   * @param name Codec 名称（如 {@code "gzip"}）
-   * @return 对应实例，未找到返回 {@code null}
-   */
-  CompressionCodec lookup(String name);
+    /**
+     * 按名称查找 Codec。
+     *
+     * @param name Codec 名称（如 {@code "gzip"}）
+     * @return 对应实例，未找到返回 {@code null}
+     */
+    CompressionCodec lookup(String name);
 
-  /**
-   * 返回所有已注册 Codec 的名称集合。
-   *
-   * @return 不可变名称集合
-   */
-  Set<String> availableCodecs();
+    /**
+     * 返回所有已注册 Codec 的名称集合。
+     *
+     * @return 不可变名称集合
+     */
+    Set<String> availableCodecs();
 }

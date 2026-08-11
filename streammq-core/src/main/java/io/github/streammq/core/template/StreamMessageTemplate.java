@@ -50,167 +50,167 @@ import java.util.concurrent.CompletableFuture;
  */
 public interface StreamMessageTemplate extends TransactionExecutor {
 
-  /** 默认发送超时（毫秒） */
-  long DEFAULT_SEND_TIMEOUT_MILLIS = 3000L;
+    /** 默认发送超时（毫秒） */
+    long DEFAULT_SEND_TIMEOUT_MILLIS = 3000L;
 
-  /** 默认同步发送重试次数 */
-  int DEFAULT_SYNC_RETRY_TIMES = 2;
+    /** 默认同步发送重试次数 */
+    int DEFAULT_SYNC_RETRY_TIMES = 2;
 
-  /** 默认异步发送重试次数（不重试） */
-  int DEFAULT_ASYNC_RETRY_TIMES = 0;
+    /** 默认异步发送重试次数（不重试） */
+    int DEFAULT_ASYNC_RETRY_TIMES = 0;
 
-  /**
-   * 同步发送（默认超时、默认重试次数）。
-   *
-   * <p><b>消息大小限制（02-2.2）：</b>Redis Stream 单条消息最大 512MB， 但推荐不超过 1MB。超大消息会增加网络传输和内存压力。 序列化后的消息大小取决于
-   * {@link io.github.streammq.core.serializer.MessageSerializer} 实现。
-   *
-   * @param message 消息
-   * @param <T> body 类型
-   * @return 发送结果
-   * @throws io.github.streammq.core.exception.StreamMQException 发送失败
-   */
-  <T> SendResult syncSend(Message<T> message);
+    /**
+     * 同步发送（默认超时、默认重试次数）。
+     *
+     * <p><b>消息大小限制（02-2.2）：</b>Redis Stream 单条消息最大 512MB， 但推荐不超过 1MB。超大消息会增加网络传输和内存压力。 序列化后的消息大小取决于
+     * {@link io.github.streammq.core.serializer.MessageSerializer} 实现。
+     *
+     * @param message 消息
+     * @param <T> body 类型
+     * @return 发送结果
+     * @throws io.github.streammq.core.exception.StreamMQException 发送失败
+     */
+    <T> SendResult syncSend(Message<T> message);
 
-  /**
-   * 同步发送（指定超时）。
-   *
-   * @param message 消息
-   * @param timeoutMillis 超时毫秒数
-   * @param <T> body 类型
-   * @return 发送结果
-   * @throws io.github.streammq.core.exception.ProducerTimeoutException 超时
-   */
-  <T> SendResult syncSend(Message<T> message, long timeoutMillis);
+    /**
+     * 同步发送（指定超时）。
+     *
+     * @param message 消息
+     * @param timeoutMillis 超时毫秒数
+     * @param <T> body 类型
+     * @return 发送结果
+     * @throws io.github.streammq.core.exception.ProducerTimeoutException 超时
+     */
+    <T> SendResult syncSend(Message<T> message, long timeoutMillis);
 
-  /**
-   * 同步发送（指定超时与重试次数）。
-   *
-   * @param message 消息
-   * @param timeoutMillis 超时毫秒数
-   * @param retryTimes 重试次数（0 表示不重试）
-   * @param <T> body 类型
-   * @return 发送结果
-   * @throws io.github.streammq.core.exception.ProducerTimeoutException 重试后仍超时
-   */
-  <T> SendResult syncSend(Message<T> message, long timeoutMillis, int retryTimes);
+    /**
+     * 同步发送（指定超时与重试次数）。
+     *
+     * @param message 消息
+     * @param timeoutMillis 超时毫秒数
+     * @param retryTimes 重试次数（0 表示不重试）
+     * @param <T> body 类型
+     * @return 发送结果
+     * @throws io.github.streammq.core.exception.ProducerTimeoutException 重试后仍超时
+     */
+    <T> SendResult syncSend(Message<T> message, long timeoutMillis, int retryTimes);
 
-  /**
-   * 异步发送（返回 {@link CompletableFuture}）。
-   *
-   * @param message 消息
-   * @param <T> body 类型
-   * @return 异步结果
-   */
-  <T> CompletableFuture<SendResult> asyncSend(Message<T> message);
+    /**
+     * 异步发送（返回 {@link CompletableFuture}）。
+     *
+     * @param message 消息
+     * @param <T> body 类型
+     * @return 异步结果
+     */
+    <T> CompletableFuture<SendResult> asyncSend(Message<T> message);
 
-  /**
-   * 异步发送（回调通知）。
-   *
-   * @param message 消息
-   * @param callback 回调
-   * @param <T> body 类型
-   */
-  <T> void asyncSend(Message<T> message, SendCallback callback);
+    /**
+     * 异步发送（回调通知）。
+     *
+     * @param message 消息
+     * @param callback 回调
+     * @param <T> body 类型
+     */
+    <T> void asyncSend(Message<T> message, SendCallback callback);
 
-  /**
-   * 异步发送（回调通知 + 指定超时）。
-   *
-   * @param message 消息
-   * @param callback 回调
-   * @param timeoutMillis 超时毫秒数
-   * @param <T> body 类型
-   */
-  <T> void asyncSend(Message<T> message, SendCallback callback, long timeoutMillis);
+    /**
+     * 异步发送（回调通知 + 指定超时）。
+     *
+     * @param message 消息
+     * @param callback 回调
+     * @param timeoutMillis 超时毫秒数
+     * @param <T> body 类型
+     */
+    <T> void asyncSend(Message<T> message, SendCallback callback, long timeoutMillis);
 
-  /**
-   * 单向发送：不等待响应，不抛异常。
-   *
-   * @param message 消息
-   * @param <T> body 类型
-   */
-  <T> void sendOneway(Message<T> message);
+    /**
+     * 单向发送：不等待响应，不抛异常。
+     *
+     * @param message 消息
+     * @param <T> body 类型
+     */
+    <T> void sendOneway(Message<T> message);
 
-  /**
-   * 同步发送（通过 {@link SendOptions} 指定超时与重试参数）。
-   *
-   * <p>这是推荐的发送方式，通过 {@link SendOptions} 统一管理发送参数， 避免多个重载方法导致的 API 膨胀。
-   *
-   * @param message 消息
-   * @param options 发送选项（超时、重试等），不能为 null
-   * @param <T> body 类型
-   * @return 发送结果
-   * @throws io.github.streammq.core.exception.StreamMQException 发送失败
-   */
-  <T> SendResult syncSend(Message<T> message, SendOptions options);
+    /**
+     * 同步发送（通过 {@link SendOptions} 指定超时与重试参数）。
+     *
+     * <p>这是推荐的发送方式，通过 {@link SendOptions} 统一管理发送参数， 避免多个重载方法导致的 API 膨胀。
+     *
+     * @param message 消息
+     * @param options 发送选项（超时、重试等），不能为 null
+     * @param <T> body 类型
+     * @return 发送结果
+     * @throws io.github.streammq.core.exception.StreamMQException 发送失败
+     */
+    <T> SendResult syncSend(Message<T> message, SendOptions options);
 
-  /**
-   * 异步发送（通过 {@link SendOptions} 指定发送参数，返回 {@link CompletableFuture}）。
-   *
-   * @param message 消息
-   * @param options 发送选项，不能为 null
-   * @param <T> body 类型
-   * @return 异步结果
-   */
-  <T> CompletableFuture<SendResult> asyncSend(Message<T> message, SendOptions options);
+    /**
+     * 异步发送（通过 {@link SendOptions} 指定发送参数，返回 {@link CompletableFuture}）。
+     *
+     * @param message 消息
+     * @param options 发送选项，不能为 null
+     * @param <T> body 类型
+     * @return 异步结果
+     */
+    <T> CompletableFuture<SendResult> asyncSend(Message<T> message, SendOptions options);
 
-  /**
-   * 异步发送（通过 {@link SendOptions} 指定发送参数，回调通知）。
-   *
-   * @param message 消息
-   * @param options 发送选项，不能为 null
-   * @param callback 回调
-   * @param <T> body 类型
-   */
-  <T> void asyncSend(Message<T> message, SendOptions options, SendCallback callback);
+    /**
+     * 异步发送（通过 {@link SendOptions} 指定发送参数，回调通知）。
+     *
+     * @param message 消息
+     * @param options 发送选项，不能为 null
+     * @param callback 回调
+     * @param <T> body 类型
+     */
+    <T> void asyncSend(Message<T> message, SendOptions options, SendCallback callback);
 
-  /**
-   * 批量发送。
-   *
-   * <p>语义：所有消息通过 Pipeline 一次性发送到 Redis，单条失败不会导致整个批次异常。 返回的 {@link SendResult}
-   * 列表与输入消息一一对应，每条结果的状态独立标识成功/失败。 如果 Pipeline 本身异常（如网络中断），则抛出 {@link
-   * io.github.streammq.core.exception.StreamMQException}。
-   *
-   * @param batch 批量消息
-   * @param <T> body 类型
-   * @return 每条消息的发送结果（与输入顺序一致）
-   * @throws IllegalArgumentException 如果 batch 为空
-   * @throws io.github.streammq.core.exception.StreamMQException 如果 Pipeline 本身异常
-   */
-  <T> List<SendResult> syncSendBatch(BatchMessage<T> batch);
+    /**
+     * 批量发送。
+     *
+     * <p>语义：所有消息通过 Pipeline 一次性发送到 Redis，单条失败不会导致整个批次异常。 返回的 {@link SendResult}
+     * 列表与输入消息一一对应，每条结果的状态独立标识成功/失败。 如果 Pipeline 本身异常（如网络中断），则抛出 {@link
+     * io.github.streammq.core.exception.StreamMQException}。
+     *
+     * @param batch 批量消息
+     * @param <T> body 类型
+     * @return 每条消息的发送结果（与输入顺序一致）
+     * @throws IllegalArgumentException 如果 batch 为空
+     * @throws io.github.streammq.core.exception.StreamMQException 如果 Pipeline 本身异常
+     */
+    <T> List<SendResult> syncSendBatch(BatchMessage<T> batch);
 
-  /**
-   * 返回消息转换器。
-   *
-   * @return 消息转换器
-   */
-  MessageConverter getMessageConverter();
+    /**
+     * 返回消息转换器。
+     *
+     * @return 消息转换器
+     */
+    MessageConverter getMessageConverter();
 
-  /**
-   * 返回生产者拦截器链（不可修改）。
-   *
-   * @return 拦截器列表
-   */
-  List<ProducerInterceptor> getProducerInterceptors();
+    /**
+     * 返回生产者拦截器链（不可修改）。
+     *
+     * @return 拦截器列表
+     */
+    List<ProducerInterceptor> getProducerInterceptors();
 
-  /**
-   * 设置生产者拦截器链（覆盖现有）。
-   *
-   * @param interceptors 拦截器列表
-   */
-  void setProducerInterceptors(List<ProducerInterceptor> interceptors);
+    /**
+     * 设置生产者拦截器链（覆盖现有）。
+     *
+     * @param interceptors 拦截器列表
+     */
+    void setProducerInterceptors(List<ProducerInterceptor> interceptors);
 
-  /**
-   * 添加单个生产者拦截器。
-   *
-   * @param interceptor 拦截器
-   */
-  void addProducerInterceptor(ProducerInterceptor interceptor);
+    /**
+     * 添加单个生产者拦截器。
+     *
+     * @param interceptor 拦截器
+     */
+    void addProducerInterceptor(ProducerInterceptor interceptor);
 
-  /**
-   * 添加单个生产者过滤器（发送前过滤）。
-   *
-   * @param filter 过滤器
-   */
-  void addProducerFilter(io.github.streammq.core.filter.ProducerFilter filter);
+    /**
+     * 添加单个生产者过滤器（发送前过滤）。
+     *
+     * @param filter 过滤器
+     */
+    void addProducerFilter(io.github.streammq.core.filter.ProducerFilter filter);
 }

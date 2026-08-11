@@ -27,67 +27,67 @@ import java.time.Duration;
  */
 public interface StreamMQMetrics {
 
-  /**
-   * 记录一次消息发送结果。
-   *
-   * @param topic 消息主题
-   * @param success 是否发送成功
-   * @param duration 发送耗时
-   */
-  void recordSend(String topic, boolean success, Duration duration);
+    /**
+     * 记录一次消息发送结果。
+     *
+     * @param topic 消息主题
+     * @param success 是否发送成功
+     * @param duration 发送耗时
+     */
+    void recordSend(String topic, boolean success, Duration duration);
 
-  /**
-   * 记录一次消息消费结果。
-   *
-   * @param topic 消息主题
-   * @param group 消费者组
-   * @param success 是否消费成功
-   * @param duration 消费耗时
-   */
-  void recordConsume(String topic, String group, boolean success, Duration duration);
+    /**
+     * 记录一次消息消费结果。
+     *
+     * @param topic 消息主题
+     * @param group 消费者组
+     * @param success 是否消费成功
+     * @param duration 消费耗时
+     */
+    void recordConsume(String topic, String group, boolean success, Duration duration);
 
-  /**
-   * 记录一次消息重试。
-   *
-   * @param topic 消息主题
-   * @param group 消费者组
-   */
-  void recordRetry(String topic, String group);
+    /**
+     * 记录一次消息重试。
+     *
+     * @param topic 消息主题
+     * @param group 消费者组
+     */
+    void recordRetry(String topic, String group);
 
-  /**
-   * 记录一条消息进入死信队列。
-   *
-   * @param topic 消息主题
-   * @param group 消费者组
-   */
-  void recordDlq(String topic, String group);
+    /**
+     * 记录一条消息进入死信队列。
+     *
+     * @param topic 消息主题
+     * @param group 消费者组
+     */
+    void recordDlq(String topic, String group);
 
-  /**
-   * 记录一次延时消息投递。
-   *
-   * @param level 延时等级
-   */
-  void recordDelayDelivery(String level);
+    /**
+     * 记录一次延时消息投递。
+     *
+     * @param level 延时等级
+     */
+    void recordDelayDelivery(String level);
 
-  /**
-   * 记录一次事务消息提交。
-   *
-   * @param group 消费者组
-   */
-  void recordTransactionCommit(String group);
+    /**
+     * 记录一次事务消息提交。
+     *
+     * @param group 消费者组
+     */
+    void recordTransactionCommit(String group);
 
-  /**
-   * 记录一次事务消息回滚。
-   *
-   * @param group 消费者组
-   */
-  void recordTransactionRollback(String group);
+    /**
+     * 记录一次事务消息回滚。
+     *
+     * @param group 消费者组
+     */
+    void recordTransactionRollback(String group);
 
-  /**
-   * 记录一次事务消息回查。
-   *
-   * @param group 消费者组
-   * @param result 回查结果
-   */
-  void recordTransactionCheck(String group, String result);
+    /**
+     * 记录一次事务消息回查。
+     *
+     * @param group 消费者组
+     * @param result 回查结果
+     */
+    void recordTransactionCheck(String group, String result);
 }

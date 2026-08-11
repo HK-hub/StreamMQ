@@ -57,602 +57,599 @@ import org.springframework.test.context.DynamicPropertySource;
  * @since 1.0.0
  */
 @SpringBootTest(
-    classes = StreamMQDiagnosticsIT.TestApplication.class,
-    properties = {
-      "spring.application.name=streammq-diagnostics-it",
-      "streammq.enabled=true",
-      "streammq.namespace=diag-it",
-      "streammq.producer.group=diag-it-producer",
-      "streammq.tracing.enabled=true",
-      "streammq.trace.enabled=true",
-      "streammq.trace.storage=redis",
-      "streammq.diagnostics.enabled=true",
-      "redisson.singleServerConfig.address=redis://127.0.0.1:6379",
-      "debug=true"
-    })
+        classes = StreamMQDiagnosticsIT.TestApplication.class,
+        properties = {
+            "spring.application.name=streammq-diagnostics-it",
+            "streammq.enabled=true",
+            "streammq.namespace=diag-it",
+            "streammq.producer.group=diag-it-producer",
+            "streammq.tracing.enabled=true",
+            "streammq.trace.enabled=true",
+            "streammq.trace.storage=redis",
+            "streammq.diagnostics.enabled=true",
+            "redisson.singleServerConfig.address=redis://127.0.0.1:6379",
+            "debug=true"
+        })
 @Import({
-  StreamMQDiagnosticsIT.DiagnosticsTestConsumer.class,
-  StreamMQDiagnosticsIT.FailingTestConsumer.class
+    StreamMQDiagnosticsIT.DiagnosticsTestConsumer.class,
+    StreamMQDiagnosticsIT.FailingTestConsumer.class
 })
 @DirtiesContext
 @DisplayName("StreamMQ Diagnostics 真实集成测试")
 class StreamMQDiagnosticsIT {
 
-  @DynamicPropertySource
-  static void redisPassword(DynamicPropertyRegistry registry) {
-    String password =
-        System.getProperty(
-            "test.redis.password",
-            System.getenv().getOrDefault("STREAMMQ_TEST_REDIS_PASSWORD", ""));
-    if (!password.isEmpty()) {
-      registry.add("redisson.singleServerConfig.password", () -> password);
-    }
-  }
-
-  private static final String TOPIC = "diag-it-topic";
-  private static final String CONSUMER_GROUP = "diag-it-cg";
-
-  @Autowired private StreamMessageTemplate template;
-
-  @Autowired private StreamMQDiagnosticsService diagnosticsService;
-
-  @Autowired private MessageProfileService profileService;
-
-  @Autowired private StreamMQTraceService traceService;
-
-  @Autowired private DiagnosticsTestConsumer testConsumer;
-
-  @Autowired private FailingTestConsumer failingConsumer;
-
-  @Autowired private RedissonClient redisson;
-
-  @BeforeEach
-  void clearState() {
-    testConsumer.clear();
-    failingConsumer.clear();
-  }
-
-  @AfterEach
-  void clearTraceData() {
-    try {
-      // 清理当日 trace stream，防止跨测试残留
-      String date =
-          java.time.LocalDate.now().format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
-      String traceKey = "streammq:diag-it:trace:" + date;
-      redisson.getBucket(traceKey).delete();
-    } catch (Exception ignored) {
-      // 忽略清理异常
-    }
-  }
-
-  /** 诊断测试消费者 - 成功消费。 */
-
-  // ===================== 基础功能测试 =====================
-
-  @Nested
-  @DisplayName("基础功能 - 发送/消费/追踪")
-  class BasicFunctionality {
-
-    @Test
-    @DisplayName("发送并消费消息后，诊断服务应能生成慢消费报告")
-    void shouldDiagnoseSlowConsumeAfterMessageExchange() {
-      SendResult result =
-          template.syncSend(
-              MessageBuilder.<String>withTopic(TOPIC)
-                  .tag("diag-test")
-                  .keys("diag-key-1")
-                  .body("diag-message")
-                  .build());
-      assertThat(result.isSuccess()).isTrue();
-
-      await()
-          .atMost(10, TimeUnit.SECONDS)
-          .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
-
-      SlowConsumeReport report = diagnosticsService.diagnoseSlowConsume(TOPIC, CONSUMER_GROUP);
-      assertThat(report).isNotNull();
-      assertThat(report.topic()).isEqualTo(TOPIC);
-      assertThat(report.group()).isEqualTo(CONSUMER_GROUP);
-      assertThat(report.bottleneck()).isNotEmpty();
-      assertThat(report.recommendation()).isNotEmpty();
+    @DynamicPropertySource
+    static void redisPassword(DynamicPropertyRegistry registry) {
+        String password =
+                System.getProperty(
+                        "test.redis.password",
+                        System.getenv().getOrDefault("STREAMMQ_TEST_REDIS_PASSWORD", ""));
+        if (!password.isEmpty()) {
+            registry.add("redisson.singleServerConfig.password", () -> password);
+        }
     }
 
-    @Test
-    @DisplayName("诊断服务应能生成积压报告")
-    void shouldDiagnoseBacklog() {
-      BacklogReport report = diagnosticsService.diagnoseBacklog(TOPIC, CONSUMER_GROUP);
-      assertThat(report).isNotNull();
-      assertThat(report.topic()).isEqualTo(TOPIC);
-      assertThat(report.group()).isEqualTo(CONSUMER_GROUP);
-      assertThat(report.severity()).isNotNull();
-      assertThat(report.recommendation()).isNotEmpty();
+    private static final String TOPIC = "diag-it-topic";
+    private static final String CONSUMER_GROUP = "diag-it-cg";
+
+    @Autowired private StreamMessageTemplate template;
+
+    @Autowired private StreamMQDiagnosticsService diagnosticsService;
+
+    @Autowired private MessageProfileService profileService;
+
+    @Autowired private StreamMQTraceService traceService;
+
+    @Autowired private DiagnosticsTestConsumer testConsumer;
+
+    @Autowired private FailingTestConsumer failingConsumer;
+
+    @Autowired private RedissonClient redisson;
+
+    @BeforeEach
+    void clearState() {
+        testConsumer.clear();
+        failingConsumer.clear();
     }
 
-    @Test
-    @DisplayName("诊断服务应能生成死信队列报告")
-    void shouldDiagnoseDlq() {
-      DlqReport report = diagnosticsService.diagnoseDlq(CONSUMER_GROUP);
-      assertThat(report).isNotNull();
-      assertThat(report.group()).isEqualTo(CONSUMER_GROUP);
-      assertThat(report.totalDlqCount()).isNotNegative();
+    @AfterEach
+    void clearTraceData() {
+        try {
+            // 清理当日 trace stream，防止跨测试残留
+            String date =
+                    java.time.LocalDate.now()
+                            .format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
+            String traceKey = "streammq:diag-it:trace:" + date;
+            redisson.getBucket(traceKey).delete();
+        } catch (Exception ignored) {
+            // 忽略清理异常
+        }
     }
 
-    @Test
-    @DisplayName("诊断服务与画像服务应被正确自动装配")
-    void shouldAutoConfigureBeans() {
-      assertThat(diagnosticsService).isNotNull();
-      assertThat(profileService).isNotNull();
-      assertThat(traceService).isNotNull();
-    }
-  }
+    /** 诊断测试消费者 - 成功消费。 */
 
-  // ===================== 追踪数据全链路测试 =====================
+    // ===================== 基础功能测试 =====================
 
-  @Nested
-  @DisplayName("追踪数据全链路 - 真实 Redis 存储/查询")
-  class TraceDataFlow {
+    @Nested
+    @DisplayName("基础功能 - 发送/消费/追踪")
+    class BasicFunctionality {
 
-    @Test
-    @DisplayName("发送多条消息后，追踪服务应能查询到发送和消费记录")
-    void shouldQueryTraceRecordsAfterMessageExchange() {
-      int msgCount = 5;
-      for (int i = 0; i < msgCount; i++) {
-        template.syncSend(
-            MessageBuilder.<String>withTopic(TOPIC)
-                .tag("trace-test")
-                .keys("trace-key-" + i)
-                .body("trace-message-" + i)
-                .build());
-      }
+        @Test
+        @DisplayName("发送并消费消息后，诊断服务应能生成慢消费报告")
+        void shouldDiagnoseSlowConsumeAfterMessageExchange() {
+            SendResult result =
+                    template.syncSend(
+                            MessageBuilder.<String>withTopic(TOPIC)
+                                    .tag("diag-test")
+                                    .keys("diag-key-1")
+                                    .body("diag-message")
+                                    .build());
+            assertThat(result.isSuccess()).isTrue();
 
-      await()
-          .atMost(10, TimeUnit.SECONDS)
-          .untilAsserted(() -> assertThat(testConsumer.getReceived()).hasSize(msgCount));
+            await().atMost(10, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
 
-      long now = System.currentTimeMillis();
-      long start = now - 5 * 60 * 1000L;
-      List<TraceRecord> records = traceService.queryByTopic(TOPIC, start, now);
+            SlowConsumeReport report =
+                    diagnosticsService.diagnoseSlowConsume(TOPIC, CONSUMER_GROUP);
+            assertThat(report).isNotNull();
+            assertThat(report.topic()).isEqualTo(TOPIC);
+            assertThat(report.group()).isEqualTo(CONSUMER_GROUP);
+            assertThat(report.bottleneck()).isNotEmpty();
+            assertThat(report.recommendation()).isNotEmpty();
+        }
 
-      assertThat(records).isNotNull();
-      assertThat(records).isNotEmpty();
+        @Test
+        @DisplayName("诊断服务应能生成积压报告")
+        void shouldDiagnoseBacklog() {
+            BacklogReport report = diagnosticsService.diagnoseBacklog(TOPIC, CONSUMER_GROUP);
+            assertThat(report).isNotNull();
+            assertThat(report.topic()).isEqualTo(TOPIC);
+            assertThat(report.group()).isEqualTo(CONSUMER_GROUP);
+            assertThat(report.severity()).isNotNull();
+            assertThat(report.recommendation()).isNotEmpty();
+        }
 
-      long sendCount = records.stream().filter(r -> r.type() == TraceType.SEND).count();
-      long consumeCount = records.stream().filter(r -> r.type() == TraceType.CONSUME).count();
-      assertThat(sendCount).isGreaterThanOrEqualTo(msgCount);
-      assertThat(consumeCount).isGreaterThanOrEqualTo(msgCount);
+        @Test
+        @DisplayName("诊断服务应能生成死信队列报告")
+        void shouldDiagnoseDlq() {
+            DlqReport report = diagnosticsService.diagnoseDlq(CONSUMER_GROUP);
+            assertThat(report).isNotNull();
+            assertThat(report.group()).isEqualTo(CONSUMER_GROUP);
+            assertThat(report.totalDlqCount()).isNotNegative();
+        }
 
-      for (TraceRecord record : records) {
-        assertThat(record.messageId()).isNotEmpty();
-        assertThat(record.topic()).isEqualTo(TOPIC);
-        assertThat(record.timestamp()).isPositive();
-      }
-    }
-
-    @Test
-    @DisplayName("按消息 ID 应能查询到完整链路记录")
-    void shouldQueryTraceByMessageId() {
-      SendResult result =
-          template.syncSend(
-              MessageBuilder.<String>withTopic(TOPIC)
-                  .tag("msgid-test")
-                  .keys("msgid-key")
-                  .body("msgid-message")
-                  .build());
-      assertThat(result.isSuccess()).isTrue();
-
-      await()
-          .atMost(10, TimeUnit.SECONDS)
-          .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
-
-      String messageId = testConsumer.getLastMessageId();
-      assertThat(messageId).isNotEmpty();
-
-      List<TraceRecord> records = traceService.queryByMessageId(messageId);
-      assertThat(records).isNotNull();
-      assertThat(records).isNotEmpty();
-      assertThat(records).allMatch(r -> messageId.equals(r.messageId()));
+        @Test
+        @DisplayName("诊断服务与画像服务应被正确自动装配")
+        void shouldAutoConfigureBeans() {
+            assertThat(diagnosticsService).isNotNull();
+            assertThat(profileService).isNotNull();
+            assertThat(traceService).isNotNull();
+        }
     }
 
-    @Test
-    @DisplayName("按消费者组应能查询到消费记录")
-    void shouldQueryTraceByGroup() {
-      template.syncSend(
-          MessageBuilder.<String>withTopic(TOPIC)
-              .tag("group-test")
-              .keys("group-key")
-              .body("group-message")
-              .build());
+    // ===================== 追踪数据全链路测试 =====================
 
-      await()
-          .atMost(10, TimeUnit.SECONDS)
-          .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
+    @Nested
+    @DisplayName("追踪数据全链路 - 真实 Redis 存储/查询")
+    class TraceDataFlow {
 
-      long now = System.currentTimeMillis();
-      long start = now - 5 * 60 * 1000L;
-      List<TraceRecord> records = traceService.queryByGroup(CONSUMER_GROUP, start, now);
+        @Test
+        @DisplayName("发送多条消息后，追踪服务应能查询到发送和消费记录")
+        void shouldQueryTraceRecordsAfterMessageExchange() {
+            int msgCount = 5;
+            for (int i = 0; i < msgCount; i++) {
+                template.syncSend(
+                        MessageBuilder.<String>withTopic(TOPIC)
+                                .tag("trace-test")
+                                .keys("trace-key-" + i)
+                                .body("trace-message-" + i)
+                                .build());
+            }
 
-      assertThat(records).isNotNull();
-      assertThat(records).isNotEmpty();
-      assertThat(records)
-          .allMatch(r -> CONSUMER_GROUP.equals(r.group()) || "diag-it-producer".equals(r.group()));
-    }
-  }
+            await().atMost(10, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).hasSize(msgCount));
 
-  // ===================== 消息画像全链路测试 =====================
+            long now = System.currentTimeMillis();
+            long start = now - 5 * 60 * 1000L;
+            List<TraceRecord> records = traceService.queryByTopic(TOPIC, start, now);
 
-  @Nested
-  @DisplayName("消息画像 - 真实生命周期构建")
-  class MessageProfileTests {
+            assertThat(records).isNotNull();
+            assertThat(records).isNotEmpty();
 
-    @Test
-    @DisplayName("发送并消费消息后，画像服务应能构建消息生命周期画像")
-    void shouldBuildMessageProfileAfterExchange() {
-      String body = "profile-message-" + System.nanoTime();
-      SendResult result =
-          template.syncSend(
-              MessageBuilder.<String>withTopic(TOPIC)
-                  .tag("profile-test")
-                  .keys("profile-key")
-                  .body(body)
-                  .build());
-      assertThat(result.isSuccess()).isTrue();
+            long sendCount = records.stream().filter(r -> r.type() == TraceType.SEND).count();
+            long consumeCount = records.stream().filter(r -> r.type() == TraceType.CONSUME).count();
+            assertThat(sendCount).isGreaterThanOrEqualTo(msgCount);
+            assertThat(consumeCount).isGreaterThanOrEqualTo(msgCount);
 
-      // 等待目标 body 被消费
-      await()
-          .atMost(10, TimeUnit.SECONDS)
-          .untilAsserted(
-              () -> {
-                List<String> bodies = testConsumer.getReceived();
-                assertThat(bodies).contains(body);
-              });
+            for (TraceRecord record : records) {
+                assertThat(record.messageId()).isNotEmpty();
+                assertThat(record.topic()).isEqualTo(TOPIC);
+                assertThat(record.timestamp()).isPositive();
+            }
+        }
 
-      // 找到该 body 对应的 messageId
-      String messageId =
-          testConsumer.getReceivedMessages().stream()
-              .filter(m -> body.equals(m.getBody()) && m.getMessageId() != null)
-              .map(m -> m.getMessageId().getStreamEntryId())
-              .findFirst()
-              .orElse(null);
-      assertThat(messageId).isNotNull();
+        @Test
+        @DisplayName("按消息 ID 应能查询到完整链路记录")
+        void shouldQueryTraceByMessageId() {
+            SendResult result =
+                    template.syncSend(
+                            MessageBuilder.<String>withTopic(TOPIC)
+                                    .tag("msgid-test")
+                                    .keys("msgid-key")
+                                    .body("msgid-message")
+                                    .build());
+            assertThat(result.isSuccess()).isTrue();
 
-      // 等待追踪数据落库并可查询（含消费记录）
-      MessageProfileService ps = profileService;
-      MessageProfile profile =
-          await()
-              .atMost(15, TimeUnit.SECONDS)
-              .until(
-                  () -> {
-                    MessageProfile candidate = ps.getProfile(messageId);
-                    if (candidate != null
-                        && candidate.consumeHistory() != null
-                        && !candidate.consumeHistory().isEmpty()) {
-                      return candidate;
-                    }
-                    return null;
-                  },
-                  p -> p != null);
+            await().atMost(10, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
 
-      assertThat(profile).isNotNull();
-      assertThat(profile.messageId()).isEqualTo(messageId);
-      assertThat(profile.topic()).isEqualTo(TOPIC);
-      assertThat(profile.tag()).isEqualTo("profile-test");
-      assertThat(profile.keys()).isEqualTo("profile-key");
-      assertThat(profile.bornTimestamp()).isPositive();
-      assertThat(profile.routePath()).isNotEmpty();
-      assertThat(profile.routePath().contains(TOPIC)).isTrue();
-      assertThat(profile.consumeHistory()).isNotEmpty();
-      assertThat(profile.consumeHistory().get(0).success()).isTrue();
-      assertThat(profile.finalStatus()).isIn(MessageStatus.SUCCESS, MessageStatus.PROCESSING);
-    }
+            String messageId = testConsumer.getLastMessageId();
+            assertThat(messageId).isNotEmpty();
 
-    @Test
-    @DisplayName("按主题批量查询画像应返回所有消息画像")
-    void shouldGetTopicProfiles() {
-      int msgCount = 3;
-      for (int i = 0; i < msgCount; i++) {
-        template.syncSend(
-            MessageBuilder.<String>withTopic(TOPIC)
-                .tag("batch-profile")
-                .keys("batch-key-" + i)
-                .body("batch-message-" + i)
-                .build());
-      }
+            List<TraceRecord> records = traceService.queryByMessageId(messageId);
+            assertThat(records).isNotNull();
+            assertThat(records).isNotEmpty();
+            assertThat(records).allMatch(r -> messageId.equals(r.messageId()));
+        }
 
-      await()
-          .atMost(10, TimeUnit.SECONDS)
-          .untilAsserted(() -> assertThat(testConsumer.getReceived()).hasSize(msgCount));
+        @Test
+        @DisplayName("按消费者组应能查询到消费记录")
+        void shouldQueryTraceByGroup() {
+            template.syncSend(
+                    MessageBuilder.<String>withTopic(TOPIC)
+                            .tag("group-test")
+                            .keys("group-key")
+                            .body("group-message")
+                            .build());
 
-      long now = System.currentTimeMillis();
-      long start = now - 5 * 60 * 1000L;
-      List<MessageProfile> profiles = profileService.getTopicProfiles(TOPIC, start, now);
+            await().atMost(10, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
 
-      assertThat(profiles).isNotNull();
-      assertThat(profiles).isNotEmpty();
-      assertThat(profiles.size()).isGreaterThanOrEqualTo(msgCount);
+            long now = System.currentTimeMillis();
+            long start = now - 5 * 60 * 1000L;
+            List<TraceRecord> records = traceService.queryByGroup(CONSUMER_GROUP, start, now);
 
-      for (MessageProfile profile : profiles) {
-        assertThat(profile.messageId()).isNotEmpty();
-        assertThat(profile.topic()).isEqualTo(TOPIC);
-        assertThat(profile.consumeHistory()).isNotNull();
-      }
+            assertThat(records).isNotNull();
+            assertThat(records).isNotEmpty();
+            assertThat(records)
+                    .allMatch(
+                            r ->
+                                    CONSUMER_GROUP.equals(r.group())
+                                            || "diag-it-producer".equals(r.group()));
+        }
     }
 
-    @Test
-    @DisplayName("消费历史应包含消费尝试记录")
-    void shouldContainConsumeHistory() {
-      SendResult result =
-          template.syncSend(
-              MessageBuilder.<String>withTopic(TOPIC)
-                  .tag("history-test")
-                  .keys("history-key")
-                  .body("history-message")
-                  .build());
-      assertThat(result.isSuccess()).isTrue();
+    // ===================== 消息画像全链路测试 =====================
 
-      await()
-          .atMost(10, TimeUnit.SECONDS)
-          .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
+    @Nested
+    @DisplayName("消息画像 - 真实生命周期构建")
+    class MessageProfileTests {
 
-      String messageId = testConsumer.getLastMessageId();
-      MessageProfile profile =
-          await()
-              .atMost(10, TimeUnit.SECONDS)
-              .until(
-                  () -> profileService.getProfile(messageId),
-                  p -> p != null && p.consumeHistory() != null && !p.consumeHistory().isEmpty());
+        @Test
+        @DisplayName("发送并消费消息后，画像服务应能构建消息生命周期画像")
+        void shouldBuildMessageProfileAfterExchange() {
+            String body = "profile-message-" + System.nanoTime();
+            SendResult result =
+                    template.syncSend(
+                            MessageBuilder.<String>withTopic(TOPIC)
+                                    .tag("profile-test")
+                                    .keys("profile-key")
+                                    .body(body)
+                                    .build());
+            assertThat(result.isSuccess()).isTrue();
 
-      assertThat(profile).isNotNull();
-      List<ConsumeAttempt> history = profile.consumeHistory();
-      assertThat(history).isNotNull();
-      assertThat(history).isNotEmpty();
+            // 等待目标 body 被消费
+            await().atMost(10, TimeUnit.SECONDS)
+                    .untilAsserted(
+                            () -> {
+                                List<String> bodies = testConsumer.getReceived();
+                                assertThat(bodies).contains(body);
+                            });
 
-      ConsumeAttempt attempt = history.get(0);
-      assertThat(attempt.consumerGroup()).isEqualTo(CONSUMER_GROUP);
-      assertThat(attempt.success()).isTrue();
-      assertThat(attempt.timestamp()).isPositive();
+            // 找到该 body 对应的 messageId
+            String messageId =
+                    testConsumer.getReceivedMessages().stream()
+                            .filter(m -> body.equals(m.getBody()) && m.getMessageId() != null)
+                            .map(m -> m.getMessageId().getStreamEntryId())
+                            .findFirst()
+                            .orElse(null);
+            assertThat(messageId).isNotNull();
+
+            // 等待追踪数据落库并可查询（含消费记录）
+            MessageProfileService ps = profileService;
+            MessageProfile profile =
+                    await().atMost(15, TimeUnit.SECONDS)
+                            .until(
+                                    () -> {
+                                        MessageProfile candidate = ps.getProfile(messageId);
+                                        if (candidate != null
+                                                && candidate.consumeHistory() != null
+                                                && !candidate.consumeHistory().isEmpty()) {
+                                            return candidate;
+                                        }
+                                        return null;
+                                    },
+                                    p -> p != null);
+
+            assertThat(profile).isNotNull();
+            assertThat(profile.messageId()).isEqualTo(messageId);
+            assertThat(profile.topic()).isEqualTo(TOPIC);
+            assertThat(profile.tag()).isEqualTo("profile-test");
+            assertThat(profile.keys()).isEqualTo("profile-key");
+            assertThat(profile.bornTimestamp()).isPositive();
+            assertThat(profile.routePath()).isNotEmpty();
+            assertThat(profile.routePath().contains(TOPIC)).isTrue();
+            assertThat(profile.consumeHistory()).isNotEmpty();
+            assertThat(profile.consumeHistory().get(0).success()).isTrue();
+            assertThat(profile.finalStatus()).isIn(MessageStatus.SUCCESS, MessageStatus.PROCESSING);
+        }
+
+        @Test
+        @DisplayName("按主题批量查询画像应返回所有消息画像")
+        void shouldGetTopicProfiles() {
+            int msgCount = 3;
+            for (int i = 0; i < msgCount; i++) {
+                template.syncSend(
+                        MessageBuilder.<String>withTopic(TOPIC)
+                                .tag("batch-profile")
+                                .keys("batch-key-" + i)
+                                .body("batch-message-" + i)
+                                .build());
+            }
+
+            await().atMost(10, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).hasSize(msgCount));
+
+            long now = System.currentTimeMillis();
+            long start = now - 5 * 60 * 1000L;
+            List<MessageProfile> profiles = profileService.getTopicProfiles(TOPIC, start, now);
+
+            assertThat(profiles).isNotNull();
+            assertThat(profiles).isNotEmpty();
+            assertThat(profiles.size()).isGreaterThanOrEqualTo(msgCount);
+
+            for (MessageProfile profile : profiles) {
+                assertThat(profile.messageId()).isNotEmpty();
+                assertThat(profile.topic()).isEqualTo(TOPIC);
+                assertThat(profile.consumeHistory()).isNotNull();
+            }
+        }
+
+        @Test
+        @DisplayName("消费历史应包含消费尝试记录")
+        void shouldContainConsumeHistory() {
+            SendResult result =
+                    template.syncSend(
+                            MessageBuilder.<String>withTopic(TOPIC)
+                                    .tag("history-test")
+                                    .keys("history-key")
+                                    .body("history-message")
+                                    .build());
+            assertThat(result.isSuccess()).isTrue();
+
+            await().atMost(10, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
+
+            String messageId = testConsumer.getLastMessageId();
+            MessageProfile profile =
+                    await().atMost(10, TimeUnit.SECONDS)
+                            .until(
+                                    () -> profileService.getProfile(messageId),
+                                    p ->
+                                            p != null
+                                                    && p.consumeHistory() != null
+                                                    && !p.consumeHistory().isEmpty());
+
+            assertThat(profile).isNotNull();
+            List<ConsumeAttempt> history = profile.consumeHistory();
+            assertThat(history).isNotNull();
+            assertThat(history).isNotEmpty();
+
+            ConsumeAttempt attempt = history.get(0);
+            assertThat(attempt.consumerGroup()).isEqualTo(CONSUMER_GROUP);
+            assertThat(attempt.success()).isTrue();
+            assertThat(attempt.timestamp()).isPositive();
+        }
+
+        @Test
+        @DisplayName("不存在的消息 ID 应返回 null")
+        void shouldReturnNullForUnknownMessage() {
+            MessageProfile profile = profileService.getProfile("non-existent-message-id");
+            assertThat(profile).isNull();
+        }
     }
 
-    @Test
-    @DisplayName("不存在的消息 ID 应返回 null")
-    void shouldReturnNullForUnknownMessage() {
-      MessageProfile profile = profileService.getProfile("non-existent-message-id");
-      assertThat(profile).isNull();
-    }
-  }
+    // ===================== 慢消费诊断全链路测试 =====================
 
-  // ===================== 慢消费诊断全链路测试 =====================
+    @Nested
+    @DisplayName("慢消费诊断 - 真实数据驱动")
+    class SlowConsumeDiagnostics {
 
-  @Nested
-  @DisplayName("慢消费诊断 - 真实数据驱动")
-  class SlowConsumeDiagnostics {
+        @Test
+        @DisplayName("发送多条消息后，慢消费报告应包含消费统计数据")
+        void shouldContainStatsAfterMultipleMessages() {
+            int msgCount = 10;
+            for (int i = 0; i < msgCount; i++) {
+                template.syncSend(
+                        MessageBuilder.<String>withTopic(TOPIC)
+                                .tag("slow-test")
+                                .keys("slow-key-" + i)
+                                .body("slow-message-" + i)
+                                .build());
+            }
 
-    @Test
-    @DisplayName("发送多条消息后，慢消费报告应包含消费统计数据")
-    void shouldContainStatsAfterMultipleMessages() {
-      int msgCount = 10;
-      for (int i = 0; i < msgCount; i++) {
-        template.syncSend(
-            MessageBuilder.<String>withTopic(TOPIC)
-                .tag("slow-test")
-                .keys("slow-key-" + i)
-                .body("slow-message-" + i)
-                .build());
-      }
+            await().atMost(15, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).hasSize(msgCount));
 
-      await()
-          .atMost(15, TimeUnit.SECONDS)
-          .untilAsserted(() -> assertThat(testConsumer.getReceived()).hasSize(msgCount));
+            SlowConsumeReport report =
+                    diagnosticsService.diagnoseSlowConsume(TOPIC, CONSUMER_GROUP);
 
-      SlowConsumeReport report = diagnosticsService.diagnoseSlowConsume(TOPIC, CONSUMER_GROUP);
+            assertThat(report).isNotNull();
+            assertThat(report.topic()).isEqualTo(TOPIC);
+            assertThat(report.group()).isEqualTo(CONSUMER_GROUP);
+            assertThat(report.produceRate()).isGreaterThan(0);
+            assertThat(report.consumeRate()).isGreaterThan(0);
+            assertThat(report.avgConsumeTimeMillis()).isGreaterThanOrEqualTo(0);
+            assertThat(report.maxConsumeTimeMillis()).isGreaterThanOrEqualTo(0);
+            assertThat(report.p99ConsumeTimeMillis()).isGreaterThanOrEqualTo(0);
+            assertThat(report.bottleneck()).isNotEmpty();
+            assertThat(report.recommendation()).isNotEmpty();
+        }
 
-      assertThat(report).isNotNull();
-      assertThat(report.topic()).isEqualTo(TOPIC);
-      assertThat(report.group()).isEqualTo(CONSUMER_GROUP);
-      assertThat(report.produceRate()).isGreaterThan(0);
-      assertThat(report.consumeRate()).isGreaterThan(0);
-      assertThat(report.avgConsumeTimeMillis()).isGreaterThanOrEqualTo(0);
-      assertThat(report.maxConsumeTimeMillis()).isGreaterThanOrEqualTo(0);
-      assertThat(report.p99ConsumeTimeMillis()).isGreaterThanOrEqualTo(0);
-      assertThat(report.bottleneck()).isNotEmpty();
-      assertThat(report.recommendation()).isNotEmpty();
-    }
-
-    @Test
-    @DisplayName("无消费者的主题应返回空报告")
-    void shouldReturnEmptyReportForUnknownTopic() {
-      SlowConsumeReport report =
-          diagnosticsService.diagnoseSlowConsume("non-existent-topic", "non-existent-group");
-      assertThat(report).isNotNull();
-      assertThat(report.bottleneck()).contains("无追踪数据");
-    }
-  }
-
-  // ===================== 积压诊断全链路测试 =====================
-
-  @Nested
-  @DisplayName("积压诊断 - 真实数据驱动")
-  class BacklogDiagnostics {
-
-    @Test
-    @DisplayName("发送并消费消息后，积压报告应反映消费状态")
-    void shouldReflectConsumeStatus() {
-      int msgCount = 8;
-      for (int i = 0; i < msgCount; i++) {
-        template.syncSend(
-            MessageBuilder.<String>withTopic(TOPIC)
-                .tag("backlog-test")
-                .keys("backlog-key-" + i)
-                .body("backlog-message-" + i)
-                .build());
-      }
-
-      await()
-          .atMost(15, TimeUnit.SECONDS)
-          .untilAsserted(() -> assertThat(testConsumer.getReceived()).hasSize(msgCount));
-
-      BacklogReport report = diagnosticsService.diagnoseBacklog(TOPIC, CONSUMER_GROUP);
-
-      assertThat(report).isNotNull();
-      assertThat(report.topic()).isEqualTo(TOPIC);
-      assertThat(report.group()).isEqualTo(CONSUMER_GROUP);
-      assertThat(report.produceRate()).isGreaterThan(0);
-      assertThat(report.severity()).isNotNull();
+        @Test
+        @DisplayName("无消费者的主题应返回空报告")
+        void shouldReturnEmptyReportForUnknownTopic() {
+            SlowConsumeReport report =
+                    diagnosticsService.diagnoseSlowConsume(
+                            "non-existent-topic", "non-existent-group");
+            assertThat(report).isNotNull();
+            assertThat(report.bottleneck()).contains("无追踪数据");
+        }
     }
 
-    @Test
-    @DisplayName("getAllBacklogs 应遍历所有消费者并生成报告")
-    void shouldGetAllBacklogs() {
-      template.syncSend(
-          MessageBuilder.<String>withTopic(TOPIC)
-              .tag("all-backlogs")
-              .keys("all-backlogs-key")
-              .body("all-backlogs-message")
-              .build());
+    // ===================== 积压诊断全链路测试 =====================
 
-      await()
-          .atMost(10, TimeUnit.SECONDS)
-          .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
+    @Nested
+    @DisplayName("积压诊断 - 真实数据驱动")
+    class BacklogDiagnostics {
 
-      List<BacklogReport> backlogs = diagnosticsService.getAllBacklogs();
-      assertThat(backlogs).isNotNull();
-      assertThat(backlogs).isNotEmpty();
-    }
-  }
+        @Test
+        @DisplayName("发送并消费消息后，积压报告应反映消费状态")
+        void shouldReflectConsumeStatus() {
+            int msgCount = 8;
+            for (int i = 0; i < msgCount; i++) {
+                template.syncSend(
+                        MessageBuilder.<String>withTopic(TOPIC)
+                                .tag("backlog-test")
+                                .keys("backlog-key-" + i)
+                                .body("backlog-message-" + i)
+                                .build());
+            }
 
-  // ===================== DLQ 诊断全链路测试 =====================
+            await().atMost(15, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).hasSize(msgCount));
 
-  @Nested
-  @DisplayName("DLQ 诊断 - 真实数据驱动")
-  class DlqDiagnostics {
+            BacklogReport report = diagnosticsService.diagnoseBacklog(TOPIC, CONSUMER_GROUP);
 
-    @Test
-    @DisplayName("正常消费的消费者组不应有死信")
-    void shouldHaveNoDlqForNormalConsumer() {
-      template.syncSend(
-          MessageBuilder.<String>withTopic(TOPIC)
-              .tag("dlq-test")
-              .keys("dlq-key")
-              .body("dlq-message")
-              .build());
+            assertThat(report).isNotNull();
+            assertThat(report.topic()).isEqualTo(TOPIC);
+            assertThat(report.group()).isEqualTo(CONSUMER_GROUP);
+            assertThat(report.produceRate()).isGreaterThan(0);
+            assertThat(report.severity()).isNotNull();
+        }
 
-      await()
-          .atMost(10, TimeUnit.SECONDS)
-          .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
+        @Test
+        @DisplayName("getAllBacklogs 应遍历所有消费者并生成报告")
+        void shouldGetAllBacklogs() {
+            template.syncSend(
+                    MessageBuilder.<String>withTopic(TOPIC)
+                            .tag("all-backlogs")
+                            .keys("all-backlogs-key")
+                            .body("all-backlogs-message")
+                            .build());
 
-      DlqReport report = diagnosticsService.diagnoseDlq(CONSUMER_GROUP);
+            await().atMost(10, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
 
-      assertThat(report).isNotNull();
-      assertThat(report.group()).isEqualTo(CONSUMER_GROUP);
-      assertThat(report.recommendation()).isNotEmpty();
-    }
-
-    @Test
-    @DisplayName("getSlowConsumers 应能返回所有慢消费者")
-    void shouldGetSlowConsumers() {
-      List<String> slowConsumers = diagnosticsService.getSlowConsumers();
-      assertThat(slowConsumers).isNotNull();
-    }
-  }
-
-  // ===================== 异常边界测试 =====================
-
-  @Nested
-  @DisplayName("异常边界 - 空值/null 安全处理")
-  class EdgeCases {
-
-    @Test
-    @DisplayName("空 topic 应安全处理")
-    void shouldHandleEmptyTopic() {
-      SlowConsumeReport report = diagnosticsService.diagnoseSlowConsume("", "group");
-      assertThat(report).isNotNull();
+            List<BacklogReport> backlogs = diagnosticsService.getAllBacklogs();
+            assertThat(backlogs).isNotNull();
+            assertThat(backlogs).isNotEmpty();
+        }
     }
 
-    @Test
-    @DisplayName("空 group 应安全处理")
-    void shouldHandleEmptyGroup() {
-      DlqReport report = diagnosticsService.diagnoseDlq("");
-      assertThat(report).isNotNull();
+    // ===================== DLQ 诊断全链路测试 =====================
+
+    @Nested
+    @DisplayName("DLQ 诊断 - 真实数据驱动")
+    class DlqDiagnostics {
+
+        @Test
+        @DisplayName("正常消费的消费者组不应有死信")
+        void shouldHaveNoDlqForNormalConsumer() {
+            template.syncSend(
+                    MessageBuilder.<String>withTopic(TOPIC)
+                            .tag("dlq-test")
+                            .keys("dlq-key")
+                            .body("dlq-message")
+                            .build());
+
+            await().atMost(10, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
+
+            DlqReport report = diagnosticsService.diagnoseDlq(CONSUMER_GROUP);
+
+            assertThat(report).isNotNull();
+            assertThat(report.group()).isEqualTo(CONSUMER_GROUP);
+            assertThat(report.recommendation()).isNotEmpty();
+        }
+
+        @Test
+        @DisplayName("getSlowConsumers 应能返回所有慢消费者")
+        void shouldGetSlowConsumers() {
+            List<String> slowConsumers = diagnosticsService.getSlowConsumers();
+            assertThat(slowConsumers).isNotNull();
+        }
     }
 
-    @Test
-    @DisplayName("空消息 ID 查询画像应返回 null")
-    void shouldHandleEmptyMessageId() {
-      MessageProfile profile = profileService.getProfile("");
-      assertThat(profile).isNull();
+    // ===================== 异常边界测试 =====================
+
+    @Nested
+    @DisplayName("异常边界 - 空值/null 安全处理")
+    class EdgeCases {
+
+        @Test
+        @DisplayName("空 topic 应安全处理")
+        void shouldHandleEmptyTopic() {
+            SlowConsumeReport report = diagnosticsService.diagnoseSlowConsume("", "group");
+            assertThat(report).isNotNull();
+        }
+
+        @Test
+        @DisplayName("空 group 应安全处理")
+        void shouldHandleEmptyGroup() {
+            DlqReport report = diagnosticsService.diagnoseDlq("");
+            assertThat(report).isNotNull();
+        }
+
+        @Test
+        @DisplayName("空消息 ID 查询画像应返回 null")
+        void shouldHandleEmptyMessageId() {
+            MessageProfile profile = profileService.getProfile("");
+            assertThat(profile).isNull();
+        }
+
+        @Test
+        @DisplayName("空 topic 查询画像应返回空列表")
+        void shouldHandleEmptyTopicForProfiles() {
+            List<MessageProfile> profiles = profileService.getTopicProfiles("", 0L, Long.MAX_VALUE);
+            assertThat(profiles).isEmpty();
+        }
     }
 
-    @Test
-    @DisplayName("空 topic 查询画像应返回空列表")
-    void shouldHandleEmptyTopicForProfiles() {
-      List<MessageProfile> profiles = profileService.getTopicProfiles("", 0L, Long.MAX_VALUE);
-      assertThat(profiles).isEmpty();
-    }
-  }
+    // ===================== 测试消费者 =====================
 
-  // ===================== 测试消费者 =====================
+    /** 测试消费者 - 成功消费。 */
+    @StreamMQConsumer(topic = TOPIC, consumerGroup = CONSUMER_GROUP, maxReconsumeTimes = 3)
+    static class DiagnosticsTestConsumer implements StreamMessageConcurrentlyConsumer<String> {
 
-  /** 测试消费者 - 成功消费。 */
-  @StreamMQConsumer(topic = TOPIC, consumerGroup = CONSUMER_GROUP, maxReconsumeTimes = 3)
-  static class DiagnosticsTestConsumer implements StreamMessageConcurrentlyConsumer<String> {
+        private final List<String> received = new CopyOnWriteArrayList<>();
+        private final CopyOnWriteArrayList<Message<String>> receivedMessages =
+                new CopyOnWriteArrayList<>();
 
-    private final List<String> received = new CopyOnWriteArrayList<>();
-    private final CopyOnWriteArrayList<Message<String>> receivedMessages =
-        new CopyOnWriteArrayList<>();
+        @Override
+        public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
+            received.add(message.getBody());
+            receivedMessages.add(message);
+            return ConsumeAction.SUCCESS;
+        }
 
-    @Override
-    public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
-      received.add(message.getBody());
-      receivedMessages.add(message);
-      return ConsumeAction.SUCCESS;
-    }
+        List<String> getReceived() {
+            return received;
+        }
 
-    List<String> getReceived() {
-      return received;
-    }
+        List<Message<String>> getReceivedMessages() {
+            return receivedMessages;
+        }
 
-    List<Message<String>> getReceivedMessages() {
-      return receivedMessages;
-    }
+        String getLastMessageId() {
+            Message<String> last = receivedMessages.get(receivedMessages.size() - 1);
+            return last.getMessageId() != null ? last.getMessageId().getStreamEntryId() : "";
+        }
 
-    String getLastMessageId() {
-      Message<String> last = receivedMessages.get(receivedMessages.size() - 1);
-      return last.getMessageId() != null ? last.getMessageId().getStreamEntryId() : "";
+        void clear() {
+            received.clear();
+            receivedMessages.clear();
+        }
     }
 
-    void clear() {
-      received.clear();
-      receivedMessages.clear();
+    /** 失败测试消费者 - 模拟消费失败场景。 */
+    @StreamMQConsumer(topic = TOPIC, consumerGroup = "diag-it-failing-cg", maxReconsumeTimes = 0)
+    static class FailingTestConsumer implements StreamMessageConcurrentlyConsumer<String> {
+
+        private final List<String> received = new CopyOnWriteArrayList<>();
+        private final AtomicInteger failCount = new AtomicInteger(0);
+
+        @Override
+        public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
+            received.add(message.getBody());
+            return ConsumeAction.RECONSUME_LATER;
+        }
+
+        List<String> getReceived() {
+            return received;
+        }
+
+        int getFailCount() {
+            return failCount.get();
+        }
+
+        void clear() {
+            received.clear();
+            failCount.set(0);
+        }
     }
-  }
 
-  /** 失败测试消费者 - 模拟消费失败场景。 */
-  @StreamMQConsumer(topic = TOPIC, consumerGroup = "diag-it-failing-cg", maxReconsumeTimes = 0)
-  static class FailingTestConsumer implements StreamMessageConcurrentlyConsumer<String> {
-
-    private final List<String> received = new CopyOnWriteArrayList<>();
-    private final AtomicInteger failCount = new AtomicInteger(0);
-
-    @Override
-    public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
-      received.add(message.getBody());
-      return ConsumeAction.RECONSUME_LATER;
-    }
-
-    List<String> getReceived() {
-      return received;
-    }
-
-    int getFailCount() {
-      return failCount.get();
-    }
-
-    void clear() {
-      received.clear();
-      failCount.set(0);
-    }
-  }
-
-  /** 测试 Spring Boot 应用。 */
-  @SpringBootApplication
-  static class TestApplication {}
+    /** 测试 Spring Boot 应用。 */
+    @SpringBootApplication
+    static class TestApplication {}
 }

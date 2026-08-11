@@ -26,434 +26,442 @@ import org.junit.jupiter.api.Test;
 @DisplayName("DefaultMessageConverter 默认消息转换器测试")
 class DefaultMessageConverterTest {
 
-  private final JacksonJsonSerializer<Object> serializer = new JacksonJsonSerializer<>();
-  private final DefaultMessageConverter converter = new DefaultMessageConverter(serializer);
-  private final ObjectMapper propsMapper = new ObjectMapper();
+    private final JacksonJsonSerializer<Object> serializer = new JacksonJsonSerializer<>();
+    private final DefaultMessageConverter converter = new DefaultMessageConverter(serializer);
+    private final ObjectMapper propsMapper = new ObjectMapper();
 
-  @Test
-  @DisplayName(
-      "toStreamFields 完整字段映射（body Base64、bodyType 类名、tag/keys/shardingKey/bornTs/bornHost）")
-  void toStreamFieldsFullMapping() {
-    Message<String> msg = new Message<>();
-    msg.setBody("hello");
-    msg.setTag("vip");
-    msg.setKeys("k1");
-    msg.setShardingKey("shard-1");
-    msg.setBornTimestamp(123456789L);
-    msg.setBornHost("host:8080");
+    @Test
+    @DisplayName(
+            "toStreamFields 完整字段映射（body Base64、bodyType 类名、tag/keys/shardingKey/bornTs/bornHost）")
+    void toStreamFieldsFullMapping() {
+        Message<String> msg = new Message<>();
+        msg.setBody("hello");
+        msg.setTag("vip");
+        msg.setKeys("k1");
+        msg.setShardingKey("shard-1");
+        msg.setBornTimestamp(123456789L);
+        msg.setBornHost("host:8080");
 
-    Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields = converter.toStreamFields(msg);
 
-    assertThat(fields).containsEntry("bodyType", "java.lang.String");
-    assertThat(fields).containsEntry("tag", "vip");
-    assertThat(fields).containsEntry("keys", "k1");
-    assertThat(fields).containsEntry("shardingKey", "shard-1");
-    assertThat(fields).containsEntry("bornTs", "123456789");
-    assertThat(fields).containsEntry("bornHost", "host:8080");
+        assertThat(fields).containsEntry("bodyType", "java.lang.String");
+        assertThat(fields).containsEntry("tag", "vip");
+        assertThat(fields).containsEntry("keys", "k1");
+        assertThat(fields).containsEntry("shardingKey", "shard-1");
+        assertThat(fields).containsEntry("bornTs", "123456789");
+        assertThat(fields).containsEntry("bornHost", "host:8080");
 
-    String expectedBody =
-        Base64.getEncoder().encodeToString(serializer.serialize("hello", Object.class));
-    assertThat(fields).containsEntry("body", expectedBody);
-  }
-
-  @Test
-  @DisplayName("toStreamFields body 为 null 时不写入 body/bodyType")
-  void toStreamFieldsNullBody() {
-    Message<String> msg = new Message<>();
-    msg.setBornTimestamp(1L);
-
-    Map<String, String> fields = converter.toStreamFields(msg);
-
-    assertThat(fields).doesNotContainKey("body");
-    assertThat(fields).doesNotContainKey("bodyType");
-    assertThat(fields).containsKey("bornTs");
-  }
-
-  @Test
-  @DisplayName("toStreamFields 可选字段为 null 时不写入")
-  void toStreamFieldsOptionalNull() {
-    Message<String> msg = new Message<>();
-    msg.setBody("hello");
-    msg.setBornTimestamp(1L);
-
-    Map<String, String> fields = converter.toStreamFields(msg);
-
-    assertThat(fields).doesNotContainKey("tag");
-    assertThat(fields).doesNotContainKey("keys");
-    assertThat(fields).doesNotContainKey("shardingKey");
-    assertThat(fields).doesNotContainKey("bornHost");
-    assertThat(fields).doesNotContainKey("retryTimes");
-    assertThat(fields).doesNotContainKey("txId");
-    assertThat(fields).doesNotContainKey("props");
-  }
-
-  @Test
-  @DisplayName("toStreamFields 包含 properties 与 userProperties 时合并为 JSON 字符串")
-  void toStreamFieldsMergedProps() throws Exception {
-    Message<String> msg = new Message<>();
-    msg.setBody("hello");
-    msg.setBornTimestamp(1L);
-    msg.putProperty("traceId", "t1");
-    msg.putUserProperty("u1", "v1");
-
-    Map<String, String> fields = converter.toStreamFields(msg);
-
-    assertThat(fields).containsKey("props");
-    Map<String, String> parsed =
-        propsMapper.readValue(fields.get("props"), new TypeReference<Map<String, String>>() {});
-    assertThat(parsed).containsEntry("traceId", "t1").containsEntry("u1", "v1");
-  }
-
-  @Test
-  @DisplayName("toStreamFields 包含 retryTimes > 0 时写入")
-  void toStreamFieldsRetryTimesPositive() {
-    Message<String> msg = new Message<>();
-    msg.setBody("hello");
-    msg.setBornTimestamp(1L);
-    msg.setReconsumeTimes(3);
-
-    Map<String, String> fields = converter.toStreamFields(msg);
-    assertThat(fields).containsEntry("retryTimes", "3");
-  }
-
-  @Test
-  @DisplayName("toStreamFields retryTimes == 0 时不写入")
-  void toStreamFieldsRetryTimesZero() {
-    Message<String> msg = new Message<>();
-    msg.setBody("hello");
-    msg.setBornTimestamp(1L);
-    msg.setReconsumeTimes(0);
-
-    Map<String, String> fields = converter.toStreamFields(msg);
-    assertThat(fields).doesNotContainKey("retryTimes");
-  }
-
-  @Test
-  @DisplayName("toStreamFields 包含 transactionId 时写入")
-  void toStreamFieldsTransactionId() {
-    Message<String> msg = new Message<>();
-    msg.setBody("hello");
-    msg.setBornTimestamp(1L);
-    msg.setTransactionId("tx-001");
-
-    Map<String, String> fields = converter.toStreamFields(msg);
-    assertThat(fields).containsEntry("txId", "tx-001");
-  }
-
-  @Test
-  @DisplayName("toStreamFields message 为 null 抛出 NullPointerException")
-  void toStreamFieldsNullMessage() {
-    assertThatThrownBy(() -> converter.toStreamFields(null))
-        .isInstanceOf(NullPointerException.class)
-        .hasMessageContaining("message");
-  }
-
-  @Test
-  @DisplayName("fromStreamFields 往返：序列化后反序列化字段一致")
-  void fromStreamFieldsRoundTrip() {
-    Message<String> msg = new Message<>();
-    msg.setBody("hello");
-    msg.setTag("vip");
-    msg.setKeys("k1");
-    msg.setShardingKey("shard-1");
-    msg.setBornTimestamp(123456789L);
-    msg.setBornHost("host:8080");
-    msg.setReconsumeTimes(2);
-    msg.setTransactionId("tx-1");
-    msg.putProperty("traceId", "t1");
-    msg.putUserProperty("u1", "v1");
-
-    Map<String, String> fields = converter.toStreamFields(msg);
-    Message<String> restored = converter.fromStreamFields(fields, String.class);
-
-    assertThat(restored.getBody()).isEqualTo("hello");
-    assertThat(restored.getTag()).isEqualTo("vip");
-    assertThat(restored.getKeys()).isEqualTo("k1");
-    assertThat(restored.getShardingKey()).isEqualTo("shard-1");
-    assertThat(restored.getBornTimestamp()).isEqualTo(123456789L);
-    assertThat(restored.getBornHost()).isEqualTo("host:8080");
-    assertThat(restored.getReconsumeTimes()).isEqualTo(2);
-    assertThat(restored.getTransactionId()).isEqualTo("tx-1");
-    assertThat(restored.getUserProperties())
-        .containsEntry("traceId", "t1")
-        .containsEntry("u1", "v1");
-  }
-
-  @Test
-  @DisplayName("fromStreamFields 字段缺失场景（只有必填 body/bodyType/bornTs）")
-  void fromStreamFieldsMissingOptional() {
-    Map<String, String> fields = new HashMap<>();
-    fields.put(
-        "body", Base64.getEncoder().encodeToString(serializer.serialize("hi", Object.class)));
-    fields.put("bodyType", String.class.getName());
-    fields.put("bornTs", "999");
-
-    Message<String> msg = converter.fromStreamFields(fields, String.class);
-
-    assertThat(msg.getBody()).isEqualTo("hi");
-    assertThat(msg.getBornTimestamp()).isEqualTo(999L);
-    assertThat(msg.getTag()).isNull();
-    assertThat(msg.getKeys()).isNull();
-    assertThat(msg.getShardingKey()).isNull();
-    assertThat(msg.getBornHost()).isNull();
-    assertThat(msg.getTransactionId()).isNull();
-    assertThat(msg.getReconsumeTimes()).isZero();
-  }
-
-  @Test
-  @DisplayName("fromStreamFields 非法 bornTs 抛出 SerializationException")
-  void fromStreamFieldsInvalidBornTs() {
-    Map<String, String> fields = new HashMap<>();
-    fields.put(
-        "body", Base64.getEncoder().encodeToString(serializer.serialize("hi", Object.class)));
-    fields.put("bodyType", String.class.getName());
-    fields.put("bornTs", "not-a-number");
-
-    assertThatThrownBy(() -> converter.fromStreamFields(fields, String.class))
-        .isInstanceOf(SerializationException.class)
-        .hasMessageContaining("bornTs");
-  }
-
-  @Test
-  @DisplayName("fromStreamFields 非法 retryTimes 抛出 SerializationException")
-  void fromStreamFieldsInvalidRetryTimes() {
-    Map<String, String> fields = new HashMap<>();
-    fields.put(
-        "body", Base64.getEncoder().encodeToString(serializer.serialize("hi", Object.class)));
-    fields.put("bodyType", String.class.getName());
-    fields.put("bornTs", "1");
-    fields.put("retryTimes", "abc");
-
-    assertThatThrownBy(() -> converter.fromStreamFields(fields, String.class))
-        .isInstanceOf(SerializationException.class)
-        .hasMessageContaining("retryTimes");
-  }
-
-  @Test
-  @DisplayName("fromStreamFields fields 为 null 抛出 NullPointerException")
-  void fromStreamFieldsNullFields() {
-    assertThatThrownBy(() -> converter.fromStreamFields(null, String.class))
-        .isInstanceOf(NullPointerException.class)
-        .hasMessageContaining("fields");
-  }
-
-  @Test
-  @DisplayName("fromStreamFields targetType 为 null 抛出 NullPointerException")
-  void fromStreamFieldsNullTargetType() {
-    assertThatThrownBy(() -> converter.fromStreamFields(new HashMap<>(), null))
-        .isInstanceOf(NullPointerException.class)
-        .hasMessageContaining("targetType");
-  }
-
-  @Test
-  @DisplayName("name 返回 default")
-  void name() {
-    assertThat(converter.name()).isEqualTo("default");
-  }
-
-  @Test
-  @DisplayName("applyTopic 为消息回填 topic")
-  void applyTopic() {
-    Message<String> msg = new Message<>();
-    DefaultMessageConverter.applyTopic(msg, "topic-1");
-    assertThat(msg.getTopic()).isEqualTo("topic-1");
-  }
-
-  @Test
-  @DisplayName("applyMessageId 为消息回填 MessageId")
-  void applyMessageId() {
-    Message<String> msg = new Message<>();
-    DefaultMessageConverter.applyMessageId(msg, "123-0");
-    assertThat(msg.getMessageId()).isNotNull();
-    assertThat(msg.getMessageId().getStreamEntryId()).isEqualTo("123-0");
-  }
-
-  // ===================== 跨平台反序列化测试 =====================
-
-  /** 自定义 POJO，用于验证跨平台 JSON 反序列化。 */
-  public static class UserDto {
-    private String name;
-    private int age;
-
-    public String getName() {
-      return name;
+        String expectedBody =
+                Base64.getEncoder().encodeToString(serializer.serialize("hello", Object.class));
+        assertThat(fields).containsEntry("body", expectedBody);
     }
 
-    public void setName(String name) {
-      this.name = name;
+    @Test
+    @DisplayName("toStreamFields body 为 null 时不写入 body/bodyType")
+    void toStreamFieldsNullBody() {
+        Message<String> msg = new Message<>();
+        msg.setBornTimestamp(1L);
+
+        Map<String, String> fields = converter.toStreamFields(msg);
+
+        assertThat(fields).doesNotContainKey("body");
+        assertThat(fields).doesNotContainKey("bodyType");
+        assertThat(fields).containsKey("bornTs");
     }
 
-    public int getAge() {
-      return age;
+    @Test
+    @DisplayName("toStreamFields 可选字段为 null 时不写入")
+    void toStreamFieldsOptionalNull() {
+        Message<String> msg = new Message<>();
+        msg.setBody("hello");
+        msg.setBornTimestamp(1L);
+
+        Map<String, String> fields = converter.toStreamFields(msg);
+
+        assertThat(fields).doesNotContainKey("tag");
+        assertThat(fields).doesNotContainKey("keys");
+        assertThat(fields).doesNotContainKey("shardingKey");
+        assertThat(fields).doesNotContainKey("bornHost");
+        assertThat(fields).doesNotContainKey("retryTimes");
+        assertThat(fields).doesNotContainKey("txId");
+        assertThat(fields).doesNotContainKey("props");
     }
 
-    public void setAge(int age) {
-      this.age = age;
+    @Test
+    @DisplayName("toStreamFields 包含 properties 与 userProperties 时合并为 JSON 字符串")
+    void toStreamFieldsMergedProps() throws Exception {
+        Message<String> msg = new Message<>();
+        msg.setBody("hello");
+        msg.setBornTimestamp(1L);
+        msg.putProperty("traceId", "t1");
+        msg.putUserProperty("u1", "v1");
+
+        Map<String, String> fields = converter.toStreamFields(msg);
+
+        assertThat(fields).containsKey("props");
+        Map<String, String> parsed =
+                propsMapper.readValue(
+                        fields.get("props"), new TypeReference<Map<String, String>>() {});
+        assertThat(parsed).containsEntry("traceId", "t1").containsEntry("u1", "v1");
     }
-  }
 
-  @Test
-  @DisplayName("跨平台：bodyType 缺失 + targetType=String → 返回原始字符串（Go JSON 场景）")
-  void crossPlatformRawStringBody() {
-    // 模拟 Go 发送的原始 JSON 字符串（未经 Base64 编码，无 bodyType 字段）
-    String rawJson = "{\"name\":\"Alice\",\"age\":30}";
-    Map<String, String> fields = new HashMap<>();
-    fields.put("body", rawJson);
-    fields.put("bornTs", "1");
+    @Test
+    @DisplayName("toStreamFields 包含 retryTimes > 0 时写入")
+    void toStreamFieldsRetryTimesPositive() {
+        Message<String> msg = new Message<>();
+        msg.setBody("hello");
+        msg.setBornTimestamp(1L);
+        msg.setReconsumeTimes(3);
 
-    Message<String> msg = converter.fromStreamFields(fields, String.class);
+        Map<String, String> fields = converter.toStreamFields(msg);
+        assertThat(fields).containsEntry("retryTimes", "3");
+    }
 
-    assertThat(msg.getBody()).isEqualTo(rawJson);
-  }
+    @Test
+    @DisplayName("toStreamFields retryTimes == 0 时不写入")
+    void toStreamFieldsRetryTimesZero() {
+        Message<String> msg = new Message<>();
+        msg.setBody("hello");
+        msg.setBornTimestamp(1L);
+        msg.setReconsumeTimes(0);
 
-  @Test
-  @DisplayName("跨平台：bodyType 缺失 + targetType=POJO → JSON 反序列化为 POJO")
-  void crossPlatformJsonToPojo() {
-    // 模拟 Go 发送的 JSON 字符串，consumer 声明 POJO 类型
-    String rawJson = "{\"name\":\"Bob\",\"age\":25}";
-    Map<String, String> fields = new HashMap<>();
-    fields.put("body", rawJson);
-    fields.put("bornTs", "1");
+        Map<String, String> fields = converter.toStreamFields(msg);
+        assertThat(fields).doesNotContainKey("retryTimes");
+    }
 
-    Message<UserDto> msg = converter.fromStreamFields(fields, UserDto.class);
+    @Test
+    @DisplayName("toStreamFields 包含 transactionId 时写入")
+    void toStreamFieldsTransactionId() {
+        Message<String> msg = new Message<>();
+        msg.setBody("hello");
+        msg.setBornTimestamp(1L);
+        msg.setTransactionId("tx-001");
 
-    assertThat(msg.getBody()).isNotNull();
-    assertThat(msg.getBody().getName()).isEqualTo("Bob");
-    assertThat(msg.getBody().getAge()).isEqualTo(25);
-  }
+        Map<String, String> fields = converter.toStreamFields(msg);
+        assertThat(fields).containsEntry("txId", "tx-001");
+    }
 
-  @Test
-  @DisplayName("跨平台：bodyType 存在 → 走 SDK 路径（Base64 + serializer）")
-  void sdkPathWithBodyType() {
-    // SDK 发送方：body 为 Base64 编码，bodyType 字段存在
-    Map<String, String> fields = new HashMap<>();
-    fields.put(
-        "body", Base64.getEncoder().encodeToString(serializer.serialize("hi", Object.class)));
-    fields.put("bodyType", String.class.getName());
-    fields.put("bornTs", "1");
+    @Test
+    @DisplayName("toStreamFields message 为 null 抛出 NullPointerException")
+    void toStreamFieldsNullMessage() {
+        assertThatThrownBy(() -> converter.toStreamFields(null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("message");
+    }
 
-    Message<String> msg = converter.fromStreamFields(fields, String.class);
+    @Test
+    @DisplayName("fromStreamFields 往返：序列化后反序列化字段一致")
+    void fromStreamFieldsRoundTrip() {
+        Message<String> msg = new Message<>();
+        msg.setBody("hello");
+        msg.setTag("vip");
+        msg.setKeys("k1");
+        msg.setShardingKey("shard-1");
+        msg.setBornTimestamp(123456789L);
+        msg.setBornHost("host:8080");
+        msg.setReconsumeTimes(2);
+        msg.setTransactionId("tx-1");
+        msg.putProperty("traceId", "t1");
+        msg.putUserProperty("u1", "v1");
 
-    assertThat(msg.getBody()).isEqualTo("hi");
-  }
+        Map<String, String> fields = converter.toStreamFields(msg);
+        Message<String> restored = converter.fromStreamFields(fields, String.class);
 
-  // ===================== 压缩/解压测试 =====================
+        assertThat(restored.getBody()).isEqualTo("hello");
+        assertThat(restored.getTag()).isEqualTo("vip");
+        assertThat(restored.getKeys()).isEqualTo("k1");
+        assertThat(restored.getShardingKey()).isEqualTo("shard-1");
+        assertThat(restored.getBornTimestamp()).isEqualTo(123456789L);
+        assertThat(restored.getBornHost()).isEqualTo("host:8080");
+        assertThat(restored.getReconsumeTimes()).isEqualTo(2);
+        assertThat(restored.getTransactionId()).isEqualTo("tx-1");
+        assertThat(restored.getUserProperties())
+                .containsEntry("traceId", "t1")
+                .containsEntry("u1", "v1");
+    }
 
-  @Test
-  @DisplayName("压缩消息往返：序列化 → 手动压缩 → 解压 → 反序列化（SDK 路径）")
-  void compressedBodyRoundTripSdkPath() {
-    CompressionCodec codec = new GzipCompressionCodec();
-    DefaultMessageConverter compressedConverter = new DefaultMessageConverter(serializer);
-    compressedConverter.setCompressionCodec(codec);
+    @Test
+    @DisplayName("fromStreamFields 字段缺失场景（只有必填 body/bodyType/bornTs）")
+    void fromStreamFieldsMissingOptional() {
+        Map<String, String> fields = new HashMap<>();
+        fields.put(
+                "body",
+                Base64.getEncoder().encodeToString(serializer.serialize("hi", Object.class)));
+        fields.put("bodyType", String.class.getName());
+        fields.put("bornTs", "999");
 
-    Message<String> msg = new Message<>();
-    msg.setBody("hello compression world");
-    msg.setTag("vip");
-    msg.setBornTimestamp(123456789L);
+        Message<String> msg = converter.fromStreamFields(fields, String.class);
 
-    // 序列化为 Stream Fields
-    Map<String, String> fields = compressedConverter.toStreamFields(msg);
+        assertThat(msg.getBody()).isEqualTo("hi");
+        assertThat(msg.getBornTimestamp()).isEqualTo(999L);
+        assertThat(msg.getTag()).isNull();
+        assertThat(msg.getKeys()).isNull();
+        assertThat(msg.getShardingKey()).isNull();
+        assertThat(msg.getBornHost()).isNull();
+        assertThat(msg.getTransactionId()).isNull();
+        assertThat(msg.getReconsumeTimes()).isZero();
+    }
 
-    // 手动压缩 body（模拟 Producer 的 applyCompression 逻辑）
-    String bodyStr = fields.get(DefaultMessageConverter.FIELD_BODY);
-    byte[] bodyBytes = Base64.getDecoder().decode(bodyStr);
-    byte[] compressed = codec.compress(bodyBytes);
-    fields.put(DefaultMessageConverter.FIELD_BODY, Base64.getEncoder().encodeToString(compressed));
-    fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
+    @Test
+    @DisplayName("fromStreamFields 非法 bornTs 抛出 SerializationException")
+    void fromStreamFieldsInvalidBornTs() {
+        Map<String, String> fields = new HashMap<>();
+        fields.put(
+                "body",
+                Base64.getEncoder().encodeToString(serializer.serialize("hi", Object.class)));
+        fields.put("bodyType", String.class.getName());
+        fields.put("bornTs", "not-a-number");
 
-    // 反序列化（应自动解压）
-    Message<String> restored = compressedConverter.fromStreamFields(fields, String.class);
+        assertThatThrownBy(() -> converter.fromStreamFields(fields, String.class))
+                .isInstanceOf(SerializationException.class)
+                .hasMessageContaining("bornTs");
+    }
 
-    assertThat(restored.getBody()).isEqualTo("hello compression world");
-    assertThat(restored.getTag()).isEqualTo("vip");
-    assertThat(restored.getBornTimestamp()).isEqualTo(123456789L);
-  }
+    @Test
+    @DisplayName("fromStreamFields 非法 retryTimes 抛出 SerializationException")
+    void fromStreamFieldsInvalidRetryTimes() {
+        Map<String, String> fields = new HashMap<>();
+        fields.put(
+                "body",
+                Base64.getEncoder().encodeToString(serializer.serialize("hi", Object.class)));
+        fields.put("bodyType", String.class.getName());
+        fields.put("bornTs", "1");
+        fields.put("retryTimes", "abc");
 
-  @Test
-  @DisplayName("compressed=true 但未配置 CompressionCodec 抛出 SerializationException")
-  void compressedWithoutCodec() {
-    Message<String> msg = new Message<>();
-    msg.setBody("hello");
-    msg.setBornTimestamp(1L);
+        assertThatThrownBy(() -> converter.fromStreamFields(fields, String.class))
+                .isInstanceOf(SerializationException.class)
+                .hasMessageContaining("retryTimes");
+    }
 
-    Map<String, String> fields = converter.toStreamFields(msg);
-    // 标记为压缩但不实际压缩，验证未配置 codec 时的异常
-    fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
+    @Test
+    @DisplayName("fromStreamFields fields 为 null 抛出 NullPointerException")
+    void fromStreamFieldsNullFields() {
+        assertThatThrownBy(() -> converter.fromStreamFields(null, String.class))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("fields");
+    }
 
-    assertThatThrownBy(() -> converter.fromStreamFields(fields, String.class))
-        .isInstanceOf(SerializationException.class)
-        .hasMessageContaining("CompressionCodec");
-  }
+    @Test
+    @DisplayName("fromStreamFields targetType 为 null 抛出 NullPointerException")
+    void fromStreamFieldsNullTargetType() {
+        assertThatThrownBy(() -> converter.fromStreamFields(new HashMap<>(), null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("targetType");
+    }
 
-  @Test
-  @DisplayName("未压缩消息不受 CompressionCodec 影响")
-  void uncompressedMessageWithCodec() {
-    CompressionCodec codec = new GzipCompressionCodec();
-    DefaultMessageConverter compressedConverter = new DefaultMessageConverter(serializer);
-    compressedConverter.setCompressionCodec(codec);
+    @Test
+    @DisplayName("name 返回 default")
+    void name() {
+        assertThat(converter.name()).isEqualTo("default");
+    }
 
-    Message<String> msg = new Message<>();
-    msg.setBody("no compression here");
-    msg.setBornTimestamp(1L);
+    @Test
+    @DisplayName("applyTopic 为消息回填 topic")
+    void applyTopic() {
+        Message<String> msg = new Message<>();
+        DefaultMessageConverter.applyTopic(msg, "topic-1");
+        assertThat(msg.getTopic()).isEqualTo("topic-1");
+    }
 
-    Map<String, String> fields = compressedConverter.toStreamFields(msg);
-    // 不设置 compressed=true，即使配置了 codec 也不应解压
-    Message<String> restored = compressedConverter.fromStreamFields(fields, String.class);
+    @Test
+    @DisplayName("applyMessageId 为消息回填 MessageId")
+    void applyMessageId() {
+        Message<String> msg = new Message<>();
+        DefaultMessageConverter.applyMessageId(msg, "123-0");
+        assertThat(msg.getMessageId()).isNotNull();
+        assertThat(msg.getMessageId().getStreamEntryId()).isEqualTo("123-0");
+    }
 
-    assertThat(restored.getBody()).isEqualTo("no compression here");
-  }
+    // ===================== 跨平台反序列化测试 =====================
 
-  @Test
-  @DisplayName("压缩消息往返：跨平台路径（bodyType 缺失 + String body）")
-  void compressedBodyCrossPlatformStringPath() {
-    CompressionCodec codec = new GzipCompressionCodec();
-    DefaultMessageConverter compressedConverter = new DefaultMessageConverter(serializer);
-    compressedConverter.setCompressionCodec(codec);
+    /** 自定义 POJO，用于验证跨平台 JSON 反序列化。 */
+    public static class UserDto {
+        private String name;
+        private int age;
 
-    // 模拟跨平台场景：原始 body 为字符串，压缩后 Base64 编码
-    String rawBody = "{\"name\":\"Alice\",\"age\":30}";
-    byte[] rawBytes = rawBody.getBytes(StandardCharsets.UTF_8);
-    byte[] compressed = codec.compress(rawBytes);
+        public String getName() {
+            return name;
+        }
 
-    Map<String, String> fields = new HashMap<>();
-    fields.put(DefaultMessageConverter.FIELD_BODY, Base64.getEncoder().encodeToString(compressed));
-    fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
-    fields.put("bornTs", "1");
-    // 不设置 bodyType → 走跨平台路径
+        public void setName(String name) {
+            this.name = name;
+        }
 
-    Message<String> msg = compressedConverter.fromStreamFields(fields, String.class);
+        public int getAge() {
+            return age;
+        }
 
-    assertThat(msg.getBody()).isEqualTo(rawBody);
-  }
+        public void setAge(int age) {
+            this.age = age;
+        }
+    }
 
-  @Test
-  @DisplayName("压缩消息往返：跨平台路径（bodyType 缺失 + POJO body）")
-  void compressedBodyCrossPlatformPojoPath() {
-    CompressionCodec codec = new GzipCompressionCodec();
-    DefaultMessageConverter compressedConverter = new DefaultMessageConverter(serializer);
-    compressedConverter.setCompressionCodec(codec);
+    @Test
+    @DisplayName("跨平台：bodyType 缺失 + targetType=String → 返回原始字符串（Go JSON 场景）")
+    void crossPlatformRawStringBody() {
+        // 模拟 Go 发送的原始 JSON 字符串（未经 Base64 编码，无 bodyType 字段）
+        String rawJson = "{\"name\":\"Alice\",\"age\":30}";
+        Map<String, String> fields = new HashMap<>();
+        fields.put("body", rawJson);
+        fields.put("bornTs", "1");
 
-    // 模拟跨平台场景：JSON body 压缩后 Base64 编码
-    String rawJson = "{\"name\":\"Bob\",\"age\":25}";
-    byte[] rawBytes = rawJson.getBytes(StandardCharsets.UTF_8);
-    byte[] compressed = codec.compress(rawBytes);
+        Message<String> msg = converter.fromStreamFields(fields, String.class);
 
-    Map<String, String> fields = new HashMap<>();
-    fields.put(DefaultMessageConverter.FIELD_BODY, Base64.getEncoder().encodeToString(compressed));
-    fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
-    fields.put("bornTs", "1");
-    // 不设置 bodyType → 走跨平台路径
+        assertThat(msg.getBody()).isEqualTo(rawJson);
+    }
 
-    Message<UserDto> msg = compressedConverter.fromStreamFields(fields, UserDto.class);
+    @Test
+    @DisplayName("跨平台：bodyType 缺失 + targetType=POJO → JSON 反序列化为 POJO")
+    void crossPlatformJsonToPojo() {
+        // 模拟 Go 发送的 JSON 字符串，consumer 声明 POJO 类型
+        String rawJson = "{\"name\":\"Bob\",\"age\":25}";
+        Map<String, String> fields = new HashMap<>();
+        fields.put("body", rawJson);
+        fields.put("bornTs", "1");
 
-    assertThat(msg.getBody()).isNotNull();
-    assertThat(msg.getBody().getName()).isEqualTo("Bob");
-    assertThat(msg.getBody().getAge()).isEqualTo(25);
-  }
+        Message<UserDto> msg = converter.fromStreamFields(fields, UserDto.class);
 
-  @Test
-  @DisplayName("FIELD_COMPRESSED 常量值为 compressed")
-  void fieldCompressedConstant() {
-    assertThat(DefaultMessageConverter.FIELD_COMPRESSED).isEqualTo("compressed");
-  }
+        assertThat(msg.getBody()).isNotNull();
+        assertThat(msg.getBody().getName()).isEqualTo("Bob");
+        assertThat(msg.getBody().getAge()).isEqualTo(25);
+    }
+
+    @Test
+    @DisplayName("跨平台：bodyType 存在 → 走 SDK 路径（Base64 + serializer）")
+    void sdkPathWithBodyType() {
+        // SDK 发送方：body 为 Base64 编码，bodyType 字段存在
+        Map<String, String> fields = new HashMap<>();
+        fields.put(
+                "body",
+                Base64.getEncoder().encodeToString(serializer.serialize("hi", Object.class)));
+        fields.put("bodyType", String.class.getName());
+        fields.put("bornTs", "1");
+
+        Message<String> msg = converter.fromStreamFields(fields, String.class);
+
+        assertThat(msg.getBody()).isEqualTo("hi");
+    }
+
+    // ===================== 压缩/解压测试 =====================
+
+    @Test
+    @DisplayName("压缩消息往返：序列化 → 手动压缩 → 解压 → 反序列化（SDK 路径）")
+    void compressedBodyRoundTripSdkPath() {
+        CompressionCodec codec = new GzipCompressionCodec();
+        DefaultMessageConverter compressedConverter = new DefaultMessageConverter(serializer);
+        compressedConverter.setCompressionCodec(codec);
+
+        Message<String> msg = new Message<>();
+        msg.setBody("hello compression world");
+        msg.setTag("vip");
+        msg.setBornTimestamp(123456789L);
+
+        // 序列化为 Stream Fields
+        Map<String, String> fields = compressedConverter.toStreamFields(msg);
+
+        // 手动压缩 body（模拟 Producer 的 applyCompression 逻辑）
+        String bodyStr = fields.get(DefaultMessageConverter.FIELD_BODY);
+        byte[] bodyBytes = Base64.getDecoder().decode(bodyStr);
+        byte[] compressed = codec.compress(bodyBytes);
+        fields.put(
+                DefaultMessageConverter.FIELD_BODY, Base64.getEncoder().encodeToString(compressed));
+        fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
+
+        // 反序列化（应自动解压）
+        Message<String> restored = compressedConverter.fromStreamFields(fields, String.class);
+
+        assertThat(restored.getBody()).isEqualTo("hello compression world");
+        assertThat(restored.getTag()).isEqualTo("vip");
+        assertThat(restored.getBornTimestamp()).isEqualTo(123456789L);
+    }
+
+    @Test
+    @DisplayName("compressed=true 但未配置 CompressionCodec 抛出 SerializationException")
+    void compressedWithoutCodec() {
+        Message<String> msg = new Message<>();
+        msg.setBody("hello");
+        msg.setBornTimestamp(1L);
+
+        Map<String, String> fields = converter.toStreamFields(msg);
+        // 标记为压缩但不实际压缩，验证未配置 codec 时的异常
+        fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
+
+        assertThatThrownBy(() -> converter.fromStreamFields(fields, String.class))
+                .isInstanceOf(SerializationException.class)
+                .hasMessageContaining("CompressionCodec");
+    }
+
+    @Test
+    @DisplayName("未压缩消息不受 CompressionCodec 影响")
+    void uncompressedMessageWithCodec() {
+        CompressionCodec codec = new GzipCompressionCodec();
+        DefaultMessageConverter compressedConverter = new DefaultMessageConverter(serializer);
+        compressedConverter.setCompressionCodec(codec);
+
+        Message<String> msg = new Message<>();
+        msg.setBody("no compression here");
+        msg.setBornTimestamp(1L);
+
+        Map<String, String> fields = compressedConverter.toStreamFields(msg);
+        // 不设置 compressed=true，即使配置了 codec 也不应解压
+        Message<String> restored = compressedConverter.fromStreamFields(fields, String.class);
+
+        assertThat(restored.getBody()).isEqualTo("no compression here");
+    }
+
+    @Test
+    @DisplayName("压缩消息往返：跨平台路径（bodyType 缺失 + String body）")
+    void compressedBodyCrossPlatformStringPath() {
+        CompressionCodec codec = new GzipCompressionCodec();
+        DefaultMessageConverter compressedConverter = new DefaultMessageConverter(serializer);
+        compressedConverter.setCompressionCodec(codec);
+
+        // 模拟跨平台场景：原始 body 为字符串，压缩后 Base64 编码
+        String rawBody = "{\"name\":\"Alice\",\"age\":30}";
+        byte[] rawBytes = rawBody.getBytes(StandardCharsets.UTF_8);
+        byte[] compressed = codec.compress(rawBytes);
+
+        Map<String, String> fields = new HashMap<>();
+        fields.put(
+                DefaultMessageConverter.FIELD_BODY, Base64.getEncoder().encodeToString(compressed));
+        fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
+        fields.put("bornTs", "1");
+        // 不设置 bodyType → 走跨平台路径
+
+        Message<String> msg = compressedConverter.fromStreamFields(fields, String.class);
+
+        assertThat(msg.getBody()).isEqualTo(rawBody);
+    }
+
+    @Test
+    @DisplayName("压缩消息往返：跨平台路径（bodyType 缺失 + POJO body）")
+    void compressedBodyCrossPlatformPojoPath() {
+        CompressionCodec codec = new GzipCompressionCodec();
+        DefaultMessageConverter compressedConverter = new DefaultMessageConverter(serializer);
+        compressedConverter.setCompressionCodec(codec);
+
+        // 模拟跨平台场景：JSON body 压缩后 Base64 编码
+        String rawJson = "{\"name\":\"Bob\",\"age\":25}";
+        byte[] rawBytes = rawJson.getBytes(StandardCharsets.UTF_8);
+        byte[] compressed = codec.compress(rawBytes);
+
+        Map<String, String> fields = new HashMap<>();
+        fields.put(
+                DefaultMessageConverter.FIELD_BODY, Base64.getEncoder().encodeToString(compressed));
+        fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
+        fields.put("bornTs", "1");
+        // 不设置 bodyType → 走跨平台路径
+
+        Message<UserDto> msg = compressedConverter.fromStreamFields(fields, UserDto.class);
+
+        assertThat(msg.getBody()).isNotNull();
+        assertThat(msg.getBody().getName()).isEqualTo("Bob");
+        assertThat(msg.getBody().getAge()).isEqualTo(25);
+    }
+
+    @Test
+    @DisplayName("FIELD_COMPRESSED 常量值为 compressed")
+    void fieldCompressedConstant() {
+        assertThat(DefaultMessageConverter.FIELD_COMPRESSED).isEqualTo("compressed");
+    }
 }

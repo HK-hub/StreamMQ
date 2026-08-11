@@ -57,310 +57,316 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @ToString(exclude = {"accessKey", "secretKey"})
 public class StreamMQProperties {
 
-  /** 是否启用 StreamMQ 自动装配，默认 true */
-  private boolean enabled = true;
+    /** 是否启用 StreamMQ 自动装配，默认 true */
+    private boolean enabled = true;
 
-  /** 命名空间（用于多租户/多环境隔离），默认空字符串 */
-  private String namespace = "";
+    /** 命名空间（用于多租户/多环境隔离），默认空字符串 */
+    private String namespace = "";
 
-  /** 生产者配置 */
-  private Producer producer = new Producer();
+    /** 生产者配置 */
+    private Producer producer = new Producer();
 
-  /** 消费者配置 */
-  private Consumer consumer = new Consumer();
+    /** 消费者配置 */
+    private Consumer consumer = new Consumer();
 
-  /** 重试策略配置 */
-  private Retry retry = new Retry();
+    /** 重试策略配置 */
+    private Retry retry = new Retry();
 
-  /** 延时消息调度器配置 */
-  private Delay delay = new Delay();
+    /** 延时消息调度器配置 */
+    private Delay delay = new Delay();
 
-  /** 死信队列配置 */
-  private Dlq dlq = new Dlq();
+    /** 死信队列配置 */
+    private Dlq dlq = new Dlq();
 
-  /** 事务消息配置 */
-  private Transaction transaction = new Transaction();
+    /** 事务消息配置 */
+    private Transaction transaction = new Transaction();
 
-  /** 健康检查配置 */
-  private Health health = new Health();
+    /** 健康检查配置 */
+    private Health health = new Health();
 
-  /**
-   * Redis 鉴权 accessKey。
-   *
-   * <p>注意：此值以明文形式存储在配置中，生产环境建议使用环境变量或配置中心加密存储。
-   */
-  private String accessKey = "";
-
-  /**
-   * Redis 鉴权 secretKey。
-   *
-   * <p>注意：此值以明文形式存储在配置中，生产环境建议使用环境变量或配置中心加密存储。 日志输出会自动脱敏此字段。
-   */
-  private String secretKey = "";
-
-  /** 线程名前缀 */
-  private String threadNamePrefix = StreamMQConstants.THREAD_PREFIX;
-
-  /** 全局追踪开关 */
-  private boolean tracingEnabled = false;
-
-  /** 重平衡策略配置 */
-  private Rebalance rebalance = new Rebalance();
-
-  /** 追踪配置 */
-  private Tracing tracing = new Tracing();
-
-  /** 追踪存储与查询配置（v1.0+） */
-  private Trace trace = new Trace();
-
-  /** 事件配置 */
-  private Event event = new Event();
-
-  // ===================== 子配置 =====================
-
-  /** 生产者配置。 */
-  @Data
-  public static class Producer {
     /**
-     * 默认生产者组名。
+     * Redis 鉴权 accessKey。
      *
-     * <p>命名规则：仅允许字母、数字、连字符（-）和下划线（_），长度不超过 128 字符。 中文和特殊字符可能导致 Redis 操作失败。
+     * <p>注意：此值以明文形式存储在配置中，生产环境建议使用环境变量或配置中心加密存储。
      */
-    private String group = StreamMQConstants.DEFAULT_PRODUCER_GROUP;
+    private String accessKey = "";
 
-    /** 默认发送超时（毫秒） */
-    private long sendMessageTimeout = StreamMQConstants.DEFAULT_SEND_TIMEOUT_MS;
+    /**
+     * Redis 鉴权 secretKey。
+     *
+     * <p>注意：此值以明文形式存储在配置中，生产环境建议使用环境变量或配置中心加密存储。 日志输出会自动脱敏此字段。
+     */
+    private String secretKey = "";
 
-    /** 默认同步发送重试次数 */
-    private int retryTimes = StreamMQConstants.DEFAULT_SYNC_RETRY_TIMES;
+    /** 线程名前缀 */
+    private String threadNamePrefix = StreamMQConstants.THREAD_PREFIX;
 
-    /** Stream 最大长度（0 = 不限制） */
-    private int streamMaxLen = 0;
+    /** 全局追踪开关 */
+    private boolean tracingEnabled = false;
 
-    /** 序列化器实现类，默认 {@link JacksonJsonSerializer} */
-    private Class<? extends MessageSerializer> serializer = JacksonJsonSerializer.class;
+    /** 重平衡策略配置 */
+    private Rebalance rebalance = new Rebalance();
 
-    /** 消息体压缩阈值（字节），body 超过此值时触发压缩，0 = 禁用（默认禁用） */
-    private int compressThreshold = 0;
+    /** 追踪配置 */
+    private Tracing tracing = new Tracing();
 
-    /** 单条消息最大大小（字节），发送时校验。 默认 512MB（Redis Stream 上限），推荐不超过 1MB。 */
-    private long maxMessageSize = StreamMQConstants.MAX_MESSAGE_SIZE_BYTES;
-  }
+    /** 追踪存储与查询配置（v1.0+） */
+    private Trace trace = new Trace();
 
-  /** 消费者配置。 */
-  @Data
-  public static class Consumer {
-    /** 单次拉取阻塞超时 */
-    private Duration pollTimeout = Duration.ofSeconds(1);
+    /** 事件配置 */
+    private Event event = new Event();
 
-    /** 单次拉取批量大小 */
-    private int batchSize = StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE;
+    // ===================== 子配置 =====================
 
-    /** 拉取间隔（毫秒），0=不间隔 */
-    private long pullInterval = 0L;
+    /** 生产者配置。 */
+    @Data
+    public static class Producer {
+        /**
+         * 默认生产者组名。
+         *
+         * <p>命名规则：仅允许字母、数字、连字符（-）和下划线（_），长度不超过 128 字符。 中文和特殊字符可能导致 Redis 操作失败。
+         */
+        private String group = StreamMQConstants.DEFAULT_PRODUCER_GROUP;
 
-    /** 暂停休眠间隔（毫秒） */
-    private long pausedSleepMillis = StreamMQConstants.DEFAULT_PAUSED_SLEEP_MS;
+        /** 默认发送超时（毫秒） */
+        private long sendMessageTimeout = StreamMQConstants.DEFAULT_SEND_TIMEOUT_MS;
 
-    /** Broker 异常退避间隔（毫秒） */
-    private long brokerErrorBackoffMillis = StreamMQConstants.DEFAULT_BROKER_ERROR_BACKOFF_MS;
+        /** 默认同步发送重试次数 */
+        private int retryTimes = StreamMQConstants.DEFAULT_SYNC_RETRY_TIMES;
 
-    /** 最大拉取批量上界 */
-    private int maxBatchSizeLimit = StreamMQConstants.MAX_BATCH_SIZE_LIMIT;
-  }
+        /** Stream 最大长度（0 = 不限制） */
+        private int streamMaxLen = 0;
 
-  /** 死信队列配置。 */
-  @Data
-  public static class Dlq {
-    /** 死信消费失败处理策略实现类，默认 {@link LogAndDropDlqFailureStrategy} */
-    private Class<? extends DlqFailureStrategy> failureStrategy =
-        LogAndDropDlqFailureStrategy.class;
+        /** 序列化器实现类，默认 {@link JacksonJsonSerializer} */
+        private Class<? extends MessageSerializer> serializer = JacksonJsonSerializer.class;
 
-    /** DLQ 消费失败后的最大重试次数（默认 3） */
-    private int maxDlqRetryAttempts = StreamMQConstants.DEFAULT_DLQ_MAX_RETRY_ATTEMPTS;
+        /** 消息体压缩阈值（字节），body 超过此值时触发压缩，0 = 禁用（默认禁用） */
+        private int compressThreshold = 0;
 
-    /** DLQ 消费重试延迟（毫秒，默认 10000） */
-    private long dlqRetryDelayMs = StreamMQConstants.DEFAULT_DLQ_RETRY_DELAY_MS;
-
-    /** 是否启用二级死信队列（默认 false） */
-    private boolean secondaryDlqEnabled = StreamMQConstants.DEFAULT_SECONDARY_DLQ_ENABLED;
-
-    /** 二级死信 Stream Key 前缀段（默认 "dlq2"） */
-    private String secondaryDlqKeyPrefix = StreamMQConstants.DEFAULT_SECONDARY_DLQ_KEY_PREFIX;
-
-    /** 告警阈值（默认 1） */
-    private int alertThreshold = StreamMQConstants.DEFAULT_DLQ_ALERT_THRESHOLD;
-
-    /** 重试退避倍数（默认 1.0 = 固定延迟） */
-    private double retryBackoffMultiplier = StreamMQConstants.DEFAULT_DLQ_RETRY_BACKOFF_MULTIPLIER;
-
-    /** 重试延迟上限（毫秒，默认 300000） */
-    private long retryMaxDelayMs = StreamMQConstants.DEFAULT_DLQ_RETRY_MAX_DELAY_MS;
-  }
-
-  /** 重试策略配置。 */
-  @Data
-  public static class Retry {
-    /** 重试功能开关 */
-    private boolean enabled = true;
-
-    /** 重试策略实现类，默认 {@link FixedArrayRetryPolicy} */
-    private Class<? extends RetryPolicy> policy = FixedArrayRetryPolicy.class;
-
-    /** 默认最大重试次数 */
-    private int maxReconsumeTimes = StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
-
-    /** 重试 ZSet 扫描间隔 */
-    private Duration scanInterval = Duration.ofSeconds(1);
-
-    /** 单次扫描批量 */
-    private int batchSize = StreamMQConstants.DEFAULT_BATCH_SIZE;
-
-    /** 自定义重试延时数组（逗号分隔的毫秒值，如 1000,5000,10000） */
-    private String delayArray = "";
-
-    /** retry Stream 最大长度（0=不限制），对齐 RocketMQ retry topic 容量控制 */
-    private int streamMaxLen = StreamMQConstants.DEFAULT_RETRY_STREAM_MAX_LEN;
-
-    /** PEL 认领扫描间隔（顺序消费专用，默认 5s） */
-    private Duration pelClaimScanInterval =
-        Duration.ofMillis(StreamMQConstants.DEFAULT_PEL_CLAIM_SCAN_INTERVAL_MS);
-
-    /** PEL 认领空闲阈值（顺序消费专用，默认 30s） */
-    private long pelClaimMinIdleMs = StreamMQConstants.DEFAULT_PEL_CLAIM_MIN_IDLE_MS;
-  }
-
-  /** 延时消息调度器配置。 */
-  @Data
-  public static class Delay {
-    /** 是否启用延时消息调度器，默认 true */
-    private boolean enabled = true;
-
-    /** 扫描间隔 */
-    private Duration scanInterval = Duration.ofSeconds(1);
-
-    /** 单次扫描批量 */
-    private int batchSize = StreamMQConstants.DEFAULT_BATCH_SIZE;
-  }
-
-  /** 事务消息配置。 */
-  @Data
-  public static class Transaction {
-    /** 事务消息功能开关 */
-    private boolean enabled = true;
-
-    /** 默认事务组名 */
-    private String defaultGroup = StreamMQConstants.DEFAULT_TX_GROUP;
-
-    /** 事务回查间隔 */
-    private Duration checkInterval = Duration.ofMillis(StreamMQConstants.DEFAULT_CHECK_INTERVAL_MS);
-
-    /** 最大回查次数 */
-    private int maxCheckTimes = StreamMQConstants.DEFAULT_MAX_CHECK_TIMES;
-  }
-
-  /** 健康检查配置。 */
-  @Data
-  public static class Health {
-    /** 是否启用健康检查，默认 true（仅在 Actuator 在 classpath 时生效） */
-    private boolean enabled = true;
-  }
-
-  /** 重平衡策略配置。 */
-  @Data
-  public static class Rebalance {
-    /** 重平衡策略实现类，默认 {@link ConsistentHashRebalanceStrategy} */
-    private Class<? extends RebalanceStrategy> strategy = ConsistentHashRebalanceStrategy.class;
-
-    /** 虚拟节点数（仅一致性哈希策略生效） */
-    private int virtualNodes = StreamMQConstants.DEFAULT_VIRTUAL_NODES;
-  }
-
-  /** 追踪配置。 */
-  @Data
-  public static class Tracing {
-    /** 追踪收集器实现类，默认 {@link NoopTraceCollector} */
-    private Class<? extends TraceCollector> collector = NoopTraceCollector.class;
-
-    /** 追踪日志 Topic（仅 Slf4jTraceCollector 生效） */
-    private String traceTopic = "";
-  }
-
-  /**
-   * 追踪存储与查询配置（v1.0+）。
-   *
-   * <p>与 {@link Tracing} 区别：Tracing 控制日志级别的追踪输出， Trace 控制追踪数据的持久化存储与查询能力。
-   */
-  @Data
-  public static class Trace {
-    /** 是否启用追踪存储与查询服务 */
-    private boolean enabled = false;
-
-    /** 追踪存储方式（{@code redis} 启用 Redis Stream 存储，其他值禁用） */
-    private String storage = "none";
-  }
-
-  /**
-   * 事件总线配置，控制各类领域事件的发布开关。
-   *
-   * <p>关闭不关心的事件可减少系统开销，避免每消息都触发异步发布。
-   */
-  @Data
-  public static class Event {
-    /** 消息发送事件开关（默认 false） */
-    private boolean sendEnabled = false;
-
-    /** 消息消费事件开关（默认 false） */
-    private boolean consumeEnabled = false;
-  }
-
-  /**
-   * 校验配置属性的合法性，在自动装配时调用。
-   *
-   * @throws IllegalArgumentException 如果配置值不合法
-   */
-  public void validate() {
-    if (producer.sendMessageTimeout <= 0) {
-      throw new IllegalArgumentException(
-          "streammq.producer.send-message-timeout must be > 0, got: "
-              + producer.sendMessageTimeout);
+        /** 单条消息最大大小（字节），发送时校验。 默认 512MB（Redis Stream 上限），推荐不超过 1MB。 */
+        private long maxMessageSize = StreamMQConstants.MAX_MESSAGE_SIZE_BYTES;
     }
-    if (producer.retryTimes < 0) {
-      throw new IllegalArgumentException(
-          "streammq.producer.retry-times must be >= 0, got: " + producer.retryTimes);
+
+    /** 消费者配置。 */
+    @Data
+    public static class Consumer {
+        /** 单次拉取阻塞超时 */
+        private Duration pollTimeout = Duration.ofSeconds(1);
+
+        /** 单次拉取批量大小 */
+        private int batchSize = StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE;
+
+        /** 拉取间隔（毫秒），0=不间隔 */
+        private long pullInterval = 0L;
+
+        /** 暂停休眠间隔（毫秒） */
+        private long pausedSleepMillis = StreamMQConstants.DEFAULT_PAUSED_SLEEP_MS;
+
+        /** Broker 异常退避间隔（毫秒） */
+        private long brokerErrorBackoffMillis = StreamMQConstants.DEFAULT_BROKER_ERROR_BACKOFF_MS;
+
+        /** 最大拉取批量上界 */
+        private int maxBatchSizeLimit = StreamMQConstants.MAX_BATCH_SIZE_LIMIT;
     }
-    if (producer.streamMaxLen < 0) {
-      throw new IllegalArgumentException(
-          "streammq.producer.stream-max-len must be >= 0, got: " + producer.streamMaxLen);
+
+    /** 死信队列配置。 */
+    @Data
+    public static class Dlq {
+        /** 死信消费失败处理策略实现类，默认 {@link LogAndDropDlqFailureStrategy} */
+        private Class<? extends DlqFailureStrategy> failureStrategy =
+                LogAndDropDlqFailureStrategy.class;
+
+        /** DLQ 消费失败后的最大重试次数（默认 3） */
+        private int maxDlqRetryAttempts = StreamMQConstants.DEFAULT_DLQ_MAX_RETRY_ATTEMPTS;
+
+        /** DLQ 消费重试延迟（毫秒，默认 10000） */
+        private long dlqRetryDelayMs = StreamMQConstants.DEFAULT_DLQ_RETRY_DELAY_MS;
+
+        /** 是否启用二级死信队列（默认 false） */
+        private boolean secondaryDlqEnabled = StreamMQConstants.DEFAULT_SECONDARY_DLQ_ENABLED;
+
+        /** 二级死信 Stream Key 前缀段（默认 "dlq2"） */
+        private String secondaryDlqKeyPrefix = StreamMQConstants.DEFAULT_SECONDARY_DLQ_KEY_PREFIX;
+
+        /** 告警阈值（默认 1） */
+        private int alertThreshold = StreamMQConstants.DEFAULT_DLQ_ALERT_THRESHOLD;
+
+        /** 重试退避倍数（默认 1.0 = 固定延迟） */
+        private double retryBackoffMultiplier =
+                StreamMQConstants.DEFAULT_DLQ_RETRY_BACKOFF_MULTIPLIER;
+
+        /** 重试延迟上限（毫秒，默认 300000） */
+        private long retryMaxDelayMs = StreamMQConstants.DEFAULT_DLQ_RETRY_MAX_DELAY_MS;
     }
-    if (consumer.batchSize <= 0) {
-      throw new IllegalArgumentException(
-          "streammq.consumer.batch-size must be > 0, got: " + consumer.batchSize);
+
+    /** 重试策略配置。 */
+    @Data
+    public static class Retry {
+        /** 重试功能开关 */
+        private boolean enabled = true;
+
+        /** 重试策略实现类，默认 {@link FixedArrayRetryPolicy} */
+        private Class<? extends RetryPolicy> policy = FixedArrayRetryPolicy.class;
+
+        /** 默认最大重试次数 */
+        private int maxReconsumeTimes = StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
+
+        /** 重试 ZSet 扫描间隔 */
+        private Duration scanInterval = Duration.ofSeconds(1);
+
+        /** 单次扫描批量 */
+        private int batchSize = StreamMQConstants.DEFAULT_BATCH_SIZE;
+
+        /** 自定义重试延时数组（逗号分隔的毫秒值，如 1000,5000,10000） */
+        private String delayArray = "";
+
+        /** retry Stream 最大长度（0=不限制），对齐 RocketMQ retry topic 容量控制 */
+        private int streamMaxLen = StreamMQConstants.DEFAULT_RETRY_STREAM_MAX_LEN;
+
+        /** PEL 认领扫描间隔（顺序消费专用，默认 5s） */
+        private Duration pelClaimScanInterval =
+                Duration.ofMillis(StreamMQConstants.DEFAULT_PEL_CLAIM_SCAN_INTERVAL_MS);
+
+        /** PEL 认领空闲阈值（顺序消费专用，默认 30s） */
+        private long pelClaimMinIdleMs = StreamMQConstants.DEFAULT_PEL_CLAIM_MIN_IDLE_MS;
     }
-    if (consumer.pullInterval < 0) {
-      throw new IllegalArgumentException(
-          "streammq.consumer.pull-interval must be >= 0, got: " + consumer.pullInterval);
+
+    /** 延时消息调度器配置。 */
+    @Data
+    public static class Delay {
+        /** 是否启用延时消息调度器，默认 true */
+        private boolean enabled = true;
+
+        /** 扫描间隔 */
+        private Duration scanInterval = Duration.ofSeconds(1);
+
+        /** 单次扫描批量 */
+        private int batchSize = StreamMQConstants.DEFAULT_BATCH_SIZE;
     }
-    if (consumer.pausedSleepMillis <= 0) {
-      throw new IllegalArgumentException(
-          "streammq.consumer.paused-sleep-millis must be > 0, got: " + consumer.pausedSleepMillis);
+
+    /** 事务消息配置。 */
+    @Data
+    public static class Transaction {
+        /** 事务消息功能开关 */
+        private boolean enabled = true;
+
+        /** 默认事务组名 */
+        private String defaultGroup = StreamMQConstants.DEFAULT_TX_GROUP;
+
+        /** 事务回查间隔 */
+        private Duration checkInterval =
+                Duration.ofMillis(StreamMQConstants.DEFAULT_CHECK_INTERVAL_MS);
+
+        /** 最大回查次数 */
+        private int maxCheckTimes = StreamMQConstants.DEFAULT_MAX_CHECK_TIMES;
     }
-    if (consumer.brokerErrorBackoffMillis <= 0) {
-      throw new IllegalArgumentException(
-          "streammq.consumer.broker-error-backoff-millis must be > 0, got: "
-              + consumer.brokerErrorBackoffMillis);
+
+    /** 健康检查配置。 */
+    @Data
+    public static class Health {
+        /** 是否启用健康检查，默认 true（仅在 Actuator 在 classpath 时生效） */
+        private boolean enabled = true;
     }
-    if (consumer.maxBatchSizeLimit <= 0) {
-      throw new IllegalArgumentException(
-          "streammq.consumer.max-batch-size-limit must be > 0, got: " + consumer.maxBatchSizeLimit);
+
+    /** 重平衡策略配置。 */
+    @Data
+    public static class Rebalance {
+        /** 重平衡策略实现类，默认 {@link ConsistentHashRebalanceStrategy} */
+        private Class<? extends RebalanceStrategy> strategy = ConsistentHashRebalanceStrategy.class;
+
+        /** 虚拟节点数（仅一致性哈希策略生效） */
+        private int virtualNodes = StreamMQConstants.DEFAULT_VIRTUAL_NODES;
     }
-    if (transaction.maxCheckTimes <= 0) {
-      throw new IllegalArgumentException(
-          "streammq.transaction.max-check-times must be > 0, got: " + transaction.maxCheckTimes);
+
+    /** 追踪配置。 */
+    @Data
+    public static class Tracing {
+        /** 追踪收集器实现类，默认 {@link NoopTraceCollector} */
+        private Class<? extends TraceCollector> collector = NoopTraceCollector.class;
+
+        /** 追踪日志 Topic（仅 Slf4jTraceCollector 生效） */
+        private String traceTopic = "";
     }
-    if (dlq.maxDlqRetryAttempts < 0) {
-      throw new IllegalArgumentException(
-          "streammq.dlq.max-dlq-retry-attempts must be >= 0, got: " + dlq.maxDlqRetryAttempts);
+
+    /**
+     * 追踪存储与查询配置（v1.0+）。
+     *
+     * <p>与 {@link Tracing} 区别：Tracing 控制日志级别的追踪输出， Trace 控制追踪数据的持久化存储与查询能力。
+     */
+    @Data
+    public static class Trace {
+        /** 是否启用追踪存储与查询服务 */
+        private boolean enabled = false;
+
+        /** 追踪存储方式（{@code redis} 启用 Redis Stream 存储，其他值禁用） */
+        private String storage = "none";
     }
-  }
+
+    /**
+     * 事件总线配置，控制各类领域事件的发布开关。
+     *
+     * <p>关闭不关心的事件可减少系统开销，避免每消息都触发异步发布。
+     */
+    @Data
+    public static class Event {
+        /** 消息发送事件开关（默认 false） */
+        private boolean sendEnabled = false;
+
+        /** 消息消费事件开关（默认 false） */
+        private boolean consumeEnabled = false;
+    }
+
+    /**
+     * 校验配置属性的合法性，在自动装配时调用。
+     *
+     * @throws IllegalArgumentException 如果配置值不合法
+     */
+    public void validate() {
+        if (producer.sendMessageTimeout <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.producer.send-message-timeout must be > 0, got: "
+                            + producer.sendMessageTimeout);
+        }
+        if (producer.retryTimes < 0) {
+            throw new IllegalArgumentException(
+                    "streammq.producer.retry-times must be >= 0, got: " + producer.retryTimes);
+        }
+        if (producer.streamMaxLen < 0) {
+            throw new IllegalArgumentException(
+                    "streammq.producer.stream-max-len must be >= 0, got: " + producer.streamMaxLen);
+        }
+        if (consumer.batchSize <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.consumer.batch-size must be > 0, got: " + consumer.batchSize);
+        }
+        if (consumer.pullInterval < 0) {
+            throw new IllegalArgumentException(
+                    "streammq.consumer.pull-interval must be >= 0, got: " + consumer.pullInterval);
+        }
+        if (consumer.pausedSleepMillis <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.consumer.paused-sleep-millis must be > 0, got: "
+                            + consumer.pausedSleepMillis);
+        }
+        if (consumer.brokerErrorBackoffMillis <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.consumer.broker-error-backoff-millis must be > 0, got: "
+                            + consumer.brokerErrorBackoffMillis);
+        }
+        if (consumer.maxBatchSizeLimit <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.consumer.max-batch-size-limit must be > 0, got: "
+                            + consumer.maxBatchSizeLimit);
+        }
+        if (transaction.maxCheckTimes <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.transaction.max-check-times must be > 0, got: "
+                            + transaction.maxCheckTimes);
+        }
+        if (dlq.maxDlqRetryAttempts < 0) {
+            throw new IllegalArgumentException(
+                    "streammq.dlq.max-dlq-retry-attempts must be >= 0, got: "
+                            + dlq.maxDlqRetryAttempts);
+        }
+    }
 }

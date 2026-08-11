@@ -32,68 +32,72 @@ import org.springframework.test.context.TestPropertySource;
 @DisplayName("事务消息示例集成测试")
 class TransactionSampleIT {
 
-  private static final String TEST_CONSUMER_GROUP = "test-tx-consumer-group";
+    private static final String TEST_CONSUMER_GROUP = "test-tx-consumer-group";
 
-  @Autowired private OrderTransactionProducer producer;
+    @Autowired private OrderTransactionProducer producer;
 
-  @Autowired private StreamMessageTemplate template;
+    @Autowired private StreamMessageTemplate template;
 
-  @Autowired private TestMessageCollector testCollector;
+    @Autowired private TestMessageCollector testCollector;
 
-  @BeforeEach
-  void clearReceivedMessages() {
-    testCollector.receivedMessages.clear();
-  }
-
-  @Test
-  @DisplayName("事务消息 COMMIT 流程：发送事务消息后消费者接收")
-  void commit_flow_consumer_receives_message() {
-    String content = "test-commit-order-001";
-
-    SendResult result = producer.sendOrderTransaction(content);
-
-    assertThat(result).isNotNull();
-    assertThat(result.isSuccess()).isTrue();
-
-    await()
-        .atMost(10, TimeUnit.SECONDS)
-        .untilAsserted(
-            () -> {
-              assertThat(testCollector.receivedMessages).hasSize(1);
-              Message<String> received = testCollector.receivedMessages.peek();
-              assertThat(received).isNotNull();
-              assertThat(received.getBody()).isEqualTo(content);
-              assertThat(received.getTag()).isEqualTo("transaction");
-            });
-  }
-
-  @Test
-  @DisplayName("事务消息 ROLLBACK 流程：本地事务失败返回不成功结果")
-  void rollback_flow_returns_unsuccessful_result() {
-    String content = "test-rollback-order-001";
-
-    Message<String> msg =
-        MessageBuilder.<String>withTopic("order-topic").tag("transaction").body(content).build();
-
-    TransactionCallback<String> callback = (message, ctx) -> LocalTransactionState.ROLLBACK_MESSAGE;
-
-    SendResult result = template.executeInTransaction(msg, callback);
-
-    assertThat(result).isNotNull();
-    assertThat(result.isSuccess()).isFalse();
-    assertThat(result.getSendStatus()).isEqualTo(SendStatus.SEND_FAILED);
-    assertThat(result.getErrorMessage()).contains("rolled back");
-  }
-
-  @StreamMQConsumer(topic = "order-topic", consumerGroup = TEST_CONSUMER_GROUP)
-  static class TestMessageCollector implements StreamMessageConcurrentlyConsumer<String> {
-
-    final ConcurrentLinkedQueue<Message<String>> receivedMessages = new ConcurrentLinkedQueue<>();
-
-    @Override
-    public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
-      receivedMessages.add(message);
-      return ConsumeAction.SUCCESS;
+    @BeforeEach
+    void clearReceivedMessages() {
+        testCollector.receivedMessages.clear();
     }
-  }
+
+    @Test
+    @DisplayName("事务消息 COMMIT 流程：发送事务消息后消费者接收")
+    void commit_flow_consumer_receives_message() {
+        String content = "test-commit-order-001";
+
+        SendResult result = producer.sendOrderTransaction(content);
+
+        assertThat(result).isNotNull();
+        assertThat(result.isSuccess()).isTrue();
+
+        await().atMost(10, TimeUnit.SECONDS)
+                .untilAsserted(
+                        () -> {
+                            assertThat(testCollector.receivedMessages).hasSize(1);
+                            Message<String> received = testCollector.receivedMessages.peek();
+                            assertThat(received).isNotNull();
+                            assertThat(received.getBody()).isEqualTo(content);
+                            assertThat(received.getTag()).isEqualTo("transaction");
+                        });
+    }
+
+    @Test
+    @DisplayName("事务消息 ROLLBACK 流程：本地事务失败返回不成功结果")
+    void rollback_flow_returns_unsuccessful_result() {
+        String content = "test-rollback-order-001";
+
+        Message<String> msg =
+                MessageBuilder.<String>withTopic("order-topic")
+                        .tag("transaction")
+                        .body(content)
+                        .build();
+
+        TransactionCallback<String> callback =
+                (message, ctx) -> LocalTransactionState.ROLLBACK_MESSAGE;
+
+        SendResult result = template.executeInTransaction(msg, callback);
+
+        assertThat(result).isNotNull();
+        assertThat(result.isSuccess()).isFalse();
+        assertThat(result.getSendStatus()).isEqualTo(SendStatus.SEND_FAILED);
+        assertThat(result.getErrorMessage()).contains("rolled back");
+    }
+
+    @StreamMQConsumer(topic = "order-topic", consumerGroup = TEST_CONSUMER_GROUP)
+    static class TestMessageCollector implements StreamMessageConcurrentlyConsumer<String> {
+
+        final ConcurrentLinkedQueue<Message<String>> receivedMessages =
+                new ConcurrentLinkedQueue<>();
+
+        @Override
+        public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
+            receivedMessages.add(message);
+            return ConsumeAction.SUCCESS;
+        }
+    }
 }

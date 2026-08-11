@@ -19,26 +19,26 @@ import io.github.streammq.core.policy.DlqFailureDecision;
  */
 public class LogAndDropDlqFailureStrategy extends AbstractDlqFailureStrategy {
 
-  /** 策略名称常量 */
-  public static final String STRATEGY_NAME = "log-and-drop";
+    /** 策略名称常量 */
+    public static final String STRATEGY_NAME = "log-and-drop";
 
-  /** 无参构造（全局默认工厂使用） */
-  public LogAndDropDlqFailureStrategy() {
-    super(DlqConfig.builder().build());
-  }
+    /** 无参构造（全局默认工厂使用） */
+    public LogAndDropDlqFailureStrategy() {
+        super(DlqConfig.builder().build());
+    }
 
-  /** 带配置构造 */
-  public LogAndDropDlqFailureStrategy(DlqConfig config) {
-    super(config);
-  }
+    /** 带配置构造 */
+    public LogAndDropDlqFailureStrategy(DlqConfig config) {
+        super(config);
+    }
 
-  @Override
-  protected DlqFailureDecision doDecide(Message<?> message, DlqFailureContext context) {
-    return DlqFailureDecision.drop();
-  }
+    @Override
+    protected DlqFailureDecision doDecide(Message<?> message, DlqFailureContext context) {
+        return DlqFailureDecision.drop();
+    }
 
-  @Override
-  public String name() {
-    return STRATEGY_NAME;
-  }
+    @Override
+    public String name() {
+        return STRATEGY_NAME;
+    }
 }

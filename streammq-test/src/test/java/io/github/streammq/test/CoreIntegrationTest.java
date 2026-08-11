@@ -1,5 +1,9 @@
 package io.github.streammq.test;
 
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
+
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy;
@@ -8,15 +12,13 @@ import io.github.streammq.adapter.redisson.producer.RedissonStreamProducerFactor
 import io.github.streammq.adapter.redisson.retry.NoRetryPolicy;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate;
 import io.github.streammq.core.annotation.StreamMQConsumer;
-import io.github.streammq.core.enums.ConsumeAction;
-import io.github.streammq.core.consumer.ConsumeContext;
-import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
 import io.github.streammq.core.enums.SelectorType;
-import io.github.streammq.core.exception.StreamMQException;
 import io.github.streammq.core.listener.StreamMQListenerContainer;
 import io.github.streammq.core.message.BatchMessage;
 import io.github.streammq.core.message.Message;
@@ -30,17 +32,6 @@ import io.github.streammq.core.producer.SendCallback;
 import io.github.streammq.core.producer.StreamMessageProducerFactory;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.template.StreamMessageTemplate;
-import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate;
-
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Nested;
-import org.junit.jupiter.api.Test;
-import org.redisson.api.RStream;
-import org.redisson.api.RedissonClient;
-import org.redisson.api.StreamMessageId;
-
 import java.lang.reflect.Proxy;
 import java.util.List;
 import java.util.Map;
@@ -50,24 +41,28 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.awaitility.Awaitility.await;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.redisson.api.RStream;
+import org.redisson.api.StreamMessageId;
 
 /**
  * StreamMQ 核心集成测试，基于真实本地 Redis 连接验证完整消息收发链路。
  *
  * <p>本测试覆盖以下场景：
+ *
  * <ul>
- *   <li>syncSend（基础 / 超时 / 重试）</li>
- *   <li>asyncSend（CompletableFuture / 回调）</li>
- *   <li>sendOneway</li>
- *   <li>syncSendBatch</li>
- *   <li>消费者注册与消息消费</li>
- *   <li>Tag / Key / UserProperties 元数据传递</li>
- *   <li>MessageMetadataBuilder 使用</li>
- *   <li>异常处理</li>
+ *   <li>syncSend（基础 / 超时 / 重试）
+ *   <li>asyncSend（CompletableFuture / 回调）
+ *   <li>sendOneway
+ *   <li>syncSendBatch
+ *   <li>消费者注册与消息消费
+ *   <li>Tag / Key / UserProperties 元数据传递
+ *   <li>MessageMetadataBuilder 使用
+ *   <li>异常处理
  * </ul>
  *
  * <p>每个测试方法使用独立的 Topic 与 ConsumerGroup，通过 flushdb 保证数据隔离。
@@ -94,22 +89,30 @@ class CoreIntegrationTest extends StreamMQTestBase {
         MessageSerializer<Object> serializer = new JacksonJsonSerializer<>();
         converter = new DefaultMessageConverter(serializer);
 
-        ProducerConfig producerConfig = ProducerConfig.builder()
-                .group(PRODUCER_GROUP)
-                .namespace(NAMESPACE)
-                .sendMessageTimeout(5000L)
-                .build();
+        ProducerConfig producerConfig =
+                ProducerConfig.builder()
+                        .group(PRODUCER_GROUP)
+                        .namespace(NAMESPACE)
+                        .sendMessageTimeout(5000L)
+                        .build();
 
         producerFactory = new RedissonStreamProducerFactory(redissonClient, converter);
         producerFactory.createProducer(producerConfig);
 
-        template = new DefaultStreamMessageTemplate(producerFactory, PRODUCER_GROUP, converter, producerConfig, null);
+        template =
+                new DefaultStreamMessageTemplate(
+                        producerFactory, PRODUCER_GROUP, converter, producerConfig, null);
 
         listenerFactory = new RedissonStreamListenerFactory(redissonClient, converter);
         NoRetryPolicy retryPolicy = new NoRetryPolicy();
-        container = new DefaultStreamMQListenerContainer(
-                redissonClient, listenerFactory, converter, retryPolicy,
-                new LogAndDropDlqFailureStrategy(), NAMESPACE);
+        container =
+                new DefaultStreamMQListenerContainer(
+                        redissonClient,
+                        listenerFactory,
+                        converter,
+                        retryPolicy,
+                        new LogAndDropDlqFailureStrategy(),
+                        NAMESPACE);
     }
 
     @AfterEach
@@ -127,58 +130,76 @@ class CoreIntegrationTest extends StreamMQTestBase {
 
     // ==================== 辅助方法 ====================
 
-    /**
-     * 使用动态代理创建 StreamMQConsumer 注解实例，避免引入 Mockito 注解 mock。
-     */
+    /** 使用动态代理创建 StreamMQConsumer 注解实例，避免引入 Mockito 注解 mock。 */
     private StreamMQConsumer buildConsumerAnnotation(String topic, String consumerGroup) {
-        return (StreamMQConsumer) Proxy.newProxyInstance(
-                StreamMQConsumer.class.getClassLoader(),
-                new Class<?>[]{StreamMQConsumer.class},
-                (proxy, method, args) -> {
-                    String name = method.getName();
-                    switch (name) {
-                        case "topic": return topic;
-                        case "consumerGroup": return consumerGroup;
-                        case "consumeMode": return ConsumeMode.CLUSTERING;
-                        case "messageModel": return MessageModel.CONCURRENT;
-                        case "consumeThreadMin": return 1;
-                        case "consumeThreadMax": return 64;
-                        case "maxReconsumeTimes": return 3;
-                        case "consumeTimeout": return 30000L;
-                        case "selectorExpression": return "*";
-                        case "namespace": return NAMESPACE;
-                        case "selectorType": return SelectorType.TAG;
-                        case "pullBatchSize": return 32;
-                        case "pullInterval": return 0L;
-                        case "streamMaxLen": return 0;
-                        case "enableMsgTrace": return false;
-                        case "enable": return true;
-                        case "shardCount": return 4;
-                        case "consumerName": return "";
-                        case "retryStreamMaxLen": return 0;
-                        case "suspendCurrentQueueTimeMillis": return 1000L;
-                        default:
-                            Class<?> returnType = method.getReturnType();
-                            if (returnType == boolean.class) return false;
-                            if (returnType == int.class) return 0;
-                            if (returnType == long.class) return 0L;
-                            if (returnType == String.class) return "";
-                            if (returnType == Class[].class) return new Class<?>[0];
-                            return null;
-                    }
-                });
+        return (StreamMQConsumer)
+                Proxy.newProxyInstance(
+                        StreamMQConsumer.class.getClassLoader(),
+                        new Class<?>[] {StreamMQConsumer.class},
+                        (proxy, method, args) -> {
+                            String name = method.getName();
+                            switch (name) {
+                                case "topic":
+                                    return topic;
+                                case "consumerGroup":
+                                    return consumerGroup;
+                                case "consumeMode":
+                                    return ConsumeMode.CLUSTERING;
+                                case "messageModel":
+                                    return MessageModel.CONCURRENT;
+                                case "consumeThreadMin":
+                                    return 1;
+                                case "consumeThreadMax":
+                                    return 64;
+                                case "maxReconsumeTimes":
+                                    return 3;
+                                case "consumeTimeout":
+                                    return 30000L;
+                                case "selectorExpression":
+                                    return "*";
+                                case "namespace":
+                                    return NAMESPACE;
+                                case "selectorType":
+                                    return SelectorType.TAG;
+                                case "pullBatchSize":
+                                    return 32;
+                                case "pullInterval":
+                                    return 0L;
+                                case "streamMaxLen":
+                                    return 0;
+                                case "enableMsgTrace":
+                                    return false;
+                                case "enable":
+                                    return true;
+                                case "shardCount":
+                                    return 4;
+                                case "consumerName":
+                                    return "";
+                                case "retryStreamMaxLen":
+                                    return 0;
+                                case "suspendCurrentQueueTimeMillis":
+                                    return 1000L;
+                                default:
+                                    Class<?> returnType = method.getReturnType();
+                                    if (returnType == boolean.class) return false;
+                                    if (returnType == int.class) return 0;
+                                    if (returnType == long.class) return 0L;
+                                    if (returnType == String.class) return "";
+                                    if (returnType == Class[].class) return new Class<?>[0];
+                                    return null;
+                            }
+                        });
     }
 
-    /**
-     * 为指定 Topic 创建消费者组（绕过 RedissonStreamListener.ensureGroup() 的已知 bug）。
-     */
+    /** 为指定 Topic 创建消费者组（绕过 RedissonStreamListener.ensureGroup() 的已知 bug）。 */
     private void ensureConsumerGroup(String topic, String group) {
         String streamKey = StreamMQKeys.topicStream(NAMESPACE, topic);
-        redissonClient.getStream(streamKey)
-                .createGroup(org.redisson.api.stream.StreamCreateGroupArgs
-                        .name(group)
-                        .makeStream()
-                        .id(new StreamMessageId(0, 0)));
+        redissonClient
+                .getStream(streamKey)
+                .createGroup(
+                        org.redisson.api.stream.StreamCreateGroupArgs.name(group)
+                                .makeStream()
+                                .id(new StreamMessageId(0, 0)));
     }
 
     // ==================== Nested: syncSend ====================
@@ -191,16 +212,16 @@ class CoreIntegrationTest extends StreamMQTestBase {
         @DisplayName("syncSend 基本消息: 验证 SendResult 与 Stream 写入")
         void syncSend_basicMessage_success() {
             String topic = "sync-basic-" + System.nanoTime();
-            Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                    .body("hello-world")
-                    .build();
+            Message<String> msg =
+                    MessageBuilder.<String>withTopic(topic).body("hello-world").build();
 
             SendResult result = template.syncSend(msg);
 
             StreamMQAssertions.assertThat(result).isSuccess().hasTopic(topic).hasMessageId();
             assertThat(result.getMessageId().getStreamEntryId()).isNotEmpty();
 
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
             assertThat(stream.size()).isEqualTo(1L);
         }
 
@@ -208,9 +229,8 @@ class CoreIntegrationTest extends StreamMQTestBase {
         @DisplayName("syncSend 带超时: 在合理超时内完成")
         void syncSend_withTimeout_success() {
             String topic = "sync-timeout-" + System.nanoTime();
-            Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                    .body("timeout-body")
-                    .build();
+            Message<String> msg =
+                    MessageBuilder.<String>withTopic(topic).body("timeout-body").build();
 
             SendResult result = template.syncSend(msg, 5000L);
 
@@ -221,14 +241,14 @@ class CoreIntegrationTest extends StreamMQTestBase {
         @DisplayName("syncSend 带重试: 正常消息一次成功不触发重试")
         void syncSend_withRetry_success() {
             String topic = "sync-retry-" + System.nanoTime();
-            Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                    .body("retry-body")
-                    .build();
+            Message<String> msg =
+                    MessageBuilder.<String>withTopic(topic).body("retry-body").build();
 
             SendResult result = template.syncSend(msg, 5000L, 3);
 
             StreamMQAssertions.assertThat(result).isSuccess();
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
             assertThat(stream.size()).isEqualTo(1L);
         }
 
@@ -238,14 +258,14 @@ class CoreIntegrationTest extends StreamMQTestBase {
             String topic = "sync-multi-" + System.nanoTime();
 
             for (int i = 0; i < 5; i++) {
-                Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                        .body("msg-" + i)
-                        .build();
+                Message<String> msg =
+                        MessageBuilder.<String>withTopic(topic).body("msg-" + i).build();
                 SendResult result = template.syncSend(msg);
                 StreamMQAssertions.assertThat(result).isSuccess();
             }
 
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
             assertThat(stream.size()).isEqualTo(5L);
         }
 
@@ -253,18 +273,21 @@ class CoreIntegrationTest extends StreamMQTestBase {
         @DisplayName("syncSend 后验证 Stream Entry 字段: body, tag, keys 正确写入")
         void syncSend_streamFieldsVerified() {
             String topic = "sync-fields-" + System.nanoTime();
-            Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                    .tag("order-tag")
-                    .keys("order-key-001")
-                    .body("order-payload")
-                    .withUserProperty("traceId", "trace-xyz")
-                    .build();
+            Message<String> msg =
+                    MessageBuilder.<String>withTopic(topic)
+                            .tag("order-tag")
+                            .keys("order-key-001")
+                            .body("order-payload")
+                            .withUserProperty("traceId", "trace-xyz")
+                            .build();
 
             SendResult result = template.syncSend(msg);
             StreamMQAssertions.assertThat(result).isSuccess().hasTag("order-tag").hasTopic(topic);
 
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
-            Map<StreamMessageId, Map<String, String>> range = stream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            Map<StreamMessageId, Map<String, String>> range =
+                    stream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
             assertThat(range).hasSize(1);
 
             Map<String, String> fields = range.values().iterator().next();
@@ -284,23 +307,27 @@ class CoreIntegrationTest extends StreamMQTestBase {
             String originalTag = "rt-tag";
             String originalKeys = "rt-key";
 
-            Message<String> sent = MessageBuilder.<String>withTopic(topic)
-                    .tag(originalTag)
-                    .keys(originalKeys)
-                    .body(originalBody)
-                    .withUserProperty("env", "test")
-                    .build();
+            Message<String> sent =
+                    MessageBuilder.<String>withTopic(topic)
+                            .tag(originalTag)
+                            .keys(originalKeys)
+                            .body(originalBody)
+                            .withUserProperty("env", "test")
+                            .build();
 
             SendResult sendResult = template.syncSend(sent);
             StreamMQAssertions.assertThat(sendResult).isSuccess();
 
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
-            Map<StreamMessageId, Map<String, String>> range = stream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            Map<StreamMessageId, Map<String, String>> range =
+                    stream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
             Map<String, String> fields = range.values().iterator().next();
 
             Message<String> received = converter.fromStreamFields(fields, String.class);
             DefaultMessageConverter.applyTopic(received, topic);
-            DefaultMessageConverter.applyMessageId(received, range.keySet().iterator().next().toString());
+            DefaultMessageConverter.applyMessageId(
+                    received, range.keySet().iterator().next().toString());
 
             StreamMQAssertions.assertThat(received)
                     .hasTopic(topic)
@@ -321,21 +348,22 @@ class CoreIntegrationTest extends StreamMQTestBase {
         @DisplayName("asyncSend CompletableFuture: 发送完成后 SendResult 非空")
         void asyncSend_future_completesWithResult() {
             String topic = "async-future-" + System.nanoTime();
-            Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                    .body("async-body")
-                    .build();
+            Message<String> msg =
+                    MessageBuilder.<String>withTopic(topic).body("async-body").build();
 
             CompletableFuture<SendResult> future = template.asyncSend(msg);
 
-            SendResult result = await().atMost(5, TimeUnit.SECONDS)
-                    .until(future::join, r -> r != null && r.isSuccess());
+            SendResult result =
+                    await().atMost(5, TimeUnit.SECONDS)
+                            .until(future::join, r -> r != null && r.isSuccess());
 
             assertThat(result).isNotNull();
             assertThat(result.getTopic()).isEqualTo(topic);
             assertThat(result.getMessageId()).isNotNull();
             assertThat(result.isSuccess()).isTrue();
 
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
             assertThat(stream.size()).isEqualTo(1L);
         }
 
@@ -347,15 +375,15 @@ class CoreIntegrationTest extends StreamMQTestBase {
 
             CompletableFuture<?>[] futures = new CompletableFuture<?>[count];
             for (int i = 0; i < count; i++) {
-                Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                        .body("concurrent-" + i)
-                        .build();
+                Message<String> msg =
+                        MessageBuilder.<String>withTopic(topic).body("concurrent-" + i).build();
                 futures[i] = template.asyncSend(msg);
             }
 
             CompletableFuture.allOf(futures).join();
 
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
             assertThat(stream.size()).isEqualTo(count);
         }
 
@@ -363,29 +391,30 @@ class CoreIntegrationTest extends StreamMQTestBase {
         @DisplayName("asyncSend 回调方式: onSuccess 被调用且 SendResult 正确")
         void asyncSend_callback_successInvoked() throws Exception {
             String topic = "async-callback-" + System.nanoTime();
-            Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                    .body("callback-body")
-                    .build();
+            Message<String> msg =
+                    MessageBuilder.<String>withTopic(topic).body("callback-body").build();
 
             CountDownLatch latch = new CountDownLatch(1);
             AtomicReference<SendResult> resultRef = new AtomicReference<>();
             AtomicBoolean successCalled = new AtomicBoolean(false);
             AtomicBoolean errorCalled = new AtomicBoolean(false);
 
-            template.asyncSend(msg, new SendCallback() {
-                @Override
-                public void onSuccess(SendResult result) {
-                    resultRef.set(result);
-                    successCalled.set(true);
-                    latch.countDown();
-                }
+            template.asyncSend(
+                    msg,
+                    new SendCallback() {
+                        @Override
+                        public void onSuccess(SendResult result) {
+                            resultRef.set(result);
+                            successCalled.set(true);
+                            latch.countDown();
+                        }
 
-                @Override
-                public void onException(Throwable ex) {
-                    errorCalled.set(true);
-                    latch.countDown();
-                }
-            });
+                        @Override
+                        public void onException(Throwable ex) {
+                            errorCalled.set(true);
+                            latch.countDown();
+                        }
+                    });
 
             assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
             assertThat(successCalled).isTrue();
@@ -404,22 +433,24 @@ class CoreIntegrationTest extends StreamMQTestBase {
             AtomicInteger successCount = new AtomicInteger(0);
 
             for (int i = 0; i < count; i++) {
-                Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                        .body("cb-body-" + i)
-                        .build();
-                template.asyncSend(msg, new SendCallback() {
-                    @Override
-                    public void onSuccess(SendResult result) {
-                        successCount.incrementAndGet();
-                        latch.countDown();
-                    }
-                });
+                Message<String> msg =
+                        MessageBuilder.<String>withTopic(topic).body("cb-body-" + i).build();
+                template.asyncSend(
+                        msg,
+                        new SendCallback() {
+                            @Override
+                            public void onSuccess(SendResult result) {
+                                successCount.incrementAndGet();
+                                latch.countDown();
+                            }
+                        });
             }
 
             assertThat(latch.await(5, TimeUnit.SECONDS)).isTrue();
             assertThat(successCount.get()).isEqualTo(count);
 
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
             assertThat(stream.size()).isEqualTo(count);
         }
     }
@@ -434,16 +465,19 @@ class CoreIntegrationTest extends StreamMQTestBase {
         @DisplayName("sendOneway: 消息最终写入 Stream")
         void sendOneway_eventuallyWrittenToStream() {
             String topic = "oneway-basic-" + System.nanoTime();
-            Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                    .body("oneway-body")
-                    .build();
+            Message<String> msg =
+                    MessageBuilder.<String>withTopic(topic).body("oneway-body").build();
 
             template.sendOneway(msg);
 
-            await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
-                RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
-                assertThat(stream.size()).isEqualTo(1L);
-            });
+            await().atMost(5, TimeUnit.SECONDS)
+                    .untilAsserted(
+                            () -> {
+                                RStream<String, String> stream =
+                                        redissonClient.getStream(
+                                                StreamMQKeys.topicStream(NAMESPACE, topic));
+                                assertThat(stream.size()).isEqualTo(1L);
+                            });
         }
 
         @Test
@@ -453,16 +487,19 @@ class CoreIntegrationTest extends StreamMQTestBase {
             int count = 8;
 
             for (int i = 0; i < count; i++) {
-                Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                        .body("oneway-" + i)
-                        .build();
+                Message<String> msg =
+                        MessageBuilder.<String>withTopic(topic).body("oneway-" + i).build();
                 template.sendOneway(msg);
             }
 
-            await().atMost(5, TimeUnit.SECONDS).untilAsserted(() -> {
-                RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
-                assertThat(stream.size()).isEqualTo(count);
-            });
+            await().atMost(5, TimeUnit.SECONDS)
+                    .untilAsserted(
+                            () -> {
+                                RStream<String, String> stream =
+                                        redissonClient.getStream(
+                                                StreamMQKeys.topicStream(NAMESPACE, topic));
+                                assertThat(stream.size()).isEqualTo(count);
+                            });
         }
     }
 
@@ -480,18 +517,20 @@ class CoreIntegrationTest extends StreamMQTestBase {
 
             BatchMessage.Builder<String> batchBuilder = BatchMessage.<String>withTopic(topic);
             for (int i = 0; i < count; i++) {
-                batchBuilder.add(MessageBuilder.<String>withTopic(topic)
-                        .tag("batch-tag")
-                        .keys("batch-key-" + i)
-                        .body("batch-body-" + i)
-                        .build());
+                batchBuilder.add(
+                        MessageBuilder.<String>withTopic(topic)
+                                .tag("batch-tag")
+                                .keys("batch-key-" + i)
+                                .body("batch-body-" + i)
+                                .build());
             }
             BatchMessage<String> batch = batchBuilder.build();
 
             List<SendResult> results = template.syncSendBatch(batch);
 
             assertThat(results).hasSize(count);
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
             assertThat(stream.size()).isEqualTo(count);
         }
 
@@ -513,8 +552,12 @@ class CoreIntegrationTest extends StreamMQTestBase {
             BatchMessage.Builder<String> builder = BatchMessage.<String>withTopic(topicA);
             builder.add(MessageBuilder.<String>withTopic(topicA).body("a").build());
 
-            assertThatThrownBy(() -> builder.add(
-                    MessageBuilder.<String>withTopic(topicB).body("b").build()))
+            assertThatThrownBy(
+                            () ->
+                                    builder.add(
+                                            MessageBuilder.<String>withTopic(topicB)
+                                                    .body("b")
+                                                    .build()))
                     .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("does not match");
         }
@@ -526,31 +569,38 @@ class CoreIntegrationTest extends StreamMQTestBase {
 
             BatchMessage.Builder<String> batchBuilder = BatchMessage.<String>withTopic(topic);
             for (int i = 0; i < 3; i++) {
-                batchBuilder.add(MessageBuilder.<String>withTopic(topic)
-                        .tag("meta-tag-" + i)
-                        .keys("meta-key-" + i)
-                        .body("meta-body-" + i)
-                        .withUserProperty("orderNo", "ORD-" + i)
-                        .build());
+                batchBuilder.add(
+                        MessageBuilder.<String>withTopic(topic)
+                                .tag("meta-tag-" + i)
+                                .keys("meta-key-" + i)
+                                .body("meta-body-" + i)
+                                .withUserProperty("orderNo", "ORD-" + i)
+                                .build());
             }
 
             List<SendResult> results = template.syncSendBatch(batchBuilder.build());
 
             assertThat(results).hasSize(3);
-            assertThat(results).allSatisfy(r -> {
-                assertThat(r.getSendStatus()).isEqualTo(SendStatus.SEND_OK);
-                assertThat(r.isSuccess()).isTrue();
-            });
+            assertThat(results)
+                    .allSatisfy(
+                            r -> {
+                                assertThat(r.getSendStatus()).isEqualTo(SendStatus.SEND_OK);
+                                assertThat(r.isSuccess()).isTrue();
+                            });
 
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
             assertThat(stream.size()).isEqualTo(3L);
 
-            Map<StreamMessageId, Map<String, String>> range = stream.range(3, StreamMessageId.MIN, StreamMessageId.MAX);
-            assertThat(range.values()).allSatisfy(fields -> {
-                assertThat(fields).containsKey("tag");
-                assertThat(fields).containsKey("keys");
-                assertThat(fields).containsKey("body");
-            });
+            Map<StreamMessageId, Map<String, String>> range =
+                    stream.range(3, StreamMessageId.MIN, StreamMessageId.MAX);
+            assertThat(range.values())
+                    .allSatisfy(
+                            fields -> {
+                                assertThat(fields).containsKey("tag");
+                                assertThat(fields).containsKey("keys");
+                                assertThat(fields).containsKey("body");
+                            });
         }
     }
 
@@ -573,18 +623,15 @@ class CoreIntegrationTest extends StreamMQTestBase {
             container.registerConsumer(consumer, annotation);
             container.start();
 
-            Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                    .body("consume-body")
-                    .build();
+            Message<String> msg =
+                    MessageBuilder.<String>withTopic(topic).body("consume-body").build();
             template.syncSend(msg);
 
             consumer.awaitMessages(1, 5000);
 
             List<Message<String>> received = consumer.getReceivedMessages();
             assertThat(received).hasSize(1);
-            StreamMQAssertions.assertThat(received.get(0))
-                    .hasTopic(topic)
-                    .hasBody("consume-body");
+            StreamMQAssertions.assertThat(received.get(0)).hasTopic(topic).hasBody("consume-body");
         }
 
         @Test
@@ -599,13 +646,14 @@ class CoreIntegrationTest extends StreamMQTestBase {
             container.registerConsumer(consumer, buildConsumerAnnotation(topic, group));
             container.start();
 
-            Message<String> sent = MessageBuilder.<String>withTopic(topic)
-                    .tag("important")
-                    .keys("order-123")
-                    .body("full-content")
-                    .withUserProperty("priority", "high")
-                    .withUserProperty("region", "us-east")
-                    .build();
+            Message<String> sent =
+                    MessageBuilder.<String>withTopic(topic)
+                            .tag("important")
+                            .keys("order-123")
+                            .body("full-content")
+                            .withUserProperty("priority", "high")
+                            .withUserProperty("region", "us-east")
+                            .build();
             template.syncSend(sent);
 
             consumer.awaitMessages(1, 5000);
@@ -636,9 +684,8 @@ class CoreIntegrationTest extends StreamMQTestBase {
             container.start();
 
             for (int i = 0; i < count; i++) {
-                Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                        .body("msg-" + i)
-                        .build();
+                Message<String> msg =
+                        MessageBuilder.<String>withTopic(topic).body("msg-" + i).build();
                 template.syncSend(msg);
             }
 
@@ -672,7 +719,8 @@ class CoreIntegrationTest extends StreamMQTestBase {
             consumer.awaitMessages(1, 5000);
             assertThat(consumer.getSuccessCount()).isEqualTo(1);
 
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
             assertThat(stream.size()).isEqualTo(1L);
         }
 
@@ -714,9 +762,8 @@ class CoreIntegrationTest extends StreamMQTestBase {
             container.start();
 
             for (int i = 0; i < count; i++) {
-                Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                        .body("concurrent-" + i)
-                        .build();
+                Message<String> msg =
+                        MessageBuilder.<String>withTopic(topic).body("concurrent-" + i).build();
                 template.syncSend(msg);
             }
 
@@ -742,25 +789,26 @@ class CoreIntegrationTest extends StreamMQTestBase {
             String metadataKeys = "full-key";
             String metadataShardingKey = "shard-42";
 
-            MessageMetadataBuilder metadata = MessageMetadataBuilder.create()
-                    .tag(metadataTag)
-                    .keys(metadataKeys)
-                    .shardingKey(metadataShardingKey)
-                    .userProperty("orderType", "PREMIUM")
-                    .userProperty("customerId", "CUST-001")
-                    .property("sysSource", "integration-test");
+            MessageMetadataBuilder metadata =
+                    MessageMetadataBuilder.create()
+                            .tag(metadataTag)
+                            .keys(metadataKeys)
+                            .shardingKey(metadataShardingKey)
+                            .userProperty("orderType", "PREMIUM")
+                            .userProperty("customerId", "CUST-001")
+                            .property("sysSource", "integration-test");
 
             MessageBuilder<String> builder = MessageBuilder.<String>withTopic(topic);
             metadata.applyTo(builder);
             Message<String> builtMsg = builder.body("metadata-body").build();
 
             SendResult result = template.syncSend(builtMsg);
-            StreamMQAssertions.assertThat(result).isSuccess()
-                    .hasTag(metadataTag)
-                    .hasTopic(topic);
+            StreamMQAssertions.assertThat(result).isSuccess().hasTag(metadataTag).hasTopic(topic);
 
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
-            Map<StreamMessageId, Map<String, String>> range = stream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            Map<StreamMessageId, Map<String, String>> range =
+                    stream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
             Map<String, String> fields = range.values().iterator().next();
             assertThat(fields).containsEntry("tag", metadataTag);
             assertThat(fields).containsEntry("keys", metadataKeys);
@@ -774,16 +822,16 @@ class CoreIntegrationTest extends StreamMQTestBase {
             String topic = "tag-test-" + System.nanoTime();
             String tag = "urgent";
 
-            Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                    .tag(tag)
-                    .body("tag-body")
-                    .build();
+            Message<String> msg =
+                    MessageBuilder.<String>withTopic(topic).tag(tag).body("tag-body").build();
 
             SendResult result = template.syncSend(msg);
             StreamMQAssertions.assertThat(result).isSuccess().hasTag(tag);
 
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
-            Map<StreamMessageId, Map<String, String>> range = stream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            Map<StreamMessageId, Map<String, String>> range =
+                    stream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
             assertThat(range.values().iterator().next()).containsEntry("tag", tag);
         }
 
@@ -793,16 +841,16 @@ class CoreIntegrationTest extends StreamMQTestBase {
             String topic = "keys-test-" + System.nanoTime();
             String keys = "INV-2024-001";
 
-            Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                    .keys(keys)
-                    .body("keys-body")
-                    .build();
+            Message<String> msg =
+                    MessageBuilder.<String>withTopic(topic).keys(keys).body("keys-body").build();
 
             SendResult result = template.syncSend(msg);
             StreamMQAssertions.assertThat(result).isSuccess().hasTopic(topic);
 
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
-            Map<StreamMessageId, Map<String, String>> range = stream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            Map<StreamMessageId, Map<String, String>> range =
+                    stream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
             assertThat(range.values().iterator().next()).containsEntry("keys", keys);
         }
 
@@ -811,18 +859,21 @@ class CoreIntegrationTest extends StreamMQTestBase {
         void messageWithUserProps_allPropsCorrectlyStored() {
             String topic = "userprops-test-" + System.nanoTime();
 
-            Message<String> msg = MessageBuilder.<String>withTopic(topic)
-                    .body("props-body")
-                    .withUserProperty("orderId", "ORD-999")
-                    .withUserProperty("amount", "199.99")
-                    .withUserProperty("currency", "USD")
-                    .build();
+            Message<String> msg =
+                    MessageBuilder.<String>withTopic(topic)
+                            .body("props-body")
+                            .withUserProperty("orderId", "ORD-999")
+                            .withUserProperty("amount", "199.99")
+                            .withUserProperty("currency", "USD")
+                            .build();
 
             SendResult result = template.syncSend(msg);
             StreamMQAssertions.assertThat(result).isSuccess();
 
-            RStream<String, String> stream = redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
-            Map<StreamMessageId, Map<String, String>> range = stream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            Map<StreamMessageId, Map<String, String>> range =
+                    stream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
             String props = range.values().iterator().next().get("props");
             assertThat(props).contains("orderId");
             assertThat(props).contains("amount");
@@ -847,9 +898,8 @@ class CoreIntegrationTest extends StreamMQTestBase {
         @Test
         @DisplayName("MessageMetadataBuilder hasDelay: 未设置延时返回 false")
         void metadataBuilder_hasDelay_returnsFalseWhenNoDelay() {
-            MessageMetadataBuilder metadata = MessageMetadataBuilder.create()
-                    .tag("test")
-                    .keys("key1");
+            MessageMetadataBuilder metadata =
+                    MessageMetadataBuilder.create().tag("test").keys("key1");
             assertThat(metadata.hasDelay()).isFalse();
         }
     }
@@ -942,8 +992,7 @@ class CoreIntegrationTest extends StreamMQTestBase {
             container.registerConsumer(consumer, buildConsumerAnnotation(topic, "err-group"));
             container.start();
 
-            assertThatThrownBy(container::start)
-                    .isInstanceOf(IllegalStateException.class);
+            assertThatThrownBy(container::start).isInstanceOf(IllegalStateException.class);
 
             container.stop();
         }
@@ -951,10 +1000,15 @@ class CoreIntegrationTest extends StreamMQTestBase {
         @Test
         @DisplayName("StreamMQAssertions.isSuccess 对失败结果返回 false")
         void assertions_isSuccess_failedResult() {
-            SendResult failedResult = new SendResult(
-                    MessageId.sentinel(),
-                    "test-topic", null, SendStatus.SEND_FAILED,
-                    System.currentTimeMillis(), null, "test-error");
+            SendResult failedResult =
+                    new SendResult(
+                            MessageId.sentinel(),
+                            "test-topic",
+                            null,
+                            SendStatus.SEND_FAILED,
+                            System.currentTimeMillis(),
+                            null,
+                            "test-error");
 
             assertThat(failedResult.isSuccess()).isFalse();
             assertThat(failedResult.getSendStatus()).isEqualTo(SendStatus.SEND_FAILED);
@@ -965,8 +1019,15 @@ class CoreIntegrationTest extends StreamMQTestBase {
         @DisplayName("SendResult 构造: sentinel MessageId 不抛异常")
         void sendResult_sentinelMessageId_constructs() {
             MessageId sentinel = MessageId.sentinel();
-            SendResult result = new SendResult(sentinel, "topic", null,
-                    SendStatus.SEND_FAILED, System.currentTimeMillis(), null, "failed");
+            SendResult result =
+                    new SendResult(
+                            sentinel,
+                            "topic",
+                            null,
+                            SendStatus.SEND_FAILED,
+                            System.currentTimeMillis(),
+                            null,
+                            "failed");
 
             assertThat(result.getMessageId()).isNotNull();
             assertThat(result.isSuccess()).isFalse();
@@ -991,12 +1052,13 @@ class CoreIntegrationTest extends StreamMQTestBase {
             container.registerConsumer(consumer, buildConsumerAnnotation(topic, group));
             container.start();
 
-            Message<String> sent = MessageBuilder.<String>withTopic(topic)
-                    .tag("order-tag")
-                    .keys("order-key-001")
-                    .body("full-flow-payload")
-                    .withUserProperty("env", "integration-test")
-                    .build();
+            Message<String> sent =
+                    MessageBuilder.<String>withTopic(topic)
+                            .tag("order-tag")
+                            .keys("order-key-001")
+                            .body("full-flow-payload")
+                            .withUserProperty("env", "integration-test")
+                            .build();
 
             SendResult sendResult = template.syncSend(sent);
             StreamMQAssertions.assertThat(sendResult).isSuccess();
@@ -1028,10 +1090,11 @@ class CoreIntegrationTest extends StreamMQTestBase {
             container.registerConsumer(consumer, buildConsumerAnnotation(topic, group));
             container.start();
 
-            Message<String> sent = MessageBuilder.<String>withTopic(topic)
-                    .tag("async-tag")
-                    .body("async-payload")
-                    .build();
+            Message<String> sent =
+                    MessageBuilder.<String>withTopic(topic)
+                            .tag("async-tag")
+                            .body("async-payload")
+                            .build();
 
             CompletableFuture<SendResult> future = template.asyncSend(sent);
             SendResult sendResult = future.get(5, TimeUnit.SECONDS);
@@ -1060,19 +1123,22 @@ class CoreIntegrationTest extends StreamMQTestBase {
 
             BatchMessage.Builder<String> batchBuilder = BatchMessage.<String>withTopic(topic);
             for (int i = 0; i < count; i++) {
-                batchBuilder.add(MessageBuilder.<String>withTopic(topic)
-                        .tag("batch-t" + (i % 3))
-                        .keys("batch-key-" + i)
-                        .body("batch-payload-" + i)
-                        .build());
+                batchBuilder.add(
+                        MessageBuilder.<String>withTopic(topic)
+                                .tag("batch-t" + (i % 3))
+                                .keys("batch-key-" + i)
+                                .body("batch-payload-" + i)
+                                .build());
             }
 
             List<SendResult> results = template.syncSendBatch(batchBuilder.build());
             assertThat(results).hasSize(count);
-            assertThat(results).allSatisfy(r -> {
-                assertThat(r.isSuccess()).isTrue();
-                assertThat(r.getTopic()).isEqualTo(topic);
-            });
+            assertThat(results)
+                    .allSatisfy(
+                            r -> {
+                                assertThat(r.isSuccess()).isTrue();
+                                assertThat(r.getTopic()).isEqualTo(topic);
+                            });
 
             consumer.waitForMessages(10000);
 
@@ -1085,8 +1151,9 @@ class CoreIntegrationTest extends StreamMQTestBase {
         void sendResult_messageId_format() {
             String topic = "msgid-format-" + System.nanoTime();
 
-            SendResult result = template.syncSend(
-                    MessageBuilder.<String>withTopic(topic).body("mid-test").build());
+            SendResult result =
+                    template.syncSend(
+                            MessageBuilder.<String>withTopic(topic).body("mid-test").build());
 
             assertThat(result.getMessageId()).isNotNull();
             assertThat(result.getMessageId().getStreamEntryId()).isNotEmpty();

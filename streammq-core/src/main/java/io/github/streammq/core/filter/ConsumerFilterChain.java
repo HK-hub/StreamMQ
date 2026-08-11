@@ -16,32 +16,32 @@ import java.util.List;
  */
 public interface ConsumerFilterChain {
 
-  /**
-   * 添加单个过滤器（按 {@link ConsumerFilter#order()} 升序插入）。
-   *
-   * @param filter 过滤器实例
-   */
-  void addFilter(ConsumerFilter filter);
+    /**
+     * 添加单个过滤器（按 {@link ConsumerFilter#order()} 升序插入）。
+     *
+     * @param filter 过滤器实例
+     */
+    void addFilter(ConsumerFilter filter);
 
-  /**
-   * 批量添加过滤器。
-   *
-   * @param filters 过滤器集合
-   */
-  void addFilters(Collection<ConsumerFilter> filters);
+    /**
+     * 批量添加过滤器。
+     *
+     * @param filters 过滤器集合
+     */
+    void addFilters(Collection<ConsumerFilter> filters);
 
-  /**
-   * 执行过滤器链。
-   *
-   * @param message 待过滤消息
-   * @return true 全部通过（不过滤），false 任一过滤器拒绝（跳过）
-   */
-  boolean accept(Message<?> message);
+    /**
+     * 执行过滤器链。
+     *
+     * @param message 待过滤消息
+     * @return true 全部通过（不过滤），false 任一过滤器拒绝（跳过）
+     */
+    boolean accept(Message<?> message);
 
-  /**
-   * 返回当前已注册的过滤器列表（按 order 升序）。
-   *
-   * @return 过滤器列表
-   */
-  List<ConsumerFilter> getFilters();
+    /**
+     * 返回当前已注册的过滤器列表（按 order 升序）。
+     *
+     * @return 过滤器列表
+     */
+    List<ConsumerFilter> getFilters();
 }

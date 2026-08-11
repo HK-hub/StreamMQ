@@ -23,59 +23,59 @@ import java.util.Set;
  */
 public class SimpleTagSelectorFilter extends TagSelectorFilter {
 
-  private final Set<String> orTags;
-  private final Set<String> andTags;
-  private final String singleTag;
+    private final Set<String> orTags;
+    private final Set<String> andTags;
+    private final String singleTag;
 
-  public SimpleTagSelectorFilter(String selectorExpression) {
-    super(selectorExpression);
-    Set<String> orSet = new HashSet<>();
-    Set<String> andSet = new HashSet<>();
-    String single = null;
+    public SimpleTagSelectorFilter(String selectorExpression) {
+        super(selectorExpression);
+        Set<String> orSet = new HashSet<>();
+        Set<String> andSet = new HashSet<>();
+        String single = null;
 
-    String expr = Objects.isNull(selectorExpression) ? "" : selectorExpression.trim();
-    if (!WILD_CARD.equals(expr) && !expr.isEmpty()) {
-      if (expr.contains("||")) {
-        String[] parts = expr.split("\\|\\|");
-        for (String part : parts) {
-          orSet.add(part.trim());
+        String expr = Objects.isNull(selectorExpression) ? "" : selectorExpression.trim();
+        if (!WILD_CARD.equals(expr) && !expr.isEmpty()) {
+            if (expr.contains("||")) {
+                String[] parts = expr.split("\\|\\|");
+                for (String part : parts) {
+                    orSet.add(part.trim());
+                }
+            } else if (expr.contains("&&")) {
+                String[] parts = expr.split("&&");
+                for (String part : parts) {
+                    andSet.add(part.trim());
+                }
+            } else {
+                single = expr;
+            }
         }
-      } else if (expr.contains("&&")) {
-        String[] parts = expr.split("&&");
-        for (String part : parts) {
-          andSet.add(part.trim());
+
+        this.orTags = orSet.isEmpty() ? null : orSet;
+        this.andTags = andSet.isEmpty() ? null : andSet;
+        this.singleTag = single;
+    }
+
+    @Override
+    protected boolean matchTag(String tag) {
+        String trimmedTag = tag.trim();
+
+        if (Objects.nonNull(singleTag)) {
+            return singleTag.equals(trimmedTag);
         }
-      } else {
-        single = expr;
-      }
+
+        if (Objects.nonNull(orTags)) {
+            return orTags.contains(trimmedTag);
+        }
+
+        if (Objects.nonNull(andTags)) {
+            return andTags.size() == 1 && andTags.contains(trimmedTag);
+        }
+
+        return false;
     }
 
-    this.orTags = orSet.isEmpty() ? null : orSet;
-    this.andTags = andSet.isEmpty() ? null : andSet;
-    this.singleTag = single;
-  }
-
-  @Override
-  protected boolean matchTag(String tag) {
-    String trimmedTag = tag.trim();
-
-    if (Objects.nonNull(singleTag)) {
-      return singleTag.equals(trimmedTag);
+    @Override
+    public String name() {
+        return "SimpleTagSelectorFilter";
     }
-
-    if (Objects.nonNull(orTags)) {
-      return orTags.contains(trimmedTag);
-    }
-
-    if (Objects.nonNull(andTags)) {
-      return andTags.size() == 1 && andTags.contains(trimmedTag);
-    }
-
-    return false;
-  }
-
-  @Override
-  public String name() {
-    return "SimpleTagSelectorFilter";
-  }
 }

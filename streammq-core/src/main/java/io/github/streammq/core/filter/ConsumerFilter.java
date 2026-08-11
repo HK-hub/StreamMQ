@@ -25,31 +25,31 @@ import io.github.streammq.core.message.Message;
  */
 public interface ConsumerFilter {
 
-  /**
-   * 判断消息是否应被消费。
-   *
-   * @param message 待过滤消息
-   * @return true 不过滤（继续消费），false 过滤（跳过，自动 ACK）
-   */
-  boolean accept(Message<?> message);
+    /**
+     * 判断消息是否应被消费。
+     *
+     * @param message 待过滤消息
+     * @return true 不过滤（继续消费），false 过滤（跳过，自动 ACK）
+     */
+    boolean accept(Message<?> message);
 
-  /**
-   * 过滤器名称。
-   *
-   * @return 名称
-   */
-  default String name() {
-    return getClass().getSimpleName();
-  }
+    /**
+     * 过滤器名称。
+     *
+     * @return 名称
+     */
+    default String name() {
+        return getClass().getSimpleName();
+    }
 
-  /**
-   * 过滤器执行顺序（升序，默认 0）。
-   *
-   * <p>selectorExpression 对应的过滤器默认 order = -1，优先执行。
-   *
-   * @return 顺序值
-   */
-  default int order() {
-    return 0;
-  }
+    /**
+     * 过滤器执行顺序（升序，默认 0）。
+     *
+     * <p>selectorExpression 对应的过滤器默认 order = -1，优先执行。
+     *
+     * @return 顺序值
+     */
+    default int order() {
+        return 0;
+    }
 }

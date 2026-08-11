@@ -3,10 +3,9 @@ package io.github.streammq.test;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.message.SendStatus;
+import java.util.List;
 import org.assertj.core.api.AbstractAssert;
 import org.assertj.core.api.Assertions;
-
-import java.util.List;
 
 /**
  * StreamMQ 断言工具类，提供针对消息相关对象的断言方法。
@@ -16,8 +15,7 @@ import java.util.List;
  */
 public final class StreamMQAssertions {
 
-    private StreamMQAssertions() {
-    }
+    private StreamMQAssertions() {}
 
     public static SendResultAssert assertThat(SendResult actual) {
         return new SendResultAssert(actual);
@@ -68,7 +66,9 @@ public final class StreamMQAssertions {
         public SendResultAssert hasSendStatus(SendStatus expectedStatus) {
             isNotNull();
             Assertions.assertThat(actual.getSendStatus())
-                    .as("Expected send status to be %s, but was %s", expectedStatus, actual.getSendStatus())
+                    .as(
+                            "Expected send status to be %s, but was %s",
+                            expectedStatus, actual.getSendStatus())
                     .isEqualTo(expectedStatus);
             return this;
         }
@@ -76,7 +76,9 @@ public final class StreamMQAssertions {
         public SendResultAssert hasErrorMessage(String expectedErrorMessage) {
             isNotNull();
             Assertions.assertThat(actual.getErrorMessage())
-                    .as("Expected error message to be %s, but was %s", expectedErrorMessage, actual.getErrorMessage())
+                    .as(
+                            "Expected error message to be %s, but was %s",
+                            expectedErrorMessage, actual.getErrorMessage())
                     .isEqualTo(expectedErrorMessage);
             return this;
         }
@@ -123,7 +125,9 @@ public final class StreamMQAssertions {
         public MessageAssert<T> hasShardingKey(String expectedShardingKey) {
             isNotNull();
             Assertions.assertThat(actual.getShardingKey())
-                    .as("Expected shardingKey to be %s, but was %s", expectedShardingKey, actual.getShardingKey())
+                    .as(
+                            "Expected shardingKey to be %s, but was %s",
+                            expectedShardingKey, actual.getShardingKey())
                     .isEqualTo(expectedShardingKey);
             return this;
         }
@@ -171,7 +175,9 @@ public final class StreamMQAssertions {
         public MessageAssert<T> hasReconsumeTimes(int expectedTimes) {
             isNotNull();
             Assertions.assertThat(actual.getReconsumeTimes())
-                    .as("Expected reconsume times to be %d, but was %d", expectedTimes, actual.getReconsumeTimes())
+                    .as(
+                            "Expected reconsume times to be %d, but was %d",
+                            expectedTimes, actual.getReconsumeTimes())
                     .isEqualTo(expectedTimes);
             return this;
         }

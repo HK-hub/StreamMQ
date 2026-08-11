@@ -43,78 +43,78 @@ import org.springframework.context.annotation.Configuration;
 @EnableConfigurationProperties(StreamMQTracingProperties.class)
 public class StreamMQTracingAutoConfiguration {
 
-  /**
-   * 默认 OpenTelemetry 实例（no-op）。
-   *
-   * <p>当用户未提供自定义 {@link OpenTelemetry} Bean 时使用 no-op 实例，追踪操作将优雅降级为空操作。 建议用户通过 OTel Spring Boot
-   * Starter 或 Agent 注入真实 SDK 实例以启用数据导出。
-   *
-   * @return OpenTelemetry 实例
-   */
-  @Bean
-  @ConditionalOnMissingBean
-  public OpenTelemetry streamMQOpenTelemetry(StreamMQTracingProperties properties) {
-    log.info(
-        "StreamMQ OpenTelemetry 追踪已启用，未检测到自定义 OpenTelemetry Bean，使用 no-op 默认实例；"
-            + "serviceName={}, otlpEndpoint={}",
-        properties.getServiceName(),
-        properties.getOtlpEndpoint());
-    return OpenTelemetry.noop();
-  }
+    /**
+     * 默认 OpenTelemetry 实例（no-op）。
+     *
+     * <p>当用户未提供自定义 {@link OpenTelemetry} Bean 时使用 no-op 实例，追踪操作将优雅降级为空操作。 建议用户通过 OTel Spring Boot
+     * Starter 或 Agent 注入真实 SDK 实例以启用数据导出。
+     *
+     * @return OpenTelemetry 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public OpenTelemetry streamMQOpenTelemetry(StreamMQTracingProperties properties) {
+        log.info(
+                "StreamMQ OpenTelemetry 追踪已启用，未检测到自定义 OpenTelemetry Bean，使用 no-op 默认实例；"
+                        + "serviceName={}, otlpEndpoint={}",
+                properties.getServiceName(),
+                properties.getOtlpEndpoint());
+        return OpenTelemetry.noop();
+    }
 
-  /**
-   * 追踪核心门面 Bean。
-   *
-   * @param openTelemetry OpenTelemetry 实例
-   * @return StreamMQTracing 实例
-   */
-  @Bean
-  @ConditionalOnMissingBean
-  public StreamMQTracing streamMQTracing(OpenTelemetry openTelemetry) {
-    return new StreamMQTracing(openTelemetry);
-  }
+    /**
+     * 追踪核心门面 Bean。
+     *
+     * @param openTelemetry OpenTelemetry 实例
+     * @return StreamMQTracing 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public StreamMQTracing streamMQTracing(OpenTelemetry openTelemetry) {
+        return new StreamMQTracing(openTelemetry);
+    }
 
-  /**
-   * 生产者追踪拦截器 Bean。
-   *
-   * <p>用户可通过提供同名 Bean 覆盖默认实现。
-   *
-   * @param tracing 追踪门面
-   * @return 拦截器实例
-   */
-  @Bean
-  @ConditionalOnMissingBean
-  public OpenTelemetryProducerInterceptor openTelemetryProducerInterceptor(
-      StreamMQTracing tracing) {
-    return new OpenTelemetryProducerInterceptor(tracing);
-  }
+    /**
+     * 生产者追踪拦截器 Bean。
+     *
+     * <p>用户可通过提供同名 Bean 覆盖默认实现。
+     *
+     * @param tracing 追踪门面
+     * @return 拦截器实例
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public OpenTelemetryProducerInterceptor openTelemetryProducerInterceptor(
+            StreamMQTracing tracing) {
+        return new OpenTelemetryProducerInterceptor(tracing);
+    }
 
-  /**
-   * 消费者追踪拦截器 Bean。
-   *
-   * <p>用户可通过提供同名 Bean 覆盖默认实现。
-   *
-   * @param tracing 追踪门面
-   * @return 拦截器实例
-   */
-  @Bean
-  @ConditionalOnMissingBean
-  public OpenTelemetryConsumerInterceptor openTelemetryConsumerInterceptor(
-      StreamMQTracing tracing) {
-    return new OpenTelemetryConsumerInterceptor(tracing);
-  }
+    /**
+     * 消费者追踪拦截器 Bean。
+     *
+     * <p>用户可通过提供同名 Bean 覆盖默认实现。
+     *
+     * @param tracing 追踪门面
+     * @return 拦截器实例
+     */
+    @Bean
+    @ConditionalOnMissingBean
+    public OpenTelemetryConsumerInterceptor openTelemetryConsumerInterceptor(
+            StreamMQTracing tracing) {
+        return new OpenTelemetryConsumerInterceptor(tracing);
+    }
 
-  /**
-   * 拓扑服务 Bean，当存在追踪查询服务与监听器容器时装配。
-   *
-   * @param traceService 追踪查询服务
-   * @param listenerContainer 监听器容器
-   * @return 拓扑服务实例
-   */
-  @Bean
-  @ConditionalOnBean({StreamMQTraceService.class, StreamMQListenerContainer.class})
-  public StreamMQTopologyService streamMQTopologyService(
-      StreamMQTraceService traceService, StreamMQListenerContainer listenerContainer) {
-    return new StreamMQTopologyService(traceService, listenerContainer);
-  }
+    /**
+     * 拓扑服务 Bean，当存在追踪查询服务与监听器容器时装配。
+     *
+     * @param traceService 追踪查询服务
+     * @param listenerContainer 监听器容器
+     * @return 拓扑服务实例
+     */
+    @Bean
+    @ConditionalOnBean({StreamMQTraceService.class, StreamMQListenerContainer.class})
+    public StreamMQTopologyService streamMQTopologyService(
+            StreamMQTraceService traceService, StreamMQListenerContainer listenerContainer) {
+        return new StreamMQTopologyService(traceService, listenerContainer);
+    }
 }

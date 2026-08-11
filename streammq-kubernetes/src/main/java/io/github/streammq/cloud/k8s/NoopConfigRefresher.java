@@ -19,29 +19,30 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class NoopConfigRefresher implements StreamMQConfigRefresher {
 
-  @Override
-  public void refreshRetryPolicy(int maxReconsumeTimes, long[] retryIntervals) {
-    log.debug(
-        "NoopConfigRefresher#refreshRetryPolicy called but no-op implemented "
-            + "(maxReconsumeTimes={}, retryIntervals length={})",
-        maxReconsumeTimes,
-        Objects.isNull(retryIntervals) ? 0 : retryIntervals.length);
-  }
+    @Override
+    public void refreshRetryPolicy(int maxReconsumeTimes, long[] retryIntervals) {
+        log.debug(
+                "NoopConfigRefresher#refreshRetryPolicy called but no-op implemented "
+                        + "(maxReconsumeTimes={}, retryIntervals length={})",
+                maxReconsumeTimes,
+                Objects.isNull(retryIntervals) ? 0 : retryIntervals.length);
+    }
 
-  @Override
-  public void refreshConsumerThreads(int min, int max) {
-    log.debug(
-        "NoopConfigRefresher#refreshConsumerThreads called but no-op implemented (min={}, max={})",
-        min,
-        max);
-  }
+    @Override
+    public void refreshConsumerThreads(int min, int max) {
+        log.debug(
+                "NoopConfigRefresher#refreshConsumerThreads called but no-op implemented (min={},"
+                        + " max={})",
+                min,
+                max);
+    }
 
-  @Override
-  public void refreshScanInterval(long retryScanMs, long delayScanMs) {
-    log.debug(
-        "NoopConfigRefresher#refreshScanInterval called but no-op implemented "
-            + "(retryScanMs={}, delayScanMs={})",
-        retryScanMs,
-        delayScanMs);
-  }
+    @Override
+    public void refreshScanInterval(long retryScanMs, long delayScanMs) {
+        log.debug(
+                "NoopConfigRefresher#refreshScanInterval called but no-op implemented "
+                        + "(retryScanMs={}, delayScanMs={})",
+                retryScanMs,
+                delayScanMs);
+    }
 }

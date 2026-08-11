@@ -23,95 +23,97 @@ import org.springframework.context.SmartLifecycle;
  */
 public class StreamMQSchedulerLifecycle implements SmartLifecycle {
 
-  private static final Logger LOG = LoggerFactory.getLogger(StreamMQSchedulerLifecycle.class);
+    private static final Logger LOG = LoggerFactory.getLogger(StreamMQSchedulerLifecycle.class);
 
-  /** 启动相位：高于 Listener 容器（{@code Integer.MAX_VALUE - 200}） */
-  public static final int PHASE = Integer.MAX_VALUE - 100;
+    /** 启动相位：高于 Listener 容器（{@code Integer.MAX_VALUE - 200}） */
+    public static final int PHASE = Integer.MAX_VALUE - 100;
 
-  private final List<StreamMQScheduler> schedulers;
-  private volatile boolean running = false;
+    private final List<StreamMQScheduler> schedulers;
+    private volatile boolean running = false;
 
-  /**
-   * 构造 Lifecycle。
-   *
-   * @param schedulers 调度器列表（按启动顺序：先注册者先启动）
-   */
-  public StreamMQSchedulerLifecycle(List<StreamMQScheduler> schedulers) {
-    this.schedulers = Objects.requireNonNull(schedulers, "schedulers");
-  }
-
-  @Override
-  public void start() {
-    if (running) {
-      return;
+    /**
+     * 构造 Lifecycle。
+     *
+     * @param schedulers 调度器列表（按启动顺序：先注册者先启动）
+     */
+    public StreamMQSchedulerLifecycle(List<StreamMQScheduler> schedulers) {
+        this.schedulers = Objects.requireNonNull(schedulers, "schedulers");
     }
-    LOG.info("Starting StreamMQ schedulers (phase={}, count={})", PHASE, schedulers.size());
-    int totalCount = schedulers.size();
-    int failedCount = 0;
-    for (StreamMQScheduler scheduler : schedulers) {
-      try {
-        scheduler.start();
-      } catch (RuntimeException ex) {
-        failedCount++;
-        LOG.error(
-            "Failed to start scheduler {}: {}",
-            scheduler.getClass().getSimpleName(),
-            ex.getMessage(),
-            ex);
-      }
-    }
-    if (totalCount == 0) {
-      LOG.info("No StreamMQ schedulers to start, setting running=true (no-op)");
-      running = true;
-    } else if (failedCount >= totalCount) {
-      LOG.error(
-          "All {} StreamMQ scheduler(s) failed to start, not setting running=true", totalCount);
-      // 全部失败时不设 running，后续 stop 不会执行（状态保持一致）
-    } else {
-      if (failedCount > 0) {
-        LOG.warn(
-            "StreamMQ schedulers started with {} failure(s) out of {}, some features may not work",
-            failedCount,
-            totalCount);
-      }
-      running = true;
-    }
-  }
 
-  @Override
-  public void stop() {
-    if (!running) {
-      return;
+    @Override
+    public void start() {
+        if (running) {
+            return;
+        }
+        LOG.info("Starting StreamMQ schedulers (phase={}, count={})", PHASE, schedulers.size());
+        int totalCount = schedulers.size();
+        int failedCount = 0;
+        for (StreamMQScheduler scheduler : schedulers) {
+            try {
+                scheduler.start();
+            } catch (RuntimeException ex) {
+                failedCount++;
+                LOG.error(
+                        "Failed to start scheduler {}: {}",
+                        scheduler.getClass().getSimpleName(),
+                        ex.getMessage(),
+                        ex);
+            }
+        }
+        if (totalCount == 0) {
+            LOG.info("No StreamMQ schedulers to start, setting running=true (no-op)");
+            running = true;
+        } else if (failedCount >= totalCount) {
+            LOG.error(
+                    "All {} StreamMQ scheduler(s) failed to start, not setting running=true",
+                    totalCount);
+            // 全部失败时不设 running，后续 stop 不会执行（状态保持一致）
+        } else {
+            if (failedCount > 0) {
+                LOG.warn(
+                        "StreamMQ schedulers started with {} failure(s) out of {}, some features"
+                                + " may not work",
+                        failedCount,
+                        totalCount);
+            }
+            running = true;
+        }
     }
-    LOG.info("Stopping StreamMQ schedulers");
-    // 反向停止
-    for (int i = schedulers.size() - 1; i >= 0; i--) {
-      StreamMQScheduler scheduler = schedulers.get(i);
-      try {
-        scheduler.stop();
-      } catch (RuntimeException ex) {
-        LOG.error(
-            "Failed to stop scheduler {}: {}",
-            scheduler.getClass().getSimpleName(),
-            ex.getMessage(),
-            ex);
-      }
+
+    @Override
+    public void stop() {
+        if (!running) {
+            return;
+        }
+        LOG.info("Stopping StreamMQ schedulers");
+        // 反向停止
+        for (int i = schedulers.size() - 1; i >= 0; i--) {
+            StreamMQScheduler scheduler = schedulers.get(i);
+            try {
+                scheduler.stop();
+            } catch (RuntimeException ex) {
+                LOG.error(
+                        "Failed to stop scheduler {}: {}",
+                        scheduler.getClass().getSimpleName(),
+                        ex.getMessage(),
+                        ex);
+            }
+        }
+        running = false;
     }
-    running = false;
-  }
 
-  @Override
-  public boolean isRunning() {
-    return running;
-  }
+    @Override
+    public boolean isRunning() {
+        return running;
+    }
 
-  @Override
-  public int getPhase() {
-    return PHASE;
-  }
+    @Override
+    public int getPhase() {
+        return PHASE;
+    }
 
-  @Override
-  public boolean isAutoStartup() {
-    return true;
-  }
+    @Override
+    public boolean isAutoStartup() {
+        return true;
+    }
 }

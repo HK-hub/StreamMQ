@@ -1,17 +1,16 @@
 package io.github.streammq.test;
 
-import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
+import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.message.Message;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 测试用消息监听器，用于验证消息消费行为。
@@ -39,8 +38,11 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
             receivedMessages.add(message);
         }
 
-        LOG.debug("Test listener received message: topic={}, keys={}, body={}",
-                message.getTopic(), message.getKeys(), message.getBody());
+        LOG.debug(
+                "Test listener received message: topic={}, keys={}, body={}",
+                message.getTopic(),
+                message.getKeys(),
+                message.getBody());
 
         if (latch != null) {
             latch.countDown();
@@ -121,12 +123,17 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
             latch.countDown();
         }
         if (!latch.await(timeoutMillis, TimeUnit.MILLISECONDS)) {
-            throw new AssertionError("Timeout waiting for " + expectedCount + " messages, received " + getReceivedCount());
+            throw new AssertionError(
+                    "Timeout waiting for "
+                            + expectedCount
+                            + " messages, received "
+                            + getReceivedCount());
         }
     }
 
     /**
      * 预设置 latch，用于在发送消息前初始化等待。
+     *
      * @param expectedCount 期望的消息数量
      */
     public void prepareAwait(int expectedCount) {
@@ -139,6 +146,7 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
 
     /**
      * 等待预设的 latch。
+     *
      * @param timeoutMillis 超时时间（毫秒）
      * @throws InterruptedException 如果等待被中断
      */
@@ -147,7 +155,8 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
             throw new IllegalStateException("prepareAwait must be called before waitForMessages");
         }
         if (!latch.await(timeoutMillis, TimeUnit.MILLISECONDS)) {
-            throw new AssertionError("Timeout waiting for messages, received " + getReceivedCount());
+            throw new AssertionError(
+                    "Timeout waiting for messages, received " + getReceivedCount());
         }
     }
 }

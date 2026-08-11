@@ -19,11 +19,11 @@ import org.springframework.stereotype.Component;
 @StreamMQConsumer(topic = "order-events", consumerGroup = "diagnostics-sample-consumer")
 public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> {
 
-  private static final Logger log = LoggerFactory.getLogger(OrderConsumer.class);
+    private static final Logger log = LoggerFactory.getLogger(OrderConsumer.class);
 
-  @Override
-  public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
-    log.info("Received order: keys={}, body={}", message.getKeys(), message.getBody());
-    return ConsumeAction.SUCCESS;
-  }
+    @Override
+    public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
+        log.info("Received order: keys={}, body={}", message.getKeys(), message.getBody());
+        return ConsumeAction.SUCCESS;
+    }
 }

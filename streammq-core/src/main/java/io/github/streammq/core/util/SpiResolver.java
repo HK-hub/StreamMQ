@@ -16,32 +16,32 @@ import java.util.Objects;
  */
 public final class SpiResolver {
 
-  private SpiResolver() {}
+    private SpiResolver() {}
 
-  /**
-   * 解析或实例化 SPI 实现。
-   *
-   * @param clazz 注解中声明的实现类；为 {@code null} 或等于 {@code spiType}（marker）时回退全局默认
-   * @param spiType SPI 接口类型（marker 比较基准）
-   * @param globalDefault 全局默认实例
-   * @param <T> SPI 类型
-   * @return 实例
-   */
-  public static <T> T resolveOrInstantiate(
-      Class<? extends T> clazz, Class<T> spiType, T globalDefault) {
-    if (Objects.isNull(clazz) || clazz == spiType) {
-      return globalDefault;
+    /**
+     * 解析或实例化 SPI 实现。
+     *
+     * @param clazz 注解中声明的实现类；为 {@code null} 或等于 {@code spiType}（marker）时回退全局默认
+     * @param spiType SPI 接口类型（marker 比较基准）
+     * @param globalDefault 全局默认实例
+     * @param <T> SPI 类型
+     * @return 实例
+     */
+    public static <T> T resolveOrInstantiate(
+            Class<? extends T> clazz, Class<T> spiType, T globalDefault) {
+        if (Objects.isNull(clazz) || clazz == spiType) {
+            return globalDefault;
+        }
+        try {
+            return clazz.getDeclaredConstructor().newInstance();
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalArgumentException(
+                    "Failed to instantiate "
+                            + clazz.getName()
+                            + " as "
+                            + spiType.getName()
+                            + " (requires public no-arg constructor)",
+                    e);
+        }
     }
-    try {
-      return clazz.getDeclaredConstructor().newInstance();
-    } catch (ReflectiveOperationException e) {
-      throw new IllegalArgumentException(
-          "Failed to instantiate "
-              + clazz.getName()
-              + " as "
-              + spiType.getName()
-              + " (requires public no-arg constructor)",
-          e);
-    }
-  }
 }

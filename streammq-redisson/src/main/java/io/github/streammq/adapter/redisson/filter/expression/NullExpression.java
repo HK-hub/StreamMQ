@@ -18,18 +18,18 @@ import io.github.streammq.core.util.StringUtils;
  */
 public class NullExpression implements Expression {
 
-  private final PropertyExpression property;
-  private final boolean isNull;
+    private final PropertyExpression property;
+    private final boolean isNull;
 
-  public NullExpression(PropertyExpression property, boolean isNull) {
-    this.property = property;
-    this.isNull = isNull;
-  }
+    public NullExpression(PropertyExpression property, boolean isNull) {
+        this.property = property;
+        this.isNull = isNull;
+    }
 
-  @Override
-  public boolean evaluate(Message<?> message) {
-    String value = property.getValue(message);
-    boolean actualIsNull = StringUtils.isEmpty(value);
-    return isNull == actualIsNull;
-  }
+    @Override
+    public boolean evaluate(Message<?> message) {
+        String value = property.getValue(message);
+        boolean actualIsNull = StringUtils.isEmpty(value);
+        return isNull == actualIsNull;
+    }
 }

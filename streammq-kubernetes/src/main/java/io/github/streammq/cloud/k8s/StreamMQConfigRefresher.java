@@ -21,34 +21,34 @@ package io.github.streammq.cloud.k8s;
  */
 public interface StreamMQConfigRefresher {
 
-  /**
-   * 刷新重试策略配置。
-   *
-   * <p>运行时调整最大重试次数与各次重试之间的等待间隔。 {@code retryIntervals} 的长度应与 {@code maxReconsumeTimes} 保持一致，
-   * 每个元素对应该次重试的等待毫秒数。
-   *
-   * @param maxReconsumeTimes 最大重试次数
-   * @param retryIntervals 各次重试间隔毫秒数组，长度应与 maxReconsumeTimes 一致
-   */
-  void refreshRetryPolicy(int maxReconsumeTimes, long[] retryIntervals);
+    /**
+     * 刷新重试策略配置。
+     *
+     * <p>运行时调整最大重试次数与各次重试之间的等待间隔。 {@code retryIntervals} 的长度应与 {@code maxReconsumeTimes} 保持一致，
+     * 每个元素对应该次重试的等待毫秒数。
+     *
+     * @param maxReconsumeTimes 最大重试次数
+     * @param retryIntervals 各次重试间隔毫秒数组，长度应与 maxReconsumeTimes 一致
+     */
+    void refreshRetryPolicy(int maxReconsumeTimes, long[] retryIntervals);
 
-  /**
-   * 刷新消费线程池大小范围。
-   *
-   * <p>动态调整消费线程池的最小与最大线程数。仅影响后续创建的消费线程， 不会中断当前正在执行的消息处理任务。
-   *
-   * @param min 最小消费线程数
-   * @param max 最大消费线程数
-   */
-  void refreshConsumerThreads(int min, int max);
+    /**
+     * 刷新消费线程池大小范围。
+     *
+     * <p>动态调整消费线程池的最小与最大线程数。仅影响后续创建的消费线程， 不会中断当前正在执行的消息处理任务。
+     *
+     * @param min 最小消费线程数
+     * @param max 最大消费线程数
+     */
+    void refreshConsumerThreads(int min, int max);
 
-  /**
-   * 刷新重试与延时消息扫描间隔。
-   *
-   * <p>调整后台扫描线程拉取重试消息与延时消息的频率。 不能运行时变更 backend type，扫描间隔变更不影响已分配的消息分片。
-   *
-   * @param retryScanMs 重试消息扫描间隔（毫秒）
-   * @param delayScanMs 延时消息扫描间隔（毫秒）
-   */
-  void refreshScanInterval(long retryScanMs, long delayScanMs);
+    /**
+     * 刷新重试与延时消息扫描间隔。
+     *
+     * <p>调整后台扫描线程拉取重试消息与延时消息的频率。 不能运行时变更 backend type，扫描间隔变更不影响已分配的消息分片。
+     *
+     * @param retryScanMs 重试消息扫描间隔（毫秒）
+     * @param delayScanMs 延时消息扫描间隔（毫秒）
+     */
+    void refreshScanInterval(long retryScanMs, long delayScanMs);
 }

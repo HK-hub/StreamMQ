@@ -17,14 +17,14 @@ package io.github.streammq.diagnostics.model;
  * @since 1.0.0
  */
 public enum MessageStatus {
-  /** 消费成功 */
-  SUCCESS,
-  /** 消费失败 */
-  FAILED,
-  /** 已进入死信队列 */
-  DLQ,
-  /** 处理中 */
-  PROCESSING,
-  /** 状态未知 */
-  UNKNOWN
+    /** 消费成功 */
+    SUCCESS,
+    /** 消费失败 */
+    FAILED,
+    /** 已进入死信队列 */
+    DLQ,
+    /** 处理中 */
+    PROCESSING,
+    /** 状态未知 */
+    UNKNOWN
 }

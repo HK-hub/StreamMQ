@@ -8,78 +8,85 @@ import org.junit.jupiter.api.Test;
 
 class SimpleTagSelectorFilterTest {
 
-  @Test
-  void testSingleTagMatch() {
-    SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("tag1");
+    @Test
+    void testSingleTagMatch() {
+        SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("tag1");
 
-    Message<String> message =
-        MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag1").build();
-    assertThat(filter.accept(message)).isTrue();
+        Message<String> message =
+                MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag1").build();
+        assertThat(filter.accept(message)).isTrue();
 
-    message = MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag2").build();
-    assertThat(filter.accept(message)).isFalse();
-  }
+        message =
+                MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag2").build();
+        assertThat(filter.accept(message)).isFalse();
+    }
 
-  @Test
-  void testOrExpression() {
-    SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("tag1 || tag2");
+    @Test
+    void testOrExpression() {
+        SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("tag1 || tag2");
 
-    Message<String> message =
-        MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag1").build();
-    assertThat(filter.accept(message)).isTrue();
+        Message<String> message =
+                MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag1").build();
+        assertThat(filter.accept(message)).isTrue();
 
-    message = MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag2").build();
-    assertThat(filter.accept(message)).isTrue();
+        message =
+                MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag2").build();
+        assertThat(filter.accept(message)).isTrue();
 
-    message = MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag3").build();
-    assertThat(filter.accept(message)).isFalse();
-  }
+        message =
+                MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag3").build();
+        assertThat(filter.accept(message)).isFalse();
+    }
 
-  @Test
-  void testAndExpression() {
-    SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("tag1 && tag2");
+    @Test
+    void testAndExpression() {
+        SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("tag1 && tag2");
 
-    Message<String> message =
-        MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag1").build();
-    assertThat(filter.accept(message)).isFalse();
+        Message<String> message =
+                MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag1").build();
+        assertThat(filter.accept(message)).isFalse();
 
-    message = MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag2").build();
-    assertThat(filter.accept(message)).isFalse();
-  }
+        message =
+                MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag2").build();
+        assertThat(filter.accept(message)).isFalse();
+    }
 
-  @Test
-  void testWildcard() {
-    SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("*");
+    @Test
+    void testWildcard() {
+        SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("*");
 
-    Message<String> message =
-        MessageBuilder.<String>withPayload("test").topic("test-topic").tag("any-tag").build();
-    assertThat(filter.accept(message)).isTrue();
+        Message<String> message =
+                MessageBuilder.<String>withPayload("test")
+                        .topic("test-topic")
+                        .tag("any-tag")
+                        .build();
+        assertThat(filter.accept(message)).isTrue();
 
-    message = MessageBuilder.<String>withPayload("test").topic("test-topic").tag("").build();
-    assertThat(filter.accept(message)).isTrue();
-  }
+        message = MessageBuilder.<String>withPayload("test").topic("test-topic").tag("").build();
+        assertThat(filter.accept(message)).isTrue();
+    }
 
-  @Test
-  void testEmptyExpression() {
-    SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("");
+    @Test
+    void testEmptyExpression() {
+        SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("");
 
-    Message<String> message =
-        MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag1").build();
-    assertThat(filter.accept(message)).isTrue();
+        Message<String> message =
+                MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag1").build();
+        assertThat(filter.accept(message)).isTrue();
 
-    filter = new SimpleTagSelectorFilter("   ");
-    assertThat(filter.accept(message)).isTrue();
-  }
+        filter = new SimpleTagSelectorFilter("   ");
+        assertThat(filter.accept(message)).isTrue();
+    }
 
-  @Test
-  void testOrder() {
-    SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("tag1");
-    assertThat(filter.order()).isEqualTo(-1);
-  }
+    @Test
+    void testOrder() {
+        SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("tag1");
+        assertThat(filter.order()).isEqualTo(-1);
+    }
 
-  @Test
-  void testName() {
-    SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("tag1");
-    assertThat(filter.name()).isEqualTo("SimpleTagSelectorFilter");
-  }
+    @Test
+    void testName() {
+        SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("tag1");
+        assertThat(filter.name()).isEqualTo("SimpleTagSelectorFilter");
+    }
 }

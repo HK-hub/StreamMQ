@@ -45,97 +45,95 @@ import org.springframework.test.context.TestPropertySource;
 @DisplayName("Interceptor 示例集成测试")
 class InterceptorSampleIT {
 
-  private static final String TEST_CONSUMER_GROUP = "test-interceptor-consumer-group";
+    private static final String TEST_CONSUMER_GROUP = "test-interceptor-consumer-group";
 
-  @Autowired private OrderProducer orderProducer;
+    @Autowired private OrderProducer orderProducer;
 
-  @Autowired private TestMessageCollector testCollector;
+    @Autowired private TestMessageCollector testCollector;
 
-  @BeforeEach
-  void clearReceivedMessages() {
-    testCollector.receivedMessages.clear();
-  }
-
-  @Test
-  @DisplayName("发送消息后 traceId 被生产者拦截器注入并被消费者接收")
-  void sendMessage_traceIdInjectedByInterceptor() {
-    String orderId = "IT-INTERCEPTOR-001";
-    String content = "interceptor-test-content-001";
-
-    SendResult result = orderProducer.sendOrder(orderId, content);
-
-    assertThat(result).isNotNull();
-    assertThat(result.isSuccess()).isTrue();
-
-    await()
-        .atMost(10, TimeUnit.SECONDS)
-        .untilAsserted(
-            () -> {
-              assertThat(testCollector.receivedMessages).hasSize(1);
-              Message<String> received = testCollector.receivedMessages.peek();
-              assertThat(received).isNotNull();
-              assertThat(received.getKeys()).isEqualTo(orderId);
-              assertThat(received.getBody()).isEqualTo(content);
-              assertThat(received.getTag()).isEqualTo("order");
-              assertThat(received.getUserProperties()).containsKey("traceId");
-              assertThat(received.getUserProperties().get("traceId")).isNotNull();
-              assertThat(received.getUserProperties().get("traceId")).isNotEmpty();
-            });
-  }
-
-  @Test
-  @DisplayName("发送消息后 spanId 被生产者拦截器注入")
-  void sendMessage_spanIdInjectedByInterceptor() {
-    String orderId = "IT-INTERCEPTOR-002";
-    String content = "interceptor-test-content-002";
-
-    SendResult result = orderProducer.sendOrder(orderId, content);
-
-    assertThat(result).isNotNull();
-    assertThat(result.isSuccess()).isTrue();
-
-    await()
-        .atMost(10, TimeUnit.SECONDS)
-        .untilAsserted(
-            () -> {
-              assertThat(testCollector.receivedMessages).hasSize(1);
-              Message<String> received = testCollector.receivedMessages.peek();
-              assertThat(received).isNotNull();
-              assertThat(received.getUserProperties()).containsEntry("spanId", "1");
-            });
-  }
-
-  @Test
-  @DisplayName("发送多条消息均被消费者接收")
-  void sendMultipleMessages_allReceived() {
-    String[] orderIds = {"IT-BATCH-001", "IT-BATCH-002", "IT-BATCH-003"};
-    String[] contents = {"batch-content-001", "batch-content-002", "batch-content-003"};
-
-    for (int i = 0; i < orderIds.length; i++) {
-      SendResult result = orderProducer.sendOrder(orderIds[i], contents[i]);
-      assertThat(result.isSuccess()).isTrue();
+    @BeforeEach
+    void clearReceivedMessages() {
+        testCollector.receivedMessages.clear();
     }
 
-    await()
-        .atMost(15, TimeUnit.SECONDS)
-        .untilAsserted(
-            () -> {
-              assertThat(testCollector.receivedMessages).hasSize(3);
-              assertThat(testCollector.receivedMessages)
-                  .extracting(Message::getKeys)
-                  .containsExactlyInAnyOrder(orderIds);
-            });
-  }
+    @Test
+    @DisplayName("发送消息后 traceId 被生产者拦截器注入并被消费者接收")
+    void sendMessage_traceIdInjectedByInterceptor() {
+        String orderId = "IT-INTERCEPTOR-001";
+        String content = "interceptor-test-content-001";
 
-  @StreamMQConsumer(topic = "interceptor-order-topic", consumerGroup = TEST_CONSUMER_GROUP)
-  static class TestMessageCollector implements StreamMessageConcurrentlyConsumer<String> {
+        SendResult result = orderProducer.sendOrder(orderId, content);
 
-    final ConcurrentLinkedQueue<Message<String>> receivedMessages = new ConcurrentLinkedQueue<>();
+        assertThat(result).isNotNull();
+        assertThat(result.isSuccess()).isTrue();
 
-    @Override
-    public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
-      receivedMessages.add(message);
-      return ConsumeAction.SUCCESS;
+        await().atMost(10, TimeUnit.SECONDS)
+                .untilAsserted(
+                        () -> {
+                            assertThat(testCollector.receivedMessages).hasSize(1);
+                            Message<String> received = testCollector.receivedMessages.peek();
+                            assertThat(received).isNotNull();
+                            assertThat(received.getKeys()).isEqualTo(orderId);
+                            assertThat(received.getBody()).isEqualTo(content);
+                            assertThat(received.getTag()).isEqualTo("order");
+                            assertThat(received.getUserProperties()).containsKey("traceId");
+                            assertThat(received.getUserProperties().get("traceId")).isNotNull();
+                            assertThat(received.getUserProperties().get("traceId")).isNotEmpty();
+                        });
     }
-  }
+
+    @Test
+    @DisplayName("发送消息后 spanId 被生产者拦截器注入")
+    void sendMessage_spanIdInjectedByInterceptor() {
+        String orderId = "IT-INTERCEPTOR-002";
+        String content = "interceptor-test-content-002";
+
+        SendResult result = orderProducer.sendOrder(orderId, content);
+
+        assertThat(result).isNotNull();
+        assertThat(result.isSuccess()).isTrue();
+
+        await().atMost(10, TimeUnit.SECONDS)
+                .untilAsserted(
+                        () -> {
+                            assertThat(testCollector.receivedMessages).hasSize(1);
+                            Message<String> received = testCollector.receivedMessages.peek();
+                            assertThat(received).isNotNull();
+                            assertThat(received.getUserProperties()).containsEntry("spanId", "1");
+                        });
+    }
+
+    @Test
+    @DisplayName("发送多条消息均被消费者接收")
+    void sendMultipleMessages_allReceived() {
+        String[] orderIds = {"IT-BATCH-001", "IT-BATCH-002", "IT-BATCH-003"};
+        String[] contents = {"batch-content-001", "batch-content-002", "batch-content-003"};
+
+        for (int i = 0; i < orderIds.length; i++) {
+            SendResult result = orderProducer.sendOrder(orderIds[i], contents[i]);
+            assertThat(result.isSuccess()).isTrue();
+        }
+
+        await().atMost(15, TimeUnit.SECONDS)
+                .untilAsserted(
+                        () -> {
+                            assertThat(testCollector.receivedMessages).hasSize(3);
+                            assertThat(testCollector.receivedMessages)
+                                    .extracting(Message::getKeys)
+                                    .containsExactlyInAnyOrder(orderIds);
+                        });
+    }
+
+    @StreamMQConsumer(topic = "interceptor-order-topic", consumerGroup = TEST_CONSUMER_GROUP)
+    static class TestMessageCollector implements StreamMessageConcurrentlyConsumer<String> {
+
+        final ConcurrentLinkedQueue<Message<String>> receivedMessages =
+                new ConcurrentLinkedQueue<>();
+
+        @Override
+        public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
+            receivedMessages.add(message);
+            return ConsumeAction.SUCCESS;
+        }
+    }
 }

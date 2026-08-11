@@ -41,31 +41,31 @@ import org.springframework.context.annotation.Import;
 @AutoConfiguration
 @ConditionalOnClass(StreamMQListenerContainer.class)
 @ConditionalOnProperty(
-    prefix = "streammq.cloud.k8s",
-    name = "enabled",
-    havingValue = "true",
-    matchIfMissing = true)
+        prefix = "streammq.cloud.k8s",
+        name = "enabled",
+        havingValue = "true",
+        matchIfMissing = true)
 @EnableConfigurationProperties(CloudK8sProperties.class)
 @Import({
-  StreamMQHealthIndicator.class,
-  StreamMQHealthController.class,
-  GracefulShutdownHandler.class,
-  HpaMetricsProvider.class,
-  StreamMQClusterController.class,
-  HpaAutoScaler.class,
-  ConfigMapConfigRefresher.class
+    StreamMQHealthIndicator.class,
+    StreamMQHealthController.class,
+    GracefulShutdownHandler.class,
+    HpaMetricsProvider.class,
+    StreamMQClusterController.class,
+    HpaAutoScaler.class,
+    ConfigMapConfigRefresher.class
 })
 public class CloudK8sAutoConfiguration {
 
-  /**
-   * Default no-op config refresher, registered only when no other {@link StreamMQConfigRefresher}
-   * bean is present.
-   *
-   * @return no-op config refresher instance
-   */
-  @Bean
-  @ConditionalOnMissingBean(StreamMQConfigRefresher.class)
-  public StreamMQConfigRefresher noopConfigRefresher() {
-    return new NoopConfigRefresher();
-  }
+    /**
+     * Default no-op config refresher, registered only when no other {@link StreamMQConfigRefresher}
+     * bean is present.
+     *
+     * @return no-op config refresher instance
+     */
+    @Bean
+    @ConditionalOnMissingBean(StreamMQConfigRefresher.class)
+    public StreamMQConfigRefresher noopConfigRefresher() {
+        return new NoopConfigRefresher();
+    }
 }

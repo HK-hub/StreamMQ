@@ -10,13 +10,13 @@ package io.github.streammq.core.exception;
  */
 public class StreamMQClientException extends StreamMQException {
 
-  private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 1L;
 
-  public StreamMQClientException(String message) {
-    super(message);
-  }
+    public StreamMQClientException(String message) {
+        super(message);
+    }
 
-  public StreamMQClientException(String message, Throwable cause) {
-    super(message, cause);
-  }
+    public StreamMQClientException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

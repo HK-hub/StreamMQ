@@ -26,9 +26,9 @@ import io.github.streammq.core.template.StreamMessageTemplate;
  * @see DefaultStreamMessageService
  */
 public interface StreamMessageService
-    extends BasicMessageService,
-        AsyncMessageService,
-        OnewayMessageService,
-        BatchMessageService,
-        DelayMessageService,
-        TransactionMessageService {}
+        extends BasicMessageService,
+                AsyncMessageService,
+                OnewayMessageService,
+                BatchMessageService,
+                DelayMessageService,
+                TransactionMessageService {}

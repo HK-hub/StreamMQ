@@ -34,15 +34,15 @@ import java.util.List;
  * @since 1.0.0
  */
 public record MessageProfile(
-    String messageId,
-    String topic,
-    String tag,
-    String keys,
-    long bornTimestamp,
-    long sendDurationMillis,
-    List<ConsumeAttempt> consumeHistory,
-    int retryCount,
-    MessageStatus finalStatus,
-    List<String> routePath,
-    String bodyType,
-    String bornHost) {}
+        String messageId,
+        String topic,
+        String tag,
+        String keys,
+        long bornTimestamp,
+        long sendDurationMillis,
+        List<ConsumeAttempt> consumeHistory,
+        int retryCount,
+        MessageStatus finalStatus,
+        List<String> routePath,
+        String bodyType,
+        String bornHost) {}

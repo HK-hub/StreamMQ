@@ -1,13 +1,12 @@
 package io.github.streammq.test;
 
+import java.io.Closeable;
+import java.io.IOException;
 import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
-
-import java.io.Closeable;
-import java.io.IOException;
 
 /**
  * 嵌入式 Redis 服务器，基于 Testcontainers。
@@ -26,9 +25,7 @@ public class EmbeddedRedisServer implements Closeable {
 
     private GenericContainer<?> container;
 
-    /**
-     * 启动嵌入式 Redis 服务器。
-     */
+    /** 启动嵌入式 Redis 服务器。 */
     public void start() {
         if (container != null && container.isRunning()) {
             LOG.warn("Redis container already running");
@@ -36,18 +33,17 @@ public class EmbeddedRedisServer implements Closeable {
         }
 
         LOG.info("Starting embedded Redis server...");
-        container = new GenericContainer<>(DockerImageName.parse(REDIS_IMAGE))
-                .withExposedPorts(6379)
-                .withEnv("REDIS_DISABLE_COMMANDS", "")
-                .withCommand("--appendonly", "yes");
+        container =
+                new GenericContainer<>(DockerImageName.parse(REDIS_IMAGE))
+                        .withExposedPorts(6379)
+                        .withEnv("REDIS_DISABLE_COMMANDS", "")
+                        .withCommand("--appendonly", "yes");
 
         container.start();
         LOG.info("Embedded Redis server started: {}:{}", getHost(), getPort());
     }
 
-    /**
-     * 停止嵌入式 Redis 服务器。
-     */
+    /** 停止嵌入式 Redis 服务器。 */
     public void stop() {
         if (container != null && container.isRunning()) {
             LOG.info("Stopping embedded Redis server...");

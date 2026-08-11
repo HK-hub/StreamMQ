@@ -27,58 +27,60 @@ import java.util.Objects;
  */
 public class JacksonJsonSerializer<T> implements MessageSerializer<T> {
 
-  /** 默认共享实例（不可变配置） */
-  private static final ObjectMapper DEFAULT_MAPPER =
-      JsonMapper.builder()
-          .addModule(new JavaTimeModule())
-          .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-          .build();
+    /** 默认共享实例（不可变配置） */
+    private static final ObjectMapper DEFAULT_MAPPER =
+            JsonMapper.builder()
+                    .addModule(new JavaTimeModule())
+                    .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
+                    .build();
 
-  private final ObjectMapper mapper;
+    private final ObjectMapper mapper;
 
-  /** 使用默认 {@link ObjectMapper} 构造。 */
-  public JacksonJsonSerializer() {
-    this(DEFAULT_MAPPER);
-  }
-
-  /**
-   * 使用自定义 {@link ObjectMapper} 构造（用于复用上层已配置的 mapper）。
-   *
-   * @param mapper Jackson ObjectMapper，不能为 null
-   */
-  public JacksonJsonSerializer(ObjectMapper mapper) {
-    this.mapper = Objects.requireNonNull(mapper, "mapper");
-  }
-
-  @Override
-  public byte[] serialize(T object, Class<T> type) throws SerializationException {
-    if (Objects.isNull(object)) {
-      return new byte[0];
+    /** 使用默认 {@link ObjectMapper} 构造。 */
+    public JacksonJsonSerializer() {
+        this(DEFAULT_MAPPER);
     }
-    try {
-      return mapper.writeValueAsBytes(object);
-    } catch (JsonProcessingException ex) {
-      throw new SerializationException(
-          "Jackson serialize failed for type " + (Objects.nonNull(type) ? type.getName() : "null"),
-          ex);
-    }
-  }
 
-  @Override
-  public <R> R deserialize(byte[] bytes, Class<R> type) throws SerializationException {
-    Objects.requireNonNull(type, "type");
-    if (Objects.isNull(bytes) || bytes.length == 0) {
-      return null;
+    /**
+     * 使用自定义 {@link ObjectMapper} 构造（用于复用上层已配置的 mapper）。
+     *
+     * @param mapper Jackson ObjectMapper，不能为 null
+     */
+    public JacksonJsonSerializer(ObjectMapper mapper) {
+        this.mapper = Objects.requireNonNull(mapper, "mapper");
     }
-    try {
-      return mapper.readValue(bytes, type);
-    } catch (Exception ex) {
-      throw new SerializationException("Jackson deserialize failed for type " + type.getName(), ex);
-    }
-  }
 
-  @Override
-  public String name() {
-    return "jackson-json";
-  }
+    @Override
+    public byte[] serialize(T object, Class<T> type) throws SerializationException {
+        if (Objects.isNull(object)) {
+            return new byte[0];
+        }
+        try {
+            return mapper.writeValueAsBytes(object);
+        } catch (JsonProcessingException ex) {
+            throw new SerializationException(
+                    "Jackson serialize failed for type "
+                            + (Objects.nonNull(type) ? type.getName() : "null"),
+                    ex);
+        }
+    }
+
+    @Override
+    public <R> R deserialize(byte[] bytes, Class<R> type) throws SerializationException {
+        Objects.requireNonNull(type, "type");
+        if (Objects.isNull(bytes) || bytes.length == 0) {
+            return null;
+        }
+        try {
+            return mapper.readValue(bytes, type);
+        } catch (Exception ex) {
+            throw new SerializationException(
+                    "Jackson deserialize failed for type " + type.getName(), ex);
+        }
+    }
+
+    @Override
+    public String name() {
+        return "jackson-json";
+    }
 }

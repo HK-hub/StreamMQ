@@ -29,33 +29,33 @@ import lombok.ToString;
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class StreamMQTopic extends CustomResource {
 
-  @JsonProperty("spec")
-  private StreamMQTopicSpec spec;
+    @JsonProperty("spec")
+    private StreamMQTopicSpec spec;
 
-  @JsonProperty("status")
-  private StreamMQTopicStatus status;
+    @JsonProperty("status")
+    private StreamMQTopicStatus status;
 
-  @Data
-  @JsonIgnoreProperties(ignoreUnknown = true)
-  @JsonInclude(JsonInclude.Include.NON_NULL)
-  public static class StreamMQTopicSpec {
-    private String clusterRef;
-    private Integer partitions = 8;
-    private Long maxLength = 1_000_000L;
-    private Integer retentionHours = 72;
-    private Integer replicas = 1;
-    private String compression;
-    private Boolean deduplicationEnabled = false;
-  }
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class StreamMQTopicSpec {
+        private String clusterRef;
+        private Integer partitions = 8;
+        private Long maxLength = 1_000_000L;
+        private Integer retentionHours = 72;
+        private Integer replicas = 1;
+        private String compression;
+        private Boolean deduplicationEnabled = false;
+    }
 
-  @Data
-  @JsonIgnoreProperties(ignoreUnknown = true)
-  @JsonInclude(JsonInclude.Include.NON_NULL)
-  public static class StreamMQTopicStatus {
-    private String phase = "Pending";
-    private Integer partitions = 0;
-    private Long currentSize = 0L;
-    private String lastUpdateTime;
-    private Long observedGeneration;
-  }
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class StreamMQTopicStatus {
+        private String phase = "Pending";
+        private Integer partitions = 0;
+        private Long currentSize = 0L;
+        private String lastUpdateTime;
+        private Long observedGeneration;
+    }
 }

@@ -17,10 +17,10 @@ package io.github.streammq.diagnostics.model;
  * @since 1.0.0
  */
 public record ConsumeAttempt(
-    String consumerGroup,
-    String consumerName,
-    long timestamp,
-    long durationMillis,
-    boolean success,
-    int reconsumeTimes,
-    String errorMessage) {}
+        String consumerGroup,
+        String consumerName,
+        long timestamp,
+        long durationMillis,
+        boolean success,
+        int reconsumeTimes,
+        String errorMessage) {}

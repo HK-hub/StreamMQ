@@ -29,17 +29,17 @@ import io.github.streammq.core.message.Message;
  */
 public interface DlqFailureStrategy {
 
-  /**
-   * 根据上下文决定 DLQ 消息失败后的处理动作。
-   *
-   * @param message 消费失败的死信消息
-   * @param context DLQ 失败上下文（含重试次数、原因等）
-   * @return 决策（永不返回 null；返回 null 时框架视为 {@link DlqFailureDecision#drop()}）
-   */
-  DlqFailureDecision decide(Message<?> message, DlqFailureContext context);
+    /**
+     * 根据上下文决定 DLQ 消息失败后的处理动作。
+     *
+     * @param message 消费失败的死信消息
+     * @param context DLQ 失败上下文（含重试次数、原因等）
+     * @return 决策（永不返回 null；返回 null 时框架视为 {@link DlqFailureDecision#drop()}）
+     */
+    DlqFailureDecision decide(Message<?> message, DlqFailureContext context);
 
-  /** 策略名称 */
-  default String name() {
-    return getClass().getSimpleName();
-  }
+    /** 策略名称 */
+    default String name() {
+        return getClass().getSimpleName();
+    }
 }

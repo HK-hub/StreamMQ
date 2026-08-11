@@ -22,31 +22,31 @@ import java.util.List;
  */
 public interface StreamMQTraceService {
 
-  /**
-   * 按消息 ID 查询追踪记录。
-   *
-   * @param messageId 消息 ID
-   * @return 匹配的追踪记录列表，按时间升序排列
-   */
-  List<TraceRecord> queryByMessageId(String messageId);
+    /**
+     * 按消息 ID 查询追踪记录。
+     *
+     * @param messageId 消息 ID
+     * @return 匹配的追踪记录列表，按时间升序排列
+     */
+    List<TraceRecord> queryByMessageId(String messageId);
 
-  /**
-   * 按主题和时间范围查询追踪记录。
-   *
-   * @param topic 主题
-   * @param startTimeMs 起始时间戳（毫秒，包含）
-   * @param endTimeMs 结束时间戳（毫秒，包含）
-   * @return 匹配的追踪记录列表，按时间升序排列
-   */
-  List<TraceRecord> queryByTopic(String topic, long startTimeMs, long endTimeMs);
+    /**
+     * 按主题和时间范围查询追踪记录。
+     *
+     * @param topic 主题
+     * @param startTimeMs 起始时间戳（毫秒，包含）
+     * @param endTimeMs 结束时间戳（毫秒，包含）
+     * @return 匹配的追踪记录列表，按时间升序排列
+     */
+    List<TraceRecord> queryByTopic(String topic, long startTimeMs, long endTimeMs);
 
-  /**
-   * 按消费组和时间范围查询追踪记录。
-   *
-   * @param group 消费者组名
-   * @param startTimeMs 起始时间戳（毫秒，包含）
-   * @param endTimeMs 结束时间戳（毫秒，包含）
-   * @return 匹配的追踪记录列表，按时间升序排列
-   */
-  List<TraceRecord> queryByGroup(String group, long startTimeMs, long endTimeMs);
+    /**
+     * 按消费组和时间范围查询追踪记录。
+     *
+     * @param group 消费者组名
+     * @param startTimeMs 起始时间戳（毫秒，包含）
+     * @param endTimeMs 结束时间戳（毫秒，包含）
+     * @return 匹配的追踪记录列表，按时间升序排列
+     */
+    List<TraceRecord> queryByGroup(String group, long startTimeMs, long endTimeMs);
 }

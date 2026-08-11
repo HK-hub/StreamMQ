@@ -26,53 +26,53 @@ import java.util.List;
  */
 public interface ConsumerInterceptorChain {
 
-  /**
-   * 添加单个拦截器（按 {@link ConsumerInterceptor#order()} 升序插入）。
-   *
-   * @param interceptor 拦截器实例
-   */
-  void addInterceptor(ConsumerInterceptor interceptor);
+    /**
+     * 添加单个拦截器（按 {@link ConsumerInterceptor#order()} 升序插入）。
+     *
+     * @param interceptor 拦截器实例
+     */
+    void addInterceptor(ConsumerInterceptor interceptor);
 
-  /**
-   * 批量添加拦截器。
-   *
-   * @param interceptors 拦截器集合
-   */
-  void addInterceptors(Collection<ConsumerInterceptor> interceptors);
+    /**
+     * 批量添加拦截器。
+     *
+     * @param interceptors 拦截器集合
+     */
+    void addInterceptors(Collection<ConsumerInterceptor> interceptors);
 
-  /**
-   * 执行 beforeConsume 拦截器链。
-   *
-   * @param message 待消费消息
-   * @param context 消费上下文
-   * @return true 全部通过，false 任一拦截器拒绝
-   */
-  boolean applyBefore(Message<?> message, ConsumeContext context);
+    /**
+     * 执行 beforeConsume 拦截器链。
+     *
+     * @param message 待消费消息
+     * @param context 消费上下文
+     * @return true 全部通过，false 任一拦截器拒绝
+     */
+    boolean applyBefore(Message<?> message, ConsumeContext context);
 
-  /**
-   * 执行 afterConsume 拦截器链。
-   *
-   * @param message 已消费消息
-   * @param action 消费动作
-   * @param context 消费上下文
-   */
-  void applyAfter(Message<?> message, ConsumeAction action, ConsumeContext context);
+    /**
+     * 执行 afterConsume 拦截器链。
+     *
+     * @param message 已消费消息
+     * @param action 消费动作
+     * @param context 消费上下文
+     */
+    void applyAfter(Message<?> message, ConsumeAction action, ConsumeContext context);
 
-  /**
-   * 通知所有拦截器发生异常。
-   *
-   * @param message 消息
-   * @param ex 异常
-   * @param timing 触发时机（BEFORE/EXECUTING/AFTER）
-   * @param context 消费上下文
-   */
-  void notifyException(
-      Message<?> message, Exception ex, InvokeTiming timing, ConsumeContext context);
+    /**
+     * 通知所有拦截器发生异常。
+     *
+     * @param message 消息
+     * @param ex 异常
+     * @param timing 触发时机（BEFORE/EXECUTING/AFTER）
+     * @param context 消费上下文
+     */
+    void notifyException(
+            Message<?> message, Exception ex, InvokeTiming timing, ConsumeContext context);
 
-  /**
-   * 返回当前已注册的拦截器列表（按 order 升序）。
-   *
-   * @return 拦截器列表
-   */
-  List<ConsumerInterceptor> getInterceptors();
+    /**
+     * 返回当前已注册的拦截器列表（按 order 升序）。
+     *
+     * @return 拦截器列表
+     */
+    List<ConsumerInterceptor> getInterceptors();
 }

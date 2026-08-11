@@ -30,276 +30,285 @@ import org.redisson.api.RedissonClient;
 @DisplayName("RedisTraceCollector Redis 追踪收集器测试")
 class RedisTraceCollectorTest {
 
-  private RedissonClient redisson;
-  private RStream<String, String> stream;
-  private RedisTraceCollector collector;
+    private RedissonClient redisson;
+    private RStream<String, String> stream;
+    private RedisTraceCollector collector;
 
-  @BeforeEach
-  @SuppressWarnings("unchecked")
-  void setUp() {
-    redisson = mock(RedissonClient.class);
-    stream = mock(RStream.class);
-    doReturn(stream).when(redisson).getStream(anyString());
-    collector = new RedisTraceCollector(redisson, "ns");
-  }
+    @BeforeEach
+    @SuppressWarnings("unchecked")
+    void setUp() {
+        redisson = mock(RedissonClient.class);
+        stream = mock(RStream.class);
+        doReturn(stream).when(redisson).getStream(anyString());
+        collector = new RedisTraceCollector(redisson, "ns");
+    }
 
-  @Test
-  @DisplayName("isEnabled 返回 true")
-  void isEnabled() {
-    assertThat(collector.isEnabled()).isTrue();
-  }
+    @Test
+    @DisplayName("isEnabled 返回 true")
+    void isEnabled() {
+        assertThat(collector.isEnabled()).isTrue();
+    }
 
-  @Test
-  @DisplayName("name 返回 redis")
-  void name() {
-    assertThat(collector.name()).isEqualTo("redis");
-  }
+    @Test
+    @DisplayName("name 返回 redis")
+    void name() {
+        assertThat(collector.name()).isEqualTo("redis");
+    }
 
-  @Test
-  @DisplayName("recordSend 成功事件写入 trace Stream")
-  void recordSendSuccess() {
-    TraceCollector.SendTraceContext ctx =
-        new TraceCollector.SendTraceContext(
-            "topic-1",
-            "tag-1",
-            new MessageId("1-0"),
-            "pg",
-            System.currentTimeMillis(),
-            true,
-            12L,
-            "trace-1",
-            new HashMap<>());
+    @Test
+    @DisplayName("recordSend 成功事件写入 trace Stream")
+    void recordSendSuccess() {
+        TraceCollector.SendTraceContext ctx =
+                new TraceCollector.SendTraceContext(
+                        "topic-1",
+                        "tag-1",
+                        new MessageId("1-0"),
+                        "pg",
+                        System.currentTimeMillis(),
+                        true,
+                        12L,
+                        "trace-1",
+                        new HashMap<>());
 
-    collector.recordSend(ctx);
+        collector.recordSend(ctx);
 
-    verify(redisson).getStream(contains(":trace:"));
-    verify(stream, times(1)).add(any());
-  }
+        verify(redisson).getStream(contains(":trace:"));
+        verify(stream, times(1)).add(any());
+    }
 
-  @Test
-  @DisplayName("recordSend 失败事件写入 trace Stream")
-  void recordSendFailure() {
-    TraceCollector.SendTraceContext ctx =
-        new TraceCollector.SendTraceContext(
-            "topic-1",
-            null,
-            new MessageId("2-0"),
-            "pg",
-            System.currentTimeMillis(),
-            false,
-            30L,
-            "trace-2",
-            new HashMap<>());
+    @Test
+    @DisplayName("recordSend 失败事件写入 trace Stream")
+    void recordSendFailure() {
+        TraceCollector.SendTraceContext ctx =
+                new TraceCollector.SendTraceContext(
+                        "topic-1",
+                        null,
+                        new MessageId("2-0"),
+                        "pg",
+                        System.currentTimeMillis(),
+                        false,
+                        30L,
+                        "trace-2",
+                        new HashMap<>());
 
-    collector.recordSend(ctx);
+        collector.recordSend(ctx);
 
-    verify(stream, times(1)).add(any());
-  }
+        verify(stream, times(1)).add(any());
+    }
 
-  @Test
-  @DisplayName("recordSend 带 attributes 时写入 trace Stream")
-  void recordSendWithAttributes() {
-    HashMap<String, String> attrs = new HashMap<>();
-    attrs.put("region", "us-east-1");
-    TraceCollector.SendTraceContext ctx =
-        new TraceCollector.SendTraceContext(
-            "topic-1",
-            "tag-1",
-            new MessageId("3-0"),
-            "pg",
-            System.currentTimeMillis(),
-            true,
-            5L,
-            "trace-3",
-            attrs);
+    @Test
+    @DisplayName("recordSend 带 attributes 时写入 trace Stream")
+    void recordSendWithAttributes() {
+        HashMap<String, String> attrs = new HashMap<>();
+        attrs.put("region", "us-east-1");
+        TraceCollector.SendTraceContext ctx =
+                new TraceCollector.SendTraceContext(
+                        "topic-1",
+                        "tag-1",
+                        new MessageId("3-0"),
+                        "pg",
+                        System.currentTimeMillis(),
+                        true,
+                        5L,
+                        "trace-3",
+                        attrs);
 
-    collector.recordSend(ctx);
+        collector.recordSend(ctx);
 
-    verify(stream, times(1)).add(any());
-  }
+        verify(stream, times(1)).add(any());
+    }
 
-  @Test
-  @DisplayName("recordSend null 入参不抛异常且不写入 Stream")
-  void recordSendNull() {
-    collector.recordSend(null);
+    @Test
+    @DisplayName("recordSend null 入参不抛异常且不写入 Stream")
+    void recordSendNull() {
+        collector.recordSend(null);
 
-    verify(stream, never()).add(any());
-  }
+        verify(stream, never()).add(any());
+    }
 
-  @Test
-  @DisplayName("recordSend messageId 为 null 时不抛异常")
-  void recordSendNullMessageId() {
-    TraceCollector.SendTraceContext ctx =
-        new TraceCollector.SendTraceContext(
-            "topic-1",
-            "tag-1",
-            null,
-            "pg",
-            System.currentTimeMillis(),
-            true,
-            10L,
-            "trace-1",
-            new HashMap<>());
+    @Test
+    @DisplayName("recordSend messageId 为 null 时不抛异常")
+    void recordSendNullMessageId() {
+        TraceCollector.SendTraceContext ctx =
+                new TraceCollector.SendTraceContext(
+                        "topic-1",
+                        "tag-1",
+                        null,
+                        "pg",
+                        System.currentTimeMillis(),
+                        true,
+                        10L,
+                        "trace-1",
+                        new HashMap<>());
 
-    collector.recordSend(ctx);
+        collector.recordSend(ctx);
 
-    verify(stream, times(1)).add(any());
-  }
+        verify(stream, times(1)).add(any());
+    }
 
-  @Test
-  @DisplayName("recordConsume 成功事件写入 trace Stream")
-  void recordConsumeSuccess() {
-    TraceCollector.ConsumeTraceContext ctx =
-        new TraceCollector.ConsumeTraceContext(
-            "topic-1",
-            "tag-1",
-            new MessageId("1-0"),
-            "cg",
-            "c1",
-            0,
-            true,
-            5L,
-            "trace-1",
-            new HashMap<>());
+    @Test
+    @DisplayName("recordConsume 成功事件写入 trace Stream")
+    void recordConsumeSuccess() {
+        TraceCollector.ConsumeTraceContext ctx =
+                new TraceCollector.ConsumeTraceContext(
+                        "topic-1",
+                        "tag-1",
+                        new MessageId("1-0"),
+                        "cg",
+                        "c1",
+                        0,
+                        true,
+                        5L,
+                        "trace-1",
+                        new HashMap<>());
 
-    collector.recordConsume(ctx);
+        collector.recordConsume(ctx);
 
-    verify(redisson).getStream(contains(":trace:"));
-    verify(stream, times(1)).add(any());
-  }
+        verify(redisson).getStream(contains(":trace:"));
+        verify(stream, times(1)).add(any());
+    }
 
-  @Test
-  @DisplayName("recordConsume 失败事件写入 trace Stream")
-  void recordConsumeFailure() {
-    TraceCollector.ConsumeTraceContext ctx =
-        new TraceCollector.ConsumeTraceContext(
-            "topic-1",
-            null,
-            new MessageId("2-0"),
-            "cg",
-            "c2",
-            3,
-            false,
-            50L,
-            "trace-2",
-            new HashMap<>());
+    @Test
+    @DisplayName("recordConsume 失败事件写入 trace Stream")
+    void recordConsumeFailure() {
+        TraceCollector.ConsumeTraceContext ctx =
+                new TraceCollector.ConsumeTraceContext(
+                        "topic-1",
+                        null,
+                        new MessageId("2-0"),
+                        "cg",
+                        "c2",
+                        3,
+                        false,
+                        50L,
+                        "trace-2",
+                        new HashMap<>());
 
-    collector.recordConsume(ctx);
+        collector.recordConsume(ctx);
 
-    verify(stream, times(1)).add(any());
-  }
+        verify(stream, times(1)).add(any());
+    }
 
-  @Test
-  @DisplayName("recordConsume null 入参不抛异常且不写入 Stream")
-  void recordConsumeNull() {
-    collector.recordConsume(null);
+    @Test
+    @DisplayName("recordConsume null 入参不抛异常且不写入 Stream")
+    void recordConsumeNull() {
+        collector.recordConsume(null);
 
-    verify(stream, never()).add(any());
-  }
+        verify(stream, never()).add(any());
+    }
 
-  @Test
-  @DisplayName("recordConsume messageId 为 null 时不抛异常")
-  void recordConsumeNullMessageId() {
-    TraceCollector.ConsumeTraceContext ctx =
-        new TraceCollector.ConsumeTraceContext(
-            "topic-1", "tag-1", null, "cg", "c1", 0, true, 5L, "trace-1", new HashMap<>());
+    @Test
+    @DisplayName("recordConsume messageId 为 null 时不抛异常")
+    void recordConsumeNullMessageId() {
+        TraceCollector.ConsumeTraceContext ctx =
+                new TraceCollector.ConsumeTraceContext(
+                        "topic-1",
+                        "tag-1",
+                        null,
+                        "cg",
+                        "c1",
+                        0,
+                        true,
+                        5L,
+                        "trace-1",
+                        new HashMap<>());
 
-    collector.recordConsume(ctx);
+        collector.recordConsume(ctx);
 
-    verify(stream, times(1)).add(any());
-  }
+        verify(stream, times(1)).add(any());
+    }
 
-  @Test
-  @DisplayName("recordSend Stream 写入异常时不传播")
-  void recordSendToleratesStreamException() {
-    doThrow(new RuntimeException("redis down")).when(stream).add(any());
+    @Test
+    @DisplayName("recordSend Stream 写入异常时不传播")
+    void recordSendToleratesStreamException() {
+        doThrow(new RuntimeException("redis down")).when(stream).add(any());
 
-    TraceCollector.SendTraceContext ctx =
-        new TraceCollector.SendTraceContext(
-            "topic-1",
-            "tag-1",
-            new MessageId("1-0"),
-            "pg",
-            System.currentTimeMillis(),
-            true,
-            10L,
-            "trace-1",
-            new HashMap<>());
+        TraceCollector.SendTraceContext ctx =
+                new TraceCollector.SendTraceContext(
+                        "topic-1",
+                        "tag-1",
+                        new MessageId("1-0"),
+                        "pg",
+                        System.currentTimeMillis(),
+                        true,
+                        10L,
+                        "trace-1",
+                        new HashMap<>());
 
-    // 不应抛异常
-    collector.recordSend(ctx);
-  }
+        // 不应抛异常
+        collector.recordSend(ctx);
+    }
 
-  @Test
-  @DisplayName("recordConsume Stream 写入异常时不传播")
-  void recordConsumeToleratesStreamException() {
-    doThrow(new RuntimeException("redis down")).when(stream).add(any());
+    @Test
+    @DisplayName("recordConsume Stream 写入异常时不传播")
+    void recordConsumeToleratesStreamException() {
+        doThrow(new RuntimeException("redis down")).when(stream).add(any());
 
-    TraceCollector.ConsumeTraceContext ctx =
-        new TraceCollector.ConsumeTraceContext(
-            "topic-1",
-            "tag-1",
-            new MessageId("1-0"),
-            "cg",
-            "c1",
-            0,
-            true,
-            5L,
-            "trace-1",
-            new HashMap<>());
+        TraceCollector.ConsumeTraceContext ctx =
+                new TraceCollector.ConsumeTraceContext(
+                        "topic-1",
+                        "tag-1",
+                        new MessageId("1-0"),
+                        "cg",
+                        "c1",
+                        0,
+                        true,
+                        5L,
+                        "trace-1",
+                        new HashMap<>());
 
-    // 不应抛异常
-    collector.recordConsume(ctx);
-  }
+        // 不应抛异常
+        collector.recordConsume(ctx);
+    }
 
-  @Test
-  @DisplayName("namespace 为 null 时正常工作")
-  void nullNamespace() {
-    RedisTraceCollector nullNsCollector = new RedisTraceCollector(redisson, null);
+    @Test
+    @DisplayName("namespace 为 null 时正常工作")
+    void nullNamespace() {
+        RedisTraceCollector nullNsCollector = new RedisTraceCollector(redisson, null);
 
-    TraceCollector.SendTraceContext ctx =
-        new TraceCollector.SendTraceContext(
-            "topic-1",
-            "tag-1",
-            new MessageId("1-0"),
-            "pg",
-            System.currentTimeMillis(),
-            true,
-            10L,
-            "trace-1",
-            new HashMap<>());
+        TraceCollector.SendTraceContext ctx =
+                new TraceCollector.SendTraceContext(
+                        "topic-1",
+                        "tag-1",
+                        new MessageId("1-0"),
+                        "pg",
+                        System.currentTimeMillis(),
+                        true,
+                        10L,
+                        "trace-1",
+                        new HashMap<>());
 
-    nullNsCollector.recordSend(ctx);
+        nullNsCollector.recordSend(ctx);
 
-    verify(redisson).getStream(contains(":trace:"));
-    verify(stream, times(1)).add(any());
-  }
+        verify(redisson).getStream(contains(":trace:"));
+        verify(stream, times(1)).add(any());
+    }
 
-  @Test
-  @DisplayName("构造 redisson 为 null 抛出 NullPointerException")
-  void constructNullRedisson() {
-    assertThatThrownBy(() -> new RedisTraceCollector(null, "ns"))
-        .isInstanceOf(NullPointerException.class)
-        .hasMessageContaining("redisson");
-  }
+    @Test
+    @DisplayName("构造 redisson 为 null 抛出 NullPointerException")
+    void constructNullRedisson() {
+        assertThatThrownBy(() -> new RedisTraceCollector(null, "ns"))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("redisson");
+    }
 
-  @Test
-  @DisplayName("trace Key 包含命名空间段")
-  void traceKeyContainsNamespace() {
-    TraceCollector.SendTraceContext ctx =
-        new TraceCollector.SendTraceContext(
-            "topic-1",
-            "tag-1",
-            new MessageId("1-0"),
-            "pg",
-            System.currentTimeMillis(),
-            true,
-            10L,
-            "trace-1",
-            new HashMap<>());
+    @Test
+    @DisplayName("trace Key 包含命名空间段")
+    void traceKeyContainsNamespace() {
+        TraceCollector.SendTraceContext ctx =
+                new TraceCollector.SendTraceContext(
+                        "topic-1",
+                        "tag-1",
+                        new MessageId("1-0"),
+                        "pg",
+                        System.currentTimeMillis(),
+                        true,
+                        10L,
+                        "trace-1",
+                        new HashMap<>());
 
-    collector.recordSend(ctx);
+        collector.recordSend(ctx);
 
-    verify(redisson).getStream(contains("streammq:ns:trace:"));
-  }
+        verify(redisson).getStream(contains("streammq:ns:trace:"));
+    }
 }

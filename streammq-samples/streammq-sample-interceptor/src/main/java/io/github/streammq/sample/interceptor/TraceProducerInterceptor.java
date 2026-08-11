@@ -19,30 +19,32 @@ import org.springframework.stereotype.Component;
 @Component
 public class TraceProducerInterceptor implements ProducerInterceptor {
 
-  private static final Logger log = LoggerFactory.getLogger(TraceProducerInterceptor.class);
+    private static final Logger log = LoggerFactory.getLogger(TraceProducerInterceptor.class);
 
-  @Override
-  public boolean beforeSend(Message<?> message) {
-    String traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-    message.putUserProperty("traceId", traceId);
-    message.putUserProperty("spanId", "1");
-    log.debug(
-        "Trace producer interceptor injected: traceId={}, topic={}", traceId, message.getTopic());
-    return true;
-  }
+    @Override
+    public boolean beforeSend(Message<?> message) {
+        String traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        message.putUserProperty("traceId", traceId);
+        message.putUserProperty("spanId", "1");
+        log.debug(
+                "Trace producer interceptor injected: traceId={}, topic={}",
+                traceId,
+                message.getTopic());
+        return true;
+    }
 
-  @Override
-  public void afterSend(Message<?> message, SendResult result) {
-    String traceId = message.getUserProperties().get("traceId");
-    log.info(
-        "Trace producer interceptor afterSend: traceId={}, topic={}, success={}",
-        traceId,
-        message.getTopic(),
-        result.isSuccess());
-  }
+    @Override
+    public void afterSend(Message<?> message, SendResult result) {
+        String traceId = message.getUserProperties().get("traceId");
+        log.info(
+                "Trace producer interceptor afterSend: traceId={}, topic={}, success={}",
+                traceId,
+                message.getTopic(),
+                result.isSuccess());
+    }
 
-  @Override
-  public int order() {
-    return 1;
-  }
+    @Override
+    public int order() {
+        return 1;
+    }
 }

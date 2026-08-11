@@ -21,30 +21,30 @@ import java.time.Duration;
  */
 public interface RetryPolicy {
 
-  /**
-   * 返回下一次重试的延迟时长。
-   *
-   * @param reconsumeTimes 已重试次数（首次失败为 0）
-   * @param message 失败消息
-   * @return 延迟时长，{@code Duration.ZERO} 表示立即重试，{@code null} 表示不再重试
-   */
-  Duration nextRetryDelay(int reconsumeTimes, Message<?> message);
+    /**
+     * 返回下一次重试的延迟时长。
+     *
+     * @param reconsumeTimes 已重试次数（首次失败为 0）
+     * @param message 失败消息
+     * @return 延迟时长，{@code Duration.ZERO} 表示立即重试，{@code null} 表示不再重试
+     */
+    Duration nextRetryDelay(int reconsumeTimes, Message<?> message);
 
-  /**
-   * 是否应停止重试（消息将进入 DLQ）。 默认实现：{@code reconsumeTimes >= maxReconsumeTimes}，用户可自定义（如根据消息类型/属性决策）。
-   *
-   * @param reconsumeTimes 已重试次数
-   * @param message 失败消息
-   * @return true 停止重试（进入 DLQ）
-   */
-  boolean shouldStopRetry(int reconsumeTimes, Message<?> message);
+    /**
+     * 是否应停止重试（消息将进入 DLQ）。 默认实现：{@code reconsumeTimes >= maxReconsumeTimes}，用户可自定义（如根据消息类型/属性决策）。
+     *
+     * @param reconsumeTimes 已重试次数
+     * @param message 失败消息
+     * @return true 停止重试（进入 DLQ）
+     */
+    boolean shouldStopRetry(int reconsumeTimes, Message<?> message);
 
-  /**
-   * 策略名称。
-   *
-   * @return 名称
-   */
-  default String name() {
-    return getClass().getSimpleName();
-  }
+    /**
+     * 策略名称。
+     *
+     * @return 名称
+     */
+    default String name() {
+        return getClass().getSimpleName();
+    }
 }

@@ -15,10 +15,10 @@ package io.github.streammq.diagnostics.model;
  * @since 1.0.0
  */
 public enum Severity {
-  /** 信息级别 */
-  INFO,
-  /** 警告级别 */
-  WARNING,
-  /** 严重级别 */
-  CRITICAL
+    /** 信息级别 */
+    INFO,
+    /** 警告级别 */
+    WARNING,
+    /** 严重级别 */
+    CRITICAL
 }

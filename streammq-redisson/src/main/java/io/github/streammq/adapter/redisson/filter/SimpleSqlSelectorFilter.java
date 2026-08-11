@@ -29,35 +29,35 @@ import org.slf4j.LoggerFactory;
  */
 public class SimpleSqlSelectorFilter extends SqlSelectorFilter {
 
-  private static final Logger LOG = LoggerFactory.getLogger(SimpleSqlSelectorFilter.class);
+    private static final Logger LOG = LoggerFactory.getLogger(SimpleSqlSelectorFilter.class);
 
-  private final Expression expression;
+    private final Expression expression;
 
-  public SimpleSqlSelectorFilter(String selectorExpression) {
-    super(selectorExpression);
-    this.expression = SelectorParser.build(selectorExpression);
-    if (Objects.isNull(expression) && !WILD_CARD.equals(selectorExpression)) {
-      LOG.warn(
-          "Failed to parse SQL92 expression: {}, filter will accept all messages",
-          selectorExpression);
+    public SimpleSqlSelectorFilter(String selectorExpression) {
+        super(selectorExpression);
+        this.expression = SelectorParser.build(selectorExpression);
+        if (Objects.isNull(expression) && !WILD_CARD.equals(selectorExpression)) {
+            LOG.warn(
+                    "Failed to parse SQL92 expression: {}, filter will accept all messages",
+                    selectorExpression);
+        }
     }
-  }
 
-  @Override
-  protected boolean evaluate(Message<?> message) {
-    if (Objects.isNull(expression)) {
-      return true;
+    @Override
+    protected boolean evaluate(Message<?> message) {
+        if (Objects.isNull(expression)) {
+            return true;
+        }
+        try {
+            return expression.evaluate(message);
+        } catch (Exception e) {
+            LOG.warn("Failed to evaluate SQL92 expression: {}", selectorExpression, e);
+            return false;
+        }
     }
-    try {
-      return expression.evaluate(message);
-    } catch (Exception e) {
-      LOG.warn("Failed to evaluate SQL92 expression: {}", selectorExpression, e);
-      return false;
-    }
-  }
 
-  @Override
-  public String name() {
-    return "SimpleSqlSelectorFilter";
-  }
+    @Override
+    public String name() {
+        return "SimpleSqlSelectorFilter";
+    }
 }

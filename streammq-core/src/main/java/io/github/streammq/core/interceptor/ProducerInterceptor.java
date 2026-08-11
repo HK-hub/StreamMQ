@@ -23,48 +23,48 @@ import io.github.streammq.core.message.SendResult;
  */
 public interface ProducerInterceptor {
 
-  /**
-   * 发送前回调。
-   *
-   * @param message 待发送消息（可修改）
-   * @return true 继续发送（含后续拦截器），false 中止发送（返回 SEND_FAILED）
-   */
-  boolean beforeSend(Message<?> message);
+    /**
+     * 发送前回调。
+     *
+     * @param message 待发送消息（可修改）
+     * @return true 继续发送（含后续拦截器），false 中止发送（返回 SEND_FAILED）
+     */
+    boolean beforeSend(Message<?> message);
 
-  /**
-   * 发送后回调。
-   *
-   * @param message 已发送消息
-   * @param result 发送结果
-   */
-  void afterSend(Message<?> message, SendResult result);
+    /**
+     * 发送后回调。
+     *
+     * @param message 已发送消息
+     * @param result 发送结果
+     */
+    void afterSend(Message<?> message, SendResult result);
 
-  /**
-   * 发送过程中发生异常时调用。
-   *
-   * @param message 消息
-   * @param exception 异常
-   * @param timing 触发时机（BEFORE/EXECUTING/AFTER）
-   */
-  default void onException(Message<?> message, Exception exception, InvokeTiming timing) {
-    // 默认空实现，子类按需覆盖
-  }
+    /**
+     * 发送过程中发生异常时调用。
+     *
+     * @param message 消息
+     * @param exception 异常
+     * @param timing 触发时机（BEFORE/EXECUTING/AFTER）
+     */
+    default void onException(Message<?> message, Exception exception, InvokeTiming timing) {
+        // 默认空实现，子类按需覆盖
+    }
 
-  /**
-   * 拦截器名称。
-   *
-   * @return 名称
-   */
-  default String name() {
-    return getClass().getSimpleName();
-  }
+    /**
+     * 拦截器名称。
+     *
+     * @return 名称
+     */
+    default String name() {
+        return getClass().getSimpleName();
+    }
 
-  /**
-   * 拦截器执行顺序（升序，默认 0）。
-   *
-   * @return 顺序值
-   */
-  default int order() {
-    return 0;
-  }
+    /**
+     * 拦截器执行顺序（升序，默认 0）。
+     *
+     * @return 顺序值
+     */
+    default int order() {
+        return 0;
+    }
 }

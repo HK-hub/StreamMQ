@@ -12,23 +12,23 @@ import io.github.streammq.core.interceptor.TraceCollector;
  */
 public class NoopTraceCollector implements TraceCollector {
 
-  @Override
-  public void recordSend(SendTraceContext context) {
-    // 空操作，不记录任何追踪数据
-  }
+    @Override
+    public void recordSend(SendTraceContext context) {
+        // 空操作，不记录任何追踪数据
+    }
 
-  @Override
-  public void recordConsume(ConsumeTraceContext context) {
-    // 空操作，不记录任何追踪数据
-  }
+    @Override
+    public void recordConsume(ConsumeTraceContext context) {
+        // 空操作，不记录任何追踪数据
+    }
 
-  @Override
-  public boolean isEnabled() {
-    return false;
-  }
+    @Override
+    public boolean isEnabled() {
+        return false;
+    }
 
-  @Override
-  public String name() {
-    return "noop";
-  }
+    @Override
+    public String name() {
+        return "noop";
+    }
 }

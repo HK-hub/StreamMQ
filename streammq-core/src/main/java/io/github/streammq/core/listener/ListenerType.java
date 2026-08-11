@@ -12,11 +12,11 @@ import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
  * @since 0.1.0
  */
 public enum ListenerType {
-  /**
-   * 并发消费：实现 {@link StreamMessageConcurrentlyConsumer}，返回 {@link
-   * io.github.streammq.core.enums.ConsumeAction} 后由容器 ACK
-   */
-  AUTO_ACK,
-  /** 顺序消费：实现 {@link StreamMessageOrderlyConsumer}，按 shardingKey 分片加锁串行消费 */
-  ORDERLY
+    /**
+     * 并发消费：实现 {@link StreamMessageConcurrentlyConsumer}，返回 {@link
+     * io.github.streammq.core.enums.ConsumeAction} 后由容器 ACK
+     */
+    AUTO_ACK,
+    /** 顺序消费：实现 {@link StreamMessageOrderlyConsumer}，按 shardingKey 分片加锁串行消费 */
+    ORDERLY
 }

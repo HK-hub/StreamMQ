@@ -41,120 +41,120 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 @AutoConfigureAfter(StreamMQCoreAutoConfiguration.class)
 @ConditionalOnProperty(
-    prefix = "streammq",
-    name = "enabled",
-    havingValue = "true",
-    matchIfMissing = true)
+        prefix = "streammq",
+        name = "enabled",
+        havingValue = "true",
+        matchIfMissing = true)
 @ConditionalOnClass({DefaultStreamMQListenerContainer.class, RedissonClient.class})
 @ConditionalOnBean(StreamMQListenerFactory.class)
 public class StreamMQListenerContainerAutoConfiguration {
 
-  private static final Logger LOG =
-      LoggerFactory.getLogger(StreamMQListenerContainerAutoConfiguration.class);
+    private static final Logger LOG =
+            LoggerFactory.getLogger(StreamMQListenerContainerAutoConfiguration.class);
 
-  /**
-   * 默认 Listener 容器。
-   *
-   * @param redisson Redisson 客户端
-   * @param consumerFactory 消费者工厂
-   * @param messageConverter 消息转换器
-   * @param retryPolicy 重试策略
-   * @param properties 配置
-   * @return Listener 容器
-   */
-  @Bean
-  @ConditionalOnMissingBean(DefaultStreamMQListenerContainer.class)
-  public DefaultStreamMQListenerContainer streamMQListenerContainer(
-      RedissonClient redisson,
-      StreamMQListenerFactory consumerFactory,
-      MessageConverter messageConverter,
-      RetryPolicy retryPolicy,
-      DlqFailureStrategy dlqFailureStrategy,
-      DlqConfig dlqConfig,
-      StreamMQProperties properties,
-      ObjectProvider<ConsumerInterceptor> consumerInterceptorProvider,
-      ObjectProvider<ConsumerFilter> consumerFilterProvider,
-      ObjectProvider<StreamMQMetrics> metricsProvider,
-      ApplicationContext applicationContext) {
-    String namespace = properties.getNamespace();
-    LOG.info(
-        "Creating DefaultStreamMQListenerContainer: namespace={}, dlqFailureStrategy={}",
-        namespace,
-        dlqFailureStrategy.name());
-    DefaultStreamMQListenerContainer container =
-        new DefaultStreamMQListenerContainer(
-            redisson,
-            consumerFactory,
-            messageConverter,
-            retryPolicy,
-            dlqFailureStrategy,
-            dlqConfig,
-            namespace);
+    /**
+     * 默认 Listener 容器。
+     *
+     * @param redisson Redisson 客户端
+     * @param consumerFactory 消费者工厂
+     * @param messageConverter 消息转换器
+     * @param retryPolicy 重试策略
+     * @param properties 配置
+     * @return Listener 容器
+     */
+    @Bean
+    @ConditionalOnMissingBean(DefaultStreamMQListenerContainer.class)
+    public DefaultStreamMQListenerContainer streamMQListenerContainer(
+            RedissonClient redisson,
+            StreamMQListenerFactory consumerFactory,
+            MessageConverter messageConverter,
+            RetryPolicy retryPolicy,
+            DlqFailureStrategy dlqFailureStrategy,
+            DlqConfig dlqConfig,
+            StreamMQProperties properties,
+            ObjectProvider<ConsumerInterceptor> consumerInterceptorProvider,
+            ObjectProvider<ConsumerFilter> consumerFilterProvider,
+            ObjectProvider<StreamMQMetrics> metricsProvider,
+            ApplicationContext applicationContext) {
+        String namespace = properties.getNamespace();
+        LOG.info(
+                "Creating DefaultStreamMQListenerContainer: namespace={}, dlqFailureStrategy={}",
+                namespace,
+                dlqFailureStrategy.name());
+        DefaultStreamMQListenerContainer container =
+                new DefaultStreamMQListenerContainer(
+                        redisson,
+                        consumerFactory,
+                        messageConverter,
+                        retryPolicy,
+                        dlqFailureStrategy,
+                        dlqConfig,
+                        namespace);
 
-    container.setFilterResolver(
-        filterClass -> {
-          try {
-            return applicationContext.getBean(filterClass);
-          } catch (org.springframework.beans.factory.NoSuchBeanDefinitionException e) {
-            return null;
-          }
-        });
+        container.setFilterResolver(
+                filterClass -> {
+                    try {
+                        return applicationContext.getBean(filterClass);
+                    } catch (org.springframework.beans.factory.NoSuchBeanDefinitionException e) {
+                        return null;
+                    }
+                });
 
-    // 注入指标收集器：消费指标记录在容器，重试 / 死信指标传播到内部 DefaultRetryAndDlqHandler
-    StreamMQMetrics metrics = metricsProvider.getIfAvailable();
-    if (metrics != null) {
-      container.setMetrics(metrics);
-      container.setHandlerMetrics(metrics);
-      LOG.info(
-          "StreamMQMetrics injected into DefaultStreamMQListenerContainer: consume/retry/dlq"
-              + " metrics enabled");
+        // 注入指标收集器：消费指标记录在容器，重试 / 死信指标传播到内部 DefaultRetryAndDlqHandler
+        StreamMQMetrics metrics = metricsProvider.getIfAvailable();
+        if (metrics != null) {
+            container.setMetrics(metrics);
+            container.setHandlerMetrics(metrics);
+            LOG.info(
+                    "StreamMQMetrics injected into DefaultStreamMQListenerContainer:"
+                            + " consume/retry/dlq metrics enabled");
+        }
+
+        java.util.List<ConsumerInterceptor> interceptors =
+                consumerInterceptorProvider.stream().toList();
+        if (!interceptors.isEmpty()) {
+            LOG.info(
+                    "Registering {} ConsumerInterceptor(s): {}",
+                    interceptors.size(),
+                    interceptors.stream().map(ConsumerInterceptor::name).toList());
+            container.addConsumerInterceptors(interceptors);
+        }
+
+        java.util.List<ConsumerFilter> filters = consumerFilterProvider.stream().toList();
+        if (!filters.isEmpty()) {
+            LOG.info(
+                    "Registering {} ConsumerFilter(s): {}",
+                    filters.size(),
+                    filters.stream().map(ConsumerFilter::name).toList());
+            container.addConsumerFilters(filters);
+        }
+
+        return container;
     }
 
-    java.util.List<ConsumerInterceptor> interceptors =
-        consumerInterceptorProvider.stream().toList();
-    if (!interceptors.isEmpty()) {
-      LOG.info(
-          "Registering {} ConsumerInterceptor(s): {}",
-          interceptors.size(),
-          interceptors.stream().map(ConsumerInterceptor::name).toList());
-      container.addConsumerInterceptors(interceptors);
+    /**
+     * Listener 注册器：在所有单例 Bean 初始化后扫描注解并注册 Listener。
+     *
+     * @param listenerContainer Listener 容器
+     * @return 注册器
+     */
+    @Bean
+    @ConditionalOnMissingBean(StreamMQListenerRegistrar.class)
+    public StreamMQListenerRegistrar streamMQListenerRegistrar(
+            DefaultStreamMQListenerContainer listenerContainer) {
+        return new StreamMQListenerRegistrar(listenerContainer);
     }
 
-    java.util.List<ConsumerFilter> filters = consumerFilterProvider.stream().toList();
-    if (!filters.isEmpty()) {
-      LOG.info(
-          "Registering {} ConsumerFilter(s): {}",
-          filters.size(),
-          filters.stream().map(ConsumerFilter::name).toList());
-      container.addConsumerFilters(filters);
+    /**
+     * 容器生命周期：通过 SmartLifecycle 启动与停止 Listener 容器。
+     *
+     * @param listenerContainer Listener 容器
+     * @return 生命周期包装
+     */
+    @Bean
+    @ConditionalOnMissingBean(name = "streamMQListenerContainerLifecycle")
+    public StreamMQListenerContainerLifecycle streamMQListenerContainerLifecycle(
+            DefaultStreamMQListenerContainer listenerContainer) {
+        return new StreamMQListenerContainerLifecycle(listenerContainer);
     }
-
-    return container;
-  }
-
-  /**
-   * Listener 注册器：在所有单例 Bean 初始化后扫描注解并注册 Listener。
-   *
-   * @param listenerContainer Listener 容器
-   * @return 注册器
-   */
-  @Bean
-  @ConditionalOnMissingBean(StreamMQListenerRegistrar.class)
-  public StreamMQListenerRegistrar streamMQListenerRegistrar(
-      DefaultStreamMQListenerContainer listenerContainer) {
-    return new StreamMQListenerRegistrar(listenerContainer);
-  }
-
-  /**
-   * 容器生命周期：通过 SmartLifecycle 启动与停止 Listener 容器。
-   *
-   * @param listenerContainer Listener 容器
-   * @return 生命周期包装
-   */
-  @Bean
-  @ConditionalOnMissingBean(name = "streamMQListenerContainerLifecycle")
-  public StreamMQListenerContainerLifecycle streamMQListenerContainerLifecycle(
-      DefaultStreamMQListenerContainer listenerContainer) {
-    return new StreamMQListenerContainerLifecycle(listenerContainer);
-  }
 }

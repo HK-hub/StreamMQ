@@ -1,12 +1,12 @@
 package io.github.streammq.test;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.message.SendStatus;
 import org.junit.jupiter.api.Test;
-
-import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * StreamMQMockUtils 单元测试。
@@ -18,7 +18,8 @@ class StreamMQMockUtilsTest {
 
     @Test
     void createMockMessage_allParams() {
-        Message<String> message = StreamMQMockUtils.createMockMessage("test-topic", "tag", "keys", "body");
+        Message<String> message =
+                StreamMQMockUtils.createMockMessage("test-topic", "tag", "keys", "body");
 
         assertThat(message.getTopic()).isEqualTo("test-topic");
         assertThat(message.getTag()).isEqualTo("tag");

@@ -20,9 +20,9 @@ import java.util.List;
  * @since 1.0.0
  */
 public record MessageTrace(
-    String messageId,
-    String topic,
-    List<TraceEvent> events,
-    long totalDurationMillis,
-    List<String> routePath,
-    String finalStatus) {}
+        String messageId,
+        String topic,
+        List<TraceEvent> events,
+        long totalDurationMillis,
+        List<String> routePath,
+        String finalStatus) {}

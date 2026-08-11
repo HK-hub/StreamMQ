@@ -22,48 +22,48 @@ import java.util.zip.GZIPOutputStream;
  */
 public class GzipCompressionCodec implements CompressionCodec {
 
-  /** 默认缓冲区大小（4KB） */
-  private static final int BUFFER_SIZE = 4096;
+    /** 默认缓冲区大小（4KB） */
+    private static final int BUFFER_SIZE = 4096;
 
-  @Override
-  public byte[] compress(byte[] data) {
-    Objects.requireNonNull(data, "data");
-    if (data.length == 0) {
-      return data;
+    @Override
+    public byte[] compress(byte[] data) {
+        Objects.requireNonNull(data, "data");
+        if (data.length == 0) {
+            return data;
+        }
+        try (ByteArrayOutputStream bos =
+                        new ByteArrayOutputStream(Math.max(data.length / 2, BUFFER_SIZE));
+                GZIPOutputStream gzip = new GZIPOutputStream(bos)) {
+            gzip.write(data);
+            gzip.finish();
+            return bos.toByteArray();
+        } catch (IOException ex) {
+            throw new StreamMQException("GZIP compress failed", ex);
+        }
     }
-    try (ByteArrayOutputStream bos =
-            new ByteArrayOutputStream(Math.max(data.length / 2, BUFFER_SIZE));
-        GZIPOutputStream gzip = new GZIPOutputStream(bos)) {
-      gzip.write(data);
-      gzip.finish();
-      return bos.toByteArray();
-    } catch (IOException ex) {
-      throw new StreamMQException("GZIP compress failed", ex);
-    }
-  }
 
-  @Override
-  public byte[] decompress(byte[] data) {
-    Objects.requireNonNull(data, "data");
-    if (data.length == 0) {
-      return data;
+    @Override
+    public byte[] decompress(byte[] data) {
+        Objects.requireNonNull(data, "data");
+        if (data.length == 0) {
+            return data;
+        }
+        try (ByteArrayInputStream bis = new ByteArrayInputStream(data);
+                GZIPInputStream gzip = new GZIPInputStream(bis);
+                ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[BUFFER_SIZE];
+            int n;
+            while ((n = gzip.read(buffer)) != -1) {
+                bos.write(buffer, 0, n);
+            }
+            return bos.toByteArray();
+        } catch (IOException ex) {
+            throw new StreamMQException("GZIP decompress failed", ex);
+        }
     }
-    try (ByteArrayInputStream bis = new ByteArrayInputStream(data);
-        GZIPInputStream gzip = new GZIPInputStream(bis);
-        ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
-      byte[] buffer = new byte[BUFFER_SIZE];
-      int n;
-      while ((n = gzip.read(buffer)) != -1) {
-        bos.write(buffer, 0, n);
-      }
-      return bos.toByteArray();
-    } catch (IOException ex) {
-      throw new StreamMQException("GZIP decompress failed", ex);
-    }
-  }
 
-  @Override
-  public String name() {
-    return "gzip";
-  }
+    @Override
+    public String name() {
+        return "gzip";
+    }
 }

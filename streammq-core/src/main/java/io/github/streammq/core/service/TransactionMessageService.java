@@ -14,10 +14,11 @@ import io.github.streammq.core.transaction.TransactionCallback;
  */
 public interface TransactionMessageService {
 
-  <T> SendResult sendTransaction(String topic, T body, TransactionCallback<T> callback);
+    <T> SendResult sendTransaction(String topic, T body, TransactionCallback<T> callback);
 
-  <T> SendResult sendTransaction(String topic, T body, String tag, TransactionCallback<T> callback);
+    <T> SendResult sendTransaction(
+            String topic, T body, String tag, TransactionCallback<T> callback);
 
-  <T> SendResult sendTransaction(
-      String topic, T body, MessageMetadataBuilder metadata, TransactionCallback<T> callback);
+    <T> SendResult sendTransaction(
+            String topic, T body, MessageMetadataBuilder metadata, TransactionCallback<T> callback);
 }

@@ -13,24 +13,24 @@ package io.github.streammq.core.scheduler;
  */
 public interface StreamMQScheduler {
 
-  /**
-   * 启动调度器。
-   *
-   * <p>实现应保证幂等：重复调用不应产生副作用。
-   */
-  void start();
+    /**
+     * 启动调度器。
+     *
+     * <p>实现应保证幂等：重复调用不应产生副作用。
+     */
+    void start();
 
-  /**
-   * 停止调度器，释放线程池等资源。
-   *
-   * <p>实现应保证幂等：重复调用不应产生副作用。
-   */
-  void stop();
+    /**
+     * 停止调度器，释放线程池等资源。
+     *
+     * <p>实现应保证幂等：重复调用不应产生副作用。
+     */
+    void stop();
 
-  /**
-   * 返回调度器是否正在运行。
-   *
-   * @return true 如果调度器已启动且未停止
-   */
-  boolean isRunning();
+    /**
+     * 返回调度器是否正在运行。
+     *
+     * @return true 如果调度器已启动且未停止
+     */
+    boolean isRunning();
 }

@@ -28,82 +28,87 @@ import org.slf4j.LoggerFactory;
  */
 public class TraceContextProducerInterceptor implements ProducerInterceptor {
 
-  private static final Logger LOG = LoggerFactory.getLogger(TraceContextProducerInterceptor.class);
+    private static final Logger LOG =
+            LoggerFactory.getLogger(TraceContextProducerInterceptor.class);
 
-  /** userProperties 中 traceId 的键名 */
-  public static final String TRACE_ID_KEY = "traceId";
+    /** userProperties 中 traceId 的键名 */
+    public static final String TRACE_ID_KEY = "traceId";
 
-  private final TraceCollector traceCollector;
+    private final TraceCollector traceCollector;
 
-  /** 线程局部发送起始时间戳，用于计算发送耗时 */
-  private final ThreadLocal<Long> sendStartTimestamp = new ThreadLocal<>();
+    /** 线程局部发送起始时间戳，用于计算发送耗时 */
+    private final ThreadLocal<Long> sendStartTimestamp = new ThreadLocal<>();
 
-  /**
-   * 构造拦截器。
-   *
-   * @param traceCollector 追踪收集器
-   */
-  public TraceContextProducerInterceptor(TraceCollector traceCollector) {
-    this.traceCollector = Objects.requireNonNull(traceCollector, "traceCollector");
-  }
-
-  @Override
-  public boolean beforeSend(Message<?> message) {
-    Objects.requireNonNull(message, "message");
-    // 如果消息没有 traceId，生成 UUID 作为 traceId
-    Map<String, String> userProps = message.getUserProperties();
-    if (Objects.isNull(userProps.get(TRACE_ID_KEY))) {
-      message.putUserProperty(TRACE_ID_KEY, UUID.randomUUID().toString());
+    /**
+     * 构造拦截器。
+     *
+     * @param traceCollector 追踪收集器
+     */
+    public TraceContextProducerInterceptor(TraceCollector traceCollector) {
+        this.traceCollector = Objects.requireNonNull(traceCollector, "traceCollector");
     }
-    sendStartTimestamp.set(System.currentTimeMillis());
-    return true;
-  }
 
-  @Override
-  public void afterSend(Message<?> message, SendResult result) {
-    Long start = sendStartTimestamp.get();
-    sendStartTimestamp.remove();
-    if (!traceCollector.isEnabled()) {
-      return;
+    @Override
+    public boolean beforeSend(Message<?> message) {
+        Objects.requireNonNull(message, "message");
+        // 如果消息没有 traceId，生成 UUID 作为 traceId
+        Map<String, String> userProps = message.getUserProperties();
+        if (Objects.isNull(userProps.get(TRACE_ID_KEY))) {
+            message.putUserProperty(TRACE_ID_KEY, UUID.randomUUID().toString());
+        }
+        sendStartTimestamp.set(System.currentTimeMillis());
+        return true;
     }
-    long duration = Objects.nonNull(start) ? System.currentTimeMillis() - start : 0L;
-    String traceId = message.getUserProperties().get(TRACE_ID_KEY);
-    Map<String, String> attributes = new HashMap<>(4);
-    if (Objects.nonNull(result.getErrorMessage())) {
-      attributes.put("errorMessage", result.getErrorMessage());
-    }
-    if (Objects.nonNull(result.getRegionId())) {
-      attributes.put("regionId", result.getRegionId());
-    }
-    if (Objects.nonNull(message.getKeys())) {
-      attributes.put("keys", message.getKeys());
-    }
-    try {
-      TraceCollector.SendTraceContext ctx =
-          new TraceCollector.SendTraceContext(
-              message.getTopic(),
-              message.getTag(),
-              result.getMessageId(),
-              null,
-              message.getBornTimestamp(),
-              result.isSuccess(),
-              duration,
-              traceId,
-              attributes);
-      traceCollector.recordSend(ctx);
-    } catch (Exception ex) {
-      // 追踪上报失败不影响主流程
-      LOG.warn("记录发送追踪失败: topic={}, messageId={}", message.getTopic(), result.getMessageId(), ex);
-    }
-  }
 
-  @Override
-  public int order() {
-    return 0;
-  }
+    @Override
+    public void afterSend(Message<?> message, SendResult result) {
+        Long start = sendStartTimestamp.get();
+        sendStartTimestamp.remove();
+        if (!traceCollector.isEnabled()) {
+            return;
+        }
+        long duration = Objects.nonNull(start) ? System.currentTimeMillis() - start : 0L;
+        String traceId = message.getUserProperties().get(TRACE_ID_KEY);
+        Map<String, String> attributes = new HashMap<>(4);
+        if (Objects.nonNull(result.getErrorMessage())) {
+            attributes.put("errorMessage", result.getErrorMessage());
+        }
+        if (Objects.nonNull(result.getRegionId())) {
+            attributes.put("regionId", result.getRegionId());
+        }
+        if (Objects.nonNull(message.getKeys())) {
+            attributes.put("keys", message.getKeys());
+        }
+        try {
+            TraceCollector.SendTraceContext ctx =
+                    new TraceCollector.SendTraceContext(
+                            message.getTopic(),
+                            message.getTag(),
+                            result.getMessageId(),
+                            null,
+                            message.getBornTimestamp(),
+                            result.isSuccess(),
+                            duration,
+                            traceId,
+                            attributes);
+            traceCollector.recordSend(ctx);
+        } catch (Exception ex) {
+            // 追踪上报失败不影响主流程
+            LOG.warn(
+                    "记录发送追踪失败: topic={}, messageId={}",
+                    message.getTopic(),
+                    result.getMessageId(),
+                    ex);
+        }
+    }
 
-  @Override
-  public String name() {
-    return "trace-context-producer";
-  }
+    @Override
+    public int order() {
+        return 0;
+    }
+
+    @Override
+    public String name() {
+        return "trace-context-producer";
+    }
 }

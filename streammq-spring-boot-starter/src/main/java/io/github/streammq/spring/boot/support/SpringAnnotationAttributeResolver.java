@@ -18,38 +18,38 @@ import org.springframework.core.env.Environment;
  * @since 0.1.0
  */
 public class SpringAnnotationAttributeResolver implements AnnotationAttributeResolver {
-  private final ConfigurableBeanFactory beanFactory;
-  private final Environment environment;
+    private final ConfigurableBeanFactory beanFactory;
+    private final Environment environment;
 
-  public SpringAnnotationAttributeResolver(ConfigurableApplicationContext applicationContext) {
-    this.beanFactory = applicationContext.getBeanFactory();
-    this.environment = applicationContext.getEnvironment();
-  }
-
-  /**
-   * 解析属性值，支持 ${...} 占位符和 #{...} SpEL 表达式。
-   *
-   * @param value 原始值（可能包含 {@code ${}} 或 {@code #{}} 表达式）
-   * @return 解析后的值；若入参为 {@code null} 或空串则原样返回
-   */
-  @Override
-  public String resolve(String value) {
-    if (StringUtils.isEmpty(value)) {
-      return value;
+    public SpringAnnotationAttributeResolver(ConfigurableApplicationContext applicationContext) {
+        this.beanFactory = applicationContext.getBeanFactory();
+        this.environment = applicationContext.getEnvironment();
     }
-    // 先解析 ${} 占位符
-    String resolved = environment.resolvePlaceholders(value);
-    // 再解析 #{} SpEL 表达式
-    if (resolved.contains("#{")) {
-      BeanExpressionResolver resolver = beanFactory.getBeanExpressionResolver();
-      if (resolver != null) {
-        BeanExpressionContext bec = new BeanExpressionContext(beanFactory, null);
-        Object result = resolver.evaluate(resolved, bec);
-        if (result != null) {
-          resolved = result.toString();
+
+    /**
+     * 解析属性值，支持 ${...} 占位符和 #{...} SpEL 表达式。
+     *
+     * @param value 原始值（可能包含 {@code ${}} 或 {@code #{}} 表达式）
+     * @return 解析后的值；若入参为 {@code null} 或空串则原样返回
+     */
+    @Override
+    public String resolve(String value) {
+        if (StringUtils.isEmpty(value)) {
+            return value;
         }
-      }
+        // 先解析 ${} 占位符
+        String resolved = environment.resolvePlaceholders(value);
+        // 再解析 #{} SpEL 表达式
+        if (resolved.contains("#{")) {
+            BeanExpressionResolver resolver = beanFactory.getBeanExpressionResolver();
+            if (resolver != null) {
+                BeanExpressionContext bec = new BeanExpressionContext(beanFactory, null);
+                Object result = resolver.evaluate(resolved, bec);
+                if (result != null) {
+                    resolved = result.toString();
+                }
+            }
+        }
+        return resolved;
     }
-    return resolved;
-  }
 }

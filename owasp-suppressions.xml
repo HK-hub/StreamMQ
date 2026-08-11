@@ -1,4 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/suppressions">
-    <!-- Add temporary CVSS suppressions here if needed for development dependencies -->
-</suppressions>

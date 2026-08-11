@@ -10,30 +10,30 @@ package io.github.streammq.core.exception;
  */
 public class StreamMQBrokerException extends StreamMQException {
 
-  private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 1L;
 
-  /** Redis 返回的错误码（如 "OOM" / "LOADING"），可为 null */
-  private final String errorCode;
+    /** Redis 返回的错误码（如 "OOM" / "LOADING"），可为 null */
+    private final String errorCode;
 
-  public StreamMQBrokerException(String message) {
-    this(message, null, null);
-  }
+    public StreamMQBrokerException(String message) {
+        this(message, null, null);
+    }
 
-  public StreamMQBrokerException(String message, String errorCode) {
-    this(message, errorCode, null);
-  }
+    public StreamMQBrokerException(String message, String errorCode) {
+        this(message, errorCode, null);
+    }
 
-  public StreamMQBrokerException(String message, String errorCode, Throwable cause) {
-    super(message, cause);
-    this.errorCode = errorCode;
-  }
+    public StreamMQBrokerException(String message, String errorCode, Throwable cause) {
+        super(message, cause);
+        this.errorCode = errorCode;
+    }
 
-  /**
-   * 返回 Redis 错误码。
-   *
-   * @return 错误码，可能为 null
-   */
-  public String getErrorCode() {
-    return errorCode;
-  }
+    /**
+     * 返回 Redis 错误码。
+     *
+     * @return 错误码，可能为 null
+     */
+    public String getErrorCode() {
+        return errorCode;
+    }
 }

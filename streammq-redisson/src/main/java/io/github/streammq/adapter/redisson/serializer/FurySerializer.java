@@ -18,36 +18,36 @@ import org.apache.fury.config.Language;
  */
 public class FurySerializer<T> implements MessageSerializer<T> {
 
-  private final ThreadSafeFury fury;
+    private final ThreadSafeFury fury;
 
-  public FurySerializer() {
-    this.fury =
-        Fury.builder()
-            .withLanguage(Language.JAVA)
-            .withRefTracking(true)
-            .requireClassRegistration(false)
-            .buildThreadSafeFury();
-  }
-
-  @Override
-  public byte[] serialize(T object, Class<T> type) {
-    if (Objects.isNull(object)) {
-      return new byte[0];
+    public FurySerializer() {
+        this.fury =
+                Fury.builder()
+                        .withLanguage(Language.JAVA)
+                        .withRefTracking(true)
+                        .requireClassRegistration(false)
+                        .buildThreadSafeFury();
     }
-    return fury.serialize(object);
-  }
 
-  @Override
-  @SuppressWarnings("unchecked")
-  public <R> R deserialize(byte[] bytes, Class<R> type) {
-    if (Objects.isNull(bytes) || bytes.length == 0) {
-      return null;
+    @Override
+    public byte[] serialize(T object, Class<T> type) {
+        if (Objects.isNull(object)) {
+            return new byte[0];
+        }
+        return fury.serialize(object);
     }
-    return (R) fury.deserialize(bytes);
-  }
 
-  @Override
-  public String name() {
-    return "fury";
-  }
+    @Override
+    @SuppressWarnings("unchecked")
+    public <R> R deserialize(byte[] bytes, Class<R> type) {
+        if (Objects.isNull(bytes) || bytes.length == 0) {
+            return null;
+        }
+        return (R) fury.deserialize(bytes);
+    }
+
+    @Override
+    public String name() {
+        return "fury";
+    }
 }

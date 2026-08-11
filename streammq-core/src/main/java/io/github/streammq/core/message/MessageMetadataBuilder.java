@@ -33,248 +33,249 @@ import lombok.Getter;
  */
 public final class MessageMetadataBuilder {
 
-  /**
-   * @return Tag
-   */
-  @Getter private String tag;
+    /**
+     * @return Tag
+     */
+    @Getter private String tag;
 
-  /**
-   * @return Keys
-   */
-  @Getter private String keys;
+    /**
+     * @return Keys
+     */
+    @Getter private String keys;
 
-  /**
-   * @return 分片 Key
-   */
-  @Getter private String shardingKey;
+    /**
+     * @return 分片 Key
+     */
+    @Getter private String shardingKey;
 
-  private final Map<String, String> properties = new LinkedHashMap<>();
-  private final Map<String, String> userProperties = new LinkedHashMap<>();
+    private final Map<String, String> properties = new LinkedHashMap<>();
+    private final Map<String, String> userProperties = new LinkedHashMap<>();
 
-  /**
-   * @return 延时级别
-   */
-  @Getter private DelayLevel delayLevel;
+    /**
+     * @return 延时级别
+     */
+    @Getter private DelayLevel delayLevel;
 
-  /**
-   * @return 自定义延时时间（毫秒），null 表示未设置
-   */
-  @Getter private Long delayTimeMillis;
+    /**
+     * @return 自定义延时时间（毫秒），null 表示未设置
+     */
+    @Getter private Long delayTimeMillis;
 
-  /**
-   * @return 消息生成时间戳，null 表示未设置
-   */
-  @Getter private Long bornTimestamp;
+    /**
+     * @return 消息生成时间戳，null 表示未设置
+     */
+    @Getter private Long bornTimestamp;
 
-  /**
-   * @return 消息来源主机
-   */
-  @Getter private String bornHost;
+    /**
+     * @return 消息来源主机
+     */
+    @Getter private String bornHost;
 
-  private MessageMetadataBuilder() {}
+    private MessageMetadataBuilder() {}
 
-  /**
-   * 创建新的元数据构造器。
-   *
-   * @return 新的构造器实例
-   */
-  public static MessageMetadataBuilder create() {
-    return new MessageMetadataBuilder();
-  }
-
-  /**
-   * 设置 Tag。
-   *
-   * @param tag 消息 Tag
-   * @return this
-   */
-  public MessageMetadataBuilder tag(String tag) {
-    this.tag = tag;
-    return this;
-  }
-
-  /**
-   * 设置 Keys。
-   *
-   * @param keys 消息 Keys
-   * @return this
-   */
-  public MessageMetadataBuilder keys(String keys) {
-    this.keys = keys;
-    return this;
-  }
-
-  /**
-   * 设置分片 Key。
-   *
-   * @param shardingKey 分片 Key
-   * @return this
-   */
-  public MessageMetadataBuilder shardingKey(String shardingKey) {
-    this.shardingKey = shardingKey;
-    return this;
-  }
-
-  /**
-   * 设置延时级别。
-   *
-   * @param delayLevel 延时级别
-   * @return this
-   */
-  public MessageMetadataBuilder delayLevel(DelayLevel delayLevel) {
-    this.delayLevel = delayLevel;
-    return this;
-  }
-
-  /**
-   * 设置自定义延时时间（毫秒）。
-   *
-   * @param delayTimeMillis 延时毫秒数（必须 &gt; 0）
-   * @return this
-   */
-  public MessageMetadataBuilder delayTimeMillis(long delayTimeMillis) {
-    if (delayTimeMillis <= 0) {
-      throw new IllegalArgumentException("delayTimeMillis must be > 0, got " + delayTimeMillis);
+    /**
+     * 创建新的元数据构造器。
+     *
+     * @return 新的构造器实例
+     */
+    public static MessageMetadataBuilder create() {
+        return new MessageMetadataBuilder();
     }
-    this.delayTimeMillis = delayTimeMillis;
-    return this;
-  }
 
-  /**
-   * 添加系统属性。
-   *
-   * @param key 属性 Key
-   * @param value 属性 Value
-   * @return this
-   */
-  public MessageMetadataBuilder property(String key, String value) {
-    this.properties.put(Objects.requireNonNull(key, "key"), value);
-    return this;
-  }
-
-  /**
-   * 批量设置系统属性。
-   *
-   * @param properties 属性 Map
-   * @return this
-   */
-  public MessageMetadataBuilder properties(Map<String, String> properties) {
-    if (Objects.nonNull(properties)) {
-      this.properties.putAll(properties);
+    /**
+     * 设置 Tag。
+     *
+     * @param tag 消息 Tag
+     * @return this
+     */
+    public MessageMetadataBuilder tag(String tag) {
+        this.tag = tag;
+        return this;
     }
-    return this;
-  }
 
-  /**
-   * 添加用户属性。
-   *
-   * @param key 属性 Key
-   * @param value 属性 Value
-   * @return this
-   */
-  public MessageMetadataBuilder userProperty(String key, String value) {
-    this.userProperties.put(Objects.requireNonNull(key, "key"), value);
-    return this;
-  }
+    /**
+     * 设置 Keys。
+     *
+     * @param keys 消息 Keys
+     * @return this
+     */
+    public MessageMetadataBuilder keys(String keys) {
+        this.keys = keys;
+        return this;
+    }
 
-  /**
-   * 批量设置用户属性。
-   *
-   * @param userProperties 用户属性 Map
-   * @return this
-   */
-  public MessageMetadataBuilder userProperties(Map<String, String> userProperties) {
-    if (Objects.nonNull(userProperties)) {
-      this.userProperties.putAll(userProperties);
+    /**
+     * 设置分片 Key。
+     *
+     * @param shardingKey 分片 Key
+     * @return this
+     */
+    public MessageMetadataBuilder shardingKey(String shardingKey) {
+        this.shardingKey = shardingKey;
+        return this;
     }
-    return this;
-  }
 
-  /**
-   * 设置消息生成时间戳。
-   *
-   * @param bornTimestamp 生成时间戳
-   * @return this
-   */
-  public MessageMetadataBuilder bornTimestamp(long bornTimestamp) {
-    this.bornTimestamp = bornTimestamp;
-    return this;
-  }
+    /**
+     * 设置延时级别。
+     *
+     * @param delayLevel 延时级别
+     * @return this
+     */
+    public MessageMetadataBuilder delayLevel(DelayLevel delayLevel) {
+        this.delayLevel = delayLevel;
+        return this;
+    }
 
-  /**
-   * 设置消息来源主机。
-   *
-   * @param bornHost 来源主机
-   * @return this
-   */
-  public MessageMetadataBuilder bornHost(String bornHost) {
-    this.bornHost = bornHost;
-    return this;
-  }
+    /**
+     * 设置自定义延时时间（毫秒）。
+     *
+     * @param delayTimeMillis 延时毫秒数（必须 &gt; 0）
+     * @return this
+     */
+    public MessageMetadataBuilder delayTimeMillis(long delayTimeMillis) {
+        if (delayTimeMillis <= 0) {
+            throw new IllegalArgumentException(
+                    "delayTimeMillis must be > 0, got " + delayTimeMillis);
+        }
+        this.delayTimeMillis = delayTimeMillis;
+        return this;
+    }
 
-  // ===================== Getter =====================
+    /**
+     * 添加系统属性。
+     *
+     * @param key 属性 Key
+     * @param value 属性 Value
+     * @return this
+     */
+    public MessageMetadataBuilder property(String key, String value) {
+        this.properties.put(Objects.requireNonNull(key, "key"), value);
+        return this;
+    }
 
-  /**
-   * @return 系统属性（不可修改）
-   */
-  public Map<String, String> getProperties() {
-    return Map.copyOf(properties);
-  }
+    /**
+     * 批量设置系统属性。
+     *
+     * @param properties 属性 Map
+     * @return this
+     */
+    public MessageMetadataBuilder properties(Map<String, String> properties) {
+        if (Objects.nonNull(properties)) {
+            this.properties.putAll(properties);
+        }
+        return this;
+    }
 
-  /**
-   * @return 用户属性（不可修改）
-   */
-  public Map<String, String> getUserProperties() {
-    return Map.copyOf(userProperties);
-  }
+    /**
+     * 添加用户属性。
+     *
+     * @param key 属性 Key
+     * @param value 属性 Value
+     * @return this
+     */
+    public MessageMetadataBuilder userProperty(String key, String value) {
+        this.userProperties.put(Objects.requireNonNull(key, "key"), value);
+        return this;
+    }
 
-  // ===================== 应用到 MessageBuilder =====================
+    /**
+     * 批量设置用户属性。
+     *
+     * @param userProperties 用户属性 Map
+     * @return this
+     */
+    public MessageMetadataBuilder userProperties(Map<String, String> userProperties) {
+        if (Objects.nonNull(userProperties)) {
+            this.userProperties.putAll(userProperties);
+        }
+        return this;
+    }
 
-  /**
-   * 将所有元数据应用到 {@link MessageBuilder}。
-   *
-   * @param builder 消息构造器
-   * @param <T> body 类型
-   */
-  public <T> void applyTo(MessageBuilder<T> builder) {
-    Objects.requireNonNull(builder, "builder");
-    if (Objects.nonNull(tag)) {
-      builder.tag(tag);
+    /**
+     * 设置消息生成时间戳。
+     *
+     * @param bornTimestamp 生成时间戳
+     * @return this
+     */
+    public MessageMetadataBuilder bornTimestamp(long bornTimestamp) {
+        this.bornTimestamp = bornTimestamp;
+        return this;
     }
-    if (Objects.nonNull(keys)) {
-      builder.keys(keys);
-    }
-    if (Objects.nonNull(shardingKey)) {
-      builder.shardingKey(shardingKey);
-    }
-    if (Objects.nonNull(delayLevel)) {
-      builder.delayLevel(delayLevel);
-    }
-    if (Objects.nonNull(delayTimeMillis)) {
-      builder.delayTimeMillis(delayTimeMillis);
-    }
-    if (!properties.isEmpty()) {
-      builder.properties(properties);
-    }
-    if (!userProperties.isEmpty()) {
-      for (Map.Entry<String, String> entry : userProperties.entrySet()) {
-        builder.withUserProperty(entry.getKey(), entry.getValue());
-      }
-    }
-    if (Objects.nonNull(bornTimestamp)) {
-      builder.bornTimestamp(bornTimestamp);
-    }
-    if (Objects.nonNull(bornHost)) {
-      builder.bornHost(bornHost);
-    }
-  }
 
-  /**
-   * 判断是否包含延时设置。
-   *
-   * @return true 如果设置了 delayLevel 或 delayTimeMillis
-   */
-  public boolean hasDelay() {
-    return Objects.nonNull(delayLevel) || Objects.nonNull(delayTimeMillis);
-  }
+    /**
+     * 设置消息来源主机。
+     *
+     * @param bornHost 来源主机
+     * @return this
+     */
+    public MessageMetadataBuilder bornHost(String bornHost) {
+        this.bornHost = bornHost;
+        return this;
+    }
+
+    // ===================== Getter =====================
+
+    /**
+     * @return 系统属性（不可修改）
+     */
+    public Map<String, String> getProperties() {
+        return Map.copyOf(properties);
+    }
+
+    /**
+     * @return 用户属性（不可修改）
+     */
+    public Map<String, String> getUserProperties() {
+        return Map.copyOf(userProperties);
+    }
+
+    // ===================== 应用到 MessageBuilder =====================
+
+    /**
+     * 将所有元数据应用到 {@link MessageBuilder}。
+     *
+     * @param builder 消息构造器
+     * @param <T> body 类型
+     */
+    public <T> void applyTo(MessageBuilder<T> builder) {
+        Objects.requireNonNull(builder, "builder");
+        if (Objects.nonNull(tag)) {
+            builder.tag(tag);
+        }
+        if (Objects.nonNull(keys)) {
+            builder.keys(keys);
+        }
+        if (Objects.nonNull(shardingKey)) {
+            builder.shardingKey(shardingKey);
+        }
+        if (Objects.nonNull(delayLevel)) {
+            builder.delayLevel(delayLevel);
+        }
+        if (Objects.nonNull(delayTimeMillis)) {
+            builder.delayTimeMillis(delayTimeMillis);
+        }
+        if (!properties.isEmpty()) {
+            builder.properties(properties);
+        }
+        if (!userProperties.isEmpty()) {
+            for (Map.Entry<String, String> entry : userProperties.entrySet()) {
+                builder.withUserProperty(entry.getKey(), entry.getValue());
+            }
+        }
+        if (Objects.nonNull(bornTimestamp)) {
+            builder.bornTimestamp(bornTimestamp);
+        }
+        if (Objects.nonNull(bornHost)) {
+            builder.bornHost(bornHost);
+        }
+    }
+
+    /**
+     * 判断是否包含延时设置。
+     *
+     * @return true 如果设置了 delayLevel 或 delayTimeMillis
+     */
+    public boolean hasDelay() {
+        return Objects.nonNull(delayLevel) || Objects.nonNull(delayTimeMillis);
+    }
 }

@@ -17,56 +17,56 @@ import org.springframework.context.SmartLifecycle;
  */
 public class StreamMQListenerContainerLifecycle implements SmartLifecycle {
 
-  private static final Logger LOG =
-      LoggerFactory.getLogger(StreamMQListenerContainerLifecycle.class);
+    private static final Logger LOG =
+            LoggerFactory.getLogger(StreamMQListenerContainerLifecycle.class);
 
-  /** 启动相位：低于调度器，确保调度器先就绪 */
-  public static final int PHASE = Integer.MAX_VALUE - 200;
+    /** 启动相位：低于调度器，确保调度器先就绪 */
+    public static final int PHASE = Integer.MAX_VALUE - 200;
 
-  private final StreamMQListenerContainer listenerContainer;
-  private volatile boolean running = false;
+    private final StreamMQListenerContainer listenerContainer;
+    private volatile boolean running = false;
 
-  /**
-   * 构造 Lifecycle。
-   *
-   * @param listenerContainer Listener 容器
-   */
-  public StreamMQListenerContainerLifecycle(StreamMQListenerContainer listenerContainer) {
-    this.listenerContainer = listenerContainer;
-  }
-
-  @Override
-  public void start() {
-    if (running) {
-      return;
+    /**
+     * 构造 Lifecycle。
+     *
+     * @param listenerContainer Listener 容器
+     */
+    public StreamMQListenerContainerLifecycle(StreamMQListenerContainer listenerContainer) {
+        this.listenerContainer = listenerContainer;
     }
-    LOG.info("Starting StreamMQListenerContainer (SmartLifecycle phase={})", PHASE);
-    listenerContainer.start();
-    running = true;
-  }
 
-  @Override
-  public void stop() {
-    if (!running) {
-      return;
+    @Override
+    public void start() {
+        if (running) {
+            return;
+        }
+        LOG.info("Starting StreamMQListenerContainer (SmartLifecycle phase={})", PHASE);
+        listenerContainer.start();
+        running = true;
     }
-    LOG.info("Stopping StreamMQListenerContainer");
-    listenerContainer.stop();
-    running = false;
-  }
 
-  @Override
-  public boolean isRunning() {
-    return running;
-  }
+    @Override
+    public void stop() {
+        if (!running) {
+            return;
+        }
+        LOG.info("Stopping StreamMQListenerContainer");
+        listenerContainer.stop();
+        running = false;
+    }
 
-  @Override
-  public int getPhase() {
-    return PHASE;
-  }
+    @Override
+    public boolean isRunning() {
+        return running;
+    }
 
-  @Override
-  public boolean isAutoStartup() {
-    return true;
-  }
+    @Override
+    public int getPhase() {
+        return PHASE;
+    }
+
+    @Override
+    public boolean isAutoStartup() {
+        return true;
+    }
 }

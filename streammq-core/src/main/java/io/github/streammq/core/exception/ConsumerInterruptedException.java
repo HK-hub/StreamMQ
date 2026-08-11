@@ -13,24 +13,24 @@ import lombok.Getter;
 @Getter
 public class ConsumerInterruptedException extends StreamMQException {
 
-  private static final long serialVersionUID = 1L;
+    private static final long serialVersionUID = 1L;
 
-  /** 受影响的 ConsumerGroup */
-  private final String consumerGroup;
+    /** 受影响的 ConsumerGroup */
+    private final String consumerGroup;
 
-  /** 受影响的 Topic */
-  private final String topic;
+    /** 受影响的 Topic */
+    private final String topic;
 
-  public ConsumerInterruptedException(String message, String topic, String consumerGroup) {
-    super(message);
-    this.topic = topic;
-    this.consumerGroup = consumerGroup;
-  }
+    public ConsumerInterruptedException(String message, String topic, String consumerGroup) {
+        super(message);
+        this.topic = topic;
+        this.consumerGroup = consumerGroup;
+    }
 
-  public ConsumerInterruptedException(
-      String message, String topic, String consumerGroup, Throwable cause) {
-    super(message, cause);
-    this.topic = topic;
-    this.consumerGroup = consumerGroup;
-  }
+    public ConsumerInterruptedException(
+            String message, String topic, String consumerGroup, Throwable cause) {
+        super(message, cause);
+        this.topic = topic;
+        this.consumerGroup = consumerGroup;
+    }
 }

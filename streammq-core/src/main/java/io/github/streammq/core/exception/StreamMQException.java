@@ -32,24 +32,24 @@ import java.io.Serial;
  */
 public class StreamMQException extends RuntimeException {
 
-  @Serial private static final long serialVersionUID = 1L;
+    @Serial private static final long serialVersionUID = 1L;
 
-  /**
-   * 构造异常。
-   *
-   * @param message 错误信息
-   */
-  public StreamMQException(String message) {
-    super(message);
-  }
+    /**
+     * 构造异常。
+     *
+     * @param message 错误信息
+     */
+    public StreamMQException(String message) {
+        super(message);
+    }
 
-  /**
-   * 构造异常。
-   *
-   * @param message 错误信息
-   * @param cause 原始异常
-   */
-  public StreamMQException(String message, Throwable cause) {
-    super(message, cause);
-  }
+    /**
+     * 构造异常。
+     *
+     * @param message 错误信息
+     * @param cause 原始异常
+     */
+    public StreamMQException(String message, Throwable cause) {
+        super(message, cause);
+    }
 }

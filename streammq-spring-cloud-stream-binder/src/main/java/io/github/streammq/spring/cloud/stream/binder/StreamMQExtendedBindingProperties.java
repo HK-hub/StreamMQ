@@ -26,19 +26,19 @@ import org.springframework.cloud.stream.binder.BinderSpecificPropertiesProvider;
  */
 @ConfigurationProperties("spring.cloud.stream.streammq.bindings")
 public class StreamMQExtendedBindingProperties
-    extends AbstractExtendedBindingProperties<
-        StreamMQConsumerProperties, StreamMQProducerProperties, StreamMQBindingProperties> {
+        extends AbstractExtendedBindingProperties<
+                StreamMQConsumerProperties, StreamMQProducerProperties, StreamMQBindingProperties> {
 
-  /** 全局默认值前缀 */
-  private static final String DEFAULTS_PREFIX = "spring.cloud.stream.streammq.default";
+    /** 全局默认值前缀 */
+    private static final String DEFAULTS_PREFIX = "spring.cloud.stream.streammq.default";
 
-  @Override
-  public String getDefaultsPrefix() {
-    return DEFAULTS_PREFIX;
-  }
+    @Override
+    public String getDefaultsPrefix() {
+        return DEFAULTS_PREFIX;
+    }
 
-  @Override
-  public Class<? extends BinderSpecificPropertiesProvider> getExtendedPropertiesEntryClass() {
-    return StreamMQBindingProperties.class;
-  }
+    @Override
+    public Class<? extends BinderSpecificPropertiesProvider> getExtendedPropertiesEntryClass() {
+        return StreamMQBindingProperties.class;
+    }
 }

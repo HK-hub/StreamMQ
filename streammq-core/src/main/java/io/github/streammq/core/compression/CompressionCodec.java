@@ -20,26 +20,26 @@ package io.github.streammq.core.compression;
  */
 public interface CompressionCodec {
 
-  /**
-   * 压缩数据。
-   *
-   * @param data 原始字节数组
-   * @return 压缩后的字节数组
-   */
-  byte[] compress(byte[] data);
+    /**
+     * 压缩数据。
+     *
+     * @param data 原始字节数组
+     * @return 压缩后的字节数组
+     */
+    byte[] compress(byte[] data);
 
-  /**
-   * 解压数据。
-   *
-   * @param data 压缩后的字节数组
-   * @return 解压后的原始字节数组
-   */
-  byte[] decompress(byte[] data);
+    /**
+     * 解压数据。
+     *
+     * @param data 压缩后的字节数组
+     * @return 解压后的原始字节数组
+     */
+    byte[] decompress(byte[] data);
 
-  /**
-   * 返回编解码器名称，用于标识压缩算法。
-   *
-   * @return 名称（如 {@code gzip}、{@code lz4}）
-   */
-  String name();
+    /**
+     * 返回编解码器名称，用于标识压缩算法。
+     *
+     * @return 名称（如 {@code gzip}、{@code lz4}）
+     */
+    String name();
 }

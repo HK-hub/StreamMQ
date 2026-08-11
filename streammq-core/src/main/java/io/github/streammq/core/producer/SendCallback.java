@@ -29,19 +29,19 @@ import io.github.streammq.core.message.SendResult;
 @FunctionalInterface
 public interface SendCallback {
 
-  /**
-   * 发送成功回调。
-   *
-   * @param result 发送结果
-   */
-  void onSuccess(SendResult result);
+    /**
+     * 发送成功回调。
+     *
+     * @param result 发送结果
+     */
+    void onSuccess(SendResult result);
 
-  /**
-   * 发送失败回调。
-   *
-   * @param ex 异常
-   */
-  default void onException(Throwable ex) {
-    // 默认实现：仅记录，业务方可按需覆盖
-  }
+    /**
+     * 发送失败回调。
+     *
+     * @param ex 异常
+     */
+    default void onException(Throwable ex) {
+        // 默认实现：仅记录，业务方可按需覆盖
+    }
 }

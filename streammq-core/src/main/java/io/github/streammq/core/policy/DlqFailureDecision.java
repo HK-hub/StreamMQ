@@ -19,76 +19,76 @@ import java.util.Objects;
  */
 public final class DlqFailureDecision {
 
-  /** 决策类型 */
-  public enum Type {
-    DROP,
-    RETRY,
-    SECONDARY_DLQ
-  }
-
-  private final Type type;
-  private final Duration retryDelay;
-
-  private DlqFailureDecision(Type type, Duration retryDelay) {
-    this.type = type;
-    this.retryDelay = retryDelay;
-  }
-
-  /** 丢弃（ACK 后由 DlqFailureStrategy 记录日志/告警） */
-  public static DlqFailureDecision drop() {
-    return new DlqFailureDecision(Type.DROP, null);
-  }
-
-  /** 按指定延迟重试（写入 retry ZSet，DLQ 重试计数 +1） */
-  public static DlqFailureDecision retry(Duration delay) {
-    Objects.requireNonNull(delay, "delay");
-    if (delay.isNegative() || delay.isZero()) {
-      throw new IllegalArgumentException("retry delay must be positive: " + delay);
+    /** 决策类型 */
+    public enum Type {
+        DROP,
+        RETRY,
+        SECONDARY_DLQ
     }
-    return new DlqFailureDecision(Type.RETRY, delay);
-  }
 
-  /** 转投到二级死信队列 */
-  public static DlqFailureDecision secondaryDlq() {
-    return new DlqFailureDecision(Type.SECONDARY_DLQ, null);
-  }
+    private final Type type;
+    private final Duration retryDelay;
 
-  public Type type() {
-    return type;
-  }
+    private DlqFailureDecision(Type type, Duration retryDelay) {
+        this.type = type;
+        this.retryDelay = retryDelay;
+    }
 
-  public Duration retryDelay() {
-    return retryDelay;
-  }
+    /** 丢弃（ACK 后由 DlqFailureStrategy 记录日志/告警） */
+    public static DlqFailureDecision drop() {
+        return new DlqFailureDecision(Type.DROP, null);
+    }
 
-  public boolean isDrop() {
-    return type == Type.DROP;
-  }
+    /** 按指定延迟重试（写入 retry ZSet，DLQ 重试计数 +1） */
+    public static DlqFailureDecision retry(Duration delay) {
+        Objects.requireNonNull(delay, "delay");
+        if (delay.isNegative() || delay.isZero()) {
+            throw new IllegalArgumentException("retry delay must be positive: " + delay);
+        }
+        return new DlqFailureDecision(Type.RETRY, delay);
+    }
 
-  public boolean isRetry() {
-    return type == Type.RETRY;
-  }
+    /** 转投到二级死信队列 */
+    public static DlqFailureDecision secondaryDlq() {
+        return new DlqFailureDecision(Type.SECONDARY_DLQ, null);
+    }
 
-  public boolean isSecondaryDlq() {
-    return type == Type.SECONDARY_DLQ;
-  }
+    public Type type() {
+        return type;
+    }
 
-  @Override
-  public boolean equals(Object o) {
-    if (this == o) return true;
-    if (!(o instanceof DlqFailureDecision that)) return false;
-    return type == that.type && Objects.equals(retryDelay, that.retryDelay);
-  }
+    public Duration retryDelay() {
+        return retryDelay;
+    }
 
-  @Override
-  public int hashCode() {
-    return Objects.hash(type, retryDelay);
-  }
+    public boolean isDrop() {
+        return type == Type.DROP;
+    }
 
-  @Override
-  public String toString() {
-    return Objects.nonNull(retryDelay)
-        ? "DlqFailureDecision{" + type + ", delay=" + retryDelay + "}"
-        : "DlqFailureDecision{" + type + "}";
-  }
+    public boolean isRetry() {
+        return type == Type.RETRY;
+    }
+
+    public boolean isSecondaryDlq() {
+        return type == Type.SECONDARY_DLQ;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof DlqFailureDecision that)) return false;
+        return type == that.type && Objects.equals(retryDelay, that.retryDelay);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(type, retryDelay);
+    }
+
+    @Override
+    public String toString() {
+        return Objects.nonNull(retryDelay)
+                ? "DlqFailureDecision{" + type + ", delay=" + retryDelay + "}"
+                : "DlqFailureDecision{" + type + "}";
+    }
 }

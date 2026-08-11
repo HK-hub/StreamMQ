@@ -21,27 +21,27 @@ import java.util.Map;
  */
 public interface DlqFailureContext {
 
-  /** 当前消息的 DLQ 消费失败次数（初次为 0，每次重试后递增） */
-  int dlqAttempts();
+    /** 当前消息的 DLQ 消费失败次数（初次为 0，每次重试后递增） */
+    int dlqAttempts();
 
-  /** 配置的最大 DLQ 重试次数 */
-  int maxDlqRetryAttempts();
+    /** 配置的最大 DLQ 重试次数 */
+    int maxDlqRetryAttempts();
 
-  /** 消息进入 DLQ 的原因 */
-  String dlqReason();
+    /** 消息进入 DLQ 的原因 */
+    String dlqReason();
 
-  /** 消息的原始 topic */
-  String originalTopic();
+    /** 消息的原始 topic */
+    String originalTopic();
 
-  /** 原始 Stream Entry ID（进入 DLQ 前的 ID） */
-  String originalMessageId();
+    /** 原始 Stream Entry ID（进入 DLQ 前的 ID） */
+    String originalMessageId();
 
-  /** 最近一次消费失败原因（消费者抛出的异常）；无异常时可为 null */
-  Throwable lastFailureCause();
+    /** 最近一次消费失败原因（消费者抛出的异常）；无异常时可为 null */
+    Throwable lastFailureCause();
 
-  /** 消息在 DLQ Stream 中的原始字段（供高级策略检查消息内容后决策） */
-  Map<String, String> dlqFields();
+    /** 消息在 DLQ Stream 中的原始字段（供高级策略检查消息内容后决策） */
+    Map<String, String> dlqFields();
 
-  /** DLQ 重试延迟配置（毫秒） */
-  long dlqRetryDelayMs();
+    /** DLQ 重试延迟配置（毫秒） */
+    long dlqRetryDelayMs();
 }

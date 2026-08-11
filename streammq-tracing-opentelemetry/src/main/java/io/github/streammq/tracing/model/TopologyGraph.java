@@ -22,8 +22,8 @@ import java.util.List;
  * @since 1.0.0
  */
 public record TopologyGraph(
-    String topic,
-    List<TopologyNode> producers,
-    List<TopologyNode> consumers,
-    List<TopologyRoute> routes,
-    long lastUpdated) {}
+        String topic,
+        List<TopologyNode> producers,
+        List<TopologyNode> consumers,
+        List<TopologyRoute> routes,
+        long lastUpdated) {}

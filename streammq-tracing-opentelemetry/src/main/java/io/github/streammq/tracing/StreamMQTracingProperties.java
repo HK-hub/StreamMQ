@@ -30,15 +30,15 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @Setter
 public class StreamMQTracingProperties {
 
-  /** 是否启用 OpenTelemetry 追踪自动装配，默认 false */
-  private boolean enabled = false;
+    /** 是否启用 OpenTelemetry 追踪自动装配，默认 false */
+    private boolean enabled = false;
 
-  /** OTLP 导出端点（如 {@code http://localhost:4317}），未配置时默认 OpenTelemetry 为 no-op */
-  private String otlpEndpoint;
+    /** OTLP 导出端点（如 {@code http://localhost:4317}），未配置时默认 OpenTelemetry 为 no-op */
+    private String otlpEndpoint;
 
-  /** 服务名称，用于标识遥测数据来源，默认 {@code streammq} */
-  private String serviceName = "streammq";
+    /** 服务名称，用于标识遥测数据来源，默认 {@code streammq} */
+    private String serviceName = "streammq";
 
-  /** Span 导出间隔（毫秒），默认 5000 */
-  private long exporterIntervalMs = 5000L;
+    /** Span 导出间隔（毫秒），默认 5000 */
+    private long exporterIntervalMs = 5000L;
 }

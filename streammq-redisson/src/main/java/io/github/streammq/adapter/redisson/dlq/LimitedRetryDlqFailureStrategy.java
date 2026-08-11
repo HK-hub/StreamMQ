@@ -26,51 +26,51 @@ import java.time.Duration;
  */
 public class LimitedRetryDlqFailureStrategy extends AbstractDlqFailureStrategy {
 
-  public static final String STRATEGY_NAME = "limited-retry";
+    public static final String STRATEGY_NAME = "limited-retry";
 
-  public LimitedRetryDlqFailureStrategy() {
-    super(DlqConfig.builder().build());
-  }
-
-  public LimitedRetryDlqFailureStrategy(DlqConfig config) {
-    super(config);
-  }
-
-  @Override
-  protected DlqFailureDecision doDecide(Message<?> message, DlqFailureContext context) {
-    int attempts = context.dlqAttempts();
-    int maxRetries = config.getMaxDlqRetryAttempts();
-
-    if (attempts >= maxRetries) {
-      log.warn(
-          "DLQ retry exhausted: attempts={}/{}, dropping message (topic={})",
-          attempts,
-          maxRetries,
-          context.originalTopic());
-      return DlqFailureDecision.drop();
+    public LimitedRetryDlqFailureStrategy() {
+        super(DlqConfig.builder().build());
     }
 
-    Duration delay = computeDelay(attempts);
-    log.info(
-        "DLQ retry scheduled: attempt={}/{}, delay={}ms (topic={})",
-        attempts + 1,
-        maxRetries,
-        delay.toMillis(),
-        context.originalTopic());
-    return DlqFailureDecision.retry(delay);
-  }
+    public LimitedRetryDlqFailureStrategy(DlqConfig config) {
+        super(config);
+    }
 
-  /** 按退避计算重试延迟：{@code min(baseDelay × multiplier^attempt, maxDelay)} */
-  private Duration computeDelay(int attempt) {
-    long base = config.getDlqRetryDelayMs();
-    double multiplier = config.getDlqRetryBackoffMultiplier();
-    long delay = (long) (base * Math.pow(multiplier, attempt));
-    delay = Math.min(delay, config.getDlqRetryMaxDelayMs());
-    return Duration.ofMillis(Math.max(delay, 1000L)); // at least 1s
-  }
+    @Override
+    protected DlqFailureDecision doDecide(Message<?> message, DlqFailureContext context) {
+        int attempts = context.dlqAttempts();
+        int maxRetries = config.getMaxDlqRetryAttempts();
 
-  @Override
-  public String name() {
-    return STRATEGY_NAME;
-  }
+        if (attempts >= maxRetries) {
+            log.warn(
+                    "DLQ retry exhausted: attempts={}/{}, dropping message (topic={})",
+                    attempts,
+                    maxRetries,
+                    context.originalTopic());
+            return DlqFailureDecision.drop();
+        }
+
+        Duration delay = computeDelay(attempts);
+        log.info(
+                "DLQ retry scheduled: attempt={}/{}, delay={}ms (topic={})",
+                attempts + 1,
+                maxRetries,
+                delay.toMillis(),
+                context.originalTopic());
+        return DlqFailureDecision.retry(delay);
+    }
+
+    /** 按退避计算重试延迟：{@code min(baseDelay × multiplier^attempt, maxDelay)} */
+    private Duration computeDelay(int attempt) {
+        long base = config.getDlqRetryDelayMs();
+        double multiplier = config.getDlqRetryBackoffMultiplier();
+        long delay = (long) (base * Math.pow(multiplier, attempt));
+        delay = Math.min(delay, config.getDlqRetryMaxDelayMs());
+        return Duration.ofMillis(Math.max(delay, 1000L)); // at least 1s
+    }
+
+    @Override
+    public String name() {
+        return STRATEGY_NAME;
+    }
 }

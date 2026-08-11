@@ -15,15 +15,15 @@ package io.github.streammq.core.enums;
  */
 public enum ConsumeMode {
 
-  /**
-   * 集群消费（默认）： 同一 ConsumerGroup 下多个 Consumer 共同消费 Topic，每条消息仅被其中一个 Consumer 处理。 利用 Redis Stream 原生
-   * ConsumerGroup 实现，自动负载均衡。
-   */
-  CLUSTERING,
+    /**
+     * 集群消费（默认）： 同一 ConsumerGroup 下多个 Consumer 共同消费 Topic，每条消息仅被其中一个 Consumer 处理。 利用 Redis Stream 原生
+     * ConsumerGroup 实现，自动负载均衡。
+     */
+    CLUSTERING,
 
-  /**
-   * 广播消费： 同一 Topic 的每条消息会被所有订阅的 Consumer 各处理一次。 实现机制：为每个 Consumer 实例创建独立 ConsumerGroup（基于
-   * instanceId 拼接）。
-   */
-  BROADCASTING
+    /**
+     * 广播消费： 同一 Topic 的每条消息会被所有订阅的 Consumer 各处理一次。 实现机制：为每个 Consumer 实例创建独立 ConsumerGroup（基于
+     * instanceId 拼接）。
+     */
+    BROADCASTING
 }

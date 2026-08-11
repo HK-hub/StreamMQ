@@ -27,12 +27,12 @@ package io.github.streammq.diagnostics.model;
  * @since 1.0.0
  */
 public record BacklogReport(
-    String topic,
-    String group,
-    long currentBacklog,
-    double growthRate,
-    long estimatedClearTimeMinutes,
-    double produceRate,
-    double consumeRate,
-    String recommendation,
-    Severity severity) {}
+        String topic,
+        String group,
+        long currentBacklog,
+        double growthRate,
+        long estimatedClearTimeMinutes,
+        double produceRate,
+        double consumeRate,
+        String recommendation,
+        Severity severity) {}
