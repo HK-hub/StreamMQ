@@ -453,17 +453,6 @@
                             <include>src/test/java/**/*.java</include>
                         </includes>
                     </java>
-                    <misc>
-                        <includes>
-                            <include>*.md</include>
-                            <include>*.xml</include>
-                            <include>*.yml</include>
-                            <include>*.yaml</include>
-                            <include>*.properties</include>
-                        </includes>
-                        <trimTrailingWhitespace />
-                        <endWithNewline />
-                    </misc>
                 </configuration>
             </plugin>
             <plugin>
