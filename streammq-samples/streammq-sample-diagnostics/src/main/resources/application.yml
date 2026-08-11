@@ -1,0 +1,24 @@
+spring:
+  application:
+    name: streammq-sample-diagnostics
+
+streammq:
+  enabled: true
+  namespace: diagnostics-sample
+  producer:
+    group: diagnostics-sample-producer
+  tracing:
+    enabled: true
+  trace:
+    enabled: true
+    storage: redis
+  diagnostics:
+    enabled: true
+
+redisson:
+  singleServerConfig:
+    address: "redis://127.0.0.1:6379"
+    database: 0
+
+server:
+  port: 8081
