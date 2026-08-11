@@ -7,8 +7,8 @@ package io.github.streammq.core.trace;
  * @since 1.0.0
  */
 public enum TraceType {
-    /** 消息发送事件 */
-    SEND,
-    /** 消息消费事件 */
-    CONSUME
+  /** 消息发送事件 */
+  SEND,
+  /** 消息消费事件 */
+  CONSUME
 }

@@ -28,6 +28,4 @@ public record TraceRecord(
     long timestamp,
     long durationMillis,
     String traceId,
-    Map<String, String> attributes
-) {
-}
+    Map<String, String> attributes) {}

@@ -10,22 +10,22 @@ package io.github.streammq.core.policy;
  */
 public interface ManagementAuthenticator {
 
-    /**
-     * 校验用户对资源的访问权限。
-     *
-     * @param username 用户名
-     * @param password 密码或 Token
-     * @param resource 资源标识（如 {@code "topic:order-topic"} / {@code "dlq:order-cg"}）
-     * @return true 鉴权通过
-     */
-    boolean authenticate(String username, String password, String resource);
+  /**
+   * 校验用户对资源的访问权限。
+   *
+   * @param username 用户名
+   * @param password 密码或 Token
+   * @param resource 资源标识（如 {@code "topic:order-topic"} / {@code "dlq:order-cg"}）
+   * @return true 鉴权通过
+   */
+  boolean authenticate(String username, String password, String resource);
 
-    /**
-     * 鉴权器名称。
-     *
-     * @return 名称
-     */
-    default String name() {
-        return getClass().getSimpleName();
-    }
+  /**
+   * 鉴权器名称。
+   *
+   * @return 名称
+   */
+  default String name() {
+    return getClass().getSimpleName();
+  }
 }

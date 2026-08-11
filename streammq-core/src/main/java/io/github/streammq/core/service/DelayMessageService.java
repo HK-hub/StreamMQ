@@ -14,16 +14,16 @@ import io.github.streammq.core.message.SendResult;
  */
 public interface DelayMessageService {
 
-    <T> SendResult sendDelay(String topic, T body, DelayLevel delayLevel);
+  <T> SendResult sendDelay(String topic, T body, DelayLevel delayLevel);
 
-    <T> SendResult sendDelay(String topic, T body, long delayTimeMillis);
+  <T> SendResult sendDelay(String topic, T body, long delayTimeMillis);
 
-    <T> SendResult sendDelay(String topic, T body, String tag, DelayLevel delayLevel);
+  <T> SendResult sendDelay(String topic, T body, String tag, DelayLevel delayLevel);
 
-    <T> SendResult sendDelay(String topic, T body, String tag, long delayTimeMillis);
+  <T> SendResult sendDelay(String topic, T body, String tag, long delayTimeMillis);
 
-    <T> SendResult sendDelay(String topic, T body, MessageMetadataBuilder metadata);
+  <T> SendResult sendDelay(String topic, T body, MessageMetadataBuilder metadata);
 
-    <T> SendResult sendDelay(String topic, T body, MessageMetadataBuilder metadata,
-                             long timeoutMillis);
+  <T> SendResult sendDelay(
+      String topic, T body, MessageMetadataBuilder metadata, long timeoutMillis);
 }

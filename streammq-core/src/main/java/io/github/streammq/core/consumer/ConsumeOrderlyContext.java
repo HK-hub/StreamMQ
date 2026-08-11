@@ -12,31 +12,31 @@ import io.github.streammq.core.message.MessageId;
  */
 public interface ConsumeOrderlyContext extends ConsumeContext {
 
-    /**
-     * 返回当前消息的分片键。
-     *
-     * @return 分片键
-     */
-    String shardingKey();
+  /**
+   * 返回当前消息的分片键。
+   *
+   * @return 分片键
+   */
+  String shardingKey();
 
-    /**
-     * 返回当前消息所属的 shard ID。
-     *
-     * @return shard ID（0-based）
-     */
-    int shardId();
+  /**
+   * 返回当前消息所属的 shard ID。
+   *
+   * @return shard ID（0-based）
+   */
+  int shardId();
 
-    /**
-     * 返回当前 shard 在本消费者上的消费位点（Stream Entry ID）。
-     *
-     * @return 当前消费位点
-     */
-    MessageId queueOffset();
+  /**
+   * 返回当前 shard 在本消费者上的消费位点（Stream Entry ID）。
+   *
+   * @return 当前消费位点
+   */
+  MessageId queueOffset();
 
-    /**
-     * 返回当前 shard 的最大堆积量。
-     *
-     * @return 堆积量
-     */
-    long backlog();
+  /**
+   * 返回当前 shard 的最大堆积量。
+   *
+   * @return 堆积量
+   */
+  long backlog();
 }

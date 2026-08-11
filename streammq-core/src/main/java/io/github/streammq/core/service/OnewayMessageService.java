@@ -13,15 +13,15 @@ import io.github.streammq.core.message.MessageMetadataBuilder;
  */
 public interface OnewayMessageService {
 
-    <T> void sendOneway(Message<T> message);
+  <T> void sendOneway(Message<T> message);
 
-    <T> void sendOneway(String topic, T body);
+  <T> void sendOneway(String topic, T body);
 
-    <T> void sendOneway(String topic, T body, String tag);
+  <T> void sendOneway(String topic, T body, String tag);
 
-    <T> void sendOneway(String topic, T body, String tag, String keys);
+  <T> void sendOneway(String topic, T body, String tag, String keys);
 
-    <T> void sendOneway(String topic, T body, String tag, String keys, String shardingKey);
+  <T> void sendOneway(String topic, T body, String tag, String keys, String shardingKey);
 
-    <T> void sendOneway(String topic, T body, MessageMetadataBuilder metadata);
+  <T> void sendOneway(String topic, T body, MessageMetadataBuilder metadata);
 }
