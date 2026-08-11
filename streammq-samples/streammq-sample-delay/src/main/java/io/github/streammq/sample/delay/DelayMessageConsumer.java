@@ -1,9 +1,9 @@
 package io.github.streammq.sample.delay;
 
 import io.github.streammq.core.annotation.StreamMQConsumer;
-import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
+import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.message.Message;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,52 +19,58 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @StreamMQConsumer(
-        topic = "delay-order-topic",
-        consumerGroup = "delay-order-consumer-group",
-        maxReconsumeTimes = 3
-)
+    topic = "delay-order-topic",
+    consumerGroup = "delay-order-consumer-group",
+    maxReconsumeTimes = 3)
 public class DelayMessageConsumer implements StreamMessageConcurrentlyConsumer<String> {
 
-    private static final Logger log = LoggerFactory.getLogger(DelayMessageConsumer.class);
+  private static final Logger log = LoggerFactory.getLogger(DelayMessageConsumer.class);
 
-    @Override
-    public ConsumeAction onMessage(Message<String> message, ConsumeContext context) throws Exception {
-        log.info("Received delay message: orderId={}, tag={}, body={}, reconsumeTimes={}",
-                message.getKeys(), message.getTag(), message.getBody(), context.reconsumeTimes());
+  @Override
+  public ConsumeAction onMessage(Message<String> message, ConsumeContext context) throws Exception {
+    log.info(
+        "Received delay message: orderId={}, tag={}, body={}, reconsumeTimes={}",
+        message.getKeys(),
+        message.getTag(),
+        message.getBody(),
+        context.reconsumeTimes());
 
-        try {
-            if ("delay".equals(message.getTag())) {
-                handleFixedDelayMessage(message);
-            } else if ("custom-delay".equals(message.getTag())) {
-                handleCustomDelayMessage(message);
-            } else {
-                handleGenericDelayMessage(message);
-            }
+    try {
+      if ("delay".equals(message.getTag())) {
+        handleFixedDelayMessage(message);
+      } else if ("custom-delay".equals(message.getTag())) {
+        handleCustomDelayMessage(message);
+      } else {
+        handleGenericDelayMessage(message);
+      }
 
-            log.info("Delay message processed successfully: orderId={}", message.getKeys());
-            return ConsumeAction.SUCCESS;
-        } catch (Exception e) {
-            log.error("Failed to process delay message: orderId={}, error={}",
-                    message.getKeys(), e.getMessage(), e);
+      log.info("Delay message processed successfully: orderId={}", message.getKeys());
+      return ConsumeAction.SUCCESS;
+    } catch (Exception e) {
+      log.error(
+          "Failed to process delay message: orderId={}, error={}",
+          message.getKeys(),
+          e.getMessage(),
+          e);
 
-            if (context.reconsumeTimes() >= 3) {
-                log.error("Delay message exhausted retries: orderId={}", message.getKeys());
-                return ConsumeAction.SUCCESS;
-            }
+      if (context.reconsumeTimes() >= 3) {
+        log.error("Delay message exhausted retries: orderId={}", message.getKeys());
+        return ConsumeAction.SUCCESS;
+      }
 
-            return ConsumeAction.RECONSUME_LATER;
-        }
+      return ConsumeAction.RECONSUME_LATER;
     }
+  }
 
-    private void handleFixedDelayMessage(Message<String> message) {
-        log.debug("Handling fixed delay message: orderId={}", message.getKeys());
-    }
+  private void handleFixedDelayMessage(Message<String> message) {
+    log.debug("Handling fixed delay message: orderId={}", message.getKeys());
+  }
 
-    private void handleCustomDelayMessage(Message<String> message) {
-        log.debug("Handling custom delay message: orderId={}", message.getKeys());
-    }
+  private void handleCustomDelayMessage(Message<String> message) {
+    log.debug("Handling custom delay message: orderId={}", message.getKeys());
+  }
 
-    private void handleGenericDelayMessage(Message<String> message) {
-        log.debug("Handling generic delay message: orderId={}", message.getKeys());
-    }
+  private void handleGenericDelayMessage(Message<String> message) {
+    log.debug("Handling generic delay message: orderId={}", message.getKeys());
+  }
 }
