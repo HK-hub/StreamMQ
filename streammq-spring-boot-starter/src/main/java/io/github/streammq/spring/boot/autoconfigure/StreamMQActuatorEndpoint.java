@@ -1,17 +1,15 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.core.util.StringUtils;
+import java.util.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.actuate.endpoint.annotation.*;
 import org.springframework.boot.actuate.endpoint.web.annotation.WebEndpoint;
 import org.springframework.boot.actuate.health.HealthIndicator;
 
-import java.util.*;
-
 /**
- * Spring Boot Actuator 端点，暴露 StreamMQ 运维管理能力。
- * 端点路径：{@code /actuator/streammq}
+ * Spring Boot Actuator 端点，暴露 StreamMQ 运维管理能力。 端点路径：{@code /actuator/streammq}
  *
  * @author StreamMQ Contributors
  * @since 0.2.0
@@ -19,91 +17,95 @@ import java.util.*;
 @WebEndpoint(id = "streammq")
 public class StreamMQActuatorEndpoint {
 
-    private static final Logger LOG = LoggerFactory.getLogger(StreamMQActuatorEndpoint.class);
+  private static final Logger LOG = LoggerFactory.getLogger(StreamMQActuatorEndpoint.class);
 
-    private final StreamMQAdminEndpoint adminEndpoint;
-    private final HealthIndicator healthIndicator;
+  private final StreamMQAdminEndpoint adminEndpoint;
+  private final HealthIndicator healthIndicator;
 
-    public StreamMQActuatorEndpoint(StreamMQAdminEndpoint adminEndpoint,
-                                     HealthIndicator healthIndicator) {
-        this.adminEndpoint = Objects.requireNonNull(adminEndpoint, "adminEndpoint");
-        this.healthIndicator = healthIndicator;
+  public StreamMQActuatorEndpoint(
+      StreamMQAdminEndpoint adminEndpoint, HealthIndicator healthIndicator) {
+    this.adminEndpoint = Objects.requireNonNull(adminEndpoint, "adminEndpoint");
+    this.healthIndicator = healthIndicator;
+  }
+
+  @ReadOperation
+  public Map<String, Object> overview() {
+    Map<String, Object> result = new LinkedHashMap<>();
+    result.put(
+        "status",
+        healthIndicator != null ? healthIndicator.health().getStatus().getCode() : "UNKNOWN");
+    result.put("groups", adminEndpoint.listGroups());
+    result.put("topics", adminEndpoint.listTopics());
+    return result;
+  }
+
+  @ReadOperation
+  public List<Map<String, Object>> groups() {
+    return adminEndpoint.listGroups();
+  }
+
+  @ReadOperation
+  public List<Map<String, Object>> pending(
+      @Selector String group, @Selector(match = Selector.Match.ALL_REMAINING) String[] path) {
+    String topic = path.length > 0 ? path[0] : "";
+    return adminEndpoint.listPending(group, topic, 100);
+  }
+
+  @ReadOperation
+  public List<Map<String, Object>> dlq(@Selector String group) {
+    return adminEndpoint.listDlq(group, 100);
+  }
+
+  @WriteOperation
+  public Map<String, Object> requeueDlq(
+      @Selector String group, String messageId, String targetTopic) {
+    if (StringUtils.isEmpty(targetTopic)) {
+      throw new IllegalArgumentException("targetTopic is required");
     }
+    return adminEndpoint.requeueDlq(group, messageId, targetTopic);
+  }
 
-    @ReadOperation
-    public Map<String, Object> overview() {
-        Map<String, Object> result = new LinkedHashMap<>();
-        result.put("status", healthIndicator != null ? healthIndicator.health().getStatus().getCode() : "UNKNOWN");
-        result.put("groups", adminEndpoint.listGroups());
-        result.put("topics", adminEndpoint.listTopics());
-        return result;
-    }
+  @DeleteOperation
+  public Map<String, Object> deleteDlq(@Selector String group, @Selector String messageId) {
+    return adminEndpoint.deleteDlq(group, messageId);
+  }
 
-    @ReadOperation
-    public List<Map<String, Object>> groups() {
-        return adminEndpoint.listGroups();
-    }
+  @ReadOperation
+  public List<String> topics() {
+    return adminEndpoint.listTopics();
+  }
 
-    @ReadOperation
-    public List<Map<String, Object>> pending(@Selector String group,
-                                              @Selector(match = Selector.Match.ALL_REMAINING) String[] path) {
-        String topic = path.length > 0 ? path[0] : "";
-        return adminEndpoint.listPending(group, topic, 100);
-    }
+  @ReadOperation
+  public Map<String, Object> stats(@Selector String group, @Selector String topic) {
+    return adminEndpoint.getStats(group, topic);
+  }
 
-    @ReadOperation
-    public List<Map<String, Object>> dlq(@Selector String group) {
-        return adminEndpoint.listDlq(group, 100);
-    }
+  @WriteOperation
+  public Map<String, Object> ackPending(
+      @Selector String group, @Selector String topic, String messageId) {
+    return adminEndpoint.ackPending(group, topic, messageId);
+  }
 
-    @WriteOperation
-    public Map<String, Object> requeueDlq(@Selector String group, String messageId, String targetTopic) {
-        if (StringUtils.isEmpty(targetTopic)) {
-            throw new IllegalArgumentException("targetTopic is required");
-        }
-        return adminEndpoint.requeueDlq(group, messageId, targetTopic);
-    }
+  @WriteOperation
+  public Map<String, Object> triggerRebalance(@Selector String group) {
+    return adminEndpoint.triggerRebalance(group);
+  }
 
-    @DeleteOperation
-    public Map<String, Object> deleteDlq(@Selector String group, @Selector String messageId) {
-        return adminEndpoint.deleteDlq(group, messageId);
+  @WriteOperation
+  public Map<String, Object> createTopic(String topic) {
+    if (StringUtils.isEmpty(topic)) {
+      throw new IllegalArgumentException("topic is required");
     }
+    return adminEndpoint.createTopic(topic);
+  }
 
-    @ReadOperation
-    public List<String> topics() {
-        return adminEndpoint.listTopics();
-    }
+  @DeleteOperation
+  public Map<String, Object> deleteTopic(@Selector String topic) {
+    return adminEndpoint.deleteTopic(topic);
+  }
 
-    @ReadOperation
-    public Map<String, Object> stats(@Selector String group, @Selector String topic) {
-        return adminEndpoint.getStats(group, topic);
-    }
-
-    @WriteOperation
-    public Map<String, Object> ackPending(@Selector String group, @Selector String topic, String messageId) {
-        return adminEndpoint.ackPending(group, topic, messageId);
-    }
-
-    @WriteOperation
-    public Map<String, Object> triggerRebalance(@Selector String group) {
-        return adminEndpoint.triggerRebalance(group);
-    }
-
-    @WriteOperation
-    public Map<String, Object> createTopic(String topic) {
-        if (StringUtils.isEmpty(topic)) {
-            throw new IllegalArgumentException("topic is required");
-        }
-        return adminEndpoint.createTopic(topic);
-    }
-
-    @DeleteOperation
-    public Map<String, Object> deleteTopic(@Selector String topic) {
-        return adminEndpoint.deleteTopic(topic);
-    }
-
-    @WriteOperation
-    public Map<String, Object> updateGroupConfig(@Selector String group, Map<String, String> config) {
-        return adminEndpoint.updateGroupConfig(group, config);
-    }
+  @WriteOperation
+  public Map<String, Object> updateGroupConfig(@Selector String group, Map<String, String> config) {
+    return adminEndpoint.updateGroupConfig(group, config);
+  }
 }

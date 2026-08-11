@@ -7,10 +7,12 @@ import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -19,135 +21,159 @@ import org.springframework.context.SmartLifecycle;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.List;
-
 /**
- * 调度器自动装配：注册 {@link RetryScheduler}、{@link DelayMessageScheduler}、
- * {@link TransactionScanner}，并通过统一 {@link SmartLifecycle} 管理启停顺序。
+ * 调度器自动装配：注册 {@link RetryScheduler}、{@link DelayMessageScheduler}、 {@link TransactionScanner}，并通过统一
+ * {@link SmartLifecycle} 管理启停顺序。
  *
- * <p>启动相位 {@code Integer.MAX_VALUE - 100}（高于 Listener 容器），
- * 确保调度器在 Listener 容器启动前已就绪。
+ * <p>启动相位 {@code Integer.MAX_VALUE - 100}（高于 Listener 容器）， 确保调度器在 Listener 容器启动前已就绪。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
 @Configuration(proxyBeanMethods = false)
-@ConditionalOnProperty(prefix = "streammq", name = "enabled", havingValue = "true", matchIfMissing = true)
+@ConditionalOnProperty(
+    prefix = "streammq",
+    name = "enabled",
+    havingValue = "true",
+    matchIfMissing = true)
 @ConditionalOnClass({RetryScheduler.class, RedissonClient.class})
 public class StreamMQSchedulerAutoConfiguration {
 
-    private static final Logger LOG = LoggerFactory.getLogger(StreamMQSchedulerAutoConfiguration.class);
+  private static final Logger LOG =
+      LoggerFactory.getLogger(StreamMQSchedulerAutoConfiguration.class);
 
-    /** 启动相位：高于 Listener 容器，确保先启动 */
-    public static final int PHASE = Integer.MAX_VALUE - 100;
+  /** 启动相位：高于 Listener 容器，确保先启动 */
+  public static final int PHASE = Integer.MAX_VALUE - 100;
 
-    /**
-     * 重试调度器：当 {@code streammq.retry.enabled=true}（默认）时注册。
-     *
-     * @param redisson Redisson 客户端
-     * @param properties 配置
-     * @return 重试调度器
-     */
-    @Bean
-    @ConditionalOnMissingBean(RetryScheduler.class)
-    @ConditionalOnProperty(prefix = "streammq.retry", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public RetryScheduler streamMQRetryScheduler(RedissonClient redisson, StreamMQProperties properties,
-                                                   ObjectProvider<StreamMQMetrics> metricsProvider) {
-        Duration interval = properties.getRetry().getScanInterval();
-        int batchSize = properties.getRetry().getBatchSize();
-        LOG.info("Creating RetryScheduler: scanInterval={}, batchSize={}", interval, batchSize);
-        // RetryScheduler 当前未暴露指标埋点接口；重试指标由 DefaultRetryAndDlqHandler 在调度重试时记录。
-        return new RetryScheduler(redisson, properties.getNamespace(),
-            interval.toMillis(), batchSize);
+  /**
+   * 重试调度器：当 {@code streammq.retry.enabled=true}（默认）时注册。
+   *
+   * @param redisson Redisson 客户端
+   * @param properties 配置
+   * @return 重试调度器
+   */
+  @Bean
+  @ConditionalOnMissingBean(RetryScheduler.class)
+  @ConditionalOnProperty(
+      prefix = "streammq.retry",
+      name = "enabled",
+      havingValue = "true",
+      matchIfMissing = true)
+  public RetryScheduler streamMQRetryScheduler(
+      RedissonClient redisson,
+      StreamMQProperties properties,
+      ObjectProvider<StreamMQMetrics> metricsProvider) {
+    Duration interval = properties.getRetry().getScanInterval();
+    int batchSize = properties.getRetry().getBatchSize();
+    LOG.info("Creating RetryScheduler: scanInterval={}, batchSize={}", interval, batchSize);
+    // RetryScheduler 当前未暴露指标埋点接口；重试指标由 DefaultRetryAndDlqHandler 在调度重试时记录。
+    return new RetryScheduler(redisson, properties.getNamespace(), interval.toMillis(), batchSize);
+  }
+
+  /**
+   * 延时消息调度器：当 {@code streammq.delay.enabled=true} 时注册。
+   *
+   * @param redisson Redisson 客户端
+   * @param properties 配置
+   * @return 延时调度器
+   */
+  @Bean
+  @ConditionalOnMissingBean(DelayMessageScheduler.class)
+  @ConditionalOnProperty(
+      prefix = "streammq.delay",
+      name = "enabled",
+      havingValue = "true",
+      matchIfMissing = true)
+  public DelayMessageScheduler streamMQDelayMessageScheduler(
+      RedissonClient redisson,
+      StreamMQProperties properties,
+      ObjectProvider<StreamMQMetrics> metricsProvider) {
+    Duration interval = properties.getDelay().getScanInterval();
+    int batchSize = properties.getDelay().getBatchSize();
+    LOG.info("Creating DelayMessageScheduler: scanInterval={}, batchSize={}", interval, batchSize);
+    DelayMessageScheduler scheduler =
+        new DelayMessageScheduler(
+            redisson, properties.getNamespace(), interval.toMillis(), batchSize);
+    StreamMQMetrics metrics = metricsProvider.getIfAvailable();
+    if (metrics != null) {
+      scheduler.setMetrics(metrics);
+      LOG.info(
+          "StreamMQMetrics injected into DelayMessageScheduler: delay delivery metrics enabled");
     }
+    return scheduler;
+  }
 
-    /**
-     * 延时消息调度器：当 {@code streammq.delay.enabled=true} 时注册。
-     *
-     * @param redisson Redisson 客户端
-     * @param properties 配置
-     * @return 延时调度器
-     */
-    @Bean
-    @ConditionalOnMissingBean(DelayMessageScheduler.class)
-    @ConditionalOnProperty(prefix = "streammq.delay", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public DelayMessageScheduler streamMQDelayMessageScheduler(RedissonClient redisson,
-                                                                StreamMQProperties properties,
-                                                                ObjectProvider<StreamMQMetrics> metricsProvider) {
-        Duration interval = properties.getDelay().getScanInterval();
-        int batchSize = properties.getDelay().getBatchSize();
-        LOG.info("Creating DelayMessageScheduler: scanInterval={}, batchSize={}", interval, batchSize);
-        DelayMessageScheduler scheduler = new DelayMessageScheduler(redisson, properties.getNamespace(),
-            interval.toMillis(), batchSize);
-        StreamMQMetrics metrics = metricsProvider.getIfAvailable();
-        if (metrics != null) {
-            scheduler.setMetrics(metrics);
-            LOG.info("StreamMQMetrics injected into DelayMessageScheduler: delay delivery metrics enabled");
-        }
-        return scheduler;
+  /**
+   * 事务回查调度器：当 {@code streammq.transaction.enabled=true}（默认）时注册。
+   *
+   * @param redisson Redisson 客户端
+   * @param messageConverter 消息转换器
+   * @param properties 配置
+   * @return 事务回查调度器
+   */
+  @Bean
+  @ConditionalOnMissingBean(TransactionScanner.class)
+  @ConditionalOnProperty(
+      prefix = "streammq.transaction",
+      name = "enabled",
+      havingValue = "true",
+      matchIfMissing = true)
+  public TransactionScanner streamMQTransactionScanner(
+      RedissonClient redisson,
+      MessageConverter messageConverter,
+      StreamMQProperties properties,
+      ObjectProvider<StreamMQMetrics> metricsProvider) {
+    Duration interval = properties.getTransaction().getCheckInterval();
+    int maxCheck = properties.getTransaction().getMaxCheckTimes();
+    LOG.info("Creating TransactionScanner: checkInterval={}, maxCheckTimes={}", interval, maxCheck);
+    TransactionScanner scanner =
+        new TransactionScanner(
+            redisson,
+            properties.getNamespace(),
+            messageConverter,
+            interval.toMillis(),
+            maxCheck,
+            TransactionScanner.DEFAULT_BATCH_SIZE);
+    StreamMQMetrics metrics = metricsProvider.getIfAvailable();
+    if (metrics != null) {
+      scanner.setMetrics(metrics);
+      LOG.info("StreamMQMetrics injected into TransactionScanner: transaction metrics enabled");
     }
+    return scanner;
+  }
 
-    /**
-     * 事务回查调度器：当 {@code streammq.transaction.enabled=true}（默认）时注册。
-     *
-     * @param redisson Redisson 客户端
-     * @param messageConverter 消息转换器
-     * @param properties 配置
-     * @return 事务回查调度器
-     */
-    @Bean
-    @ConditionalOnMissingBean(TransactionScanner.class)
-    @ConditionalOnProperty(prefix = "streammq.transaction", name = "enabled", havingValue = "true", matchIfMissing = true)
-    public TransactionScanner streamMQTransactionScanner(RedissonClient redisson,
-                                                          MessageConverter messageConverter,
-                                                          StreamMQProperties properties,
-                                                          ObjectProvider<StreamMQMetrics> metricsProvider) {
-        Duration interval = properties.getTransaction().getCheckInterval();
-        int maxCheck = properties.getTransaction().getMaxCheckTimes();
-        LOG.info("Creating TransactionScanner: checkInterval={}, maxCheckTimes={}", interval, maxCheck);
-        TransactionScanner scanner = new TransactionScanner(redisson, properties.getNamespace(), messageConverter,
-            interval.toMillis(), maxCheck, TransactionScanner.DEFAULT_BATCH_SIZE);
-        StreamMQMetrics metrics = metricsProvider.getIfAvailable();
-        if (metrics != null) {
-            scanner.setMetrics(metrics);
-            LOG.info("StreamMQMetrics injected into TransactionScanner: transaction metrics enabled");
-        }
-        return scanner;
+  /**
+   * 调度器统一生命周期管理：在 Spring 容器启动时按顺序启动调度器。
+   *
+   * <p>所有调度器均为可选，通过 {@code ObjectProvider} 注入，避免单个调度器被条件注解禁用时 导致 Lifecycle Bean 创建失败。
+   *
+   * @param retrySchedulerProvider 重试调度器（可选）
+   * @param delaySchedulerProvider 延时调度器（可选）
+   * @param transactionScannerProvider 事务回查调度器（可选）
+   * @return SmartLifecycle
+   */
+  @Bean
+  @ConditionalOnMissingBean(name = "streamMQSchedulerLifecycle")
+  public SmartLifecycle streamMQSchedulerLifecycle(
+      org.springframework.beans.factory.ObjectProvider<RetryScheduler> retrySchedulerProvider,
+      org.springframework.beans.factory.ObjectProvider<DelayMessageScheduler>
+          delaySchedulerProvider,
+      org.springframework.beans.factory.ObjectProvider<TransactionScanner>
+          transactionScannerProvider) {
+    List<StreamMQScheduler> schedulers = new ArrayList<>(3);
+    RetryScheduler retryScheduler = retrySchedulerProvider.getIfAvailable();
+    if (retryScheduler != null) {
+      schedulers.add(retryScheduler);
     }
-
-    /**
-     * 调度器统一生命周期管理：在 Spring 容器启动时按顺序启动调度器。
-     *
-     * <p>所有调度器均为可选，通过 {@code ObjectProvider} 注入，避免单个调度器被条件注解禁用时
-     * 导致 Lifecycle Bean 创建失败。
-     *
-     * @param retrySchedulerProvider 重试调度器（可选）
-     * @param delaySchedulerProvider 延时调度器（可选）
-     * @param transactionScannerProvider 事务回查调度器（可选）
-     * @return SmartLifecycle
-     */
-    @Bean
-    @ConditionalOnMissingBean(name = "streamMQSchedulerLifecycle")
-    public SmartLifecycle streamMQSchedulerLifecycle(
-            org.springframework.beans.factory.ObjectProvider<RetryScheduler> retrySchedulerProvider,
-            org.springframework.beans.factory.ObjectProvider<DelayMessageScheduler> delaySchedulerProvider,
-            org.springframework.beans.factory.ObjectProvider<TransactionScanner> transactionScannerProvider) {
-        List<StreamMQScheduler> schedulers = new ArrayList<>(3);
-        RetryScheduler retryScheduler = retrySchedulerProvider.getIfAvailable();
-        if (retryScheduler != null) {
-            schedulers.add(retryScheduler);
-        }
-        DelayMessageScheduler delay = delaySchedulerProvider.getIfAvailable();
-        if (delay != null) {
-            schedulers.add(delay);
-        }
-        TransactionScanner scanner = transactionScannerProvider.getIfAvailable();
-        if (scanner != null) {
-            schedulers.add(scanner);
-        }
-        LOG.info("Creating StreamMQSchedulerLifecycle with {} scheduler(s)", schedulers.size());
-        return new StreamMQSchedulerLifecycle(schedulers);
+    DelayMessageScheduler delay = delaySchedulerProvider.getIfAvailable();
+    if (delay != null) {
+      schedulers.add(delay);
     }
+    TransactionScanner scanner = transactionScannerProvider.getIfAvailable();
+    if (scanner != null) {
+      schedulers.add(scanner);
+    }
+    LOG.info("Creating StreamMQSchedulerLifecycle with {} scheduler(s)", schedulers.size());
+    return new StreamMQSchedulerLifecycle(schedulers);
+  }
 }
