@@ -5,12 +5,13 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   publish:
     name: Publish to Maven Central
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
@@ -34,28 +35,23 @@ jobs:
       - name: Set project version
         run: mvn versions:set -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false
 
-      - name: Build and deploy
+      - name: Build and deploy to Maven Central
         run: mvn clean deploy -DskipTests -Pgpg
         env:
           MAVEN_USERNAME: ${{ secrets.OSSRH_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.OSSRH_TOKEN }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
 
-      - name: Create release
-        uses: actions/create-release@v1
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
+          name: StreamMQ ${{ steps.version.outputs.version }}
           tag_name: ${{ github.ref }}
-          release_name: StreamMQ ${{ steps.version.outputs.version }}
-          draft: false
-          prerelease: false
-
-      - name: Upload release assets
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: |
+          generate_release_notes: true
+          files: |
             streammq-core/target/streammq-core-${{ steps.version.outputs.version }}.jar
             streammq-core/target/streammq-core-${{ steps.version.outputs.version }}-sources.jar
             streammq-core/target/streammq-core-${{ steps.version.outputs.version }}-javadoc.jar
+            streammq-redisson/target/streammq-redisson-${{ steps.version.outputs.version }}.jar
+            streammq-spring-boot-starter/target/streammq-spring-boot-starter-${{ steps.version.outputs.version }}.jar
+            streammq-bom/target/streammq-bom-${{ steps.version.outputs.version }}.pom

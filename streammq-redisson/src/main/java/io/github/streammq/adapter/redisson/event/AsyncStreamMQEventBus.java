@@ -58,4 +58,9 @@ public class AsyncStreamMQEventBus implements StreamMQEventBus {
         subscribers.computeIfAbsent(eventType, k -> new CopyOnWriteArrayList<>()).add(subscriber);
         LOG.debug("Subscribed to event: {}", eventType.getSimpleName());
     }
+
+    /** 关闭事件总线，释放异步分发线程池。 */
+    public void close() {
+        executor.shutdown();
+    }
 }

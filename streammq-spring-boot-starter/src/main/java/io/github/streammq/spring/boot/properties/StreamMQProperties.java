@@ -101,9 +101,6 @@ public class StreamMQProperties {
     /** 线程名前缀 */
     private String threadNamePrefix = StreamMQConstants.THREAD_PREFIX;
 
-    /** 全局追踪开关 */
-    private boolean tracingEnabled = false;
-
     /** 重平衡策略配置 */
     private Rebalance rebalance = new Rebalance();
 
@@ -281,6 +278,9 @@ public class StreamMQProperties {
     /** 追踪配置。 */
     @Data
     public static class Tracing {
+        /** 是否启用追踪，对应 {@code streammq.tracing.enabled}（默认 false） */
+        private boolean enabled = false;
+
         /** 追踪收集器实现类，默认 {@link NoopTraceCollector} */
         private Class<? extends TraceCollector> collector = NoopTraceCollector.class;
 

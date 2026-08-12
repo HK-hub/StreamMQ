@@ -23,7 +23,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * no-op 实例；若用户自行提供 OTel SDK Bean， 则以下字段可作为参考配置使用。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 @ConfigurationProperties(prefix = "streammq.tracing.otel")
 @Getter

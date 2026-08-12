@@ -163,7 +163,7 @@ YAML_EOF
     cat > "$TEMP_DIR/src/main/java/com/example/demo/DemoApplication.java" << 'JAVA_EOF'
 package com.example.demo;
 
-import io.github.streammq.spring.boot EnableStreamMQ;
+import io.github.streammq.core.annotation.EnableStreamMQ;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
@@ -200,7 +200,7 @@ public class OrderService {
                 .tag("created")
                 .keys(orderId)
                 .body(content)
-                .userProperty("traceId", "demo-" + orderId)
+                .withUserProperty("traceId", "demo-" + orderId)
                 .build();
         return template.syncSend(message);
     }
@@ -212,7 +212,7 @@ JAVA_EOF
 package com.example.demo;
 
 import io.github.streammq.core.annotation.StreamMQConsumer;
-import io.github.streammq.core.consumer.ConsumeAction;
+import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.message.Message;
@@ -266,12 +266,18 @@ build_and_run() {
 send_test_message() {
     log_step "发送测试消息..."
 
+    # 注意：演示应用本身未暴露任何 REST 触发接口，此处仅做健康检查，
+    # 实际消息发送需在应用中调用 OrderService/OrderProducer 发送，或运行测试触发发送。
     curl -s -X POST "http://localhost:8080/actuator/health" &>/dev/null || true
 
     log_info "正在发送示例订单消息..."
     log_info "（由于 StreamMQ 演示应用已在运行，消息将自动被消费者接收）"
     log_info ""
-    log_info "如需手动测试，可在应用中添加 REST Controller 调用 OrderService："
+    log_info "消息发送触发方式（演示应用未内置 REST 触发接口）："
+    log_info "  1. 在应用中调用 OrderProducer 发送消息"
+    log_info "  2. 运行测试触发发送"
+    log_info ""
+    log_info "如需通过 REST 手动测试，可在应用中添加 REST Controller 调用 OrderService："
     log_info ""
     log_info "  @RestController"
     log_info "  public class DemoController {"

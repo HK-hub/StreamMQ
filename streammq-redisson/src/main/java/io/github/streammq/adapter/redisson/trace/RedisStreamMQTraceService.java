@@ -33,7 +33,7 @@ import org.slf4j.LoggerFactory;
  * <p>适用于中小规模追踪数据查询。对于大规模数据场景，建议对接专业 APM 系统 （如 Elasticsearch / Zipkin / SkyWalking）。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public class RedisStreamMQTraceService implements StreamMQTraceService {
 

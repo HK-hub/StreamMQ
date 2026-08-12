@@ -10,6 +10,6 @@ package io.github.streammq.diagnostics.model;
  * @param count 出现次数
  * @param percentage 占比（0.0 ~ 100.0）
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public record FailureReason(String reason, long count, double percentage) {}

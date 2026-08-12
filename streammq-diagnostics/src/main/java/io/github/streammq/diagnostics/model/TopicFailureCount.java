@@ -10,6 +10,6 @@ package io.github.streammq.diagnostics.model;
  * @param count 失败消息数
  * @param lastFailureTimestamp 最近一次失败时间戳（毫秒）
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public record TopicFailureCount(String topic, long count, long lastFailureTimestamp) {}

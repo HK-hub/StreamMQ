@@ -10,8 +10,7 @@ import java.lang.annotation.*;
  *
  * <p><b>自动装配触发方式</b>：当 {@code streammq-spring-boot-starter} 在 classpath 时， Spring Boot 通过 {@code
  * META-INF/spring/AutoConfiguration.imports} 自动装配 {@code StreamMQAutoConfiguration}，无需手动
- * {@code @Import}。 本注解作为显式标记与配置属性载体（{@link #mode()} / {@link #tracingEnabled()} / {@link
- * #scanBasePackages()}），供 starter 中的 {@code StreamMQListenerRegistrar} 等组件读取以调整行为。
+ * {@code @Import}。本注解作为显式标记，便于声明式表达「使用 StreamMQ」；其属性当前为预留项， 未参与装配行为（0.1.0 阶段）。
  *
  * <p>使用示例：
  *

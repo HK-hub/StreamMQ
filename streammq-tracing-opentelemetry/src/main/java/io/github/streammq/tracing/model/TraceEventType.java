@@ -6,7 +6,7 @@ package io.github.streammq.tracing.model;
  * <p>由 {@link TraceEvent} 引用，用于消息链路可视化与问题排查。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public enum TraceEventType {
     /** 消息发送事件（生产者投递到 Topic） */

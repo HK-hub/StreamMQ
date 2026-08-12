@@ -4,6 +4,6 @@ package io.github.streammq.core.enums;
 public enum SelectorType {
     /** 基于 Tag 过滤 */
     TAG,
-    /** 基于 SQL92 表达式过滤（预留） */
+    /** 基于 SQL92 表达式过滤（由 {@link io.github.streammq.core.filter.SqlSelectorFilter} 实现） */
     SQL92
 }

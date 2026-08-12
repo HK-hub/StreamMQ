@@ -17,7 +17,7 @@ package io.github.streammq.cloud.k8s;
  * <p>默认实现 {@link NoopConfigRefresher} 为空操作，不产生任何副作用。 用户可提供自定义实现并注册为 Bean 以覆盖默认行为。
  *
  * @author StreamMQ Contributors
- * @since 2.0.0
+ * @since 0.1.0
  */
 public interface StreamMQConfigRefresher {
 

@@ -49,6 +49,9 @@ desktop.ini
 *.swp
 *~
 
+# Redis 数据文件（本地测试残留）
+*.rdb
+
 # 文档辅助
 docs/test-encoding.txt
 

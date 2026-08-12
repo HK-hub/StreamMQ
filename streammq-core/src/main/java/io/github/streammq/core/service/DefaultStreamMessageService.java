@@ -412,9 +412,13 @@ public class DefaultStreamMessageService implements StreamMessageService {
     @Override
     public <T> List<SendResult> sendBatch(
             List<Message<T>> messages, long timeoutMillis, int retryTimes) {
-        // 当前 template.syncSendBatch 不支持超时/重试参数，这里预留 API，
-        // 实际通过 template 的默认行为发送；未来 template 扩展后可直接传递参数。
-        return sendBatch(messages);
+        Objects.requireNonNull(messages, "messages");
+        if (messages.isEmpty()) {
+            throw new IllegalArgumentException("messages list is empty");
+        }
+        String topic = messages.get(0).getTopic();
+        BatchMessage<T> batch = BatchMessage.<T>withTopic(topic).addAll(messages).build();
+        return template.syncSendBatch(batch, timeoutMillis, retryTimes);
     }
 
     @Override
@@ -452,8 +456,12 @@ public class DefaultStreamMessageService implements StreamMessageService {
         if (messages.length == 0) {
             throw new IllegalArgumentException("messages array is empty");
         }
-        // 当前 template.syncSendBatch 不支持超时/重试参数，预留 API
-        return sendBatch(topic, messages);
+        List<Message<T>> normalized = new ArrayList<>(messages.length);
+        for (Message<T> msg : messages) {
+            normalized.add(normalizeTopic(msg, topic));
+        }
+        BatchMessage<T> batch = BatchMessage.<T>withTopic(topic).addAll(normalized).build();
+        return template.syncSendBatch(batch, timeoutMillis, retryTimes);
     }
 
     /**

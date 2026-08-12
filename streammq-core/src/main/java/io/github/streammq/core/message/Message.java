@@ -145,6 +145,10 @@ public final class Message<T> implements Serializable {
             String bornHost,
             String transactionId,
             int reconsumeTimes) {
+        Objects.requireNonNull(topic, "topic");
+        if (topic.trim().isEmpty()) {
+            throw new IllegalArgumentException("topic must not be empty");
+        }
         this.topic = topic;
         this.tag = tag;
         this.keys = keys;
@@ -234,6 +238,10 @@ public final class Message<T> implements Serializable {
      * @return 新的 Message 实例
      */
     public Message<T> withTopic(String topic) {
+        Objects.requireNonNull(topic, "topic");
+        if (topic.trim().isEmpty()) {
+            throw new IllegalArgumentException("topic must not be empty");
+        }
         Message<T> copy = copyInternal();
         copy.topic = topic;
         return copy;

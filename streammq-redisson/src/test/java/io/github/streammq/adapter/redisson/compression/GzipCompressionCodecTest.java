@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
  * {@link GzipCompressionCodec} 单元测试，覆盖压缩/解压往返、空数据、大数据与异常场景。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 @DisplayName("GzipCompressionCodec GZIP 压缩编解码器测试")
 class GzipCompressionCodecTest {

@@ -4,6 +4,7 @@ import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.serializer.MessageSerializer;
+import io.github.streammq.core.util.StringUtils;
 import java.util.Objects;
 import lombok.Builder;
 import lombok.Getter;
@@ -169,15 +170,8 @@ public class ListenerConfig {
             int shardCount,
             int streamMaxLen,
             boolean enableMsgTrace) {
-        this.topic = Objects.requireNonNull(topic, "topic must not be null");
-        this.consumerGroup =
-                Objects.requireNonNull(consumerGroup, "consumerGroup must not be null");
-        if (topic.trim().isEmpty()) {
-            throw new IllegalArgumentException("topic must not be empty");
-        }
-        if (consumerGroup.trim().isEmpty()) {
-            throw new IllegalArgumentException("consumerGroup must not be empty");
-        }
+        this.topic = StringUtils.requireValidName(topic, "topic");
+        this.consumerGroup = StringUtils.requireValidName(consumerGroup, "consumerGroup");
         if (pullBatchSize <= 0) {
             throw new IllegalArgumentException("pullBatchSize must be > 0, got: " + pullBatchSize);
         }

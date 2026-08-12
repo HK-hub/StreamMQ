@@ -348,7 +348,7 @@ Message<String> message = MessageBuilder.<String>withTopic("order-topic")
         .shardingKey("user-456")
         .body("content")
         .delayLevel(DelayLevel.MINUTE_5)
-        .userProperty("traceId", "t-001")
+        .withUserProperty("traceId", "t-001")
         .build();
 ```
 

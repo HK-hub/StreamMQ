@@ -25,6 +25,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.TestPropertySource;
 
 /**
@@ -44,6 +45,7 @@ import org.springframework.test.context.TestPropertySource;
  * @since 0.1.0
  */
 @SpringBootTest(classes = DlqSampleApplication.class)
+@ActiveProfiles("it")
 @Import({
     DlqSampleIT.TestMessageCollector.class,
     DlqSampleIT.TestFailConsumer.class,

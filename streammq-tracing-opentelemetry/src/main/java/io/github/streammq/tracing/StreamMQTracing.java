@@ -51,7 +51,7 @@ import org.slf4j.LoggerFactory;
  * 适配单线程顺序发送场景。跨线程发送应由调用方在外部管理 Span 生命周期。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public class StreamMQTracing {
 

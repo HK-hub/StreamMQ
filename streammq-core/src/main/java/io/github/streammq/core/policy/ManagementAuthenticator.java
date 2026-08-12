@@ -1,9 +1,11 @@
 package io.github.streammq.core.policy;
 
 /**
- * 运维管理鉴权 SPI（v1.0 GA 提供）。
+ * 运维管理鉴权 SPI（0.1.0 提供）。
  *
  * <p>用于运维 REST 端点的鉴权，业务方实现此接口接入企业鉴权系统（如 OAuth2 / SSO / LDAP）。
+ *
+ * <p>默认实现为 {@code DenyAllAuthenticator}（拒绝所有访问），业务方注册自定义实现覆盖。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

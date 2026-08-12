@@ -16,6 +16,11 @@
     <name>StreamMQ Samples</name>
     <description>StreamMQ 示例聚合模块，含 QuickStart / 事务 / 延时 / 顺序 / 死信队列 / 拦截器 / 诊断 / 追踪 八个示例。</description>
 
+    <!-- 示例工程不发布到 Maven Central -->
+    <properties>
+        <maven.deploy.skip>true</maven.deploy.skip>
+    </properties>
+
     <modules>
         <module>streammq-sample-quickstart</module>
         <module>streammq-sample-transaction</module>

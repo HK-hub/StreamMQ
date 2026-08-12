@@ -129,7 +129,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 batchSize);
     }
 
-    /** 停止调度器（取消扫描任务但保留线程池，支持后续 restart）。 */
+    /** 停止调度器（取消扫描任务并关闭线程池，线程为 daemon，不阻塞 JVM 退出）。 */
     @Override
     public void stop() {
         if (!running.compareAndSet(true, false)) {
@@ -140,6 +140,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
             future.cancel(false);
             this.scanFuture = null;
         }
+        scanExecutor.shutdown();
         LOG.info("DelayMessageScheduler stopped");
     }
 

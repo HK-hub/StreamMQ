@@ -432,7 +432,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
             // 读取 payload Hash,验证元数据
             RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
             String msgId = zset.iterator().next();
-            String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
+            String payloadKey = StreamMQKeys.retryPayloadHash(namespace, msgId);
             RMap<String, String> payload = redisson.getMap(payloadKey);
             assertThat(payload).containsKey(RetryScheduler.FIELD_RETRY_COUNT);
             assertThat(payload).containsEntry(RetryScheduler.FIELD_TARGET_TOPIC, topic);

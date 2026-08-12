@@ -27,7 +27,7 @@ import lombok.extern.slf4j.Slf4j;
  * <p>追踪异常不影响正常发送流程：所有追踪操作均被 try/catch 包裹，失败时仅记录日志。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 @Slf4j
 @RequiredArgsConstructor

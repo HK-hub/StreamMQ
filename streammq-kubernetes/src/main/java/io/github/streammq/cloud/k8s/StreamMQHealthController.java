@@ -26,7 +26,7 @@ import org.springframework.web.bind.annotation.RestController;
  * consumerCount=0}），存活探针仍返回 UP。
  *
  * @author StreamMQ Contributors
- * @since 2.0.0
+ * @since 0.1.0
  */
 @RestController
 @RequestMapping("/streammq/health")

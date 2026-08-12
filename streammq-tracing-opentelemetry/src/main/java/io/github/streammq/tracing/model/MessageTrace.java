@@ -17,7 +17,7 @@ import java.util.List;
  *     "Consumer:OrderConsumer"]}）
  * @param finalStatus 最终状态：{@code SUCCESS} / {@code FAILED} / {@code DLQ} / {@code PROCESSING}
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public record MessageTrace(
         String messageId,

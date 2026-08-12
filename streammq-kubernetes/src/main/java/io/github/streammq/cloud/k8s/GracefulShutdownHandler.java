@@ -25,7 +25,7 @@ import org.springframework.beans.factory.ObjectProvider;
  * <p>其他组件可通过 {@link #isShuttingDown()} 查询当前是否处于关闭过程中， 据此跳过非必要任务（如心跳、rebalance）。
  *
  * @author StreamMQ Contributors
- * @since 2.0.0
+ * @since 0.1.0
  */
 @Slf4j
 public class GracefulShutdownHandler implements DisposableBean {

@@ -37,7 +37,7 @@ import java.lang.annotation.*;
  *                  messageModel = MessageModel.ORDERLY, shardCount = 8)
  * public class OrderOrderlyConsumer implements StreamMessageOrderlyConsumer<Order> {
  *     @Override
- *     public OrderlyAction onMessage(Message<Order> message, ConsumeOrderlyContext context) {
+ *     public ConsumeAction onMessage(Message<Order> message, ConsumeOrderlyContext context) {
  *         processOrder(message.getBody());
  *         return ConsumeAction.SUCCESS;
  *     }

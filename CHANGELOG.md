@@ -9,14 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Spring Cloud Stream Binder module for Spring Cloud Stream integration
-- OpenTelemetry tracing integration for distributed tracing
-- Kubernetes Operator (CRD + Operator) for elastic scaling and config hot-reload
 - Multi-backend abstraction (BackendProvider SPI) supporting Redis / Kafka / RabbitMQ / Pulsar
 - Kafka backend implementation based on Kafka Client BackendProvider
 - Cross-datacenter asynchronous replication (RPO ≤ 1s)
 - Kafka wire protocol compatibility (native Kafka Client zero-code access)
-- Message topology visualization
 
 ### Changed
 
@@ -62,6 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Spring Boot 3 自动装配** — `@EnableStreamMQ` 注解、ConfigurationProperties、Actuator 健康检查
 - **BOM 模块** — `streammq-bom`，统一版本管理，可独立 import 到任意项目
 - **测试工具包** — `streammq-test`，提供嵌入式 Redis、断言工具、Mock 工具、Testcontainers 集成
+- **Spring Cloud Stream Binder** — `streammq-spring-cloud-stream-binder`，Spring Cloud Stream 集成
+- **OpenTelemetry 链路追踪** — `streammq-tracing-opentelemetry`，分布式链路追踪集成
+- **Kubernetes Operator** — `streammq-kubernetes`，CRD + Operator，弹性伸缩与配置热更新
+- **消息拓扑可视化** — `streammq-diagnostics`，消息画像与流转拓扑
 
 ### Technical Stack
 
@@ -74,7 +74,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - README with architecture overview, feature list, quick start guide
 - V1.0 design documents: PRD, architecture, functional design, detailed design
-- V2.0 planning documents: PRD v2.0, architecture v2.0, functional design v2.0
 - Full API documentation in `docs/doc-site/`
 - Configuration reference, deployment guide, FAQ
 

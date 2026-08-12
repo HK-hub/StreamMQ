@@ -28,7 +28,7 @@ import org.redisson.api.StreamMessageId;
  * {@link RedisStreamMQTraceService} 单元测试，覆盖按消息 ID / Topic / 消费组查询、 时间范围过滤、结果排序、空入参与异常容忍场景。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 @DisplayName("RedisStreamMQTraceService Redis 追踪查询服务测试")
 class RedisStreamMQTraceServiceTest {

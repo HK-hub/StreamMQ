@@ -1,6 +1,7 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
+import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.filter.ConsumerFilter;
 import io.github.streammq.core.interceptor.ConsumerInterceptor;
@@ -75,6 +76,7 @@ public class StreamMQListenerContainerAutoConfiguration {
             ObjectProvider<ConsumerInterceptor> consumerInterceptorProvider,
             ObjectProvider<ConsumerFilter> consumerFilterProvider,
             ObjectProvider<StreamMQMetrics> metricsProvider,
+            ObjectProvider<PelClaimScheduler> pelClaimSchedulerProvider,
             ApplicationContext applicationContext) {
         String namespace = properties.getNamespace();
         LOG.info(
@@ -127,6 +129,13 @@ public class StreamMQListenerContainerAutoConfiguration {
                     filters.size(),
                     filters.stream().map(ConsumerFilter::name).toList());
             container.addConsumerFilters(filters);
+        }
+
+        // 注入顺序消费 PEL 认领调度器（可选）：容器启动时注册 ORDERLY 消费目标
+        PelClaimScheduler pelClaimScheduler = pelClaimSchedulerProvider.getIfAvailable();
+        if (pelClaimScheduler != null) {
+            container.setPelClaimScheduler(pelClaimScheduler);
+            LOG.info("PelClaimScheduler injected into DefaultStreamMQListenerContainer");
         }
 
         return container;

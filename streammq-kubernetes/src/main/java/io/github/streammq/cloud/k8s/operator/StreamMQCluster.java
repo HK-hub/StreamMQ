@@ -45,7 +45,7 @@ import lombok.ToString;
  * }</pre>
  *
  * @author StreamMQ Contributors
- * @since 2.0.0
+ * @since 0.1.0
  */
 @Data
 @EqualsAndHashCode(callSuper = true)

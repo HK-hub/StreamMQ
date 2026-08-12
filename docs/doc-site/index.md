@@ -1,4 +1,4 @@
-﻿# StreamMQ
+# StreamMQ
 
 > 基于 Redis Stream + Redisson 的高性能消息中间件 SDK —— **让 Redis 成为你的消息总线**。
 
@@ -7,8 +7,8 @@
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.5-green.svg)
 ![Redisson](https://img.shields.io/badge/Redisson-3.34.1-red.svg)
 ![Jackson](https://img.shields.io/badge/Jackson-2.18.1-yellow.svg)
-![Version](https://img.shields.io/badge/Version-0.1.0--SNAPSHOT-lightgrey.svg)
-![Tests](https://img.shields.io/badge/Tests-651%20passing-brightgreen.svg)
+![Version](https://img.shields.io/badge/Version-0.1.0-lightgrey.svg)
+![Tests](https://img.shields.io/badge/Tests-965%20passing-brightgreen.svg)
 
 **GitHub**：https://github.com/streammq/streammq · **License**：MIT · **Maven groupId**：`io.github.streammq`
 
@@ -197,7 +197,7 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 | Redis | 7.2+ |
 | Maven groupId | `io.github.streammq` |
 | License | MIT |
-| 测试用例 | 651 个全部通过 |
+| 测试用例 | 965 个全部通过 |
 
 ---
 

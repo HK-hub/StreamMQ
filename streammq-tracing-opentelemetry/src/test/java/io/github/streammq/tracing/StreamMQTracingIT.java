@@ -59,7 +59,7 @@ import org.springframework.test.context.DynamicPropertySource;
  * streammq.tracing.otel.enabled=true}），验证两套追踪体系协同工作。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 @SpringBootTest(
         classes = StreamMQTracingIT.TestApplication.class,

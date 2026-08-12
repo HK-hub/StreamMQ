@@ -139,7 +139,7 @@ public class StreamMQCoreAutoConfiguration {
      *
      * @return 异步事件总线
      */
-    @Bean
+    @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean(StreamMQEventBus.class)
     public StreamMQEventBus streamMQEventBus() {
         LOG.debug("Creating AsyncStreamMQEventBus");

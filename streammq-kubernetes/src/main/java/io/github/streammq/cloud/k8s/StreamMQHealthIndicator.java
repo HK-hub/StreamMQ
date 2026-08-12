@@ -26,7 +26,7 @@ import org.springframework.boot.actuate.health.HealthIndicator;
  * <p>当 {@link StreamMQListenerContainer} 不存在时，健康状态为 DOWN 并标注原因。
  *
  * @author StreamMQ Contributors
- * @since 2.0.0
+ * @since 0.1.0
  */
 public class StreamMQHealthIndicator implements HealthIndicator {
 

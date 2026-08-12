@@ -438,7 +438,9 @@ public class HighPriorityFilter implements ConsumerFilter {
 
 StreamMQ 提供生产者与消费者双向拦截器链，用于在发送 / 消费前后进行切面处理，对齐 RocketMQ Interceptor 体验。
 
-### 生产者拦截器链（ProducerInterceptorChain）
+### 生产者拦截器（ProducerInterceptor）
+
+StreamMQ 在 `StreamMessageTemplate` 中按 `order()` 升序应用生产者拦截器，方法如下：
 
 | 方法 | 时机 | 用途 |
 |------|------|------|
@@ -454,7 +456,7 @@ StreamMQ 提供生产者与消费者双向拦截器链，用于在发送 / 消�
 | `afterConsume(Message, ConsumeAction, ConsumeContext)` | 消费后 | 指标埋点、审计 |
 | `onException(...)` | 异常时 | 异常处理 |
 
-> 顺序消费的 `SUSPEND_CURRENT_QUEUE_A_MOMENT` 在 `afterConsume` 中会映射为 `RECONSUME_LATER`。
+> 顺序消费返回非成功动作时，消息保留在 PEL（Pending Entry List）中，由 `PelClaimScheduler` 周期重投。
 > 多拦截器按 `order()` 升序执行。
 
 ---

@@ -37,6 +37,36 @@
         </license>
     </licenses>
 
+    <!-- ========== 开发者 ========== -->
+    <developers>
+        <developer>
+            <id>streammq-contributors</id>
+            <name>StreamMQ Contributors</name>
+            <email>streammq@example.com</email>
+            <url>https://github.com/streammq/streammq</url>
+        </developer>
+    </developers>
+
+    <!-- ========== SCM ========== -->
+    <scm>
+        <connection>scm:git:https://github.com/streammq/streammq.git</connection>
+        <developerConnection>scm:git:https://github.com/streammq/streammq.git</developerConnection>
+        <url>https://github.com/streammq/streammq</url>
+        <tag>v0.1.0</tag>
+    </scm>
+
+    <!-- ========== 发布仓库（Maven Central / OSSRH） ========== -->
+    <distributionManagement>
+        <snapshotRepository>
+            <id>ossrh</id>
+            <url>https://s01.oss.sonatype.org/content/repositories/snapshots</url>
+        </snapshotRepository>
+        <repository>
+            <id>ossrh</id>
+            <url>https://s01.oss.sonatype.org/service/local/staging/deploy/maven2</url>
+        </repository>
+    </distributionManagement>
+
     <!-- ========== 属性 ========== -->
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
@@ -83,6 +113,8 @@
         <flatten-maven-plugin.version>1.6.0</flatten-maven-plugin.version>
         <spotless-maven-plugin.version>2.43.0</spotless-maven-plugin.version>
         <owasp-dependency-check.version>12.1.1</owasp-dependency-check.version>
+        <!-- OWASP Dependency-Check 默认跳过；CI 中通过 -Dowasp.skip=false 显式开启 -->
+        <owasp.skip>true</owasp.skip>
     </properties>
 
     <!-- ========== 依赖统一管理（默认 provided，子模块按需引入）========== -->
@@ -427,6 +459,18 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
+                <configuration>
+                    <rules>
+                        <requireJavaVersion>
+                            <version>[21,)</version>
+                        </requireJavaVersion>
+                        <requireMavenVersion>
+                            <version>[3.9,)</version>
+                        </requireMavenVersion>
+                        <banDuplicatePomDependencyVersions/>
+                        <dependencyConvergence/>
+                    </rules>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>com.diffplug.spotless</groupId>
@@ -470,7 +514,7 @@
                 <configuration>
                     <failBuildOnCVSS>7</failBuildOnCVSS>
                     <suppressionFile>owasp-suppressions.xml</suppressionFile>
-                    <skip>true</skip>
+                    <skip>${owasp.skip}</skip>
                 </configuration>
             </plugin>
         </plugins>
@@ -485,5 +529,30 @@
             <snapshots><enabled>false</enabled></snapshots>
         </repository>
     </repositories>
+
+    <!-- ========== 发布 Profile：GPG 签名 ========== -->
+    <profiles>
+        <profile>
+            <id>gpg</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.7</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 
 </project>

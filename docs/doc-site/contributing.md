@@ -1,4 +1,4 @@
-﻿# 贡献指南
+# 贡献指南
 
 > 欢迎为 StreamMQ 贡献代码！本文档对标顶级开源社区（如 Spring、Redisson、Kafka）的贡献流程，旨在帮助贡献者快速上手并保持代码质量的一致性。
 > StreamMQ 是一个以 MIT 协议开源的项目，任何形式的贡献（代码、文档、Issue、建议）都受欢迎。
@@ -541,7 +541,7 @@ Migration guide:
 
 ## 测试要求
 
-StreamMQ 当前包含 651 个测试用例，所有 PR 必须满足测试要求。
+StreamMQ 当前包含 965 个测试用例，所有 PR 必须满足测试要求。
 
 ### 1. 测试分类
 
@@ -578,8 +578,8 @@ class MessageBuilderTest {
                 .keys("order-123")
                 .shardingKey("user-456")
                 .body("{\"orderId\":123}")
-                .delayLevel(DelayLevel.LEVEL_6)
-                .userProperty("traceId", "t-001")
+                .delayLevel(DelayLevel.MINUTE_1)
+                .withUserProperty("traceId", "t-001")
                 .build();
 
         assertThat(message)
@@ -590,7 +590,7 @@ class MessageBuilderTest {
                 assertThat(msg.getKeys()).isEqualTo("order-123");
                 assertThat(msg.getShardingKey()).isEqualTo("user-456");
                 assertThat(msg.getBody()).isEqualTo("{\"orderId\":123}");
-                assertThat(msg.getDelayLevel()).isEqualTo(DelayLevel.LEVEL_6);
+                assertThat(msg.getDelayLevel()).isEqualTo(DelayLevel.MINUTE_1);
                 assertThat(msg.getUserProperty("traceId")).isEqualTo("t-001");
             });
     }
@@ -903,7 +903,7 @@ jobs:
 
 ## 模块开发规范
 
-StreamMQ 当前包含 6 个模块，新增模块需遵循以下规范。
+StreamMQ 当前包含 11 个模块，新增模块需遵循以下规范。
 
 ### 1. 现有模块清单
 

@@ -9,7 +9,6 @@ import io.github.streammq.core.message.Message;
 import io.github.streammq.core.policy.OrderlyShardLockManager;
 import io.github.streammq.core.util.StringUtils;
 import java.util.Objects;
-import java.util.concurrent.TimeUnit;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RLock;
@@ -83,10 +82,12 @@ public class RedissonOrderlyShardLockManager implements OrderlyShardLockManager 
         if (Objects.isNull(shardingKey)) {
             shardingKey = "";
         }
-        int shardIndex = Math.abs(shardingKey.hashCode()) % reg.getShardCount();
+        int shardIndex = (shardingKey.hashCode() & 0x7fffffff) % reg.getShardCount();
         RLock lock = (RLock) reg.getShardLocks().get(shardIndex);
         try {
-            lock.lock(reg.getConsumeTimeoutMillis(), TimeUnit.MILLISECONDS);
+            // 使用看门狗（无限期租约，自动续期）：避免业务处理超过固定租约后锁被其他实例抢占导致顺序性被破坏。
+            // 看门狗默认 30s，线程存活期间自动续期；线程退出或 JVM 崩溃后锁自动释放。
+            lock.lock();
             return orderly.onMessage(message, ctx);
         } finally {
             if (lock.isHeldByCurrentThread()) {

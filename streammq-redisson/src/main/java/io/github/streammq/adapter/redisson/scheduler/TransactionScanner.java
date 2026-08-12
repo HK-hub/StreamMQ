@@ -5,6 +5,7 @@ import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.enums.LocalTransactionState;
+import io.github.streammq.core.exception.StreamMQBrokerException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
@@ -270,7 +271,7 @@ public class TransactionScanner implements StreamMQScheduler {
                 checkerRegistry.size());
     }
 
-    /** 停止调度器（取消扫描任务但保留线程池，支持后续 restart）。 */
+    /** 停止调度器（取消扫描任务并关闭线程池，线程为 daemon，不阻塞 JVM 退出）。 */
     @Override
     public void stop() {
         if (!running.compareAndSet(true, false)) {
@@ -281,6 +282,7 @@ public class TransactionScanner implements StreamMQScheduler {
             future.cancel(false);
             this.scanFuture = null;
         }
+        scanExecutor.shutdown();
         LOG.info("TransactionScanner stopped");
     }
 
@@ -336,11 +338,14 @@ public class TransactionScanner implements StreamMQScheduler {
             return;
         }
 
-        // 转投半消息到目标 Stream（幂等：halfStream XDEL 已删除则无操作）
-        publishHalfToBusiness(txGroup, halfIdStr, targetTopic);
+        // 转投半消息到目标 Stream + 原子标记 COMMIT
+        boolean published = publishHalfAndMarkCommit(txGroup, halfIdStr, targetTopic, txId);
+        if (!published) {
+            // 半消息不存在：直接按已提交终态终止，避免状态卡在 COMMITTING
+            stateMap.put(txId, STATE_COMMIT);
+        }
 
         // 终态
-        stateMap.put(txId, STATE_COMMIT);
         removeCheckEntry(txId, txGroup);
         cleanupTerminalState(stateMap, txId);
 
@@ -578,8 +583,9 @@ public class TransactionScanner implements StreamMQScheduler {
 
     // ===================== 辅助方法 =====================
 
-    /** 将半消息从 half Stream 转投到目标 Stream（COMMIT 时调用）。 */
-    private void publishHalfToBusiness(String txGroup, String halfIdStr, String targetTopic) {
+    /** 将半消息从 half Stream 转投到目标 Stream 并原子标记 COMMIT（COMMIT 时调用）。 */
+    private boolean publishHalfAndMarkCommit(
+            String txGroup, String halfIdStr, String targetTopic, String txId) {
         String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
         RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
         StreamMessageId halfId = parseStreamId(halfIdStr);
@@ -591,26 +597,35 @@ public class TransactionScanner implements StreamMQScheduler {
                     "Half message not found, cannot publish: txGroup={}, halfId={}",
                     txGroup,
                     halfIdStr);
-            return;
+            return false;
         }
         Map<String, String> fields = new HashMap<>(entries.values().iterator().next());
         // 移除 originTopic 等调度元数据（如有）
         fields.remove(DefaultMessageConverter.FIELD_ORIGIN_TOPIC);
 
-        // XADD 到目标 Stream
+        // 通过 WRITE_ATOMIC 批处理将「XADD 目标流 + XDEL 半消息 + 状态置 COMMIT」原子执行：
+        // 要么全部生效、要么全部不生效，避免崩溃窗口内重复投递（此前 XADD 与状态更新非原子）。
         String targetStreamKey = StreamMQKeys.topicStream(namespace, targetTopic);
-        RStream<String, String> targetStream = redisson.getStream(targetStreamKey);
-        targetStream.add(StreamAddArgs.entries(fields));
-
-        // XDEL 半消息
+        String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
+        RBatch batch =
+                redisson.createBatch(
+                        BatchOptions.defaults()
+                                .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
+        batch.<String, String>getStream(targetStreamKey).addAsync(StreamAddArgs.entries(fields));
+        batch.<String, String>getStream(halfStreamKey).removeAsync(halfId);
+        RMapAsync<String, String> stateMapAsync = batch.getMap(stateHashKey);
+        stateMapAsync.putAsync(txId, STATE_COMMIT);
         try {
-            halfStream.remove(halfId);
+            batch.execute();
+            return true;
         } catch (RuntimeException ex) {
-            LOG.warn(
-                    "XDEL half message after publish failed: halfId={}: {}",
-                    halfIdStr,
+            LOG.error(
+                    "Failed to atomically publish transaction message, txId={}: {}",
+                    txId,
                     ex.getMessage(),
                     ex);
+            throw new StreamMQBrokerException(
+                    "Failed to atomically publish transaction message for txId " + txId, null, ex);
         }
     }
 

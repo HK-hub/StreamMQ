@@ -49,7 +49,7 @@ import org.springframework.beans.factory.annotation.Autowired;
  * </ul>
  *
  * @author StreamMQ Contributors
- * @since 2.0.0
+ * @since 0.1.0
  */
 @Slf4j
 public class ConfigMapConfigRefresher implements StreamMQConfigRefresher, Runnable, AutoCloseable {

@@ -21,6 +21,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.ActiveProfiles;
 
 /**
  * Diagnostics 示例集成测试。
@@ -31,6 +32,7 @@ import org.springframework.test.annotation.DirtiesContext;
  * @since 0.1.0
  */
 @SpringBootTest(classes = DiagnosticsApplication.class)
+@ActiveProfiles("it")
 @Import(DiagnosticsSampleIT.TestMessageCollector.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 @DisplayName("Diagnostics 示例集成测试")

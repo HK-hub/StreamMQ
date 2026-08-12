@@ -37,41 +37,32 @@ streammq:
   # 生产者配置
   producer:
     group: default-producer-group
-    send-timeout: 3000
-    retry-times: 2
-    compress-threshold: 0           # 0 = 关闭压缩
-    compression-codec: gzip         # 压缩算法：gzip
+    send-message-timeout: 3000        # 发送超时（毫秒）
+    retry-times: 2                    # 同步发送重试次数
+    compress-threshold: 0             # 0 = 关闭压缩，>0 时超过阈值自动压缩
 
-  # 消费者配置
+  # 消费者配置（单消费者当前串行处理，无线程池配置）
   consumer:
-    consume-thread-min: 1
-    consume-thread-max: 64
-    pull-batch-size: 32
-    max-reconsume-times: 16
-    consume-timeout: 30000
-    inflight-capacity: 1000         # 背压队列容量，0 = 不启用背压
-    pull-interval: 0                # 拉取间隔（毫秒），0 = 不间隔
+    batch-size: 32                    # 单次拉取批量大小
+    pull-interval: 0                  # 拉取间隔（毫秒），0 = 不间隔
+
+  # 重试配置
+  retry:
+    max-reconsume-times: 16           # 消费失败最大重试次数
 
   # 事务消息配置
   transaction:
-    check-interval-ms: 60000
-    max-check-times: 15
-    batch-size: 32
+    check-interval: 60s               # 回查间隔
+    max-check-times: 15               # 最大回查次数
 
   # 死信队列配置
   dlq:
-    enabled: true
-    max-retry-times: 3
+    max-dlq-retry-attempts: 3         # DLQ 消费失败最大重试次数
+    # failure-strategy: io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy  # 可选：DLQ 失败策略
 
-  # 可观测性配置
-  metrics:
-    enabled: true
+  # 可观测性配置（指标开关由 streammq.enabled 控制）
   tracing:
     enabled: false
-
-  # 运维管理配置
-  management:
-    enabled: true
 ```
 
 ---
@@ -98,10 +89,9 @@ streammq:
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `streammq.producer.group` | string | `default-producer-group` | 默认生产者组名 |
-| `streammq.producer.send-timeout` | int | `3000` | 发送超时（毫秒） |
+| `streammq.producer.send-message-timeout` | long | `3000` | 发送超时（毫秒） |
 | `streammq.producer.retry-times` | int | `2` | 同步发送重试次数（0 = 不重试） |
 | `streammq.producer.compress-threshold` | int | `0` | body 压缩阈值（字节），`0` = 关闭压缩 |
-| `streammq.producer.compression-codec` | string | `gzip` | 压缩算法：`gzip` |
 
 ### 压缩配置说明
 
@@ -111,7 +101,6 @@ streammq:
 streammq:
   producer:
     compress-threshold: 1024        # 超过 1KB 的 body 压缩
-    compression-codec: gzip         # 使用 gzip 压缩
 ```
 
 | 压缩算法 | 说明 |
@@ -127,21 +116,11 @@ streammq:
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `streammq.consumer.consume-thread-min` | int | `1` | 最小消费线程数 |
-| `streammq.consumer.consume-thread-max` | int | `64` | 最大消费线程数 |
-| `streammq.consumer.pull-batch-size` | int | `32` | 单次拉取批量大小 |
-| `streammq.consumer.max-reconsume-times` | int | `16` | 最大重试次数 |
-| `streammq.consumer.consume-timeout` | long | `30000` | 单条消息消费超时（毫秒） |
-| `streammq.consumer.inflight-capacity` | int | `1000` | 背压队列容量，`0` = 不启用背压 |
+| `streammq.consumer.batch-size` | int | `32` | 单次拉取批量大小 |
 | `streammq.consumer.pull-interval` | long | `0` | 拉取间隔（毫秒），`0` = 不间隔 |
 
-### 背压队列
-
-`inflight-capacity` 控制拉取-处理解耦的内部队列容量：
-- 消息从 Redis Stream 拉取后先进入 InflightQueue
-- 消费线程从 InflightQueue 取消息处理
-- 队列满时暂停拉取，实现背压
-- 设为 `0` 表示不启用背压（按需拉取）
+> 消费线程数不可配置：0.1.0 中单消费者当前串行处理；背压队列（InflightQueue）暂未开放配置。
+> 消费超时、最大重试次数为注解属性（`@StreamMQConsumer.consumeTimeout` / `@StreamMQConsumer.maxReconsumeTimes`）或 `streammq.retry.max-reconsume-times`。
 
 ### 拉取间隔
 
@@ -152,11 +131,8 @@ streammq:
 ```yaml
 streammq:
   consumer:
-    consume-thread-max: 128         # 高吞吐场景增大线程数
-    pull-batch-size: 64             # 增大批量提升吞吐
-    inflight-capacity: 2000         # 增大背压队列
-    max-reconsume-times: 20         # 增大重试次数
-```
+    batch-size: 64             # 增大批量提升吞吐
+    pull-interval: 0           # 拉取间隔（毫秒）
 
 ---
 
@@ -164,18 +140,16 @@ streammq:
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `streammq.transaction.check-interval-ms` | long | `60000` | 事务回查间隔（毫秒） |
+| `streammq.transaction.check-interval` | duration | `60s` | 事务回查间隔 |
 | `streammq.transaction.max-check-times` | int | `15` | 最大回查次数 |
-| `streammq.transaction.batch-size` | int | `32` | 单次扫描批量 |
 
-> 半消息发送后，框架按 `check-interval-ms` 间隔扫描超时未确认的半消息并触发回查。连续 `max-check-times` 次仍为 `UNKNOW`，框架强制 `ROLLBACK_MESSAGE`。
+> 半消息发送后，框架按 `check-interval` 间隔扫描超时未确认的半消息并触发回查。连续 `max-check-times` 次仍为 `UNKNOW`，框架强制 `ROLLBACK_MESSAGE`。
 
 ```yaml
 streammq:
   transaction:
-    check-interval-ms: 30000        # 30s 回查一次
-    max-check-times: 20             # 最多回查 20 次
-    batch-size: 64
+    check-interval: 30s          # 30s 回查一次
+    max-check-times: 20          # 最多回查 20 次
 ```
 
 ---
@@ -184,14 +158,13 @@ streammq:
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `streammq.dlq.enabled` | boolean | `true` | 是否启用 DLQ |
-| `streammq.dlq.max-retry-times` | int | `3` | DLQ 消费最大重试次数 |
+| `streammq.dlq.failure-strategy` | class | `LogAndDropDlqFailureStrategy` | DLQ 消费失败处理策略实现类 |
+| `streammq.dlq.max-dlq-retry-attempts` | int | `3` | DLQ 消费失败最大重试次数 |
 
 ```yaml
 streammq:
   dlq:
-    enabled: true
-    max-retry-times: 5
+    max-dlq-retry-attempts: 5
 ```
 
 > DLQ Stream Key 格式：`streammq:{namespace}:dlq:{consumerGroup}`
@@ -203,15 +176,14 @@ streammq:
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `streammq.metrics.enabled` | boolean | `true` | 是否启用指标收集（Actuator） |
 | `streammq.tracing.enabled` | boolean | `false` | 是否启用消息追踪 |
+
+> Micrometer 指标无独立开关，由 `streammq.enabled` 控制（`streammq.enabled=false` 时不再注册指标收集器）。
 
 ```yaml
 streammq:
-  metrics:
-    enabled: true                   # 暴露 StreamMQMetrics 到 Actuator
   tracing:
-    enabled: true                   # 启用 Slf4jTraceCollector 与追踪拦截器
+    enabled: true                   # 启用追踪收集器与追踪拦截器
 ```
 
 > 启用 `tracing` 后，框架注册 `Slf4jTraceCollector` 与追踪拦截器，自动埋点发送 / 消费事件。
@@ -221,17 +193,17 @@ streammq:
 
 ## 管理配置
 
-| 配置项 | 类型 | 默认值 | 说明 |
-|--------|------|--------|------|
-| `streammq.management.enabled` | boolean | `true` | 是否启用运维管理端点 |
+StreamMQ 的运维管理端点通过 Spring Boot Actuator 暴露（`@WebEndpoint`，路径 `/actuator/streammq`），不提供 `streammq.management.*` 配置项。
 
 ```yaml
-streammq:
-  management:
-    enabled: true
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,streammq
 ```
 
-> 管理端点鉴权通过 `ManagementAuthenticator` SPI 配置，内置实现：`BasicAuth`、`Token`、`AllowAll`、`DenyAll`。
+> 管理端点鉴权通过 `ManagementAuthenticator` SPI（注册为 Spring Bean）配置，内置实现：`AllowAllAuthenticator`、`BasicAuthAuthenticator`、`TokenAuthenticator`、`DenyAllAuthenticator`（默认，拒绝一切访问，返回 401）。
 
 ---
 
@@ -485,14 +457,14 @@ SQL92 表达式可引用消息的 `userProperties` 与系统字段，支持以�
 | BETWEEN | `age BETWEEN 18 AND 60` | 范围 |
 | IS NULL | `tag IS NULL` | 空判断 |
 
-发送时通过 `userProperty()` 设置可过滤属性：
+发送时通过 `withUserProperty()` 设置可过滤属性：
 
 ```java
 Message<String> message = MessageBuilder.<String>withTopic("order-topic")
         .tag("created")
-        .userProperty("age", "25")
-        .userProperty("region", "CN")
-        .userProperty("status", "A")
+        .withUserProperty("age", "25")
+        .withUserProperty("region", "CN")
+        .withUserProperty("status", "A")
         .body("content")
         .build();
 ```
@@ -512,15 +484,11 @@ StreamMQ 推荐使用 Spring Profile 区分不同环境的配置。
 streammq:
   namespace: streammq-dev
   producer:
-    send-timeout: 5000
+    send-message-timeout: 5000
     retry-times: 1
-  consumer:
+  retry:
     max-reconsume-times: 5
-  metrics:
-    enabled: false
   tracing:
-    enabled: false
-  management:
     enabled: false
 
 redisson:
@@ -536,16 +504,11 @@ redisson:
 streammq:
   namespace: streammq-staging
   producer:
-    send-timeout: 3000
+    send-message-timeout: 3000
     retry-times: 2
-  consumer:
+  retry:
     max-reconsume-times: 16
-    inflight-capacity: 1000
-  metrics:
-    enabled: true
   tracing:
-    enabled: true
-  management:
     enabled: true
 
 redisson:
@@ -565,28 +528,20 @@ streammq:
   namespace: streammq-prod
   producer:
     group: prod-producer-group
-    send-timeout: 3000
+    send-message-timeout: 3000
     retry-times: 3
     compress-threshold: 1024        # 生产环境开启压缩
-    compression-codec: gzip
   consumer:
-    consume-thread-min: 4
-    consume-thread-max: 128
-    pull-batch-size: 64
+    batch-size: 64
+    pull-interval: 0
+  retry:
     max-reconsume-times: 16
-    consume-timeout: 30000
-    inflight-capacity: 2000
   transaction:
-    check-interval-ms: 60000
+    check-interval: 60s
     max-check-times: 15
   dlq:
-    enabled: true
-    max-retry-times: 5
-  metrics:
-    enabled: true
+    max-dlq-retry-attempts: 5
   tracing:
-    enabled: true
-  management:
     enabled: true
 
 redisson:
@@ -635,46 +590,37 @@ StreamMQ 基于 Spring Boot 配置机制，所有配置项均可通过环境变�
 | `streammq.enabled` | `STREAMMQ_ENABLED` |
 | `streammq.namespace` | `STREAMMQ_NAMESPACE` |
 | `streammq.producer.group` | `STREAMMQ_PRODUCER_GROUP` |
-| `streammq.producer.send-timeout` | `STREAMMQ_PRODUCER_SEND_TIMEOUT` |
+| `streammq.producer.send-message-timeout` | `STREAMMQ_PRODUCER_SEND_MESSAGE_TIMEOUT` |
 | `streammq.producer.retry-times` | `STREAMMQ_PRODUCER_RETRY_TIMES` |
 | `streammq.producer.compress-threshold` | `STREAMMQ_PRODUCER_COMPRESS_THRESHOLD` |
-| `streammq.producer.compression-codec` | `STREAMMQ_PRODUCER_COMPRESSION_CODEC` |
-| `streammq.consumer.consume-thread-min` | `STREAMMQ_CONSUMER_CONSUME_THREAD_MIN` |
-| `streammq.consumer.consume-thread-max` | `STREAMMQ_CONSUMER_CONSUME_THREAD_MAX` |
-| `streammq.consumer.pull-batch-size` | `STREAMMQ_CONSUMER_PULL_BATCH_SIZE` |
-| `streammq.consumer.max-reconsume-times` | `STREAMMQ_CONSUMER_MAX_RECONSUME_TIMES` |
-| `streammq.consumer.consume-timeout` | `STREAMMQ_CONSUMER_CONSUME_TIMEOUT` |
-| `streammq.consumer.inflight-capacity` | `STREAMMQ_CONSUMER_INFLIGHT_CAPACITY` |
+| `streammq.consumer.batch-size` | `STREAMMQ_CONSUMER_BATCH_SIZE` |
 | `streammq.consumer.pull-interval` | `STREAMMQ_CONSUMER_PULL_INTERVAL` |
-| `streammq.transaction.check-interval-ms` | `STREAMMQ_TRANSACTION_CHECK_INTERVAL_MS` |
+| `streammq.retry.max-reconsume-times` | `STREAMMQ_RETRY_MAX_RECONSUME_TIMES` |
+| `streammq.transaction.check-interval` | `STREAMMQ_TRANSACTION_CHECK_INTERVAL` |
 | `streammq.transaction.max-check-times` | `STREAMMQ_TRANSACTION_MAX_CHECK_TIMES` |
-| `streammq.transaction.batch-size` | `STREAMMQ_TRANSACTION_BATCH_SIZE` |
-| `streammq.dlq.enabled` | `STREAMMQ_DLQ_ENABLED` |
-| `streammq.dlq.max-retry-times` | `STREAMMQ_DLQ_MAX_RETRY_TIMES` |
-| `streammq.metrics.enabled` | `STREAMMQ_METRICS_ENABLED` |
+| `streammq.dlq.max-dlq-retry-attempts` | `STREAMMQ_DLQ_MAX_DLQ_RETRY_ATTEMPTS` |
 | `streammq.tracing.enabled` | `STREAMMQ_TRACING_ENABLED` |
-| `streammq.management.enabled` | `STREAMMQ_MANAGEMENT_ENABLED` |
 
 ### 使用示例
 
 ```bash
 # 通过环境变量覆盖
 export STREAMMQ_NAMESPACE=streammq-prod
-export STREAMMQ_PRODUCER_SEND_TIMEOUT=5000
-export STREAMMQ_CONSUMER_MAX_RECONSUME_TIMES=20
-export STREAMMQ_DLQ_ENABLED=true
+export STREAMMQ_PRODUCER_SEND_MESSAGE_TIMEOUT=5000
+export STREAMMQ_RETRY_MAX_RECONSUME_TIMES=20
+export STREAMMQ_DLQ_MAX_DLQ_RETRY_ATTEMPTS=5
 
 # 通过 JVM 系统属性覆盖
 java -Dstreammq.namespace=streammq-prod \
-     -Dstreammq.producer.send-timeout=5000 \
-     -Dstreammq.consumer.max-reconsume-times=20 \
+     -Dstreammq.producer.send-message-timeout=5000 \
+     -Dstreammq.retry.max-reconsume-times=20 \
      -jar app.jar
 
 # 通过命令行参数覆盖
 java -jar app.jar \
      --streammq.namespace=streammq-prod \
-     --streammq.producer.send-timeout=5000 \
-     --streammq.consumer.max-reconsume-times=20
+     --streammq.producer.send-message-timeout=5000 \
+     --streammq.retry.max-reconsume-times=20
 ```
 
 ### 配合 .env / Docker / Kubernetes
@@ -686,9 +632,9 @@ services:
     image: streammq-app:latest
     environment:
       - STREAMMQ_NAMESPACE=streammq-prod
-      - STREAMMQ_PRODUCER_SEND_TIMEOUT=5000
-      - STREAMMQ_CONSUMER_MAX_RECONSUME_TIMES=20
-      - STREAMMQ_DLQ_ENABLED=true
+      - STREAMMQ_PRODUCER_SEND_MESSAGE_TIMEOUT=5000
+      - STREAMMQ_RETRY_MAX_RECONSUME_TIMES=20
+      - STREAMMQ_DLQ_MAX_DLQ_RETRY_ATTEMPTS=5
 ```
 
 ```yaml
@@ -696,9 +642,9 @@ services:
 env:
   - name: STREAMMQ_NAMESPACE
     value: "streammq-prod"
-  - name: STREAMMQ_PRODUCER_SEND_TIMEOUT
+  - name: STREAMMQ_PRODUCER_SEND_MESSAGE_TIMEOUT
     value: "5000"
-  - name: STREAMMQ_CONSUMER_MAX_RECONSUME_TIMES
+  - name: STREAMMQ_RETRY_MAX_RECONSUME_TIMES
     value: "20"
 ```
 
@@ -723,15 +669,13 @@ Spring Boot 配置优先级（从高到低）：
 
 | 模块 | 关键配置 | 推荐值（生产） |
 |------|----------|----------------|
-| 生产者 | `send-timeout` | `3000` |
+| 生产者 | `send-message-timeout` | `3000` |
 | 生产者 | `retry-times` | `2-3` |
 | 生产者 | `compress-threshold` | `1024`（开启压缩） |
-| 消费者 | `consume-thread-max` | `64-128` |
-| 消费者 | `pull-batch-size` | `32-64` |
-| 消费者 | `inflight-capacity` | `1000-2000` |
-| 消费者 | `max-reconsume-times` | `16` |
-| 事务 | `check-interval-ms` | `60000` |
+| 消费者 | `batch-size` | `32-64` |
+| 消费者 | `pull-interval` | `0` |
+| 重试 | `max-reconsume-times` | `16` |
+| 事务 | `check-interval` | `60s` |
 | 事务 | `max-check-times` | `15` |
-| DLQ | `enabled` | `true` |
-| 指标 | `metrics.enabled` | `true` |
+| DLQ | `max-dlq-retry-attempts` | `3` |
 | 追踪 | `tracing.enabled` | `true` |

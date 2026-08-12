@@ -2,6 +2,7 @@ package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.core.policy.ManagementAuthenticator;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -82,10 +83,11 @@ public class StreamMQHealthAutoConfiguration {
     public StreamMQActuatorEndpoint streamMQActuatorEndpoint(
             StreamMQAdminEndpoint adminEndpoint,
             org.springframework.beans.factory.ObjectProvider<StreamMQHealthIndicator>
-                    healthIndicatorProvider) {
+                    healthIndicatorProvider,
+            ManagementAuthenticator authenticator) {
         LOG.debug("Creating StreamMQActuatorEndpoint");
         return new StreamMQActuatorEndpoint(
-                adminEndpoint, healthIndicatorProvider.getIfAvailable());
+                adminEndpoint, healthIndicatorProvider.getIfAvailable(), authenticator);
     }
 
     /** StreamMQ 健康检查实现。 */

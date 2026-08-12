@@ -33,4 +33,30 @@ public final class StringUtils {
     public static boolean isNotEmpty(CharSequence cs) {
         return Objects.nonNull(cs) && !cs.isEmpty();
     }
+
+    /**
+     * 校验 StreamMQ 命名（topic / consumerGroup / tag 等）：非 null、非空、不含 {@code ':'}、{@code '*'} 或空白字符。
+     *
+     * <p>Redis Stream Key 使用 {@code :} 作为命名空间分隔符、{@code *} 作为通配符，非法字符会破坏 Key 结构或被错误路由。
+     *
+     * @param name 待校验的名称
+     * @param field 字段名（用于异常信息，如 {@code "topic"}）
+     * @return 去除首尾空白后的合法名称
+     * @throws IllegalArgumentException 如果名称为空或包含非法字符
+     */
+    public static String requireValidName(String name, String field) {
+        Objects.requireNonNull(name, field);
+        String trimmed = name.trim();
+        if (trimmed.isEmpty()) {
+            throw new IllegalArgumentException(field + " must not be empty");
+        }
+        for (int i = 0; i < trimmed.length(); i++) {
+            char c = trimmed.charAt(i);
+            if (c == ':' || c == '*' || Character.isWhitespace(c)) {
+                throw new IllegalArgumentException(
+                        field + " must not contain ':', '*' or whitespace: " + name);
+            }
+        }
+        return trimmed;
+    }
 }

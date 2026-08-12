@@ -14,7 +14,7 @@ import lombok.extern.slf4j.Slf4j;
  * StreamMQConfigRefresher} Bean 时自动退让。
  *
  * @author StreamMQ Contributors
- * @since 2.0.0
+ * @since 0.1.0
  */
 @Slf4j
 public class NoopConfigRefresher implements StreamMQConfigRefresher {

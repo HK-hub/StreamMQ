@@ -60,6 +60,21 @@ public interface StreamMessageProducer {
      */
     List<SendResult> syncSendBatch(List<? extends Message<?>> messages);
 
+    /**
+     * 批量发送（基于 RBatch / Pipeline），支持指定超时。
+     *
+     * <p>默认实现委托 {@link #syncSendBatch(List)}，适配层可覆盖以提供超时控制。
+     *
+     * @param messages 消息列表（必须同 Topic）
+     * @param timeoutMillis 超时毫秒数
+     * @return 每条消息的发送结果
+     * @throws IllegalArgumentException 如果消息列表为空、Topic 不一致或超时非法
+     */
+    default List<SendResult> syncSendBatch(
+            List<? extends Message<?>> messages, long timeoutMillis) {
+        return syncSendBatch(messages);
+    }
+
     /** 关闭生产者，释放资源。 */
     void close();
 }

@@ -60,8 +60,7 @@ import org.slf4j.LoggerFactory;
  *       per-consumer {@link RetryAndDlqHandler}，实现高度可配置
  * </ul>
  *
- * <p>消费结果统一由 {@code onMessage} 返回值（{@link ConsumeAction} / {@link OrderlyAction}）表达， 不再支持手动
- * ACK/nack/defer 调用，避免双模式冲突。
+ * <p>消费结果统一由 {@code onMessage} 返回值（{@link ConsumeAction}）表达， 不再支持手动 ACK/nack/defer 调用，避免双模式冲突。
  *
  * <p>以下职责已委托给独立的策略类（组合模式）：
  *
@@ -216,6 +215,18 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     /** 全局 DLQ 配置 */
     private final DlqConfig dlqConfig;
+
+    /** 顺序消费 PEL 认领调度器（可选，注入后容器启动时注册目标） */
+    private volatile PelClaimScheduler pelClaimScheduler;
+
+    /**
+     * 注入顺序消费 PEL 认领调度器。容器启动时会将所有 ORDERLY 消费目标注册到调度器。
+     *
+     * @param scheduler PEL 认领调度器
+     */
+    public void setPelClaimScheduler(PelClaimScheduler scheduler) {
+        this.pelClaimScheduler = Objects.requireNonNull(scheduler, "scheduler");
+    }
 
     /** 构造容器（向后兼容：内部创建默认策略实现，per-consumer 启用）。 */
     public DefaultStreamMQListenerContainer(
@@ -769,6 +780,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             }
         }
         doStartListeners();
+        if (pelClaimScheduler != null) {
+            registerPelClaimTargets(pelClaimScheduler);
+        }
         LOG.info("ListenerContainer started, state=RUNNING");
     }
 

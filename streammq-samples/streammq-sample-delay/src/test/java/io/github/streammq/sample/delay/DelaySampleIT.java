@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.annotation.DirtiesContext;
+import org.springframework.test.context.ActiveProfiles;
 
 /**
  * 延时消息示例集成测试，基于真实本地 Redis 连接验证延时消息的完整收发链路。
@@ -31,6 +32,7 @@ import org.springframework.test.annotation.DirtiesContext;
  * @since 0.1.0
  */
 @SpringBootTest(classes = DelaySampleApplication.class)
+@ActiveProfiles("it")
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 @DisplayName("延时消息示例集成测试")
 class DelaySampleIT {

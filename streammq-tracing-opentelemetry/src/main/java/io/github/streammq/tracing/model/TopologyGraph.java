@@ -19,7 +19,7 @@ import java.util.List;
  * @param routes 消息流转路由列表
  * @param lastUpdated 拓扑快照时间戳（毫秒）
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public record TopologyGraph(
         String topic,

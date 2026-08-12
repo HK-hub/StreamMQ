@@ -1,5 +1,6 @@
 package io.github.streammq.core.message;
 
+import io.github.streammq.core.util.StringUtils;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -93,10 +94,7 @@ public final class BatchMessage<T> {
         private final List<Message<T>> messages = new ArrayList<>();
 
         private Builder(String topic) {
-            this.topic = Objects.requireNonNull(topic, "topic").trim();
-            if (this.topic.isEmpty()) {
-                throw new IllegalArgumentException("topic must not be empty");
-            }
+            this.topic = StringUtils.requireValidName(topic, "topic");
         }
 
         /**

@@ -33,7 +33,7 @@ import org.springframework.context.annotation.Configuration;
  * 收集器注册。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass({RedissonClient.class, StreamMQTraceService.class})

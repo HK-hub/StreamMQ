@@ -1,4 +1,4 @@
-﻿# 部署指南
+# 部署指南
 
 > 本文档面向准备将 StreamMQ 部署到开发、测试、生产环境的工程师，覆盖从环境准备、单机部署到 Kubernetes 集群部署的完整流程，并给出生产环境的最佳实践配置。
 
@@ -218,7 +218,7 @@ mvn clean compile
 
 ### 运行测试
 
-StreamMQ 当前包含 651 个测试用例，部分集成测试依赖 Testcontainers 启动嵌入式 Redis，需 Docker 环境。
+StreamMQ 当前包含 965 个测试用例，部分集成测试依赖 Testcontainers 启动嵌入式 Redis，需 Docker 环境。
 
 ```bash
 # 运行所有测试（需要 Docker）
@@ -994,11 +994,11 @@ management:
       namespace: ${streammq.namespace}
     distribution:
       percentiles-histogram:
-        streammq.producer.send.duration: true
-        streammq.consumer.consume.duration: true
+        streammq.send.duration: true
+        streammq.consume.duration: true
       percentiles:
-        streammq.producer.send.duration: 0.5,0.9,0.99
-        streammq.consumer.consume.duration: 0.5,0.9,0.99
+        streammq.send.duration: 0.5,0.9,0.99
+        streammq.consume.duration: 0.5,0.9,0.99
 ```
 
 #### Prometheus 抓取配置
@@ -1214,11 +1214,9 @@ server:
 spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s   # 优雅停机最大等待时间
-
-streammq:
-  consumer:
-    shutdown-timeout: 25000     # 消费者停止前等待正在处理消息完成的最长时间（ms）
 ```
+
+> **注意**：StreamMQ 消费者容器停机时，等待正在处理的消息完成的最长时间为固定 5s（0.1.0 暂不可配置，不存在 `streammq.consumer.shutdown-timeout` 配置项）。
 
 ### K8s 配合
 
@@ -1240,7 +1238,7 @@ spec:
 2. preStop hook 执行 sleep 10（等待 LB 摘除流量）
 3. Spring Boot 接收信号，停止接收新请求
 4. StreamMQ 消费者停止拉取新消息
-5. 等待正在处理的消息完成（最长 25 秒）
+5. 等待正在处理的消息完成（最长 5 秒，0.1.0 固定值，不可配置）
 6. 提交消费进度（XACK）
 7. 关闭 Redisson 连接
 8. 应用退出

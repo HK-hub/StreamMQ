@@ -1,4 +1,4 @@
-﻿# FAQ · 常见问题
+# FAQ · 常见问题
 
 > 本文档汇总 StreamMQ 使用过程中的常见问题、故障排查、性能优化与迁移指南，帮助开发者快速定位与解决问题。
 
@@ -325,14 +325,14 @@ public class OrderDlqConsumer implements StreamMessageConcurrentlyConsumer<Strin
 
 | 指标名                              | 类型      | 说明                     |
 | ----------------------------------- | --------- | ------------------------ |
-| `streammq.producer.send.total`      | Counter   | 发送消息总数             |
-| `streammq.producer.send.success`    | Counter   | 发送成功数               |
-| `streammq.producer.send.failed`     | Counter   | 发送失败数               |
-| `streammq.producer.send.duration`   | Timer     | 发送耗时分布             |
-| `streammq.consumer.consume.total`   | Counter   | 消费消息总数             |
-| `streammq.consumer.consume.duration`| Timer     | 消费耗时分布             |
-| `streammq.consumer.retry.total`     | Counter   | 重试消息数               |
-| `streammq.consumer.dlq.total`       | Counter   | 进入死信队列数           |
+| `streammq.send.total`      | Counter   | 发送消息总数             |
+| `streammq.send.total (tag success=true)`    | Counter   | 发送成功数               |
+| `streammq.send.total (tag success=false)`     | Counter   | 发送失败数               |
+| `streammq.send.duration`   | Timer     | 发送耗时分布             |
+| `streammq.consume.total`   | Counter   | 消费消息总数             |
+| `streammq.consume.duration`| Timer     | 消费耗时分布             |
+| `streammq.retry.total`     | Counter   | 重试消息数               |
+| `streammq.dlq.total`       | Counter   | 进入死信队列数           |
 
 #### 2. Actuator 端点
 
@@ -411,11 +411,9 @@ server:
 spring:
   lifecycle:
     timeout-per-shutdown-phase: 30s
-
-streammq:
-  consumer:
-    shutdown-timeout: 25000     # 等待正在处理的消息完成
 ```
+
+> **注意**：StreamMQ 消费者容器停机时，等待正在处理的消息完成的最长时间为固定 5s（0.1.0 暂不可配置，不存在 `streammq.consumer.shutdown-timeout` 配置项）。
 
 **K8s 配合：**
 
@@ -433,7 +431,7 @@ spec:
 优雅停机流程：
 1. 收到 SIGTERM 信号
 2. 停止拉取新消息
-3. 等待正在处理的消息完成（最长 `shutdown-timeout`）
+3. 等待正在处理的消息完成（最长 5 秒，0.1.0 固定值，不可配置）
 4. 提交消费进度（XACK）
 5. 关闭 Redisson 连接
 6. 应用退出
@@ -525,12 +523,11 @@ redis-cli XINFO GROUPS streammq:order-topic
 redis-cli XINFO CONSUMERS streammq:order-topic order-group
 
 # 3. 查看 StreamMQ 指标
-curl http://localhost:8080/actuator/metrics/streammq.consumer.lag
+curl http://localhost:8080/actuator/metrics/streammq.consume.total
 ```
 
 **解决方案：**
 - 增加消费者实例数（集群消费模式）
-- 增大 `consume-thread-max`
 - 优化业务处理逻辑（异步化、批量化）
 - 调整 `pull-batch-size`
 - 检查是否单分片热点导致顺序消费阻塞

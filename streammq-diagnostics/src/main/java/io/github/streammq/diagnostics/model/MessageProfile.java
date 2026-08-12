@@ -31,7 +31,7 @@ import java.util.List;
  * @param bodyType 消息体类型名
  * @param bornHost 出生主机（发送端 host:port）
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public record MessageProfile(
         String messageId,

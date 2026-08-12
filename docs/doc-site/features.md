@@ -804,8 +804,8 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 ```java
 Message<Order> msg = MessageBuilder.<Order>withTopic("order-topic")
         .body(order)
-        .userProperty("region", "hangzhou")
-        .userProperty("amount", "150")
+        .withUserProperty("region", "hangzhou")
+        .withUserProperty("amount", "150")
         .build();
 ```
 
@@ -897,16 +897,16 @@ StreamMQ 自动注册以下 Micrometer 指标，可通过 Actuator `/actuator/me
 
 | 指标名 | 类型 | 说明 |
 |--------|------|------|
-| `streammq.producer.send.total` | Counter | 发送消息总数 |
-| `streammq.producer.send.success` | Counter | 发送成功数 |
-| `streammq.producer.send.failed` | Counter | 发送失败数 |
-| `streammq.producer.send.duration` | Timer | 发送耗时分布 |
-| `streammq.consumer.consume.total` | Counter | 消费消息总数 |
-| `streammq.consumer.consume.success` | Counter | 消费成功数 |
-| `streammq.consumer.consume.failed` | Counter | 消费失败数 |
-| `streammq.consumer.consume.duration` | Timer | 消费耗时分布 |
-| `streammq.consumer.retry.total` | Counter | 重试消息数 |
-| `streammq.consumer.dlq.total` | Counter | 进入死信队列数 |
+| `streammq.send.total` | Counter | 发送消息总数（tag `success`） |
+| `streammq.send.duration` | Timer | 发送耗时分布 |
+| `streammq.consume.total` | Counter | 消费消息总数 |
+| `streammq.consume.duration` | Timer | 消费耗时分布 |
+| `streammq.retry.total` | Counter | 重试消息数 |
+| `streammq.dlq.total` | Counter | 进入死信队列数 |
+| `streammq.delay.total` | Counter | 延时消息投递数 |
+| `streammq.transaction.commit.total` | Counter | 事务提交数 |
+| `streammq.transaction.rollback.total` | Counter | 事务回滚数 |
+| `streammq.transaction.check.total` | Counter | 事务回查数 |
 
 ### 启用指标
 
@@ -1208,64 +1208,59 @@ public interface ManagementAuthenticator {
 
 ## 管理 REST API
 
-StreamMQ 内置 Admin REST 端点，用于运维管理。默认挂载在 `/streammq-admin` 路径下。
+StreamMQ 内置 Admin REST 端点，用于运维管理。默认挂载在 `/actuator/streammq` 路径下。
 
 ### 启用管理端点
 
+管理端点为 Actuator Web 端点（`@WebEndpoint(id = "streammq")`），当 `streammq.enabled=true` 且 Actuator 在 classpath 时自动注册。需通过 Actuator 暴露配置开放访问：
+
 ```yaml
-streammq:
-  management:
-    enabled: true   # 启用管理端点
+management:
+  endpoints:
+    web:
+      exposure:
+        include: streammq   # 或 "*"
 ```
 
 ### 端点列表
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/streammq-admin/topics` | 查询所有 Topic 列表 |
-| `GET` | `/streammq-admin/topics/{topic}` | 查询指定 Topic 详情 |
-| `GET` | `/streammq-admin/topics/{topic}/groups` | 查询 Topic 下所有消费组 |
-| `GET` | `/streammq-admin/consumers` | 查询所有消费者实例 |
-| `GET` | `/streammq-admin/consumers/{group}` | 查询指定消费组的消费者实例 |
-| `POST` | `/streammq-admin/consumers/{group}/pause` | 暂停消费组 |
-| `POST` | `/streammq-admin/consumers/{group}/resume` | 恢复消费组 |
-| `GET` | `/streammq-admin/dlq/{group}` | 查询指定消费组的死信消息 |
-| `POST` | `/streammq-admin/dlq/{group}/resend` | 重发死信消息到原 Topic |
-| `DELETE` | `/streammq-admin/dlq/{group}/{messageId}` | 删除指定死信消息 |
-| `GET` | `/streammq-admin/metrics` | 查询 StreamMQ 指标 |
-| `GET` | `/streammq-admin/trace/{messageId}` | 按消息 ID 查询追踪记录 |
+| `GET` | `/actuator/streammq` | 总览（状态、消费组、Topic） |
+| `GET` | `/actuator/streammq/groups` | 消费组列表 |
+| `GET` | `/actuator/streammq/pending/{group}/{topic}` | Pending 消息 |
+| `GET` | `/actuator/streammq/dlq/{group}` | 查询指定消费组的死信消息 |
+| `POST` | `/actuator/streammq/dlq/{group}/requeue?messageId&targetTopic` | DLQ 消息重新入队 |
+| `DELETE` | `/actuator/streammq/dlq/{group}/{messageId}` | 删除指定死信消息 |
+| `GET` | `/actuator/streammq/topics` | Topic 列表 |
+| `GET` | `/actuator/streammq/stats/{group}/{topic}` | 运行时统计 |
+| `POST` | `/actuator/streammq/ack/{group}/{topic}?messageId` | 手动 ACK |
+| `POST` | `/actuator/streammq/rebalance/{group}` | 触发重平衡 |
+| `POST` | `/actuator/streammq/topics?topic` | 创建 Topic |
+| `DELETE` | `/actuator/streammq/topics/{topic}` | 删除 Topic |
+| `POST` | `/actuator/streammq/config/{group}` | 更新消费组配置 |
 
 ### 鉴权配置
 
-通过 `ManagementAuthenticator` SPI 配置管理端点鉴权：
-
-```yaml
-streammq:
-  management:
-    enabled: true
-    authenticator: basic   # basic / token / allow-all / deny-all
-    basic:
-      username: admin
-      password: admin123
-```
+所有操作（含只读）均通过 `ManagementAuthenticator` SPI 鉴权，鉴权失败返回 HTTP 401。默认实现 `DenyAllAuthenticator` 拒绝一切访问；业务方注册自定义 `ManagementAuthenticator` Bean（如 `BasicAuthAuthenticator` / `TokenAuthenticator` / `AllowAllAuthenticator`）即可开放。Basic 凭据取自请求的 `Authorization: Basic` 头。
 
 ### 使用示例
 
 ```bash
 # 查询所有 Topic
-curl -u admin:admin123 http://localhost:8080/streammq-admin/topics
+curl -u admin:admin123 http://localhost:8080/actuator/streammq/topics
 
 # 暂停消费组
-curl -u admin:admin123 -X POST http://localhost:8080/streammq-admin/consumers/order-group/pause
+curl -u admin:admin123 -X POST http://localhost:8080/actuator/streammq/consumers/order-group/pause
 
 # 查询死信
-curl -u admin:admin123 http://localhost:8080/streammq-admin/dlq/order-group
+curl -u admin:admin123 http://localhost:8080/actuator/streammq/dlq/order-group
 
 # 重发死信
-curl -u admin:admin123 -X POST http://localhost:8080/streammq-admin/dlq/order-group/resend
+curl -u admin:admin123 -X POST http://localhost:8080/actuator/streammq/dlq/order-group/resend
 
 # 查询消息追踪
-curl -u admin:admin123 http://localhost:8080/streammq-admin/trace/123-0
+curl -u admin:admin123 http://localhost:8080/actuator/streammq/trace/123-0
 ```
 
 ---

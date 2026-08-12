@@ -33,6 +33,6 @@
  * 所有探针与指标方法将以降级方式安全返回，不抛出异常。
  *
  * @author StreamMQ Contributors
- * @since 2.0.0
+ * @since 0.1.0
  */
 package io.github.streammq.cloud.k8s;

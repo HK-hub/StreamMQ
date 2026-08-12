@@ -15,7 +15,7 @@ import java.util.Map;
  * @param detail 事件详情描述
  * @param attributes 扩展属性
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public record TraceEvent(
         TraceEventType type,

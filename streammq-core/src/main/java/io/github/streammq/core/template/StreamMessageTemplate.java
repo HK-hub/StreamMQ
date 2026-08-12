@@ -180,6 +180,22 @@ public interface StreamMessageTemplate extends TransactionExecutor {
     <T> List<SendResult> syncSendBatch(BatchMessage<T> batch);
 
     /**
+     * 批量发送，支持指定超时与重试次数。
+     *
+     * <p>语义与 {@link #syncSendBatch(BatchMessage)} 一致，另支持 Pipeline 超时与整体重试。 重试语义为
+     * at-least-once：失败后可能已部分写入 Redis，重试可能造成重复投递，由消费端幂等兜底。
+     *
+     * @param batch 批量消息
+     * @param timeoutMillis 超时毫秒数（&lt;=0 使用默认超时）
+     * @param retryTimes 重试次数（&lt;0 按 0 处理）
+     * @param <T> body 类型
+     * @return 每条消息的发送结果（与输入顺序一致）
+     * @throws IllegalArgumentException 如果 batch 为空
+     * @throws io.github.streammq.core.exception.StreamMQException 如果 Pipeline 本身异常
+     */
+    <T> List<SendResult> syncSendBatch(BatchMessage<T> batch, long timeoutMillis, int retryTimes);
+
+    /**
      * 返回消息转换器。
      *
      * @return 消息转换器

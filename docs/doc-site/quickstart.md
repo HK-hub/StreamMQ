@@ -71,7 +71,7 @@ streammq:
   namespace: streammq        # 全局命名空间，用于隔离不同环境（如 dev/test/prod）
   producer:
     group: default-producer-group
-    send-timeout: 3000       # 发送超时（毫秒）
+    send-message-timeout: 3000   # 发送超时（毫秒）
 
 # Redisson 配置（单机示例，生产环境请使用集群配置）
 redisson:
@@ -87,7 +87,7 @@ redisson:
 | `streammq.enabled` | `true` | 是否启用 StreamMQ 自动装配 |
 | `streammq.namespace` | `""` | 全局命名空间，用于 Redis Key 隔离 |
 | `streammq.producer.group` | `default-producer-group` | 默认生产者组名 |
-| `streammq.producer.send-timeout` | `3000` | 发送超时毫秒数 |
+| `streammq.producer.send-message-timeout` | `3000` | 发送超时毫秒数 |
 | `redisson.*` | - | Redisson 原生配置，参考 Redisson 文档 |
 
 > ⚠️ 生产环境请使用 Redis Sentinel 或 Cluster 配置，并设置独立命名空间隔离环境。
@@ -154,7 +154,7 @@ public class OrderService {
                 .tag("created")              // 设置 Tag，用于消息过滤
                 .keys(orderId)               // 设置业务键，用于幂等与查询
                 .body(content)               // 设置消息体
-                .userProperty("traceId", "t-001")  // 自定义用户属性
+                .withUserProperty("traceId", "t-001")  // 自定义用户属性
                 .build();
 
         // 同步发送：等待 Redis 返回，失败抛 StreamMQException
@@ -256,7 +256,7 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 
 ## Step 6：通过 REST 接口测试
 
-为了让发送与消费形成完整闭环，我们添加一个 REST Controller 触发消息发送：
+为了让发送与消费形成完整闭环，可添加一个 REST Controller 触发消息发送（REST 触发接口并非必需——也可通过发送方示例或测试触发消息发送）：
 
 ```java
 package io.github.streammq.demo;
@@ -357,7 +357,7 @@ public class OrderController {
 **现象**：`ProducerTimeoutException: Send message timeout`。
 
 **排查**：
-- 调大 `streammq.producer.send-timeout`（默认 3000ms）。
+- 调大 `streammq.producer.send-message-timeout`（默认 3000ms）。
 - 检查 Redis 负载与网络延迟。
 - 确认 Redis 未执行 `BGSAVE` 等阻塞操作。
 

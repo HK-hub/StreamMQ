@@ -10,6 +10,6 @@ package io.github.streammq.tracing.model;
  * @param messageType 消息类型描述（如 Topic / Tag）
  * @param rate 消息速率（条/秒，基于追踪数据估算）
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public record TopologyRoute(String from, String to, String messageType, double rate) {}

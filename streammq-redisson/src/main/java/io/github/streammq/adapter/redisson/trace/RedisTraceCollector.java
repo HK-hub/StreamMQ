@@ -29,7 +29,7 @@ import org.slf4j.LoggerFactory;
  * <p>追踪写入失败不影响主流程，仅记录 WARN 日志。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public class RedisTraceCollector implements TraceCollector {
 

@@ -38,16 +38,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * ACK / 重试 / DLQ 路由处理器默认实现（策略类）。
+ * ACK / 閲嶈瘯 / DLQ 璺敱澶勭悊鍣ㄩ粯璁ゅ疄鐜帮紙绛栫暐绫伙級銆?
  *
- * <p>封装消息消费后的动作路由逻辑。DLQ 消费失败时， 使用 {@link DlqFailureStrategy} 决策 drop / retry / secondaryDlq 三种去向。
+ * <p>灏佽娑堟伅娑堣垂鍚庣殑鍔ㄤ綔璺敱閫昏緫銆侱LQ 娑堣垂澶辫触鏃讹紝 浣跨敤 {@link DlqFailureStrategy} 鍐崇瓥 drop / retry /
+ * secondaryDlq 涓夌鍘诲悜銆?
  *
- * <p>内置策略：
+ * <p>鍐呯疆绛栫暐锛?
  *
  * <ul>
- *   <li>{@link LogAndDropDlqFailureStrategy} - 始终丢弃（默认）
- *   <li>{@link LimitedRetryDlqFailureStrategy} - 有限次重试后丢弃
- *   <li>{@link SecondaryDlqFailureStrategy} - 有限次重试后转投二级死信
+ *   <li>{@link LogAndDropDlqFailureStrategy} - 濮嬬粓涓㈠純锛堥粯璁わ級
+ *   <li>{@link LimitedRetryDlqFailureStrategy} - 鏈夐檺娆￠噸璇曞悗涓㈠純
+ *   <li>{@link SecondaryDlqFailureStrategy} - 鏈夐檺娆￠噸璇曞悗杞姇浜岀骇姝讳俊
  * </ul>
  *
  * @author StreamMQ Contributors
@@ -67,7 +68,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
     @NonNull private final DlqFailureStrategy dlqFailureStrategy;
     @NonNull private final DlqConfig dlqConfig;
 
-    /** 指标收集器（可选注入，用于记录重试 / 死信指标，null 时为 no-op） */
+    /** 鎸囨爣鏀堕泦鍣紙鍙€夋敞鍏ワ紝鐢ㄤ簬璁板綍閲嶈瘯 / 姝讳俊鎸囨爣锛宯ull 鏃朵负 no-op锛? */
     @Setter private volatile StreamMQMetrics metrics;
 
     @Override
@@ -129,14 +130,14 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
     }
 
     /**
-     * DLQ 消费失败处理（基于策略决策）。
+     * DLQ 娑堣垂澶辫触澶勭悊锛堝熀浜庣瓥鐣ュ喅绛栵級銆?
      *
-     * <p>流程：
+     * <p>娴佺▼锛?
      *
      * <ol>
-     *   <li>从消息中解析 dlqRetryCount
-     *   <li>构造 {@link DlqFailureContext} 传给策略
-     *   <li>执行策略返回的决策（drop/retry/secondaryDlq）
+     *   <li>浠庢秷鎭腑瑙ｆ瀽 dlqRetryCount
+     *   <li>鏋勯€?{@link DlqFailureContext} 浼犵粰绛栫暐
+     *   <li>鎵ц绛栫暐杩斿洖鐨勫喅绛栵紙drop/retry/secondaryDlq锛?
      * </ol>
      */
     private void handleDlqFailureWithStrategy(
@@ -225,7 +226,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         }
     }
 
-    /** 将 DLQ 消息写入 retry ZSet（以哨兵 topic 标识，RetryScheduler 检测后 XADD 回 DLQ Stream） */
+    /** 灏?DLQ 娑堟伅鍐欏叆 retry ZSet锛堜互鍝ㄥ叺 topic 鏍囪瘑锛孯etryScheduler 妫€娴嬪悗 XADD 鍥?DLQ Stream锛? */
     private void scheduleDlqRetry(
             Message<?> message,
             ListenerRegistration<?> reg,
@@ -236,7 +237,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             Duration delay) {
         long nextRetryAt = System.currentTimeMillis() + delay.toMillis();
         String msgIdStr = messageId.getStreamEntryId();
-        String payloadKey = StreamMQKeys.delayPayloadHash(reg.getNamespace(), msgIdStr);
+        String payloadKey = StreamMQKeys.retryPayloadHash(reg.getNamespace(), msgIdStr);
         int newDlqRetryCount = dlqRetryCount + 1;
         Map<String, String> payload = new HashMap<>(fields.size() + 3);
         payload.putAll(fields);
@@ -262,7 +263,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         listener.ack(messageId);
     }
 
-    /** 路由到二级死信队列 */
+    /** 璺敱鍒颁簩绾ф淇￠槦鍒? */
     private void routeToSecondaryDlq(
             Message<?> message,
             ListenerRegistration<?> reg,
@@ -305,7 +306,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         return 0;
     }
 
-    // ===================== 原方法（不变） =====================
+    // ===================== 鍘熸柟娉曪紙涓嶅彉锛?=====================
 
     @Override
     public void handleReconsumeLater(
@@ -402,7 +403,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             Duration delay) {
         long nextRetryAt = System.currentTimeMillis() + delay.toMillis();
         String msgIdStr = messageId.getStreamEntryId();
-        String payloadKey = StreamMQKeys.delayPayloadHash(reg.getNamespace(), msgIdStr);
+        String payloadKey = StreamMQKeys.retryPayloadHash(reg.getNamespace(), msgIdStr);
         Map<String, String> payload = new HashMap<>(fields.size() + 2);
         payload.putAll(fields);
         payload.put(RetryScheduler.FIELD_RETRY_COUNT, Integer.toString(retryCount));
@@ -461,37 +462,37 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         }
     }
 
-    // ===================== 指标收集 =====================
+    // ===================== 鎸囨爣鏀堕泦 =====================
 
     /**
-     * 记录重试指标（null 安全，指标异常不影响业务主流程）。
+     * 璁板綍閲嶈瘯鎸囨爣锛坣ull 瀹夊叏锛屾寚鏍囧紓甯镐笉褰卞搷涓氬姟涓绘祦绋嬶級銆?
      *
-     * @param topic 消息主题
-     * @param group 消费者组
+     * @param topic 娑堟伅涓婚
+     * @param group 娑堣垂鑰呯粍
      */
     private void recordRetryMetrics(String topic, String group) {
         if (Objects.nonNull(metrics)) {
             try {
                 metrics.recordRetry(topic, group);
             } catch (Exception ignored) {
-                // 指标收集失败不得影响业务主流程
+                // 鎸囨爣鏀堕泦澶辫触涓嶅緱褰卞搷涓氬姟涓绘祦绋?
                 LOG.debug("Metrics collection failed", ignored);
             }
         }
     }
 
     /**
-     * 记录死信指标（null 安全，指标异常不影响业务主流程）。
+     * 璁板綍姝讳俊鎸囨爣锛坣ull 瀹夊叏锛屾寚鏍囧紓甯镐笉褰卞搷涓氬姟涓绘祦绋嬶級銆?
      *
-     * @param topic 消息主题
-     * @param group 消费者组
+     * @param topic 娑堟伅涓婚
+     * @param group 娑堣垂鑰呯粍
      */
     private void recordDlqMetrics(String topic, String group) {
         if (Objects.nonNull(metrics)) {
             try {
                 metrics.recordDlq(topic, group);
             } catch (Exception ignored) {
-                // 指标收集失败不得影响业务主流程
+                // 鎸囨爣鏀堕泦澶辫触涓嶅緱褰卞搷涓氬姟涓绘祦绋?
                 LOG.debug("Metrics collection failed", ignored);
             }
         }

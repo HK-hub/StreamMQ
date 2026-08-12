@@ -3,6 +3,8 @@ package io.github.streammq.core.service;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -789,26 +791,28 @@ class StreamMessageServiceTest {
         @Test
         @DisplayName("sendBatch(String topic, timeout, retry, Message<T>...) varargs + 超时重试")
         void sendBatchTopicTimeoutRetryVarargs() {
-            when(template.syncSendBatch(any(BatchMessage.class))).thenReturn(List.of(okResult()));
+            when(template.syncSendBatch(any(BatchMessage.class), anyLong(), anyInt()))
+                    .thenReturn(List.of(okResult()));
 
             Message<String> m1 = MessageBuilder.<String>withTopic("orders").body("a").build();
             mqService.sendBatch("orders", 1000L, 2, m1);
 
             ArgumentCaptor<BatchMessage> captor = ArgumentCaptor.forClass(BatchMessage.class);
-            verify(template).syncSendBatch(captor.capture());
+            verify(template).syncSendBatch(captor.capture(), eq(1000L), eq(2));
             assertThat(captor.getValue().size()).isEqualTo(1);
         }
 
         @Test
-        @DisplayName("sendBatch(List<Message<T>>, timeout, retry) 预留超时重试 API")
+        @DisplayName("sendBatch(List<Message<T>>, timeout, retry) 透传超时与重试参数")
         void sendBatchMessageListTimeoutRetry() {
-            when(template.syncSendBatch(any(BatchMessage.class))).thenReturn(List.of(okResult()));
+            when(template.syncSendBatch(any(BatchMessage.class), anyLong(), anyInt()))
+                    .thenReturn(List.of(okResult()));
 
             List<Message<String>> messages =
                     List.of(MessageBuilder.<String>withTopic("orders").body("a").build());
             mqService.sendBatch(messages, 1000L, 2);
 
-            verify(template).syncSendBatch(any(BatchMessage.class));
+            verify(template).syncSendBatch(any(BatchMessage.class), eq(1000L), eq(2));
         }
 
         @Test

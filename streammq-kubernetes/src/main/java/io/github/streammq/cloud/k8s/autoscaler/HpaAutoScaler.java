@@ -35,13 +35,14 @@ import org.springframework.stereotype.Component;
  * </ul>
  *
  * @author StreamMQ Contributors
- * @since 2.0.0
+ * @since 0.1.0
  */
 @Slf4j
 @Component
 public class HpaAutoScaler implements InitializingBean, DisposableBean {
 
-    @Autowired private KubernetesClient kubernetesClient;
+    @Autowired(required = false)
+    private KubernetesClient kubernetesClient;
 
     @Autowired private HpaMetricsProvider metricsProvider;
 

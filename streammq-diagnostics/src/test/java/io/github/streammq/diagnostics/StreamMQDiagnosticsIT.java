@@ -54,7 +54,7 @@ import org.springframework.test.context.DynamicPropertySource;
  * 与诊断模块（{@code streammq.diagnostics.enabled=true}），确保追踪数据被写入 Redis 并可被诊断服务查询。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 @SpringBootTest(
         classes = StreamMQDiagnosticsIT.TestApplication.class,

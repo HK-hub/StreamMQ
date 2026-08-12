@@ -309,6 +309,25 @@ public final class StreamMQKeys {
                 + requireNonEmpty(msgId, "msgId");
     }
 
+    /**
+     * 重试消息 payload Hash Key：{@code streammq:{ns}:retry:payload:{msgId}}。
+     *
+     * <p>与延时消息 payload 分离，避免两种调度在同一 Key 空间中混淆或潜在冲突。
+     *
+     * @param namespace 命名空间
+     * @param msgId 消息 ID
+     * @return Hash Key
+     */
+    public static String retryPayloadHash(String namespace, String msgId) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_RETRY
+                + SEP
+                + SEG_PAYLOAD
+                + SEP
+                + requireNonEmpty(msgId, "msgId");
+    }
+
     /** 延时已投递计数 Hash Key：{@code streammq:{ns}:delay:meta:delivered}。 */
     public static String delayDeliveredCounter(String namespace) {
         return prefix(namespace) + SEP + TYPE_DELAY + SEP + TYPE_META + SEP + SEG_DELIVERED;

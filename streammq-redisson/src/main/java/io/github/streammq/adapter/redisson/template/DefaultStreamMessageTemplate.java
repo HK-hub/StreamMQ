@@ -366,6 +366,63 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     }
 
     @Override
+    public <T> List<SendResult> syncSendBatch(
+            BatchMessage<T> batch, long timeoutMillis, int retryTimes) {
+        Objects.requireNonNull(batch, "batch");
+        if (batch.isEmpty()) {
+            throw new IllegalArgumentException("batch is empty");
+        }
+        if (timeoutMillis <= 0) {
+            timeoutMillis = DEFAULT_SEND_TIMEOUT_MILLIS;
+        }
+        if (retryTimes < 0) {
+            retryTimes = 0;
+        }
+
+        for (Message<T> message : batch.getMessages()) {
+            if (!applyInterceptorsBefore(message)) {
+                throw new StreamMQException(
+                        "Batch send aborted by interceptor for topic: " + message.getTopic());
+            }
+        }
+
+        StreamMessageProducer producer = resolveProducer(batch.getTopic());
+        StreamMQException lastError = null;
+        for (int attempt = 0; attempt <= retryTimes; attempt++) {
+            try {
+                List<SendResult> results =
+                        producer.syncSendBatch(batch.getMessages(), timeoutMillis);
+                List<SendResult> finalResults = new ArrayList<>(results.size());
+                for (int i = 0; i < results.size(); i++) {
+                    SendResult result = results.get(i);
+                    applyInterceptorsAfter(batch.getMessages().get(i), result);
+                    finalResults.add(result);
+                }
+                return finalResults;
+            } catch (StreamMQException ex) {
+                lastError = ex;
+                for (Message<T> msg : batch.getMessages()) {
+                    notifyProducerException(msg, ex, InvokeTiming.EXECUTING);
+                }
+                LOG.warn(
+                        "syncSendBatch attempt {}/{} failed for topic {}: {}",
+                        attempt + 1,
+                        retryTimes + 1,
+                        batch.getTopic(),
+                        ex.getMessage(),
+                        ex);
+            }
+        }
+        for (Message<T> msg : batch.getMessages()) {
+            applyInterceptorsAfter(msg, buildFailedResult(msg, lastError));
+        }
+        throw Objects.nonNull(lastError)
+                ? lastError
+                : new StreamMQException(
+                        "syncSendBatch failed for unknown reason: " + batch.getTopic());
+    }
+
+    @Override
     public <T> SendResult executeInTransaction(
             Message<T> message, TransactionCallback<T> callback) {
         Objects.requireNonNull(message, "message");

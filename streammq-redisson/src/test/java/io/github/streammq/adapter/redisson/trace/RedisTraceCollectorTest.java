@@ -25,7 +25,7 @@ import org.redisson.api.RedissonClient;
  * {@link RedisTraceCollector} 单元测试，覆盖启用状态、name、记录方法、 null 入参、异常容忍与构造参数校验。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 @DisplayName("RedisTraceCollector Redis 追踪收集器测试")
 class RedisTraceCollectorTest {

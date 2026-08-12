@@ -11,6 +11,6 @@ package io.github.streammq.tracing.model;
  * @param group 消费者组名，生产者节点可为 {@code null}
  * @param active 是否活跃（在最近时间窗口内有追踪记录）
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public record TopologyNode(String name, String type, String topic, String group, boolean active) {}

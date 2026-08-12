@@ -30,4 +30,13 @@ public interface StreamMQEventBus {
      * @param <E> 事件类型
      */
     <E> void subscribe(Class<E> eventType, Consumer<E> subscriber);
+
+    /**
+     * 关闭事件总线，释放异步分发线程等资源。
+     *
+     * <p>默认空实现，适配层可覆盖以释放自身资源（如线程池）。 由 Spring 容器在应用关闭时调用。
+     */
+    default void close() {
+        // no-op
+    }
 }

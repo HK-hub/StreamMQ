@@ -45,6 +45,10 @@ public class StreamMQAdminEndpoint {
     /** 列出所有已注册的 ConsumerGroup 及其实例数、pending 消息数。 */
     public List<Map<String, Object>> listGroups() {
         List<Map<String, Object>> result = new ArrayList<>();
+        if (container == null) {
+            LOG.debug("Listener container not available, returning empty consumer groups");
+            return result;
+        }
         var consumers = container.getConsumers();
         for (var meta : consumers) {
             Map<String, Object> info = new LinkedHashMap<>();
@@ -202,6 +206,10 @@ public class StreamMQAdminEndpoint {
     /** 列出所有已知 Topic。 */
     public List<String> listTopics() {
         List<String> topics = new ArrayList<>();
+        if (container == null) {
+            LOG.debug("Listener container not available, returning empty topics");
+            return topics;
+        }
         for (var meta : container.getConsumers()) {
             if (!topics.contains(meta.topic())) {
                 topics.add(meta.topic());

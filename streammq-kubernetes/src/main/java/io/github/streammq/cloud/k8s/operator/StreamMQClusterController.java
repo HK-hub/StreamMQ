@@ -47,13 +47,14 @@ import org.springframework.beans.factory.annotation.Autowired;
  * </ol>
  *
  * @author StreamMQ Contributors
- * @since 2.0.0
+ * @since 0.1.0
  */
 @Slf4j
 public class StreamMQClusterController
         implements InitializingBean, DisposableBean, Runnable, AutoCloseable {
 
-    @Autowired private KubernetesClient kubernetesClient;
+    @Autowired(required = false)
+    private KubernetesClient kubernetesClient;
 
     @Autowired(required = false)
     private StreamMQConfigRefresher configRefresher;

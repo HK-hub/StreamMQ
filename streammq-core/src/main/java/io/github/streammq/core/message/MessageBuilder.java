@@ -1,6 +1,7 @@
 package io.github.streammq.core.message;
 
 import io.github.streammq.core.enums.DelayLevel;
+import io.github.streammq.core.util.StringUtils;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -126,7 +127,7 @@ public final class MessageBuilder<T> {
      * @return this
      */
     public MessageBuilder<T> topic(String topic) {
-        this.topic = Objects.requireNonNull(topic, "topic").trim();
+        this.topic = StringUtils.requireValidName(topic, "topic");
         return this;
     }
 

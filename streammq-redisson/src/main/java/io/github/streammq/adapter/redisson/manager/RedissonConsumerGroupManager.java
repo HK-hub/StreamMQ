@@ -220,6 +220,8 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
         } catch (RuntimeException ex) {
             LOG.warn("Failed to release RSemaphore for group={}: {}", group, ex.getMessage());
         }
+        // 关闭心跳线程池，避免线程泄漏
+        heartbeatExecutor.shutdown();
         LOG.info("Consumer instance unregistered: group={}, instanceId={}", group, instanceId);
     }
 

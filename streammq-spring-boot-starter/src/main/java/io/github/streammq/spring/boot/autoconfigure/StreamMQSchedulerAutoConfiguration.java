@@ -1,6 +1,7 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler;
+import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.core.converter.MessageConverter;
@@ -65,10 +66,15 @@ public class StreamMQSchedulerAutoConfiguration {
             ObjectProvider<StreamMQMetrics> metricsProvider) {
         Duration interval = properties.getRetry().getScanInterval();
         int batchSize = properties.getRetry().getBatchSize();
-        LOG.info("Creating RetryScheduler: scanInterval={}, batchSize={}", interval, batchSize);
+        int streamMaxLen = properties.getRetry().getStreamMaxLen();
+        LOG.info(
+                "Creating RetryScheduler: scanInterval={}, batchSize={}, streamMaxLen={}",
+                interval,
+                batchSize,
+                streamMaxLen);
         // RetryScheduler 当前未暴露指标埋点接口；重试指标由 DefaultRetryAndDlqHandler 在调度重试时记录。
         return new RetryScheduler(
-                redisson, properties.getNamespace(), interval.toMillis(), batchSize);
+                redisson, properties.getNamespace(), interval.toMillis(), batchSize, streamMaxLen);
     }
 
     /**
@@ -153,6 +159,37 @@ public class StreamMQSchedulerAutoConfiguration {
     }
 
     /**
+     * 顺序消费 PEL 认领调度器：当 {@code streammq.retry.enabled=true}（默认）时注册。
+     *
+     * <p>负责恢复顺序消费 SUSPEND/崩溃后遗留的 PEL 消息。目标由 {@code
+     * DefaultStreamMQListenerContainer#registerPelClaimTargets} 在容器启动时注册。
+     *
+     * @param redisson Redisson 客户端
+     * @param properties 配置
+     * @return PEL 认领调度器
+     */
+    @Bean
+    @ConditionalOnMissingBean(PelClaimScheduler.class)
+    @ConditionalOnProperty(
+            prefix = "streammq.retry",
+            name = "enabled",
+            havingValue = "true",
+            matchIfMissing = true)
+    public PelClaimScheduler streamMQPelClaimScheduler(
+            RedissonClient redisson, StreamMQProperties properties) {
+        long intervalMs = properties.getRetry().getPelClaimScanInterval().toMillis();
+        long minIdleMs = properties.getRetry().getPelClaimMinIdleMs();
+        int batchSize = properties.getRetry().getBatchSize();
+        LOG.info(
+                "Creating PelClaimScheduler: scanInterval={}ms, minIdleMs={}ms, batchSize={}",
+                intervalMs,
+                minIdleMs,
+                batchSize);
+        return new PelClaimScheduler(
+                redisson, properties.getNamespace(), intervalMs, batchSize, minIdleMs);
+    }
+
+    /**
      * 调度器统一生命周期管理：在 Spring 容器启动时按顺序启动调度器。
      *
      * <p>所有调度器均为可选，通过 {@code ObjectProvider} 注入，避免单个调度器被条件注解禁用时 导致 Lifecycle Bean 创建失败。
@@ -160,6 +197,7 @@ public class StreamMQSchedulerAutoConfiguration {
      * @param retrySchedulerProvider 重试调度器（可选）
      * @param delaySchedulerProvider 延时调度器（可选）
      * @param transactionScannerProvider 事务回查调度器（可选）
+     * @param pelClaimSchedulerProvider PEL 认领调度器（可选）
      * @return SmartLifecycle
      */
     @Bean
@@ -169,8 +207,10 @@ public class StreamMQSchedulerAutoConfiguration {
             org.springframework.beans.factory.ObjectProvider<DelayMessageScheduler>
                     delaySchedulerProvider,
             org.springframework.beans.factory.ObjectProvider<TransactionScanner>
-                    transactionScannerProvider) {
-        List<StreamMQScheduler> schedulers = new ArrayList<>(3);
+                    transactionScannerProvider,
+            org.springframework.beans.factory.ObjectProvider<PelClaimScheduler>
+                    pelClaimSchedulerProvider) {
+        List<StreamMQScheduler> schedulers = new ArrayList<>(4);
         RetryScheduler retryScheduler = retrySchedulerProvider.getIfAvailable();
         if (retryScheduler != null) {
             schedulers.add(retryScheduler);
@@ -182,6 +222,10 @@ public class StreamMQSchedulerAutoConfiguration {
         TransactionScanner scanner = transactionScannerProvider.getIfAvailable();
         if (scanner != null) {
             schedulers.add(scanner);
+        }
+        PelClaimScheduler pelClaim = pelClaimSchedulerProvider.getIfAvailable();
+        if (pelClaim != null) {
+            schedulers.add(pelClaim);
         }
         LOG.info("Creating StreamMQSchedulerLifecycle with {} scheduler(s)", schedulers.size());
         return new StreamMQSchedulerLifecycle(schedulers);

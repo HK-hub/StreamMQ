@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * HPA 控制器。
  *
  * @author StreamMQ Contributors
- * @since 2.0.0
+ * @since 0.1.0
  */
 public class HpaMetricsProvider {
 

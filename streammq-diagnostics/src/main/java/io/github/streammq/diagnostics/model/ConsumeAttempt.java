@@ -14,7 +14,7 @@ package io.github.streammq.diagnostics.model;
  * @param reconsumeTimes 第几次重试（0 表示首次消费）
  * @param errorMessage 失败时的错误信息，成功时为 null
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public record ConsumeAttempt(
         String consumerGroup,

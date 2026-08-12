@@ -11,7 +11,7 @@
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.x-green.svg)](https://spring.io/projects/spring-boot)
 [![Redisson](https://img.shields.io/badge/Redisson-3.34.x-red.svg)](https://redisson.org/)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/streammq/streammq)
-[![Tests](https://img.shields.io/badge/tests-651%20passed-brightgreen.svg)](https://github.com/streammq/streammq)
+[![Tests](https://img.shields.io/badge/tests-965%20passed-brightgreen.svg)](https://github.com/streammq/streammq)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/streammq/streammq/pulls)
 [![Stars](https://img.shields.io/github/stars/streammq/streammq?style=social)](https://github.com/streammq/streammq)
 
@@ -27,7 +27,6 @@
 
 | 资源 | 链接 |
 |------|------|
-| 🎬 快速开始演示（60s GIF） | [docs/demo/screenshots/quickstart-demo.gif](docs/demo/screenshots/quickstart-demo.gif) |
 | 📺 YouTube 演示视频 | 即将上线 |
 | 🎯 Product Hunt 展示 | 即将上线 |
 | 📝 GIF 制作指南 | [docs/demo/demo-gif-guide.md](docs/demo/demo-gif-guide.md) |
@@ -82,7 +81,7 @@
 
 ### 生产就绪
 
-651 个测试用例全部通过，覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理等全场景。已在真实生产环境中验证。
+965 个测试用例全部通过（786 单元 + 179 集成，`mvn verify` 复现），覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理等全场景。已在真实生产环境中验证。
 
 ---
 
@@ -305,7 +304,7 @@ public class OrderService {
                 .tag("created")
                 .keys(orderId)
                 .body(content)
-                .userProperty("traceId", "t-001")
+                .withUserProperty("traceId", "t-001")
                 .build();
         return template.syncSend(message);
     }
@@ -441,9 +440,9 @@ Message<String> msg2 = MessageBuilder.<String>withTopic("delay-topic")
 )
 public class OrderOrderlyConsumer implements StreamMessageOrderlyConsumer<String> {
     @Override
-    public OrderlyAction onMessage(Message<String> message, ConsumeOrderlyContext context) {
+    public ConsumeAction onMessage(Message<String> message, ConsumeOrderlyContext context) {
         processOrder(message.getBody());
-        return OrderlyAction.SUCCESS;
+        return ConsumeAction.SUCCESS;
     }
 }
 
@@ -518,7 +517,6 @@ public class OrderDlqConsumer implements StreamMessageConcurrentlyConsumer<Strin
 streammq:
   producer:
     compress-threshold: 1024    # 消息体超过 1KB 时自动压缩
-    compression-codec: gzip     # 压缩编解码器
 ```
 
 ---
@@ -531,6 +529,11 @@ streammq:
 | **streammq-core** | 核心抽象层，定义消息模型、API、SPI 接口（无 Spring 依赖） |
 | **streammq-redisson** | Redisson 适配层，基于 Redis Stream 实现核心能力 |
 | **streammq-spring-boot-starter** | Spring Boot 3 自动装配、配置绑定、Actuator 集成 |
+| **streammq-tracing-opentelemetry** | OpenTelemetry 链路追踪集成 |
+| **streammq-diagnostics** | 消息画像、慢消费、积压、DLQ 诊断 |
+| **streammq-kubernetes** | K8s 健康检查、HPA、优雅停机、CRD Operator |
+| **streammq-spring-cloud-stream-binder** | Spring Cloud Stream Binder 实现 |
+| **streammq-benchmark** | JMH 基准测试 |
 | **streammq-test** | 测试工具包，提供嵌入式 Redis、断言工具、Mock 工具 |
 | **streammq-samples** | 示例工程集合，覆盖快速开始、事务、延时、顺序、DLQ、拦截器、诊断、链路追踪 |
 
@@ -548,41 +551,32 @@ streammq:
   # 生产者配置
   producer:
     group: default-producer-group
-    send-timeout: 3000
-    retry-times: 2
-    compress-threshold: 0              # 0=不压缩，>0 时超过阈值自动压缩
-    compression-codec: gzip
+    send-message-timeout: 3000        # 发送超时（毫秒）
+    retry-times: 2                    # 同步发送重试次数
+    compress-threshold: 0             # 0=不压缩，>0 时超过阈值自动压缩
 
-  # 消费者配置
+  # 消费者配置（单消费者当前串行处理，无线程池配置）
   consumer:
-    consume-thread-min: 1
-    consume-thread-max: 64
-    pull-batch-size: 32
-    max-reconsume-times: 16
-    consume-timeout: 30000
-    inflight-capacity: 1000            # 背压队列容量
-    pull-interval: 0                   # 拉取间隔（毫秒）
+    batch-size: 32                    # 单次拉取批量大小
+    pull-interval: 0                  # 拉取间隔（毫秒）
+
+  # 重试配置
+  retry:
+    max-reconsume-times: 16           # 消费失败最大重试次数
 
   # 事务配置
   transaction:
-    check-interval-ms: 60000           # 回查间隔
-    max-check-times: 15                # 最大回查次数
-    batch-size: 32                     # 单次扫描批量
+    check-interval: 60s               # 回查间隔
+    max-check-times: 15               # 最大回查次数
 
   # 死信队列配置
   dlq:
-    enabled: true
-    max-retry-times: 3
+    max-dlq-retry-attempts: 3         # DLQ 消费失败最大重试次数
+    # failure-strategy: io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy  # 可选：DLQ 失败策略
 
-  # 可观测性配置
-  metrics:
-    enabled: true
+  # 可观测性配置（指标开关由 streammq.enabled 控制）
   tracing:
     enabled: false
-
-  # 管理接口配置
-  management:
-    enabled: true
 ```
 
 ### @StreamMQConsumer 属性速查
@@ -610,7 +604,6 @@ streammq:
 | `messageConverter` | Class | MessageConverter.class | 消息转换器（默认全局） |
 | `retryPolicy` | Class | RetryPolicy.class | 重试策略（默认全局） |
 | `rebalanceStrategy` | Class | RebalanceStrategy.class | 重平衡策略（默认全局） |
-| `dlqFailureStrategy` | Class | DlqFailureStrategy.class | 死信失败策略（默认全局） |
 | `consumerFilter` | Class[] | {} | 消费者专属过滤器 |
 
 > 完整配置参考请查看 [配置文档](docs/doc-site/configuration.md)。
@@ -632,9 +625,9 @@ StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换：
 | `RetryPolicy` | 重试策略 | `FixedArrayRetryPolicy` |
 | `RebalanceStrategy` | 消费者重平衡策略 | `AverageRebalanceStrategy` / `ConsistentHashRebalanceStrategy` |
 | `CompressionCodec` | 消息压缩编解码 | `GzipCompressionCodec` |
-| `TraceCollector` | 链路追踪上下文采集 | `Slf4jTraceCollector` |
+| `TraceCollector` | 链路追踪上下文采集 | `NoopTraceCollector` |
 | `ManagementAuthenticator` | 管理接口鉴权 | `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` / `DenyAllAuthenticator` |
-| `DlqFailureStrategy` | 死信消费失败策略 | `AbstractDlqFailureStrategy` |
+| `DlqFailureStrategy` | 死信消费失败策略 | `LogAndDropDlqFailureStrategy` |
 
 ### 自定义 SPI 示例
 
@@ -679,14 +672,16 @@ public class CustomMessageSerializer implements MessageSerializer {
 
 | 指标名 | 类型 | 说明 |
 |--------|------|------|
-| `streammq.producer.send.total` | Counter | 发送消息总数 |
-| `streammq.producer.send.success` | Counter | 发送成功数 |
-| `streammq.producer.send.failed` | Counter | 发送失败数 |
-| `streammq.producer.send.duration` | Timer | 发送耗时分布 |
-| `streammq.consumer.consume.total` | Counter | 消费消息总数 |
-| `streammq.consumer.consume.duration` | Timer | 消费耗时分布 |
-| `streammq.consumer.retry.total` | Counter | 重试消息数 |
-| `streammq.consumer.dlq.total` | Counter | 进入死信队列数 |
+| `streammq.send.total` | Counter | 发送总数（tag：`success`） |
+| `streammq.send.duration` | Timer | 发送耗时 |
+| `streammq.consume.total` | Counter | 消费总数 |
+| `streammq.consume.duration` | Timer | 消费耗时 |
+| `streammq.retry.total` | Counter | 重试数 |
+| `streammq.dlq.total` | Counter | 进入 DLQ 数 |
+| `streammq.delay.total` | Counter | 延时投递数 |
+| `streammq.transaction.commit.total` | Counter | 事务提交数 |
+| `streammq.transaction.rollback.total` | Counter | 事务回滚数 |
+| `streammq.transaction.check.total` | Counter | 事务回查数 |
 
 ### Actuator 端点
 
@@ -700,14 +695,21 @@ public class CustomMessageSerializer implements MessageSerializer {
 
 | 端点 | 方法 | 说明 |
 |------|------|------|
-| `/streammq/admin/consumer-groups` | GET | 查询消费组列表 |
-| `/streammq/admin/consumer-groups/{group}` | GET | 查询消费组详情 |
-| `/streammq/admin/topics` | GET | 查询 Topic 列表 |
-| `/streammq/admin/topics/{topic}` | GET | 查询 Topic 详情 |
-| `/streammq/admin/dlq/{group}` | GET | 查询 DLQ 消息 |
-| `/streammq/admin/dlq/{group}` | DELETE | 清空 DLQ |
-| `/streammq/admin/ack` | POST | 手动 ACK |
-| `/streammq/admin/rebalance` | POST | 触发重平衡 |
+| `/actuator/streammq` | GET | 总览（状态、消费组、Topic） |
+| `/actuator/streammq/groups` | GET | 消费组列表 |
+| `/actuator/streammq/pending/{group}/{topic}` | GET | Pending 消息 |
+| `/actuator/streammq/dlq/{group}` | GET | DLQ 消息 |
+| `/actuator/streammq/dlq/{group}/requeue?messageId&targetTopic` | POST | DLQ 重新入队 |
+| `/actuator/streammq/dlq/{group}/{messageId}` | DELETE | 删除 DLQ 消息 |
+| `/actuator/streammq/topics` | GET | Topic 列表 |
+| `/actuator/streammq/stats/{group}/{topic}` | GET | 运行时统计 |
+| `/actuator/streammq/ack/{group}/{topic}?messageId` | POST | 手动 ACK |
+| `/actuator/streammq/rebalance/{group}` | POST | 触发重平衡 |
+| `/actuator/streammq/topics?topic` | POST | 创建 Topic |
+| `/actuator/streammq/topics/{topic}` | DELETE | 删除 Topic |
+| `/actuator/streammq/config/{group}` | POST | 更新消费组配置 |
+
+> 所有操作均需通过 `ManagementAuthenticator` 鉴权；默认 `DenyAllAuthenticator` 拒绝所有访问（返回 401），需注册 `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` Bean 后开放。
 
 ### 链路追踪
 
@@ -758,14 +760,6 @@ template.syncSend(message);  // traceId 自动透传到消费者
 | [功能设计](docs/03-functional-design.md) | V1.0 功能设计 |
 | [详细设计](docs/04-detailed-design.md) | V1.0 详细设计 |
 
-### V2.0 规划文档
-
-| 文档 | 说明 |
-|------|------|
-| [V2.0 PRD](docs/2.0/01-PRD-v2.0.md) | V2.0 产品需求文档 |
-| [V2.0 架构设计](docs/2.0/02-architecture-v2.0.md) | V2.0 架构设计 |
-| [V2.0 功能设计](docs/2.0/03-functional-design-v2.0.md) | V2.0 功能设计 |
-
 ---
 
 ## 路线图
@@ -788,6 +782,10 @@ template.syncSend(message);  // traceId 自动透传到消费者
 - [x] 管理 REST API
 - [x] 12 个 SPI 扩展点
 - [x] Spring Boot 3 自动装配 + Actuator 集成
+- [x] Spring Cloud Stream Binder（实现 Spring Cloud Stream Binder SPI）
+- [x] Kubernetes Operator（CRD + Operator，弹性伸缩、配置热更新）
+- [x] 消息画像与拓扑图（可视化消息流转拓扑）
+- [x] 分布式追踪增强（OpenTelemetry 集成）
 
 ### V2.0（规划中）
 
@@ -795,10 +793,6 @@ template.syncSend(message);  // traceId 自动透传到消费者
 - [ ] **Kafka 后端实现**（基于 Kafka Client 的 BackendProvider）
 - [ ] **跨机房复制**（异步复制，RPO ≤ 1s）
 - [ ] **Kafka 线网协议兼容**（原生 Kafka Client 零代码接入）
-- [ ] **Spring Cloud Stream Binder**（实现 Spring Cloud Stream Binder SPI）
-- [ ] **Kubernetes Operator**（CRD + Operator，弹性伸缩、配置热更新）
-- [ ] **消息画像与拓扑图**（可视化消息流转拓扑）
-- [ ] **分布式追踪增强**（OpenTelemetry 集成）
 
 ---
 
@@ -884,7 +878,7 @@ StreamMQ 重视您的安全。遵循以下最佳实践以确保安全部署：
 
 ### 密钥管理
 
-- **accessKey / secretKey 脱敏**：StreamMQ 在日志输出中自动对 `accessKey` 和 `secretKey` 字段进行脱敏处理（仅显示前 4 位和后 4 位，中间以 `****` 替代），避免敏感凭据泄露。
+- **accessKey / secretKey 不落日志**：StreamMQ 从不将 `accessKey` / `secretKey` 输出到日志（配置对象的 `toString` 已排除这两个字段），并建议通过环境变量注入。
 - **配置安全存储**：切勿将 `accessKey` 和 `secretKey` 硬编码在代码或公开的配置文件中。生产环境建议使用环境变量、配置中心（如 Nacos、Apollo）或密钥管理服务（如 Vault、AWS Secrets Manager）进行管理。
 - **最小权限原则**：Redis 实例应使用具有最小必要权限的账号，避免使用默认的 `requirepass` 直接复用管理员密码。
 
@@ -907,18 +901,12 @@ redisson:
 ### 安全策略
 
 - **版本更新**：关注 [GitHub Security Advisories](https://github.com/streammq/streammq/security/advisories) 及时获取安全公告。
-- **依赖扫描**：StreamMQ 在 CI 中集成了 OWASP Dependency-Check，自动检测已知漏洞依赖。
+- **依赖扫描**：StreamMQ 提供 OWASP Dependency-Check 配置（`mvn verify -Dowasp.skip=false` 触发），CI 中执行依赖漏洞扫描。
 - **负责任披露**：如发现安全漏洞，请通过 [GitHub Security](https://github.com/streammq/streammq/security) 页面私下报告，我们将在 48 小时内响应。
 
-### 日志脱敏示例
+### 日志脱敏
 
-```
-# 正确：日志中自动脱敏
-2026-08-08 10:00:00 INFO  [streammq] 使用 accessKey: sk_a1b2****c3d4 初始化连接
-
-# 错误：不会出现（框架自动保护）
-2026-08-08 10:00:00 INFO  [streammq] 使用 accessKey: sk_a1b2c3d4e5f6g7h8 初始化连接
-```
+StreamMQ 从不将 `accessKey` / `secretKey` 输出到日志（配置对象的 `toString` 已排除这两个字段），并建议通过环境变量注入。
 
 ---
 

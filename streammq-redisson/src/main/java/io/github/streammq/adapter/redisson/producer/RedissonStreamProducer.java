@@ -206,10 +206,18 @@ public class RedissonStreamProducer implements StreamMessageProducer {
 
     @Override
     public List<SendResult> syncSendBatch(List<? extends Message<?>> messages) {
+        return syncSendBatch(messages, defaultTimeoutMillis);
+    }
+
+    @Override
+    public List<SendResult> syncSendBatch(List<? extends Message<?>> messages, long timeoutMillis) {
         ensureOpen();
         Objects.requireNonNull(messages, "messages");
         if (messages.isEmpty()) {
             throw new IllegalArgumentException("messages list is empty");
+        }
+        if (timeoutMillis <= 0) {
+            timeoutMillis = defaultTimeoutMillis;
         }
 
         // 校验同 Topic
@@ -229,7 +237,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         if (anyDelay) {
             List<SendResult> results = new ArrayList<>(messages.size());
             for (Message<?> msg : messages) {
-                results.add(syncSend(msg, defaultTimeoutMillis));
+                results.add(syncSend(msg, timeoutMillis));
             }
             return results;
         }
@@ -239,12 +247,38 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         List<Message<?>> messageList = new ArrayList<>(messages);
         for (Message<?> message : messageList) {
             Map<String, String> fields = converter.toStreamFields(message);
+            // 消息大小预检：与单条发送保持一致，避免批量写入超大消息导致 Redis 内存压力
+            int estimatedSize = estimateFieldSize(fields);
+            if (estimatedSize > maxMessageSize) {
+                throw new StreamMQBrokerException(
+                        "Message size "
+                                + estimatedSize
+                                + " bytes exceeds max "
+                                + maxMessageSize
+                                + " bytes for topic "
+                                + message.getTopic(),
+                        null,
+                        null);
+            }
             StreamAddArgs<String, String> args = buildAddArgs(fields);
             batch.<String, String>getStream(streamKey).addAsync(args);
         }
 
         try {
-            batch.execute();
+            batch.executeAsync().get(timeoutMillis, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException ex) {
+            throw new ProducerTimeoutException(
+                    "syncSendBatch timed out after " + timeoutMillis + "ms for topic " + firstTopic,
+                    firstTopic,
+                    timeoutMillis,
+                    ex);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new StreamMQBrokerException(
+                    "syncSendBatch interrupted for topic " + firstTopic, null, ex);
+        } catch (java.util.concurrent.ExecutionException ex) {
+            throw new StreamMQBrokerException(
+                    "syncSendBatch failed for topic " + firstTopic, null, ex.getCause());
         } catch (RuntimeException ex) {
             throw new StreamMQBrokerException(
                     "syncSendBatch failed for topic " + firstTopic, null, ex);

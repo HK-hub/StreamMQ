@@ -25,6 +25,6 @@
  * <p>当追踪服务不可用时，所有诊断方法将以无数据方式优雅降级，不抛出异常。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 package io.github.streammq.diagnostics;

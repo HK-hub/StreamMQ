@@ -142,7 +142,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
                 targets.size());
     }
 
-    /** 停止调度器（取消扫描任务但保留线程池，支持后续 restart）。 */
+    /** 停止调度器（取消扫描任务并关闭线程池，线程为 daemon，不阻塞 JVM 退出）。 */
     @Override
     public void stop() {
         if (!running.compareAndSet(true, false)) {
@@ -153,6 +153,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
             future.cancel(false);
             this.scanFuture = null;
         }
+        scanExecutor.shutdown();
         LOG.info("PelClaimScheduler stopped");
     }
 
@@ -225,23 +226,28 @@ public class PelClaimScheduler implements StreamMQScheduler {
                                 id,
                                 retryTimes);
                     } else {
-                        // XAUTOCLAIM 到同组（重新分配给活跃消费者）
+                        // 重新投递：容器消费者使用 XREADGROUP >（neverDelivered）读取，
+                        // XAUTOCLAIM 到固定消费者名（pelclaim-consumer）的消息永远不会被读取（永久卡在 PEL）。
+                        // 因此改为：XADD 新 entry（递增 retryTimes）+ ACK 旧 entry，使其作为新消息被消费者
+                        // 重新拉取；重投次数超限后由上方分支进入 DLQ。
                         try {
-                            stream.autoClaim(
-                                    target.group,
-                                    "pelclaim-consumer",
-                                    minIdleMs,
-                                    java.util.concurrent.TimeUnit.MILLISECONDS,
-                                    id,
-                                    1);
-                            LOG.debug(
-                                    "XAUTOCLAIM executed for orderly pending: topic={}, group={},"
-                                            + " id={}",
+                            fields.put(
+                                    DefaultMessageConverter.FIELD_RETRY_TIMES,
+                                    Integer.toString(retryTimes + 1));
+                            stream.add(StreamAddArgs.entries(fields));
+                            stream.ack(target.group, id);
+                            LOG.info(
+                                    "Orderly pending redelivered: topic={}, group={}, id={},"
+                                            + " retryTimes={}",
                                     target.topic,
                                     target.group,
-                                    id);
+                                    id,
+                                    retryTimes + 1);
                         } catch (RuntimeException ex) {
-                            LOG.warn("XAUTOCLAIM failed for id={}: {}", id, ex.getMessage());
+                            LOG.warn(
+                                    "Failed to redeliver orderly pending id={}: {}",
+                                    id,
+                                    ex.getMessage());
                         }
                     }
                 } catch (Exception ex) {
