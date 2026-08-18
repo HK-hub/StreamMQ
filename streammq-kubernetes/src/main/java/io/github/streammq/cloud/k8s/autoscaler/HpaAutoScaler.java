@@ -88,6 +88,11 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
             log.warn("HpaAutoScaler already started");
             return;
         }
+        if (kubernetesClient == null) {
+            log.warn("KubernetesClient not available, HpaAutoScaler disabled");
+            running.set(false);
+            return;
+        }
         log.info("Starting HpaAutoScaler with syncIntervalSeconds={}", syncIntervalSeconds);
         scanFuture =
                 scheduler.scheduleAtFixedRate(
@@ -116,6 +121,10 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
     }
 
     private void scanAndScale() {
+        if (kubernetesClient == null) {
+            // KubernetesClient 不可用（非 K8s 环境）时不执行扫描
+            return;
+        }
         try {
             var clusters =
                     kubernetesClient

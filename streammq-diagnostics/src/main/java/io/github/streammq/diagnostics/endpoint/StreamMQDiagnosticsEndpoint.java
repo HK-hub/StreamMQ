@@ -1,5 +1,7 @@
 package io.github.streammq.diagnostics.endpoint;
 
+import io.github.streammq.core.policy.ManagementAuthenticator;
+import io.github.streammq.core.util.WebRequestAuthSupport;
 import io.github.streammq.diagnostics.MessageProfileService;
 import io.github.streammq.diagnostics.StreamMQDiagnosticsService;
 import io.github.streammq.diagnostics.model.BacklogReport;
@@ -12,12 +14,14 @@ import java.util.Map;
 import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseBody;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * StreamMQ 诊断 REST 端点，暴露 JSON 接口供仪表盘集成。
@@ -51,17 +55,40 @@ public class StreamMQDiagnosticsEndpoint {
 
     private final StreamMQDiagnosticsService diagnosticsService;
     private final MessageProfileService profileService;
+    private final ManagementAuthenticator authenticator;
 
     /**
      * 构造诊断端点。
      *
      * @param diagnosticsService 诊断服务
      * @param profileService 消息画像服务
+     * @param authenticator 管理鉴权器（默认拒绝所有访问，返回 401）
      */
     public StreamMQDiagnosticsEndpoint(
-            StreamMQDiagnosticsService diagnosticsService, MessageProfileService profileService) {
+            StreamMQDiagnosticsService diagnosticsService,
+            MessageProfileService profileService,
+            ManagementAuthenticator authenticator) {
         this.diagnosticsService = Objects.requireNonNull(diagnosticsService, "diagnosticsService");
         this.profileService = Objects.requireNonNull(profileService, "profileService");
+        this.authenticator = Objects.requireNonNull(authenticator, "authenticator");
+    }
+
+    /**
+     * 校验当前请求是否具有诊断访问权限；无权限时抛出 401。
+     *
+     * @param resource 被访问的资源标识
+     */
+    private void checkPermission(String resource) {
+        String[] credentials = WebRequestAuthSupport.parseBasicCredentialsFromRequest();
+        boolean allowed =
+                Objects.nonNull(credentials)
+                        ? authenticator.authenticate(credentials[0], credentials[1], resource)
+                        : authenticator.authenticate(null, null, resource);
+        if (!allowed) {
+            log.warn("StreamMQ diagnostics access denied for resource: {}", resource);
+            throw new ResponseStatusException(
+                    HttpStatus.UNAUTHORIZED, "Access denied for resource " + resource);
+        }
     }
 
     /**
@@ -72,6 +99,7 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/profile/{messageId}")
     public ResponseEntity<MessageProfile> getProfile(@PathVariable String messageId) {
+        checkPermission("profile:" + messageId);
         MessageProfile profile = profileService.getProfile(messageId);
         if (Objects.isNull(profile)) {
             return ResponseEntity.notFound().build();
@@ -89,6 +117,7 @@ public class StreamMQDiagnosticsEndpoint {
     @GetMapping("/slow-consume")
     public SlowConsumeReport diagnoseSlowConsume(
             @RequestParam String topic, @RequestParam String group) {
+        checkPermission("slow-consume:" + topic);
         return diagnosticsService.diagnoseSlowConsume(topic, group);
     }
 
@@ -101,6 +130,7 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/backlog")
     public BacklogReport diagnoseBacklog(@RequestParam String topic, @RequestParam String group) {
+        checkPermission("backlog:" + topic);
         return diagnosticsService.diagnoseBacklog(topic, group);
     }
 
@@ -112,6 +142,7 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/dlq")
     public DlqReport diagnoseDlq(@RequestParam String group) {
+        checkPermission("dlq:" + group);
         return diagnosticsService.diagnoseDlq(group);
     }
 
@@ -122,6 +153,7 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/slow-consumers")
     public List<String> getSlowConsumers() {
+        checkPermission("slow-consumers");
         return diagnosticsService.getSlowConsumers();
     }
 
@@ -132,6 +164,7 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/all-backlogs")
     public List<BacklogReport> getAllBacklogs() {
+        checkPermission("all-backlogs");
         return diagnosticsService.getAllBacklogs();
     }
 
@@ -142,6 +175,7 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/health")
     public Map<String, Object> health() {
+        checkPermission("health");
         List<String> slowConsumers = diagnosticsService.getSlowConsumers();
         List<BacklogReport> backlogs = diagnosticsService.getAllBacklogs();
         long totalBacklog = backlogs.stream().mapToLong(BacklogReport::currentBacklog).sum();

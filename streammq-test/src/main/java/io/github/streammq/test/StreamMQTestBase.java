@@ -1,6 +1,8 @@
 package io.github.streammq.test;
 
+import io.github.streammq.core.util.RedisAvailability;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.redisson.Redisson;
 import org.redisson.api.RedissonClient;
@@ -55,6 +57,11 @@ public abstract class StreamMQTestBase {
 
         String host = getRedisHost();
         int port = getRedisPort();
+
+        // 无 Redis 可用时优雅跳过集成测试，避免 Connection refused 直接失败
+        Assumptions.assumeTrue(
+                RedisAvailability.isAvailable(host, port),
+                "Redis not available at " + host + ":" + port + ", skipping integration test");
 
         Config config = new Config();
         config.useSingleServer()

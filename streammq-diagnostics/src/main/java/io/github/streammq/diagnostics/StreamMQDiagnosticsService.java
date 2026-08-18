@@ -12,6 +12,7 @@ import io.github.streammq.diagnostics.model.FailureReason;
 import io.github.streammq.diagnostics.model.Severity;
 import io.github.streammq.diagnostics.model.SlowConsumeReport;
 import io.github.streammq.diagnostics.model.TopicFailureCount;
+import io.github.streammq.diagnostics.spi.BacklogProbe;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -56,8 +57,11 @@ public class StreamMQDiagnosticsService {
     private final StreamMQListenerContainer listenerContainer;
     private final StreamMQDiagnosticsProperties properties;
 
+    /** 积压探针（可空）：存在时基于真实 Redis XLEN/XPENDING 计算积压，否则回退到追踪窗口估算 */
+    private final BacklogProbe backlogProbe;
+
     /**
-     * 构造诊断服务。
+     * 构造诊断服务（不使用积压探针，回退到追踪窗口估算）。
      *
      * @param traceService 追踪查询服务
      * @param listenerContainer 监听器容器
@@ -67,9 +71,26 @@ public class StreamMQDiagnosticsService {
             StreamMQTraceService traceService,
             StreamMQListenerContainer listenerContainer,
             StreamMQDiagnosticsProperties properties) {
+        this(traceService, listenerContainer, properties, null);
+    }
+
+    /**
+     * 构造诊断服务。
+     *
+     * @param traceService 追踪查询服务
+     * @param listenerContainer 监听器容器
+     * @param properties 诊断配置属性
+     * @param backlogProbe 积压探针（可为 null，此时使用追踪窗口估算）
+     */
+    public StreamMQDiagnosticsService(
+            StreamMQTraceService traceService,
+            StreamMQListenerContainer listenerContainer,
+            StreamMQDiagnosticsProperties properties,
+            BacklogProbe backlogProbe) {
         this.traceService = Objects.requireNonNull(traceService, "traceService");
         this.listenerContainer = Objects.requireNonNull(listenerContainer, "listenerContainer");
         this.properties = Objects.requireNonNull(properties, "properties");
+        this.backlogProbe = backlogProbe;
     }
 
     /**
@@ -137,6 +158,9 @@ public class StreamMQDiagnosticsService {
     /**
      * 诊断消息积压，分析指定主题+消费者组的积压状况。
      *
+     * <p>积压量优先来自 {@link BacklogProbe}（真实 Redis XPENDING 未确认消息数）； 探针不可用或返回 null 时，回退到 追踪窗口内「生产数 -
+     * 消费数」的估算（取非负）。
+     *
      * <p>分析维度：
      *
      * <ul>
@@ -155,16 +179,19 @@ public class StreamMQDiagnosticsService {
         long start = now - properties.getRecentWindowMs();
 
         List<TraceRecord> topicRecords = traceService.queryByTopic(topic, start, now);
-        if (CollectionUtils.isEmpty(topicRecords)) {
-            return buildEmptyBacklogReport(topic, group);
-        }
-
         List<TraceRecord> consumeRecords = filterConsumeByGroup(topicRecords, group);
         List<TraceRecord> sendRecords = filterSend(topicRecords);
 
         long produceCount = sendRecords.size();
         long consumeCount = consumeRecords.size();
-        long currentBacklog = Math.max(0, produceCount - consumeCount);
+
+        // 积压量：优先真实 Redis 数据（XPENDING 未确认数），否则追踪窗口差值估算
+        Long realBacklog = probeBacklog(topic, group);
+        long currentBacklog =
+                realBacklog != null ? realBacklog : Math.max(0, produceCount - consumeCount);
+        if (CollectionUtils.isEmpty(topicRecords) && realBacklog == null) {
+            return buildEmptyBacklogReport(topic, group);
+        }
 
         double windowSeconds = properties.getRecentWindowMs() / 1000.0;
         double produceRate = produceCount / windowSeconds;
@@ -186,6 +213,30 @@ public class StreamMQDiagnosticsService {
                 consumeRate,
                 recommendation,
                 severity);
+    }
+
+    /**
+     * 通过 {@link BacklogProbe} 获取真实积压（XPENDING 未确认消息数）。
+     *
+     * @param topic 主题
+     * @param group 消费者组
+     * @return 积压消息数；探针不可用或探测失败时为 null
+     */
+    private Long probeBacklog(String topic, String group) {
+        if (backlogProbe == null) {
+            return null;
+        }
+        try {
+            BacklogProbe.Result result = backlogProbe.probe(topic, group);
+            return result != null ? result.pendingCount() : null;
+        } catch (RuntimeException ex) {
+            log.warn(
+                    "Backlog probe failed for topic={}, group={}: {}",
+                    topic,
+                    group,
+                    ex.getMessage());
+            return null;
+        }
     }
 
     /**

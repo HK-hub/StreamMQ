@@ -32,6 +32,13 @@ public class StreamMQDiagnosticsProperties {
     /** 是否启用诊断模块，默认关闭 */
     private boolean enabled = false;
 
+    /**
+     * 命名空间（用于真实积压探测的 Redis Key 前缀，需与 {@code streammq.namespace} 保持一致）。
+     *
+     * <p>仅影响基于 Redisson 的积压探针（XLEN/XPENDING）；追踪窗口估算不依赖该值。 默认空字符串。
+     */
+    private String namespace = "";
+
     /** 近期诊断时间窗口（毫秒），默认 5 分钟 */
     private long recentWindowMs = 5 * 60 * 1000L;
 

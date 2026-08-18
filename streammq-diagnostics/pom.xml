@@ -50,6 +50,18 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- Redisson 适配层（optional：真实积压探测 XLEN/XPENDING 与 Key 工具；未引入时诊断回退到追踪窗口估算） -->
+        <dependency>
+            <groupId>io.github.streammq</groupId>
+            <artifactId>streammq-redisson</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>org.redisson</groupId>
+            <artifactId>redisson</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- 测试 -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -76,11 +88,6 @@
         <dependency>
             <groupId>io.github.streammq</groupId>
             <artifactId>streammq-spring-boot-starter</artifactId>
-            <scope>test</scope>
-        </dependency>
-        <dependency>
-            <groupId>io.github.streammq</groupId>
-            <artifactId>streammq-redisson</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
