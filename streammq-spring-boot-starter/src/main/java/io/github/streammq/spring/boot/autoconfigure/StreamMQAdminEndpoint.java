@@ -3,9 +3,11 @@ package io.github.streammq.spring.boot.autoconfigure;
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.util.CollectionUtils;
+import io.github.streammq.core.util.StringUtils;
 import java.util.*;
 import org.redisson.api.*;
 import org.redisson.api.stream.StreamAddArgs;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,7 +27,7 @@ import org.slf4j.LoggerFactory;
  * </ul>
  *
  * @author StreamMQ Contributors
- * @since 0.2.0
+ * @since 0.1.0
  */
 public class StreamMQAdminEndpoint {
 
@@ -57,20 +59,22 @@ public class StreamMQAdminEndpoint {
             info.put("consumerClass", meta.consumerType().getName());
             info.put("bodyType", meta.bodyType().getName());
             info.put("containerRunning", container.isRunning());
-            // 查询实例数
+            // 查询实例数（instances Hash 使用 StringCodec 存储字符串时间戳，跨 codec 兼容）
             String instancesKey =
                     StreamMQKeys.consumerGroupInstances(namespace, meta.consumerGroup());
             try {
-                RMap<String, Long> instances = redisson.getMap(instancesKey);
-                Map<String, Long> all = instances.readAllMap();
+                RMap<String, String> instances =
+                        redisson.getMap(instancesKey, StringCodec.INSTANCE);
+                Map<String, String> all = instances.readAllMap();
                 info.put("activeInstances", all != null ? all.size() : 0);
                 if (CollectionUtils.isNotEmpty(all)) {
                     List<Map<String, Object>> instList = new ArrayList<>();
                     for (var e : all.entrySet()) {
                         Map<String, Object> inst = new LinkedHashMap<>();
                         inst.put("instanceId", e.getKey());
-                        inst.put("lastHeartbeat", e.getValue());
-                        inst.put("ageMs", System.currentTimeMillis() - e.getValue());
+                        long lastHeartbeat = parseTimestamp(e.getValue());
+                        inst.put("lastHeartbeat", lastHeartbeat);
+                        inst.put("ageMs", System.currentTimeMillis() - lastHeartbeat);
                         instList.add(inst);
                     }
                     info.put("instances", instList);
@@ -267,7 +271,8 @@ public class StreamMQAdminEndpoint {
     /**
      * 触发消费组重平衡。
      *
-     * <p>通过清除 {@code streammq:{ns}:cg:{group}:instances} 中的实例注册信息， 使所有实例在下次心跳时重新注册并触发分片重新分配。
+     * <p>通过清除 {@code streammq:{ns}:cg:{group}:instances} 中的实例注册信息， 使所有实例在下次心跳时重新注册并触发分片重新分配； 同时调用容器
+     * {@code rebalanceGroup} 对 ORDERLY 消费者执行一次分片分配并广播通知。
      *
      * @param group 消费者组名
      * @return 操作结果
@@ -279,9 +284,18 @@ public class StreamMQAdminEndpoint {
             RMap<String, Long> instances = redisson.getMap(instancesKey);
             int cleared = instances.size();
             instances.delete();
-            result.put("success", true);
             result.put("clearedInstances", cleared);
-            LOG.info("Rebalance triggered: group={}, clearedInstances={}", group, cleared);
+            boolean rebalanced = false;
+            if (container != null) {
+                rebalanced = container.rebalanceGroup(group);
+            }
+            result.put("success", true);
+            result.put("rebalanceExecuted", rebalanced);
+            LOG.info(
+                    "Rebalance triggered: group={}, clearedInstances={}, rebalanceExecuted={}",
+                    group,
+                    cleared,
+                    rebalanced);
         } catch (RuntimeException ex) {
             result.put("success", false);
             result.put("error", ex.getMessage());
@@ -380,6 +394,18 @@ public class StreamMQAdminEndpoint {
             LOG.warn("Update group config failed: group={}: {}", group, ex.getMessage());
         }
         return result;
+    }
+
+    /** 解析心跳时间戳字符串（非法值视为 0）。 */
+    private static long parseTimestamp(String value) {
+        if (StringUtils.isEmpty(value)) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException ex) {
+            return 0L;
+        }
     }
 
     private static StreamMessageId parseId(String msgId) {

@@ -2,8 +2,7 @@ package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.core.policy.ManagementAuthenticator;
 import io.github.streammq.core.util.StringUtils;
-import java.lang.reflect.Method;
-import java.nio.charset.StandardCharsets;
+import io.github.streammq.core.util.WebRequestAuthSupport;
 import java.util.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -45,7 +44,7 @@ public class StreamMQActuatorEndpoint {
 
     /** 校验当前请求是否具有管理权限；无权时返回 HTTP 401 响应，有权限返回 null。 */
     private WebEndpointResponse<?> checkPermission(String resource) {
-        String[] credentials = parseBasicCredentialsFromRequest();
+        String[] credentials = WebRequestAuthSupport.parseBasicCredentialsFromRequest();
         boolean allowed =
                 Objects.nonNull(credentials)
                         ? authenticator.authenticate(credentials[0], credentials[1], resource)
@@ -58,61 +57,6 @@ public class StreamMQActuatorEndpoint {
             return new WebEndpointResponse<>(body, 401);
         }
         return null;
-    }
-
-    /** 从当前请求上下文中反射读取 {@code Authorization: Basic} 头，返回 [user, pass] 或 null。 */
-    private static String[] parseBasicCredentialsFromRequest() {
-        // 纯反射访问 Spring 的 RequestContextHolder，避免对 spring-web / servlet-api 的编译期依赖：
-        // 非 Web 环境或缺少 spring-web 时返回 null，凭据为空 → 默认拒绝。
-        Object attrs = null;
-        try {
-            Class<?> holder =
-                    Class.forName("org.springframework.web.context.request.RequestContextHolder");
-            attrs = holder.getMethod("getRequestAttributes").invoke(null);
-        } catch (ReflectiveOperationException | LinkageError ex) {
-            LOG.debug("RequestContextHolder unavailable: {}", ex.getMessage());
-        }
-        if (attrs == null) {
-            return null;
-        }
-        Object request = null;
-        try {
-            request = attrs.getClass().getMethod("getRequest").invoke(attrs);
-        } catch (ReflectiveOperationException ex) {
-            LOG.debug("No servlet request in context: {}", ex.getMessage());
-        }
-        if (request == null) {
-            return null;
-        }
-        String authorizationHeader = null;
-        try {
-            Method getHeader = request.getClass().getMethod("getHeader", String.class);
-            authorizationHeader = (String) getHeader.invoke(request, "Authorization");
-        } catch (ReflectiveOperationException ex) {
-            LOG.debug("Failed to read Authorization header: {}", ex.getMessage());
-        }
-        return parseBasicCredentials(authorizationHeader);
-    }
-
-    /** 解析 {@code Authorization: Basic base64(user:pass)} 头，返回 [user, pass] 或 null。 */
-    private static String[] parseBasicCredentials(String authorizationHeader) {
-        if (StringUtils.isEmpty(authorizationHeader)
-                || !authorizationHeader.regionMatches(true, 0, "Basic ", 0, 6)) {
-            return null;
-        }
-        try {
-            String encoded = authorizationHeader.substring(6).trim();
-            byte[] decoded = Base64.getDecoder().decode(encoded);
-            String decodedStr = new String(decoded, StandardCharsets.UTF_8);
-            int idx = decodedStr.indexOf(':');
-            if (idx < 0) {
-                return null;
-            }
-            return new String[] {decodedStr.substring(0, idx), decodedStr.substring(idx + 1)};
-        } catch (IllegalArgumentException ex) {
-            LOG.debug("Invalid Basic Authorization header: {}", ex.getMessage());
-            return null;
-        }
     }
 
     @ReadOperation

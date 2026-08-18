@@ -8,6 +8,7 @@ import io.github.streammq.adapter.redisson.interceptor.TraceContextConsumerInter
 import io.github.streammq.adapter.redisson.interceptor.TraceContextProducerInterceptor;
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducerFactory;
+import io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.adapter.redisson.security.DenyAllAuthenticator;
 import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate;
@@ -191,8 +192,46 @@ public class StreamMQCoreAutoConfiguration {
     @ConditionalOnMissingBean(RetryPolicy.class)
     public RetryPolicy streamMQRetryPolicy(StreamMQProperties properties) {
         Class<? extends RetryPolicy> clazz = properties.getRetry().getPolicy();
+        // 默认 FixedArrayRetryPolicy 支持通过 streammq.retry.delay-array 自定义延时数组
+        if (clazz == FixedArrayRetryPolicy.class) {
+            long[] delayMillis = parseDelayArray(properties.getRetry().getDelayArray());
+            if (delayMillis != null) {
+                LOG.info(
+                        "Using FixedArrayRetryPolicy with custom delay-array: {}ms",
+                        properties.getRetry().getDelayArray());
+                return new FixedArrayRetryPolicy(delayMillis);
+            }
+        }
         LOG.debug("Using RetryPolicy: {}", clazz.getSimpleName());
         return BeanUtils.instantiateClass(clazz);
+    }
+
+    /**
+     * 解析 {@code streammq.retry.delay-array}（逗号分隔毫秒值）为延时数组；空/非法时返回 null（使用策略默认）。
+     *
+     * @param delayArray 配置值，可为空
+     * @return 延时数组，或 null
+     */
+    private static long[] parseDelayArray(String delayArray) {
+        if (delayArray == null || delayArray.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            String[] parts = delayArray.split(",");
+            long[] result = new long[parts.length];
+            for (int i = 0; i < parts.length; i++) {
+                result[i] = Long.parseLong(parts[i].trim());
+                if (result[i] <= 0) {
+                    return null;
+                }
+            }
+            return result;
+        } catch (NumberFormatException ex) {
+            LOG.warn(
+                    "Invalid streammq.retry.delay-array '{}', using FixedArrayRetryPolicy default",
+                    delayArray);
+            return null;
+        }
     }
 
     /** DLQ 配置 Bean（从 properties 读取，供全局和 per-consumer 策略使用）。 */

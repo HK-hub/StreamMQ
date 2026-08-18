@@ -93,6 +93,22 @@ public class StreamMQListenerContainerAutoConfiguration {
                         dlqConfig,
                         namespace);
 
+        // 消费者全局默认配置：注解未显式指定时生效（streammq.consumer.* / streammq.rebalance.*）
+        container.setDefaultPullBatchSize(properties.getConsumer().getBatchSize());
+        container.setDefaultPullBlockTimeoutMillis(
+                properties.getConsumer().getPollTimeout().toMillis());
+        container.setDefaultPullIntervalMillis(properties.getConsumer().getPullInterval());
+        container.setMaxBatchSizeLimit(properties.getConsumer().getMaxBatchSizeLimit());
+        container.setDefaultVirtualNodes(properties.getRebalance().getVirtualNodes());
+        LOG.info(
+                "ListenerContainer defaults: pullBatchSize={}, pullBlockTimeout={}ms,"
+                        + " pullInterval={}ms, maxBatchSizeLimit={}, virtualNodes={}",
+                properties.getConsumer().getBatchSize(),
+                properties.getConsumer().getPollTimeout().toMillis(),
+                properties.getConsumer().getPullInterval(),
+                properties.getConsumer().getMaxBatchSizeLimit(),
+                properties.getRebalance().getVirtualNodes());
+
         container.setFilterResolver(
                 filterClass -> {
                     try {
