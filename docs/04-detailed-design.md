@@ -582,7 +582,7 @@ private void handleMessage(StreamMessage sm) {
                 sm.getRetryCount() + 1);
             redisson.getScoredSortedSet(retryZSetKey).add(nextRetryAt,
                 buildRetryEntry(sm, message, sm.getRetryCount() + 1));
-            // 不 ack，让 PEL 暂留（XAUTOCLAIM 由扫描补偿）
+            // 不 ack，消息留在 PEL（容器内先按 maxReconsumeTimes 原地重试，崩溃残留由 PelClaimScheduler 扫描重投补偿）
         }
         case DEFER -> defer(sm.getId(), ctx.getDeferMillis());
     }
@@ -1837,9 +1837,9 @@ scanExecutor.scheduleAtFixedRate(() -> {
 
 | Key 模式 | Redis 类型 | 命令组合 | 用途 | 频率 | 备注 |
 |---|---|---|---|---|---|
-| `streammq:msg:{topic}` | Stream | XADD / XREADGROUP / XACK / XAUTOCLAIM / XLEN / XINFO | 普通消息存储 | 极高（每条消息） | MAXLEN 截断 |
+| `streammq:msg:{topic}` | Stream | XADD / XREADGROUP / XACK / XLEN / XINFO | 普通消息存储 | 极高（每条消息） | MAXLEN 截断 |
 | `streammq:msg:{topic}:shard{shardId}` | Stream | XADD / XREADGROUP / XACK | 顺序消息分片 Stream | 高 | shard 数默认 16 |
-| `streammq:msg:{topic}:group:{group}:pending` | (PEL 内置) | XPENDING / XCLAIM | 待 ACK 列表查询 | 中 | 由 XAUTOCLAIM 自动清理 |
+| `streammq:msg:{topic}:group:{group}:pending` | (PEL 内置) | XPENDING / XCLAIM | 待 ACK 列表查询 | 中 | 由 PelClaimScheduler 扫描重投清理 |
 
 ### 6.2 消费者组相关
 
@@ -1895,7 +1895,8 @@ scanExecutor.scheduleAtFixedRate(() -> {
 | XADD | 发送消息、重试转投、DLQ 写入 | 极高 |
 | XREADGROUP | 消费消息主循环 | 极高 |
 | XACK | 消费成功后确认 | 高 |
-| XAUTOCLAIM | PEL 过期消息回收 | 低（周期） |
+| XPENDING | PEL 查询（诊断 / 认领调度） | 低（周期） |
+| XADD（PEL 重投） | 顺序消费崩溃残留重投（XADD 新 entry + XACK 旧 entry，保留 originalMessageId） | 低（周期） |
 | ZADD | 重试 / 延时 / 回查入队 | 中 |
 | ZPOPMIN | 重试 / 延时 / 回查出队 | 中 |
 | HSET | 心跳 / 状态 / 分配写入 | 中 |

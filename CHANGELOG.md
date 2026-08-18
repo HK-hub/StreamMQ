@@ -7,12 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
+### Planned (V2.0, 规划中，尚未实现)
 
 - Multi-backend abstraction (BackendProvider SPI) supporting Redis / Kafka / RabbitMQ / Pulsar
 - Kafka backend implementation based on Kafka Client BackendProvider
 - Cross-datacenter asynchronous replication (RPO ≤ 1s)
 - Kafka wire protocol compatibility (native Kafka Client zero-code access)
+
+> 注：以上 V2.0 规划项尚未实现，未包含在任何已发布版本中；详细规划见 README「路线图」章节。
 
 ### Changed
 

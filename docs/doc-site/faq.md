@@ -266,8 +266,8 @@ streammq:
 
 1. **消息拉取：** 消费者通过 `XREADGROUP` 拉取消息，消息进入 PEL
 2. **消费成功：** 业务返回 `ConsumeAction.SUCCESS`，StreamMQ 调用 `XACK` 移除
-3. **消费失败：** 返回 `RECONSUME_LATER`，消息留在 PEL，进入重试流程
-4. **消费者宕机：** 消息保留在 PEL，重启后通过 `XAUTOCLAIM` 重新认领
+3. **消费失败：** 并发消费返回 `RECONSUME_LATER`，消息写入 retry ZSet 延迟重投；顺序消费在当前线程内重试（挂起），重试耗尽后进入 DLQ
+4. **消费者宕机：** 消息保留在 PEL，由 PEL 认领调度器（`PelClaimScheduler`）周期扫描空闲消息并重新投递（XADD 新 entry + ACK 旧 entry，保留原 `originalMessageId`）
 5. **重试耗尽：** 消息进入 DLQ
 
 **关键配置：**

@@ -36,7 +36,7 @@ streammq:
 
   # 生产者配置
   producer:
-    group: default-producer-group
+    group: default-producer
     send-message-timeout: 3000        # 发送超时（毫秒）
     retry-times: 2                    # 同步发送重试次数
     compress-threshold: 0             # 0 = 关闭压缩，>0 时超过阈值自动压缩
@@ -49,6 +49,12 @@ streammq:
   # 重试配置
   retry:
     max-reconsume-times: 16           # 消费失败最大重试次数
+    # delay-array: "1000,5000,10000"  # 可选：自定义重试延时数组（逗号分隔毫秒），默认 RocketMQ 16 级数组
+
+  # 重平衡配置
+  rebalance:
+    # strategy: io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy
+    virtual-nodes: 160                # 一致性哈希虚拟节点数
 
   # 事务消息配置
   transaction:
@@ -88,7 +94,7 @@ streammq:
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `streammq.producer.group` | string | `default-producer-group` | 默认生产者组名 |
+| `streammq.producer.group` | string | `default-producer` | 默认生产者组名 |
 | `streammq.producer.send-message-timeout` | long | `3000` | 发送超时（毫秒） |
 | `streammq.producer.retry-times` | int | `2` | 同步发送重试次数（0 = 不重试） |
 | `streammq.producer.compress-threshold` | int | `0` | body 压缩阈值（字节），`0` = 关闭压缩 |
@@ -116,8 +122,10 @@ streammq:
 
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
-| `streammq.consumer.batch-size` | int | `32` | 单次拉取批量大小 |
-| `streammq.consumer.pull-interval` | long | `0` | 拉取间隔（毫秒），`0` = 不间隔 |
+| `streammq.consumer.batch-size` | int | `32` | 单次拉取批量大小（注解 `@StreamMQConsumer.pullBatchSize` 显式指定时优先） |
+| `streammq.consumer.poll-timeout` | duration | `1s` | 单次拉取阻塞超时（XREADGROUP BLOCK），与注解 `consumeTimeout` 解耦 |
+| `streammq.consumer.pull-interval` | long | `0` | 拉取间隔（毫秒），`0` = 不间隔（注解 `pullInterval` 显式指定时优先） |
+| `streammq.consumer.max-batch-size-limit` | int | `1000` | 单次拉取批量上界（防误配超大值） |
 
 > 消费线程数不可配置：0.1.0 中单消费者当前串行处理；背压队列（InflightQueue）暂未开放配置。
 > 消费超时、最大重试次数为注解属性（`@StreamMQConsumer.consumeTimeout` / `@StreamMQConsumer.maxReconsumeTimes`）或 `streammq.retry.max-reconsume-times`。
@@ -131,8 +139,9 @@ streammq:
 ```yaml
 streammq:
   consumer:
-    batch-size: 64             # 增大批量提升吞吐
-    pull-interval: 0           # 拉取间隔（毫秒）
+    batch-size: 64             # 增大批量提升吞吐（注解未指定时生效）
+    poll-timeout: 1s            # 单次拉取阻塞超时
+    pull-interval: 0            # 拉取间隔（毫秒）
 
 ---
 

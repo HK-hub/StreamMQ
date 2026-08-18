@@ -31,7 +31,7 @@ StreamMQ 基于 Redis Stream + Redisson 构建，部署前请确认以下软件�
 | 组件          | 最低版本 | 推荐版本   | 说明                                          |
 | ------------- | -------- | ---------- | --------------------------------------------- |
 | JDK           | 21       | 21         | StreamMQ 使用 record / sealed / 虚拟线程等特性 |
-| Redis         | 7.2      | 7.2+       | 依赖 Redis Stream 的 `XAUTOCLAIM` 等新特性     |
+| Redis         | 7.2      | 7.2+       | 依赖 Redis Stream（ConsumerGroup / PEL / XPENDING 等）新特性     |
 | Maven         | 3.9      | 3.9+       | 构建工具，需支持 JDK 21                        |
 | Spring Boot   | 3.3.0    | 3.3.5      | 与 StreamMQ Starter 自动装配匹配               |
 | Docker        | 24.0     | 25.0+      | 容器化部署（可选）                             |
@@ -303,7 +303,7 @@ streammq:
   enabled: true
   namespace: streammq
   producer:
-    group: default-producer-group
+    group: default-producer
     send-timeout: 3000
     retry-times: 2
   consumer:
@@ -589,7 +589,7 @@ data:
       enabled: true
       namespace: streammq
       producer:
-        group: default-producer-group
+        group: default-producer
         send-timeout: 3000
         retry-times: 2
       consumer:

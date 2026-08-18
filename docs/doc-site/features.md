@@ -63,9 +63,9 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 public class OrderOrderlyConsumer implements StreamMessageOrderlyConsumer<String> {
 
     @Override
-    public OrderlyAction onMessage(Message<String> message, ConsumeOrderlyContext context) throws Exception {
+    public ConsumeAction onMessage(Message<String> message, ConsumeOrderlyContext context) throws Exception {
         processOrder(message.getBody());
-        return OrderlyAction.SUCCESS;
+        return ConsumeAction.SUCCESS;
         // 消费失败时返回 SUSPEND_CURRENT_QUEUE_A_MOMENT，消息留在 PEL 等待重新消费
     }
 }
@@ -103,12 +103,12 @@ public class OrderDlqConsumer implements StreamMessageConcurrentlyConsumer<Strin
 | `ConsumeAction.RECONSUME_LATER` | 消费失败，按 `RetryPolicy` 计算延迟后重投 |
 | `ConsumeAction.defer(Duration)` | 消费失败，按指定延迟重投（覆盖 RetryPolicy） |
 
-**顺序消费（`OrderlyAction`）**：
+**顺序消费（`ConsumeAction`）**：
 
 | 返回值 | 说明 |
 |--------|------|
-| `OrderlyAction.SUCCESS` | 消费成功，自动 ACK，下一条继续 |
-| `OrderlyAction.SUSPEND_CURRENT_QUEUE_A_MOMENT` | 暂停当前 shard 一小段时间（默认 1000ms），重新消费同一消息 |
+| `ConsumeAction.SUCCESS` | 消费成功，自动 ACK，下一条继续 |
+| `ConsumeAction.SUSPEND_CURRENT_QUEUE_A_MOMENT` | 暂停当前 shard 一小段时间（默认 1000ms），重新消费同一消息 |
 
 > ⚠️ 抛出 `RuntimeException` 时：并发消费等价于 `RECONSUME_LATER`，顺序消费等价于 `SUSPEND_CURRENT_QUEUE_A_MOMENT`。框架不提供手动 ACK/nack 调用，避免双模式冲突。
 
@@ -434,6 +434,10 @@ Producer                     StreamMQ                     Consumer
    │                            │ ──────────────────────────>│
 ```
 
+> 实现说明：顺序消息使用「单 Stream + 分片分布式锁」而非分片独立 Stream —— 相同 `shardingKey` 哈希到固定分片，
+> 消费时获取对应分片锁后串行处理。消费失败时在当前线程内按 `maxReconsumeTimes` 重试同一消息，每次失败按
+> `suspendCurrentQueueTimeMillis` 挂起（默认 1000ms），保证同分片严格有序；重试耗尽后直接进入 DLQ。
+
 ### 发送顺序消息
 
 ```java
@@ -460,14 +464,14 @@ template.syncSend(msg);
 public class OrderOrderlyConsumer implements StreamMessageOrderlyConsumer<Order> {
 
     @Override
-    public OrderlyAction onMessage(Message<Order> message, ConsumeOrderlyContext context) throws Exception {
+    public ConsumeAction onMessage(Message<Order> message, ConsumeOrderlyContext context) throws Exception {
         try {
             // 同一订单的状态变更消息将严格按发送顺序消费
             processOrderStatusChange(message.getBody());
-            return OrderlyAction.SUCCESS;
+            return ConsumeAction.SUCCESS;
         } catch (Exception e) {
             // 消费失败：暂停当前 shard 一小段时间后重新消费同一消息
-            return OrderlyAction.SUSPEND_CURRENT_QUEUE_A_MOMENT;
+            return ConsumeAction.SUSPEND_CURRENT_QUEUE_A_MOMENT;
         }
     }
 }
@@ -942,6 +946,11 @@ public ConsumeAction onMessage(Message<String> message, ConsumeContext context) 
 ### Trace 查询 API
 
 `StreamMQTraceService` 提供按消息 ID、Topic、消费组维度的追踪记录查询能力：
+
+> 限制（基于 Redis Stream 存储的默认实现）：
+> - `queryByMessageId` 仅查询**今天与昨天**两个 trace Stream，更早数据需直接查询对应日期 Stream
+> - 单日单次查询最多读取 10,000 条记录，超出部分静默截断
+> - 时间范围查询遍历范围内的每一天并全量内存过滤，适用于中小规模追踪数据；大规模场景建议对接专业 APM（OTel / Zipkin / SkyWalking）
 
 ```java
 @Autowired

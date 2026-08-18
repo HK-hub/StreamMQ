@@ -1,4 +1,4 @@
-﻿# 快速开始
+# 快速开始
 
 本指南将带你用 5 分钟完成 StreamMQ 的接入，从依赖引入到消息收发的完整闭环。
 
@@ -70,7 +70,7 @@ streammq:
   enabled: true              # 启用 StreamMQ（默认 true）
   namespace: streammq        # 全局命名空间，用于隔离不同环境（如 dev/test/prod）
   producer:
-    group: default-producer-group
+    group: default-producer
     send-message-timeout: 3000   # 发送超时（毫秒）
 
 # Redisson 配置（单机示例，生产环境请使用集群配置）

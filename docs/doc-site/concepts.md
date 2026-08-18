@@ -1,4 +1,4 @@
-﻿# 核心概念
+# 核心概念
 
 StreamMQ 是一款基于 Redis Stream + Redisson 构建的轻量级消息中间件 SDK，提供类 RocketMQ 的 API 体验。本文档系统介绍 StreamMQ 的核心概念，帮助开发者建立完整的心智模型。
 
@@ -144,9 +144,9 @@ public ConsumeAction onMessage(Message<Order> msg, ConsumeContext ctx) {
 
 ---
 
-## OrderlyAction（顺序消费结果）
+## ConsumeAction（顺序消费结果）
 
-OrderlyAction 是顺序消费回调的返回值枚举。
+ConsumeAction 是顺序消费回调的返回值枚举。
 
 | 动作 | 说明 |
 |------|------|

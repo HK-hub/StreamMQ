@@ -1,4 +1,4 @@
-﻿# API 参考
+# API 参考
 
 StreamMQ 提供类 RocketMQ 的 API 体验。本文档覆盖所有公共接口与注解，包含方法签名、参数说明、返回类型与代码示例。
 
@@ -25,7 +25,7 @@ StreamMQ 提供类 RocketMQ 的 API 体验。本文档覆盖所有公共接口�
   - [StreamMessageConcurrentlyConsumer](#streammessageconcurrentlyconsumer)
   - [StreamMessageOrderlyConsumer](#streammessageorderlyconsumer)
   - [DlqMessageConsumer](#dlqmessageconsumer)
-  - [ConsumeAction / OrderlyAction](#consumeaction--orderlyaction)
+  - [ConsumeAction / ConsumeAction](#consumeaction--orderlyaction)
   - [ConsumeContext / ConsumeOrderlyContext](#consumecontext--consumeorderlycontext)
 - [事务 API](#事务-api)
   - [TransactionCallback](#transactioncallback)
@@ -88,9 +88,9 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<Order> {
                   messageModel = MessageModel.ORDERLY, shardCount = 8)
 public class OrderOrderlyConsumer implements StreamMessageOrderlyConsumer<Order> {
     @Override
-    public OrderlyAction onMessage(Message<Order> message, ConsumeOrderlyContext context) {
+    public ConsumeAction onMessage(Message<Order> message, ConsumeOrderlyContext context) {
         processOrder(message.getBody());
-        return OrderlyAction.SUCCESS;
+        return ConsumeAction.SUCCESS;
     }
 }
 ```
@@ -533,7 +533,7 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 
 ```java
 public interface StreamMessageOrderlyConsumer<T> {
-    OrderlyAction onMessage(Message<T> message, ConsumeOrderlyContext context) throws Exception;
+    ConsumeAction onMessage(Message<T> message, ConsumeOrderlyContext context) throws Exception;
 }
 ```
 
@@ -543,10 +543,10 @@ public interface StreamMessageOrderlyConsumer<T> {
                   messageModel = MessageModel.ORDERLY, shardCount = 8)
 public class OrderlyConsumer implements StreamMessageOrderlyConsumer<String> {
     @Override
-    public OrderlyAction onMessage(Message<String> message, ConsumeOrderlyContext context) {
+    public ConsumeAction onMessage(Message<String> message, ConsumeOrderlyContext context) {
         System.out.println("shardId: " + context.shardId() + ", shardingKey: " + context.shardingKey());
         process(message.getBody());
-        return OrderlyAction.SUCCESS;
+        return ConsumeAction.SUCCESS;
     }
 }
 ```
@@ -579,7 +579,7 @@ public class OrderDlqConsumer extends AbstractDlqMessageConsumer<Order> {
 
 ---
 
-### ConsumeAction / OrderlyAction
+### ConsumeAction / ConsumeAction
 
 #### ConsumeAction
 
@@ -606,7 +606,7 @@ return ConsumeAction.RECONSUME_LATER;
 return ConsumeAction.defer(Duration.ofSeconds(30));
 ```
 
-#### OrderlyAction
+#### ConsumeAction
 
 顺序消费返回值枚举。
 

@@ -10,10 +10,10 @@
 [![Java](https://img.shields.io/badge/Java-21%2B-orange.svg)](https://openjdk.java.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.x-green.svg)](https://spring.io/projects/spring-boot)
 [![Redisson](https://img.shields.io/badge/Redisson-3.34.x-red.svg)](https://redisson.org/)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/streammq/streammq)
-[![Tests](https://img.shields.io/badge/tests-965%20passed-brightgreen.svg)](https://github.com/streammq/streammq)
-[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/streammq/streammq/pulls)
-[![Stars](https://img.shields.io/github/stars/streammq/streammq?style=social)](https://github.com/streammq/streammq)
+[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/HK-hub/StreamMQ)
+[![Tests](https://img.shields.io/badge/tests-974%20passed-brightgreen.svg)](https://github.com/HK-hub/StreamMQ)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/HK-hub/StreamMQ/pulls)
+[![Stars](https://img.shields.io/github/stars/HK-hub/StreamMQ?style=social)](https://github.com/HK-hub/StreamMQ)
 
 </div>
 
@@ -81,7 +81,7 @@
 
 ### 生产就绪
 
-965 个测试用例全部通过（786 单元 + 179 集成，`mvn verify` 复现），覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理等全场景。已在真实生产环境中验证。
+974 个测试用例全部通过（790 单元 + 184 集成，`mvn verify` 复现），覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理等全场景。集成测试在本地无 Redis 时自动跳过，不影响 `mvn test` / `mvn verify` 通过。
 
 ---
 
@@ -212,7 +212,7 @@
 
 ### 性能优化建议
 
-1. **序列化选择**: 优先 Fury（默认），其吞吐量是 Jackson 的 7 倍以上
+1. **序列化选择**: 默认 Jackson；对吞吐有要求的场景可配置为 Fury（`streammq.producer.serializer` 指定 `FurySerializer`），其吞吐量是 Jackson 的 7 倍以上
 2. **发送策略**: 高吞吐场景使用 `asyncSend`，可提升 4~5 倍性能
 3. **负载大小**: 10KB 大消息建议启用 GZIP 压缩（`MessageCompressor` SPI）
 4. **连接池**: 默认 16 连接可满足多数场景，高并发可调至 32~64
@@ -428,7 +428,13 @@ Message<String> msg2 = MessageBuilder.<String>withTopic("delay-topic")
 
 ### 顺序消息
 
-基于 ShardingKey 的分片顺序消费，保证同一分区内严格有序。
+基于 ShardingKey 的分片顺序消费，保证同一分片内严格有序。
+
+> 实现：单 Stream + 分片分布式锁。消费失败时在当前线程内按 `maxReconsumeTimes` 重试，每次失败按
+> `suspendCurrentQueueTimeMillis`（默认 1000ms）挂起，不越过失败消息继续消费（严格有序）；重试耗尽后直接进入 DLQ。
+> 消费者实例崩溃后的消息由 PEL 认领调度器恢复重投。
+> 分片并发控制由分布式锁保证；`RebalanceStrategy` 提供分片分配元数据（assignment Hash + REBALANCE 通知，供管理端点观测），
+> 手动重平衡见 `/actuator/streammq/rebalance/{group}`。
 
 ```java
 @Component
@@ -550,7 +556,7 @@ streammq:
 
   # 生产者配置
   producer:
-    group: default-producer-group
+    group: default-producer
     send-message-timeout: 3000        # 发送超时（毫秒）
     retry-times: 2                    # 同步发送重试次数
     compress-threshold: 0             # 0=不压缩，>0 时超过阈值自动压缩
@@ -821,19 +827,19 @@ git commit -m "feat: add your feature"
 
 ### 贡献方式
 
-- **Bug 报告**：提交 [Issue](https://github.com/streammq/streammq/issues)，描述问题与复现步骤
-- **功能请求**：提交 [Issue](https://github.com/streammq/streammq/issues)，描述期望功能与使用场景
-- **代码贡献**：提交 [Pull Request](https://github.com/streammq/streammq/pulls)，关联相关 Issue
+- **Bug 报告**：提交 [Issue](https://github.com/HK-hub/StreamMQ/issues)，描述问题与复现步骤
+- **功能请求**：提交 [Issue](https://github.com/HK-hub/StreamMQ/issues)，描述期望功能与使用场景
+- **代码贡献**：提交 [Pull Request](https://github.com/HK-hub/StreamMQ/pulls)，关联相关 Issue
 - **文档改进**：完善文档、修正错误、补充示例
-- **问题解答**：在 [Discussions](https://github.com/streammq/streammq/discussions) 中帮助其他用户
+- **问题解答**：在 [Discussions](https://github.com/HK-hub/StreamMQ/discussions) 中帮助其他用户
 
 ---
 
 ## 社区
 
-- **GitHub Issues**：[https://github.com/streammq/streammq/issues](https://github.com/streammq/streammq/issues)
-- **GitHub Discussions**：[https://github.com/streammq/streammq/discussions](https://github.com/streammq/streammq/discussions)
-- **Pull Requests**：[https://github.com/streammq/streammq/pulls](https://github.com/streammq/streammq/pulls)
+- **GitHub Issues**：[https://github.com/HK-hub/StreamMQ/issues](https://github.com/HK-hub/StreamMQ/issues)
+- **GitHub Discussions**：[https://github.com/HK-hub/StreamMQ/discussions](https://github.com/HK-hub/StreamMQ/discussions)
+- **Pull Requests**：[https://github.com/HK-hub/StreamMQ/pulls](https://github.com/HK-hub/StreamMQ/pulls)
 
 ---
 
@@ -900,9 +906,9 @@ redisson:
 
 ### 安全策略
 
-- **版本更新**：关注 [GitHub Security Advisories](https://github.com/streammq/streammq/security/advisories) 及时获取安全公告。
+- **版本更新**：关注 [GitHub Security Advisories](https://github.com/HK-hub/StreamMQ/security/advisories) 及时获取安全公告。
 - **依赖扫描**：StreamMQ 提供 OWASP Dependency-Check 配置（`mvn verify -Dowasp.skip=false` 触发），CI 中执行依赖漏洞扫描。
-- **负责任披露**：如发现安全漏洞，请通过 [GitHub Security](https://github.com/streammq/streammq/security) 页面私下报告，我们将在 48 小时内响应。
+- **负责任披露**：如发现安全漏洞，请通过 [GitHub Security](https://github.com/HK-hub/StreamMQ/security) 页面私下报告，我们将在 48 小时内响应。
 
 ### 日志脱敏
 
@@ -922,6 +928,6 @@ StreamMQ 从不将 `accessKey` / `secretKey` 输出到日志（配置对象的 `
 
 如果这个项目对你有帮助，欢迎给一个 ⭐ Star！
 
-[![Star History](https://api.star-history.com/svg?repos=streammq/streammq&type=Date)](https://github.com/streammq/streammq)
+[![Star History](https://api.star-history.com/svg?repos=HK-hub/StreamMQ&type=Date)](https://github.com/HK-hub/StreamMQ)
 
 </div>
