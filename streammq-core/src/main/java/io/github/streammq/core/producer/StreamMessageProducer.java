@@ -45,6 +45,19 @@ public interface StreamMessageProducer {
     CompletableFuture<SendResult> asyncSend(Message<?> message);
 
     /**
+     * 异步发送单条消息（带超时）。
+     *
+     * <p>默认实现委托 {@link #asyncSend(Message)}，适配层可覆盖以真正应用超时控制。
+     *
+     * @param message 消息
+     * @param timeoutMillis 超时毫秒数
+     * @return 异步结果
+     */
+    default CompletableFuture<SendResult> asyncSend(Message<?> message, long timeoutMillis) {
+        return asyncSend(message);
+    }
+
+    /**
      * 单向发送：不等待响应，不抛异常，性能最高。
      *
      * @param message 消息

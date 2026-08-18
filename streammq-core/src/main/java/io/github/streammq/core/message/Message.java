@@ -64,14 +64,14 @@ public final class Message<T> implements Serializable {
      * 延时级别（可选），18 级固定延时，非空时表示延时消息。 与 {@link #delayTimeMillis} 互斥，同时设置时 {@code delayTimeMillis} 优先。
      *
      * <p>实现机制：通过 {@link io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler} 周期扫描
-     * ZSet，将到期消息转投到目标 Stream。 精度取决于扫描间隔（默认 100ms），实际延时可能有 ±100ms 误差。
+     * ZSet，将到期消息转投到目标 Stream。 精度取决于扫描间隔（默认 1000ms），实际延时可能有 ±1000ms 误差。
      */
     private DelayLevel delayLevel;
 
     /**
      * 任意延时毫秒数（可选），v1.0+ 支持。 优先级高于 {@link #delayLevel}，同时设置时此字段生效。
      *
-     * <p>实现机制：与 {@link #delayLevel} 相同，使用 ScoredSortedSet 存储， score 为触发时间戳。精度取决于扫描间隔（默认 100ms）。
+     * <p>实现机制：与 {@link #delayLevel} 相同，使用 ScoredSortedSet 存储， score 为触发时间戳。精度取决于扫描间隔（默认 1000ms）。
      *
      * <p>两种延时方式的可靠性相同，均基于 Redis ZSet + 定时扫描。
      */

@@ -14,8 +14,9 @@ import io.github.streammq.core.message.Message;
  *
  * <ul>
  *   <li>{@link ConsumeAction#SUCCESS} - 消费成功，自动 ACK，下一条继续
- *   <li>{@link ConsumeAction#RECONSUME_LATER} - 暂停当前 shard 一小段时间（默认 10ms）， 消息留在 PEL
- *       等待重新消费同一消息（与并发消费的 RECONSUME_LATER 行为不同， 顺序消费不会将消息重新入队重试，而是暂停 shard 后原地重试）
+ *   <li>{@link ConsumeAction#RECONSUME_LATER} - 消费失败：容器在当前线程内按 {@code maxReconsumeTimes}
+ *       重试同一消息，每次失败后按 {@code suspendCurrentQueueTimeMillis}（默认 1000ms）挂起当前 shard， 不越过失败消息继续消费
+ *       （保证同分片严格有序）；重试耗尽后直接进入 DLQ。
  * </ul>
  *
  * <p>抛出 {@link RuntimeException} 等价于返回 {@link ConsumeAction#RECONSUME_LATER}。 框架不提供手动

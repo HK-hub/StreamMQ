@@ -5,7 +5,7 @@ import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
 import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.message.Message;
-import org.redisson.api.RLock;
+import java.util.concurrent.locks.Lock;
 
 /**
  * 顺序消费分片锁管理器策略接口。
@@ -13,8 +13,10 @@ import org.redisson.api.RLock;
  * <p>负责为顺序消费 Consumer 创建 shard 级分布式锁，并在消费时按 shardingKey 路由到对应 shard 加锁执行， 保证同一 shardingKey
  * 的消息串行消费，不同 shard 之间可并行。
  *
- * <p>设计模式：策略模式，将顺序消费的锁逻辑从容器中分离。 默认实现（基于 Redisson {@link RLock}）位于 {@code streammq-redisson-adapter}
- * 模块， 可通过容器构造器注入自定义实现。
+ * <p>设计模式：策略模式，将顺序消费的锁逻辑从容器中分离。 默认实现（基于 Redisson 分布式锁）位于 {@code streammq-redisson-adapter} 模块，
+ * 可通过容器构造器注入自定义实现。
+ *
+ * <p>抽象层使用 JDK {@link Lock} 而非特定客户端类型（如 Redisson {@code RLock}）， 保持 core 模块与具体 Redis 客户端解耦。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -29,9 +31,9 @@ public interface OrderlyShardLockManager {
      * @param group 消费组
      * @param ns 注解指定的命名空间（可为空）
      * @param shardCount 分片数
-     * @return RLock 数组，shardCount &lt;= 0 时返回 null
+     * @return Lock 数组，shardCount &lt;= 0 时返回 null
      */
-    RLock[] createShardLocks(
+    Lock[] createShardLocks(
             String defaultNs, String topic, String group, String ns, int shardCount);
 
     /**

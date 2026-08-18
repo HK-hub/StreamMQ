@@ -127,7 +127,7 @@ public final class MessageBuilder<T> {
      * @return this
      */
     public MessageBuilder<T> topic(String topic) {
-        this.topic = StringUtils.requireValidName(topic, "topic");
+        this.topic = StringUtils.requireValidTopic(topic);
         return this;
     }
 

@@ -168,8 +168,8 @@ public interface StreamMessageTemplate extends TransactionExecutor {
      * 批量发送。
      *
      * <p>语义：所有消息通过 Pipeline 一次性发送到 Redis，单条失败不会导致整个批次异常。 返回的 {@link SendResult}
-     * 列表与输入消息一一对应，每条结果的状态独立标识成功/失败。 如果 Pipeline 本身异常（如网络中断），则抛出 {@link
-     * io.github.streammq.core.exception.StreamMQException}。
+     * 列表与输入消息一一对应，每条结果携带该消息在 Redis Stream 中的<b>真实 Entry ID</b>， 每条结果的状态独立标识成功/失败。 如果 Pipeline
+     * 本身异常（如网络中断），则抛出 {@link io.github.streammq.core.exception.StreamMQException}。
      *
      * @param batch 批量消息
      * @param <T> body 类型

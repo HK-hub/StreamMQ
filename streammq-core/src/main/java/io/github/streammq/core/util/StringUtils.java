@@ -59,4 +59,40 @@ public final class StringUtils {
         }
         return trimmed;
     }
+
+    /**
+     * 校验并规范化主题名（非 null / 非空 / 不含 {@code ':'}、{@code '*'} 或空白）。
+     *
+     * @param topic 主题名
+     * @return 去除首尾空白后的主题名
+     * @throws IllegalArgumentException 如果主题名为空或包含非法字符
+     */
+    public static String requireValidTopic(String topic) {
+        return requireValidName(topic, "topic");
+    }
+
+    /**
+     * 校验并规范化消费者组名（非 null / 非空 / 不含 {@code ':'}、{@code '*'} 或空白）。
+     *
+     * @param group 消费者组名
+     * @return 去除首尾空白后的消费者组名
+     * @throws IllegalArgumentException 如果组名为空或包含非法字符
+     */
+    public static String requireValidGroup(String group) {
+        return requireValidName(group, "consumerGroup");
+    }
+
+    /**
+     * 校验并规范化命名空间（允许为空字符串；非空时不含 {@code ':'}、{@code '*'} 或空白）。
+     *
+     * @param namespace 命名空间，可为 null 或空字符串
+     * @return 去除首尾空白后的命名空间
+     * @throws IllegalArgumentException 如果命名空间非空但包含非法字符
+     */
+    public static String requireValidNamespace(String namespace) {
+        if (isEmpty(namespace)) {
+            return "";
+        }
+        return requireValidName(namespace, "namespace");
+    }
 }

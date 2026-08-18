@@ -20,7 +20,8 @@ import java.time.Duration;
  *       RECONSUME_LATER 处理
  * </ul>
  *
- * <p>顺序消费的 {@link ConsumeAction} 由容器直接处理（消息留在 PEL），不进入本处理器。
+ * <p>顺序消费：{@code SUCCESS} 时由容器调用本处理器 ACK；失败时容器在当前线程内重试 （{@code maxReconsumeTimes} 次），耗尽后调用 {@link
+ * #routeToDlq} 直接进入 DLQ 并 ACK， 保证分片内严格有序。
  *
  * <p>重试超时路由：当 {@link RetryPolicy#nextRetryDelay} 返回 null（不再重试）时， 路由到 DLQ Stream。
  *

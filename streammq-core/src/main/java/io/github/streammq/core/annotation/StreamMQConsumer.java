@@ -80,6 +80,10 @@ public @interface StreamMQConsumer {
      * <p>设置为 {@link MessageModel#ORDERLY} 时表示顺序消费，需实现 {@link
      * io.github.streammq.core.consumer.StreamMessageOrderlyConsumer}， {@link #shardCount()} 生效。
      *
+     * <p>顺序消费实现为「单 Stream + 分片分布式锁」：同一 {@code shardingKey} 路由到同一分片串行消费； 消费失败时在当前线程内按 {@link
+     * #maxReconsumeTimes()} 重试，每次失败后按 {@link #suspendCurrentQueueTimeMillis()} 挂起， 保证同分片不越过失败消息
+     * （严格有序）；重试耗尽后直接进入 DLQ。
+     *
      * @return 消息模型
      */
     MessageModel messageModel() default MessageModel.CONCURRENT;
