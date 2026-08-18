@@ -18,7 +18,7 @@ import org.openjdk.jmh.runner.options.TimeValue;
 @OutputTimeUnit(TimeUnit.SECONDS)
 @Warmup(iterations = 3, time = 2)
 @Measurement(iterations = 5, time = 3)
-@Fork(1)
+@Fork(3)
 public class SerializationBenchmark {
 
     private static final int PAYLOAD_SIZE = 1024;

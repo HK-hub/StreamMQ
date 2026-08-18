@@ -35,6 +35,11 @@ jobs:
       - name: Set project version
         run: mvn versions:set -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false
 
+      # streammq-bom 独立于 parent、内部以属性硬编码 streammq.version；
+      # versions:set 不会更新该属性，需单独 set-property，否则 BOM 会指向不存在的旧版本。
+      - name: Sync BOM version property
+        run: mvn versions:set-property -Dproperty=streammq.version -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false
+
       - name: Build and deploy to Maven Central
         run: mvn clean deploy -DskipTests -Pgpg
         env:

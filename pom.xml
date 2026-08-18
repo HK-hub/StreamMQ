@@ -11,7 +11,7 @@
     <packaging>pom</packaging>
     <name>StreamMQ</name>
     <description>StreamMQ - 基于 Redis Stream + Redisson 的开箱即用 Redis MQ SDK (Parent POM)</description>
-    <url>https://github.com/streammq/streammq</url>
+    <url>https://github.com/HK-hub/StreamMQ</url>
 
     <!-- ========== 模块清单 ========== -->
     <modules>
@@ -43,15 +43,15 @@
             <id>streammq-contributors</id>
             <name>StreamMQ Contributors</name>
             <email>streammq@example.com</email>
-            <url>https://github.com/streammq/streammq</url>
+            <url>https://github.com/HK-hub/StreamMQ</url>
         </developer>
     </developers>
 
     <!-- ========== SCM ========== -->
     <scm>
-        <connection>scm:git:https://github.com/streammq/streammq.git</connection>
-        <developerConnection>scm:git:https://github.com/streammq/streammq.git</developerConnection>
-        <url>https://github.com/streammq/streammq</url>
+        <connection>scm:git:https://github.com/HK-hub/StreamMQ.git</connection>
+        <developerConnection>scm:git:https://github.com/HK-hub/StreamMQ.git</developerConnection>
+        <url>https://github.com/HK-hub/StreamMQ</url>
         <tag>v0.1.0</tag>
     </scm>
 

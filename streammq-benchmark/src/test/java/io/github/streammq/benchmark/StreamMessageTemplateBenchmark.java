@@ -28,7 +28,7 @@ import org.slf4j.LoggerFactory;
 @OutputTimeUnit(TimeUnit.SECONDS)
 @Warmup(iterations = 3, time = 2)
 @Measurement(iterations = 5, time = 3)
-@Fork(1)
+@Fork(3)
 public class StreamMessageTemplateBenchmark {
 
     private static final Logger LOG = LoggerFactory.getLogger(StreamMessageTemplateBenchmark.class);
