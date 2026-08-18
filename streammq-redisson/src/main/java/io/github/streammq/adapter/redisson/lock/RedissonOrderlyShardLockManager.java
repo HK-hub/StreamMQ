@@ -9,6 +9,7 @@ import io.github.streammq.core.message.Message;
 import io.github.streammq.core.policy.OrderlyShardLockManager;
 import io.github.streammq.core.util.StringUtils;
 import java.util.Objects;
+import java.util.concurrent.locks.Lock;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RLock;
@@ -41,7 +42,7 @@ public class RedissonOrderlyShardLockManager implements OrderlyShardLockManager 
      * @return RLock 数组，shardCount &lt;= 0 时返回 null
      */
     @Override
-    public RLock[] createShardLocks(
+    public Lock[] createShardLocks(
             String defaultNs, String topic, String group, String ns, int shardCount) {
         if (shardCount <= 0) {
             return null;

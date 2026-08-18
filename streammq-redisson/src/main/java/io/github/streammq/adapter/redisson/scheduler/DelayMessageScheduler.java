@@ -16,6 +16,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.Setter;
+import org.redisson.api.BatchOptions;
 import org.redisson.api.RBatch;
 import org.redisson.api.RMap;
 import org.redisson.api.RScoredSortedSet;
@@ -75,6 +76,9 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     /** 关闭调度线程池时的等待超时（秒） */
     private static final long AWAIT_TERMINATION_SECONDS =
             StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
+
+    /** 转移失败后的回写退避（毫秒）：避免 Redis 故障时以 scan 间隔高频热循环重试 */
+    private static final long FAILURE_REQUEUE_BACKOFF_MS = 5_000L;
 
     private final RedissonClient redisson;
     private final String namespace;
@@ -206,7 +210,11 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 fields.remove(FIELD_DELIVER_AT);
 
                 if (Objects.isNull(batch)) {
-                    batch = redisson.createBatch();
+                    batch =
+                            redisson.createBatch(
+                                    BatchOptions.defaults()
+                                            .executionMode(
+                                                    BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
                 }
                 String targetStreamKey = StreamMQKeys.topicStream(namespace, targetTopic);
                 StreamAddArgs<String, String> args = StreamAddArgs.entries(fields);
@@ -228,11 +236,14 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                         msgId,
                         ex.getMessage(),
                         ex);
-                // 处理失败时将 msgId 重新写回 ZSet（score=当前时间，立即重试），
-                // 避免消息因 ZREM 后处理失败而永久丢失
+                // 处理失败时将 msgId 写回 ZSet（带退避延迟），
+                // 避免消息因 ZREM 后处理失败而永久丢失，同时防止 Redis 故障时高频热循环
                 try {
-                    zset.add(System.currentTimeMillis(), msgId);
-                    LOG.warn("Re-added msgId={} to delay ZSet for retry", msgId);
+                    zset.add(System.currentTimeMillis() + FAILURE_REQUEUE_BACKOFF_MS, msgId);
+                    LOG.warn(
+                            "Re-added msgId={} to delay ZSet (backoff {}ms)",
+                            msgId,
+                            FAILURE_REQUEUE_BACKOFF_MS);
                 } catch (RuntimeException reAddEx) {
                     LOG.error(
                             "CRITICAL: Failed to re-add msgId={} to delay ZSet, message may be"
@@ -286,7 +297,11 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 fields.remove(FIELD_DELIVER_AT);
 
                 if (Objects.isNull(batch)) {
-                    batch = redisson.createBatch();
+                    batch =
+                            redisson.createBatch(
+                                    BatchOptions.defaults()
+                                            .executionMode(
+                                                    BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
                 }
                 String targetStreamKey = StreamMQKeys.topicStream(namespace, targetTopic);
                 StreamAddArgs<String, String> args = StreamAddArgs.entries(fields);
@@ -308,8 +323,11 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                         ex.getMessage(),
                         ex);
                 try {
-                    zset.add(System.currentTimeMillis(), msgId);
-                    LOG.warn("Re-added msgId={} to custom delay ZSet for retry", msgId);
+                    zset.add(System.currentTimeMillis() + FAILURE_REQUEUE_BACKOFF_MS, msgId);
+                    LOG.warn(
+                            "Re-added msgId={} to custom delay ZSet (backoff {}ms)",
+                            msgId,
+                            FAILURE_REQUEUE_BACKOFF_MS);
                 } catch (RuntimeException reAddEx) {
                     LOG.error(
                             "CRITICAL: Failed to re-add msgId={} to custom delay ZSet, message may"

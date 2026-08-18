@@ -61,10 +61,7 @@ public class RedissonStreamProducerFactory implements StreamMessageProducerFacto
     public StreamMessageProducer createProducer(ProducerConfig config) {
         ensureOpen();
         Objects.requireNonNull(config, "config");
-        String group = config.getGroup();
-        if (StringUtils.isEmpty(group)) {
-            throw new IllegalArgumentException("Missing required property: group");
-        }
+        String group = StringUtils.requireValidGroup(config.getGroup());
         return producers.computeIfAbsent(
                 group,
                 g -> {

@@ -162,6 +162,20 @@ class ProducerIT extends AbstractRedisIT {
         long distinctIds =
                 results.stream().map(r -> r.getMessageId().getStreamEntryId()).distinct().count();
         assertThat(distinctIds).isEqualTo(3L);
+
+        // 返回的 messageId 必须是 Redis Stream 中的真实 Entry ID（而非占位 ID）
+        RStream<String, String> stream =
+                redisson.getStream(StreamMQKeys.topicStream(namespace, TOPIC));
+        Map<StreamMessageId, Map<String, String>> entries =
+                stream.range(StreamMessageId.MIN, StreamMessageId.MAX);
+        Map<String, Map<String, String>> byId =
+                entries.entrySet().stream()
+                        .collect(
+                                java.util.stream.Collectors.toMap(
+                                        e -> e.getKey().toString(), Map.Entry::getValue));
+        for (SendResult result : results) {
+            assertThat(byId).containsKey(result.getMessageId().getStreamEntryId());
+        }
     }
 
     @Test

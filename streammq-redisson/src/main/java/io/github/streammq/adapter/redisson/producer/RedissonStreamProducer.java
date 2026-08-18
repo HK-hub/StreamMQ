@@ -188,6 +188,15 @@ public class RedissonStreamProducer implements StreamMessageProducer {
     }
 
     @Override
+    public CompletableFuture<SendResult> asyncSend(Message<?> message, long timeoutMillis) {
+        ensureOpen();
+        Objects.requireNonNull(message, "message");
+        long effectiveTimeout = timeoutMillis > 0 ? timeoutMillis : defaultTimeoutMillis;
+        return CompletableFuture.supplyAsync(
+                () -> syncSend(message, effectiveTimeout), asyncExecutor);
+    }
+
+    @Override
     public void sendOneway(Message<?> message) {
         ensureOpen();
         Objects.requireNonNull(message, "message");
@@ -264,8 +273,11 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             batch.<String, String>getStream(streamKey).addAsync(args);
         }
 
+        List<?> responses;
         try {
-            batch.executeAsync().get(timeoutMillis, TimeUnit.MILLISECONDS);
+            BatchResult<?> batchResult =
+                    batch.executeAsync().get(timeoutMillis, TimeUnit.MILLISECONDS);
+            responses = batchResult.getResponses();
         } catch (TimeoutException ex) {
             throw new ProducerTimeoutException(
                     "syncSendBatch timed out after " + timeoutMillis + "ms for topic " + firstTopic,
@@ -284,23 +296,38 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                     "syncSendBatch failed for topic " + firstTopic, null, ex);
         }
 
-        // 由于 RBatch 不返回每条 ID，为每条消息生成唯一占位 ID（基于 UUID 哈希）
-        // 真实 Stream Entry ID 由消费端从 Stream Entry 获取
+        // 从 BatchResult 提取每条 XADD 返回的真实 Stream Entry ID（按命令提交顺序一一对应）。
+        // 若 Redisson 版本未返回可识别结果，则回退生成占位 ID（仅影响调用方拿到非真实 ID，消费侧始终使用 Stream 真实 ID）。
         List<SendResult> results = new ArrayList<>(messageList.size());
-        for (Message<?> message : messageList) {
-            // 为每条消息生成唯一 ID，避免批量消息 ID 相同导致幂等失效
-            MessageId placeholder =
-                    MessageId.of(
-                            System.currentTimeMillis(), Math.abs(UUID.randomUUID().hashCode()));
-            message.setMessageId(placeholder);
+        for (int i = 0; i < messageList.size(); i++) {
+            Message<?> message = messageList.get(i);
+            MessageId messageId = toRealMessageId(responses, i);
+            message.setMessageId(messageId);
             results.add(
                     new SendResult(
-                            placeholder,
+                            messageId,
                             message.getTopic(),
                             message.getTag(),
                             message.getBornTimestamp()));
         }
         return results;
+    }
+
+    /**
+     * 从 {@link BatchResult#getResponses()} 中按索引解析真实 Stream Entry ID；不可识别时回退占位 ID。
+     *
+     * @param responses 批处理各命令的返回结果
+     * @param index 命令索引
+     * @return 消息 ID
+     */
+    private MessageId toRealMessageId(List<?> responses, int index) {
+        if (Objects.nonNull(responses) && index < responses.size()) {
+            Object response = responses.get(index);
+            if (response instanceof StreamMessageId streamMessageId) {
+                return MessageId.fromStreamMessageId(streamMessageId);
+            }
+        }
+        return MessageId.of(System.currentTimeMillis(), 0x7fffffff & UUID.randomUUID().hashCode());
     }
 
     /**
@@ -316,8 +343,9 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         DelayLevel level = message.getDelayLevel();
         Long delayTimeMillis = message.getDelayTimeMillis();
 
-        // V1.0+: 任意延时优先使用 custom ZSet，不转换为 DelayLevel
-        if (Objects.isNull(level) && Objects.nonNull(delayTimeMillis) && delayTimeMillis > 0) {
+        // 任意延时优先：同时设置 delayLevel 与 delayTimeMillis 时，delayTimeMillis 优先（对齐 Message javadoc）。
+        // 使用 custom ZSet 支持任意延时。
+        if (Objects.nonNull(delayTimeMillis) && delayTimeMillis > 0) {
             // 使用 custom ZSet 支持任意延时
             long deliverAt = now + delayTimeMillis;
             String zsetKey = StreamMQKeys.delayCustomZSet(namespace);
@@ -341,7 +369,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                         deliverAt,
                         message.getTopic());
 
-                MessageId messageId = MessageId.of(now, Math.abs(msgId.hashCode()));
+                MessageId messageId = MessageId.of(now, 0x7fffffff & msgId.hashCode());
                 message.setMessageId(messageId);
                 return new SendResult(
                         messageId,
@@ -383,7 +411,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                     deliverAt,
                     message.getTopic());
 
-            MessageId messageId = new MessageId(now + "-" + Math.abs(msgId.hashCode()));
+            MessageId messageId = new MessageId(now + "-" + (msgId.hashCode() & 0x7fffffff));
             message.setMessageId(messageId);
             return new SendResult(
                     messageId, message.getTopic(), message.getTag(), message.getBornTimestamp());

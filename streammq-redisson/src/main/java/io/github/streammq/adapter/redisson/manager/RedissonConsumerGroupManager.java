@@ -10,6 +10,7 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.redisson.api.*;
 import org.redisson.client.RedisException;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -28,7 +29,7 @@ import org.slf4j.LoggerFactory;
  * <p>线程安全：所有字段均为 final 或线程安全类型。
  *
  * @author StreamMQ Contributors
- * @since 0.2.0
+ * @since 0.1.0
  */
 public class RedissonConsumerGroupManager implements ConsumerGroupManager {
 
@@ -128,6 +129,16 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
     }
 
     /**
+     * 实例注册表 Hash（显式使用 StringCodec，避免客户端全局 codec 类型不兼容导致 Long/Map 编解码失败）。
+     *
+     * @return instances Hash
+     */
+    private RMap<String, String> instances() {
+        return redisson.getMap(
+                StreamMQKeys.consumerGroupInstances(namespace, group), StringCodec.INSTANCE);
+    }
+
+    /**
      * 注册当前实例到消费者组。
      *
      * <ol>
@@ -146,10 +157,8 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
                     instanceId);
             return;
         }
-        // 1. 写入 instances Hash
-        String instancesKey = StreamMQKeys.consumerGroupInstances(namespace, group);
-        RMap<String, Long> instances = redisson.getMap(instancesKey);
-        instances.put(instanceId, System.currentTimeMillis());
+        // 1. 写入 instances Hash（时间戳以字符串存储，配合 StringCodec 保证跨 codec 兼容）
+        instances().put(instanceId, String.valueOf(System.currentTimeMillis()));
         LOG.info("Consumer instance registered: group={}, instanceId={}", group, instanceId);
 
         // 2. 申请 RSemaphore（防并发 Rebalance）
@@ -210,9 +219,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
             listenerId = -1;
         }
         // 从 instances Hash 移除
-        String instancesKey = StreamMQKeys.consumerGroupInstances(namespace, group);
-        RMap<String, Long> instances = redisson.getMap(instancesKey);
-        instances.remove(instanceId);
+        instances().remove(instanceId);
         // 释放信号量
         try {
             RSemaphore sem = redisson.getSemaphore(semaphoreKey);
@@ -232,9 +239,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
             return;
         }
         try {
-            String instancesKey = StreamMQKeys.consumerGroupInstances(namespace, group);
-            RMap<String, Long> instances = redisson.getMap(instancesKey);
-            instances.put(instanceId, System.currentTimeMillis());
+            instances().put(instanceId, String.valueOf(System.currentTimeMillis()));
             heartbeatFailCount = 0;
             LOG.debug("Heartbeat OK: group={}, instanceId={}", group, instanceId);
         } catch (RedisException ex) {
@@ -264,9 +269,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
      */
     @Override
     public List<String> getActiveConsumers() {
-        String instancesKey = StreamMQKeys.consumerGroupInstances(namespace, group);
-        RMap<String, Long> instances = redisson.getMap(instancesKey);
-        Map<String, Long> all = instances.readAllMap();
+        Map<String, String> all = instances().readAllMap();
         if (CollectionUtils.isEmpty(all)) {
             return List.of();
         }
@@ -274,24 +277,38 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
         // 清理超时实例（惰性清理）
         List<String> toRemove = new ArrayList<>();
         List<String> active = new ArrayList<>();
-        for (Map.Entry<String, Long> entry : all.entrySet()) {
-            if (now - entry.getValue() > instanceTimeoutMs) {
+        for (Map.Entry<String, String> entry : all.entrySet()) {
+            long lastHeartbeat = parseTimestamp(entry.getValue());
+            if (now - lastHeartbeat > instanceTimeoutMs) {
                 toRemove.add(entry.getKey());
                 LOG.debug(
                         "Stale instance detected: group={}, instanceId={}, lastHeartbeat={}ms ago",
                         group,
                         entry.getKey(),
-                        now - entry.getValue());
+                        now - lastHeartbeat);
             } else {
                 active.add(entry.getKey());
             }
         }
         // 批量清理超时实例
         if (!toRemove.isEmpty()) {
-            instances.fastRemove(toRemove.toArray(new String[0]));
+            instances().fastRemove(toRemove.toArray(new String[0]));
         }
         Collections.sort(active);
         return active;
+    }
+
+    /** 解析心跳时间戳字符串（非法值视为 0，立即视为过期）。 */
+    private long parseTimestamp(String value) {
+        if (value == null || value.isEmpty()) {
+            return 0L;
+        }
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException ex) {
+            LOG.debug("Invalid heartbeat timestamp '{}' for group={}", value, group);
+            return 0L;
+        }
     }
 
     /**
@@ -403,21 +420,19 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
      */
     @Override
     public void cleanupStaleGroups() {
-        String instancesKey = StreamMQKeys.consumerGroupInstances(namespace, group);
-        RMap<String, Long> instances = redisson.getMap(instancesKey);
-        Map<String, Long> all = instances.readAllMap();
+        Map<String, String> all = instances().readAllMap();
         if (CollectionUtils.isEmpty(all)) {
             return;
         }
         long now = System.currentTimeMillis();
         List<String> staleIds = new ArrayList<>();
-        for (Map.Entry<String, Long> entry : all.entrySet()) {
-            if (now - entry.getValue() > instanceTimeoutMs) {
+        for (Map.Entry<String, String> entry : all.entrySet()) {
+            if (now - parseTimestamp(entry.getValue()) > instanceTimeoutMs) {
                 staleIds.add(entry.getKey());
             }
         }
         if (!staleIds.isEmpty()) {
-            instances.fastRemove(staleIds.toArray(new String[0]));
+            instances().fastRemove(staleIds.toArray(new String[0]));
             LOG.info(
                     "Cleaned up {} stale instance records for group={}: {}",
                     staleIds.size(),

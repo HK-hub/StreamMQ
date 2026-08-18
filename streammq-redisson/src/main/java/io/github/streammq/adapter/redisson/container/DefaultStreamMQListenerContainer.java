@@ -41,7 +41,6 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.Lock;
-import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -84,9 +83,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 单次 pull 批量大小 */
     private static final int DEFAULT_BATCH_SIZE = StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE;
 
-    /** pullBlock 超时（秒），控制消费循环响应停止信号的延迟 */
-    private static final Duration PULL_BLOCK_TIMEOUT = Duration.ofSeconds(1);
-
     /** 暂停状态下消费循环的休眠间隔（毫秒） */
     private static final long PAUSED_SLEEP_MILLIS = StreamMQConstants.DEFAULT_PAUSED_SLEEP_MS;
 
@@ -97,6 +93,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 关闭消费线程池时的等待超时（秒） */
     private static final long AWAIT_TERMINATION_SECONDS =
             StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
+
+    /** 消费超时取消后，等待业务线程真正终止的宽限期（毫秒），用于缩小与重试副本的重叠窗口 */
+    private static final long TIMEOUT_CANCEL_GRACE_MILLIS = 2_000L;
 
     private final RedissonClient redisson;
     private final StreamMQListenerFactory consumerFactory;
@@ -219,6 +218,22 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 顺序消费 PEL 认领调度器（可选，注入后容器启动时注册目标） */
     private volatile PelClaimScheduler pelClaimScheduler;
 
+    /** 消费者全局默认：单次拉取批量（注解 {@code pullBatchSize} 未显式指定时生效） */
+    private volatile int defaultPullBatchSize = StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE;
+
+    /** 消费者全局默认：拉取阻塞超时（毫秒），与注解 {@code consumeTimeout} 解耦 */
+    private volatile long defaultPullBlockTimeoutMillis =
+            StreamMQConstants.DEFAULT_PULL_BLOCK_TIMEOUT_MS;
+
+    /** 消费者全局默认：拉取间隔（毫秒） */
+    private volatile long defaultPullIntervalMillis = StreamMQConstants.DEFAULT_PULL_INTERVAL_MS;
+
+    /** 单次拉取批量上界（对应 {@code streammq.consumer.max-batch-size-limit}） */
+    private volatile int maxBatchSizeLimit = StreamMQConstants.MAX_BATCH_SIZE_LIMIT;
+
+    /** 一致性哈希重平衡策略虚拟节点数（对应 {@code streammq.rebalance.virtual-nodes}） */
+    private volatile int defaultVirtualNodes = StreamMQConstants.DEFAULT_VIRTUAL_NODES;
+
     /**
      * 注入顺序消费 PEL 认领调度器。容器启动时会将所有 ORDERLY 消费目标注册到调度器。
      *
@@ -226,6 +241,75 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      */
     public void setPelClaimScheduler(PelClaimScheduler scheduler) {
         this.pelClaimScheduler = Objects.requireNonNull(scheduler, "scheduler");
+    }
+
+    /**
+     * 设置消费者全局默认单次拉取批量。
+     *
+     * @param batchSize 批量大小，必须 &gt; 0
+     */
+    public void setDefaultPullBatchSize(int batchSize) {
+        if (batchSize > 0) {
+            this.defaultPullBatchSize = batchSize;
+        }
+    }
+
+    /**
+     * 设置消费者全局默认拉取阻塞超时（毫秒）。
+     *
+     * @param millis 毫秒数，必须 &gt; 0
+     */
+    public void setDefaultPullBlockTimeoutMillis(long millis) {
+        if (millis > 0) {
+            this.defaultPullBlockTimeoutMillis = millis;
+        }
+    }
+
+    /**
+     * 设置消费者全局默认拉取间隔（毫秒）。
+     *
+     * @param millis 毫秒数，必须 &gt;= 0
+     */
+    public void setDefaultPullIntervalMillis(long millis) {
+        if (millis >= 0) {
+            this.defaultPullIntervalMillis = millis;
+        }
+    }
+
+    /**
+     * 设置单次拉取批量上界。
+     *
+     * @param limit 上界，必须 &gt; 0
+     */
+    public void setMaxBatchSizeLimit(int limit) {
+        if (limit > 0) {
+            this.maxBatchSizeLimit = limit;
+        }
+    }
+
+    /**
+     * 设置一致性哈希重平衡策略虚拟节点数。
+     *
+     * @param virtualNodes 虚拟节点数，必须 &gt; 0
+     */
+    public void setDefaultVirtualNodes(int virtualNodes) {
+        if (virtualNodes > 0) {
+            this.defaultVirtualNodes = virtualNodes;
+        }
+    }
+
+    /** 解析生效的拉取批量：注解显式指定时优先，否则使用全局默认，并限制在上界内。 */
+    private int resolvePullBatchSize(int annotationValue) {
+        int effective =
+                annotationValue != StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE
+                        ? annotationValue
+                        : defaultPullBatchSize;
+        return Math.max(1, Math.min(effective, maxBatchSizeLimit));
+    }
+
+    /** 解析生效的拉取间隔：注解显式指定时优先，否则使用全局默认。 */
+    private long resolvePullInterval(long annotationValue) {
+        return annotationValue != 0 ? annotationValue : defaultPullIntervalMillis;
     }
 
     /** 构造容器（向后兼容：内部创建默认策略实现，per-consumer 启用）。 */
@@ -423,6 +507,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         Objects.requireNonNull(consumer, "consumer");
         Objects.requireNonNull(annotation, "annotation");
         checkBeforeStart();
+        StringUtils.requireValidTopic(annotation.topic());
+        StringUtils.requireValidGroup(annotation.consumerGroup());
+        StringUtils.requireValidNamespace(annotation.namespace());
         Class<?> bodyType = BodyTypeResolver.resolve(consumer);
         String effectiveGroup = annotation.consumerGroup();
         boolean isDlqMode = annotation.dlqMode();
@@ -437,9 +524,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         .shardCount(0)
                         .consumeTimeoutMillis(annotation.consumeTimeout())
                         .shardLocks(null)
-                        .pullBatchSize(annotation.pullBatchSize())
-                        .pullBlockTimeoutMillis(annotation.consumeTimeout())
-                        .pullIntervalMillis(annotation.pullInterval())
+                        .pullBatchSize(resolvePullBatchSize(annotation.pullBatchSize()))
+                        .pullBlockTimeoutMillis(defaultPullBlockTimeoutMillis)
+                        .pullIntervalMillis(resolvePullInterval(annotation.pullInterval()))
                         .selectorExpression(annotation.selectorExpression())
                         .serializer(annotation.serializer())
                         .retryPolicy(annotation.retryPolicy())
@@ -472,8 +559,11 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         Objects.requireNonNull(consumer, "consumer");
         Objects.requireNonNull(annotation, "annotation");
         checkBeforeStart();
+        StringUtils.requireValidTopic(annotation.topic());
+        StringUtils.requireValidGroup(annotation.consumerGroup());
+        StringUtils.requireValidNamespace(annotation.namespace());
         int shardCount = annotation.shardCount();
-        RLock[] shardLockArray =
+        Lock[] shardLockArray =
                 shardLockManager.createShardLocks(
                         defaultNamespace,
                         annotation.topic(),
@@ -494,9 +584,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         .shardCount(shardCount)
                         .consumeTimeoutMillis(annotation.consumeTimeout())
                         .shardLocks(shardLocks)
-                        .pullBatchSize(annotation.pullBatchSize())
-                        .pullBlockTimeoutMillis(annotation.consumeTimeout())
-                        .pullIntervalMillis(annotation.pullInterval())
+                        .pullBatchSize(resolvePullBatchSize(annotation.pullBatchSize()))
+                        .pullBlockTimeoutMillis(defaultPullBlockTimeoutMillis)
+                        .pullIntervalMillis(resolvePullInterval(annotation.pullInterval()))
                         .selectorExpression(annotation.selectorExpression())
                         .serializer(annotation.serializer())
                         .retryPolicy(annotation.retryPolicy())
@@ -531,6 +621,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         Objects.requireNonNull(consumer, "consumer");
         Objects.requireNonNull(annotation, "annotation");
         checkBeforeStart();
+        StringUtils.requireValidGroup(annotation.consumerGroup());
+        StringUtils.requireValidNamespace(annotation.namespace());
         String effectiveGroup = annotation.consumerGroup();
         Class<?> bodyType = BodyTypeResolver.resolve(consumer);
         ListenerRegistration<T> reg =
@@ -544,8 +636,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         .shardCount(0)
                         .consumeTimeoutMillis(StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS)
                         .shardLocks(null)
-                        .pullBatchSize(StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE)
-                        .pullBlockTimeoutMillis(StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS)
+                        .pullBatchSize(
+                                resolvePullBatchSize(StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE))
+                        .pullBlockTimeoutMillis(defaultPullBlockTimeoutMillis)
                         .pullIntervalMillis(0L)
                         .selectorExpression("*")
                         .serializer(MessageSerializer.class)
@@ -648,6 +741,13 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         if (Objects.isNull(rebalanceClass) || rebalanceClass == RebalanceStrategy.class) {
             return new io.github.streammq.adapter.redisson.rebalance.AverageRebalanceStrategy();
         }
+        // 一致性哈希策略支持通过 streammq.rebalance.virtual-nodes 配置虚拟节点数
+        if (rebalanceClass
+                == io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy
+                        .class) {
+            return new io.github.streammq.adapter.redisson.rebalance
+                    .ConsistentHashRebalanceStrategy(defaultVirtualNodes);
+        }
         try {
             return SpiResolver.resolveOrInstantiate(
                     (Class) rebalanceClass, RebalanceStrategy.class, null);
@@ -707,6 +807,34 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                     : Object.class));
         }
         return Collections.unmodifiableList(list);
+    }
+
+    /**
+     * 手动触发指定消费者组的分片重平衡（仅对已注册的 ORDERLY 消费者生效）。
+     *
+     * <p>计算 {@link RebalanceStrategy} 分配并写入 assignment Hash + 广播 REBALANCE 通知， 供可观测与管理端点使用；
+     * 顺序消费的实际并发控制由分片分布式锁保证。
+     *
+     * @param group 消费者组名
+     * @return true 表示已执行重平衡；false 表示未找到对应 ORDERLY 消费者或无可执行
+     */
+    public boolean rebalanceGroup(String group) {
+        for (Map.Entry<String, ListenerRegistration<?>> entry : registrations.entrySet()) {
+            ListenerRegistration<?> reg = entry.getValue();
+            if (reg.getType() == ListenerType.ORDERLY && reg.getGroup().equals(group)) {
+                ConsumerGroupManager cgm = consumerGroupManagers.get(entry.getKey());
+                if (cgm != null && reg.getShardCount() > 0) {
+                    cgm.rebalance(reg.getShardCount());
+                    LOG.info(
+                            "Rebalance triggered for orderly group={}, shardCount={}",
+                            group,
+                            reg.getShardCount());
+                    return true;
+                }
+            }
+        }
+        LOG.warn("Rebalance requested for unknown/non-orderly group: {}", group);
+        return false;
     }
 
     /**
@@ -776,6 +904,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                 instanceId,
                                 resolveRebalanceStrategy(reg));
                 cgm.register();
+                cgm.cleanupStaleGroups();
                 consumerGroupManagers.put(reg.key(), cgm);
             }
         }
@@ -1063,17 +1192,14 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                     StreamMessageOrderlyConsumer orderly =
                             (StreamMessageOrderlyConsumer) reg.getConsumer();
                     ConsumeAction orderlyAction =
-                            shardLockManager.consumeWithShardLock(
-                                    message, reg, (ConsumeOrderlyContext) ctx, orderly);
-                    if (orderlyAction.isSuccess()) {
-                        handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
-                        finalAction = ConsumeAction.SUCCESS;
-                    } else {
-                        LOG.debug(
-                                "Suspend current shard (messageId={}): message stays in PEL",
-                                message.getMessageId());
-                        finalAction = ConsumeAction.RECONSUME_LATER;
-                    }
+                            consumeOrderlyWithRetry(
+                                    message,
+                                    reg,
+                                    (ConsumeOrderlyContext) ctx,
+                                    orderly,
+                                    listener,
+                                    handler);
+                    finalAction = orderlyAction;
                 } else {
                     StreamMessageConcurrentlyConsumer consumer =
                             (StreamMessageConcurrentlyConsumer) reg.getConsumer();
@@ -1132,9 +1258,11 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 reg.getGroup(),
                 message.getMessageId(),
                 reg.getConsumeTimeoutMillis());
+        AtomicReference<Thread> taskThread = new AtomicReference<>();
         Future<ConsumeAction> future =
                 consumeExecutor.submit(
                         () -> {
+                            taskThread.set(Thread.currentThread());
                             if (reg.isDlqMode()) {
                                 return processDlqMessage(message, reg, ctx);
                             }
@@ -1164,6 +1292,17 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             handler.handleAction(action, message, reg, listener, null);
         } catch (TimeoutException e) {
             future.cancel(true);
+            // 等待业务线程真正终止（上限为宽限期）：cancel 只是中断信号，业务代码可能仍在执行。
+            // 等待后再 ACK + 调度重试，可显著缩小「原消费与重试副本并发执行」的窗口。
+            // 若业务忽略中断，宽限期后仍继续（框架语义：超时重试与原消费可能并发，由业务幂等兜底）。
+            Thread t = taskThread.get();
+            if (t != null && t != Thread.currentThread()) {
+                try {
+                    t.join(TIMEOUT_CANCEL_GRACE_MILLIS);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+            }
             LOG.warn(
                     "Consume timeout ({}ms) for message, cancelling and retrying: topic={},"
                             + " group={}, messageId={}",
@@ -1218,6 +1357,73 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                     consumer.getClass().getSimpleName());
             return ConsumeAction.SUCCESS;
         }
+    }
+
+    /**
+     * 顺序消费：失败时在当前线程内重试（最多 {@code maxReconsumeTimes} 次）， 每次失败后按 {@code
+     * suspendCurrentQueueTimeMillis} 挂起，保证<b>同一分片不越过失败消息继续消费</b>（严格有序）。
+     *
+     * <p>重试耗尽后直接路由到 DLQ 并 ACK，避免消息留在 PEL 由 {@link PelClaimScheduler} 以新 ID 重投导致乱序。
+     *
+     * <p>崩溃恢复仍由 {@link PelClaimScheduler} 负责：消费者实例崩溃后，PEL 中空闲超阈值的消息会被重新投递。
+     *
+     * @param message 消息
+     * @param reg 注册信息
+     * @param ctx 顺序消费上下文
+     * @param orderly 顺序消费者
+     * @param listener 监听器
+     * @param handler ACK/重试/DLQ 处理器
+     * @return 消费动作
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private ConsumeAction consumeOrderlyWithRetry(
+            Message<?> message,
+            ListenerRegistration reg,
+            ConsumeOrderlyContext ctx,
+            StreamMessageOrderlyConsumer orderly,
+            StreamMQListener listener,
+            RetryAndDlqHandler handler)
+            throws Exception {
+        int maxRetries = Math.max(0, reg.getMaxReconsumeTimes());
+        long suspendMillis = Math.max(0, reg.getSuspendCurrentQueueTimeMillis());
+        ConsumeAction action = shardLockManager.consumeWithShardLock(message, reg, ctx, orderly);
+        int attempt = 0;
+        while (!action.isSuccess() && attempt < maxRetries) {
+            attempt++;
+            LOG.debug(
+                    "Orderly consume failed (attempt {}/{}), suspending shard for {}ms: topic={},"
+                            + " group={}, messageId={}",
+                    attempt,
+                    maxRetries,
+                    suspendMillis,
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    message.getMessageId());
+            sleepQuietly(suspendMillis);
+            action = shardLockManager.consumeWithShardLock(message, reg, ctx, orderly);
+        }
+        if (action.isSuccess()) {
+            handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
+            return ConsumeAction.SUCCESS;
+        }
+        LOG.warn(
+                "Orderly consume exhausted retries (max={}), routing to DLQ: topic={}, group={},"
+                        + " messageId={}",
+                maxRetries,
+                reg.getTopic(),
+                reg.getGroup(),
+                message.getMessageId());
+        if (handler.routeToDlq(
+                message, reg, message.getMessageId(), RetryScheduler.DLQ_REASON_MAX_RETRY)) {
+            listener.ack(message.getMessageId());
+        } else {
+            LOG.error(
+                    "DLQ routing failed, message kept in PEL (topic={}, group={}, messageId={})",
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    message.getMessageId());
+        }
+        return ConsumeAction.RECONSUME_LATER;
     }
 
     /**

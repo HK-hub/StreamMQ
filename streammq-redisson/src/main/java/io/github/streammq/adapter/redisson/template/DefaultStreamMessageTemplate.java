@@ -267,7 +267,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                 return;
             }
             StreamMessageProducer producer = resolveProducer(message.getTopic());
-            producer.asyncSend(message)
+            producer.asyncSend(message, timeoutMillis)
                     .whenComplete(
                             (result, ex) -> {
                                 if (Objects.isNull(ex)) {
@@ -302,13 +302,32 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     @Override
     public <T> CompletableFuture<SendResult> asyncSend(Message<T> message, SendOptions options) {
         Objects.requireNonNull(options, "options");
-        return asyncSend(message);
+        Objects.requireNonNull(message, "message");
+        // 在独立线程中按 SendOptions 的超时/重试语义执行，保证调用方非阻塞。
+        long timeoutMillis = options.effectiveTimeoutMillis();
+        int retryTimes = options.effectiveRetryTimes();
+        return CompletableFuture.supplyAsync(() -> syncSend(message, timeoutMillis, retryTimes));
     }
 
     @Override
     public <T> void asyncSend(Message<T> message, SendOptions options, SendCallback callback) {
         Objects.requireNonNull(options, "options");
-        asyncSend(message, callback);
+        Objects.requireNonNull(message, "message");
+        Objects.requireNonNull(callback, "callback");
+        long timeoutMillis = options.effectiveTimeoutMillis();
+        int retryTimes = options.effectiveRetryTimes();
+        CompletableFuture.supplyAsync(() -> syncSend(message, timeoutMillis, retryTimes))
+                .whenComplete(
+                        (result, ex) -> {
+                            if (Objects.isNull(ex)) {
+                                callback.onSuccess(result);
+                            } else {
+                                callback.onException(
+                                        ex instanceof RuntimeException re
+                                                ? re
+                                                : new StreamMQException("async send failed", ex));
+                            }
+                        });
     }
 
     @Override

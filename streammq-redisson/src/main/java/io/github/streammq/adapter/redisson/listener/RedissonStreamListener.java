@@ -431,9 +431,15 @@ public class RedissonStreamListener implements StreamMQListener {
     /**
      * 获取实际使用的消费者组名。 广播模式下，每个消费者实例使用独立组名（{@code {group}:{consumerName}}）， 确保每个实例都能接收到全量消息。
      *
+     * <p>重试循环（retryMode）除外：重试消息写入共享的 {@code retry:msg:{topic}:{group}} 流，若广播实例各自建组，
+     * 每条重试消息会被所有实例重复消费；因此重试循环统一使用基组名，由任一实例处理一次即可。
+     *
      * @return 实际的消费者组名
      */
     private String getEffectiveGroup() {
+        if (retryMode) {
+            return group;
+        }
         if (broadcast) {
             return group + ":" + consumerName;
         }

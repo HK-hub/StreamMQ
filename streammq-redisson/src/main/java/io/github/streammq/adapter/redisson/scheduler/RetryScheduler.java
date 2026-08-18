@@ -20,36 +20,35 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 閲嶈瘯娑堟伅璋冨害鍣紝鍛ㄦ湡鎵弿閲嶈瘯 ZSet锛屽皢鍒版湡娑堟伅杞姇鍒扮洰鏍?Stream 鎴?DLQ Stream銆?
+ * 重试消息调度器，周期扫描重试 ZSet，将到期消息转投到目标 Stream 或 DLQ Stream。
  *
- * <p>瀛樺偍妯″瀷锛堝榻?04-detailed-design.md 搂6锛夛細
+ * <p>存储模型（对齐 04-detailed-design.md §6）：
  *
  * <ul>
- *   <li>ZSet Key: {@code streammq:{ns}:retry:{topic}:{group}}锛宻core=nextRetryAt(ms)锛宮ember=msgId
- *   <li>payload Hash Key: {@code streammq:{ns}:retry:payload:{msgId}}锛?瀛樺偍娑堟伅瀹屾暣瀛楁 + {@code
+ *   <li>ZSet Key: {@code streammq:{ns}:retry:{topic}:{group}}，score=nextRetryAt(ms)，member=msgId
+ *   <li>payload Hash Key: {@code streammq:{ns}:retry:payload:{msgId}}， 存储消息完整字段 + {@code
  *       retryCount} + {@code targetTopic}
  * </ul>
  *
- * <p>杞姇鍐崇瓥锛堝榻愬喅绛?D5锛夛細
+ * <p>转投决策（对齐决策 D5）：
  *
  * <ul>
- *   <li>{@code retryCount < maxReconsumeTimes}锛氳浆鎶曞埌鐩爣 Stream锛坽@code streammq:{ns}:msg:{topic}}锛夛紝
- *       閫掑 {@code retryTimes} 瀛楁
- *   <li>{@code retryCount >= maxReconsumeTimes}锛氳浆鎶曞埌 DLQ Stream锛坽@code
- *       streammq:{ns}:dlq:{group}}锛?
+ *   <li>{@code retryCount < maxReconsumeTimes}：转投到目标 Stream（{@code streammq:{ns}:msg:{topic}}）， 递增
+ *       {@code retryTimes} 字段
+ *   <li>{@code retryCount >= maxReconsumeTimes}：转投到 DLQ Stream（{@code streammq:{ns}:dlq:{group}}）
  * </ul>
  *
- * <p>杞姇娴佺▼锛圝ava 绔師瀛愭搷浣滐紝ZREM 淇濊瘉 only-once锛夛細
+ * <p>转投流程（Java 端原子操作，ZREM 保证 only-once）：
  *
  * <ol>
- *   <li>{@code ZRANGEBYSCORE 0 now LIMIT 0 batchSize} 鑾峰彇鍒版湡 msgId
- *   <li>瀵规瘡涓?msgId锛歿@code ZREM}锛堣繑鍥?true 琛ㄧず鎴愬姛鑾峰彇锛?
- *   <li>浠?payload Hash 璇诲彇瀛楁涓?retryCount
- *   <li>鎸?retryCount 鍐崇瓥锛歑ADD 鍒扮洰鏍?Stream 鎴?DLQ Stream
+ *   <li>{@code ZRANGEBYSCORE 0 now LIMIT 0 batchSize} 获取到期 msgId
+ *   <li>对每个 msgId：{@code ZREM}（返回 true 表示成功获取）
+ *   <li>从 payload Hash 读取字段与 retryCount
+ *   <li>按 retryCount 决策：XADD 到目标 Stream 或 DLQ Stream
  *   <li>{@code DEL} payload Hash
  * </ol>
  *
- * <p>绾跨▼瀹夊叏锛氭墍鏈夊瓧娈靛潎涓?final 鎴栫嚎绋嬪畨鍏ㄧ被鍨嬨€?
+ * <p>线程安全：所有字段均为 final 或线程安全类型。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -58,30 +57,33 @@ public class RetryScheduler implements StreamMQScheduler {
 
     private static final Logger LOG = LoggerFactory.getLogger(RetryScheduler.class);
 
-    /** payload Hash 涓殑閲嶈瘯娆℃暟瀛楁鍚? */
+    /** payload Hash 中的重试次数字段名 */
     public static final String FIELD_RETRY_COUNT = "retryCount";
 
-    /** payload Hash 涓殑鐩爣 Topic 瀛楁鍚? */
+    /** payload Hash 中的目标 Topic 字段名 */
     public static final String FIELD_TARGET_TOPIC = "targetTopic";
 
-    /** DLQ Stream Entry 瀛楁锛氳繘鍏?DLQ 鐨勫師鍥? */
+    /** DLQ Stream Entry 字段：进入 DLQ 的原因 */
     public static final String FIELD_DLQ_REASON = "dlqReason";
 
-    /** DLQ Stream Entry 瀛楁锛氬師濮嬮噸璇曟鏁? */
+    /** DLQ Stream Entry 字段：原始重试次数 */
     public static final String FIELD_ORIGINAL_RETRY_COUNT = "originalRetryCount";
 
-    /** DLQ 鍘熷洜锛氳揪鍒版渶澶ч噸璇曟鏁? */
+    /** DLQ 原因：达到最大重试次数 */
     public static final String DLQ_REASON_MAX_RETRY = "maxRetry";
 
-    /** 榛樿鎵弿闂撮殧锛堟绉掞級 */
+    /** 默认扫描间隔（毫秒） */
     private static final long DEFAULT_SCAN_INTERVAL_MS = StreamMQConstants.DEFAULT_SCAN_INTERVAL_MS;
 
-    /** 榛樿鍗曟鎵弿鎵归噺 */
+    /** 默认单次扫描批量 */
     private static final int DEFAULT_BATCH_SIZE = StreamMQConstants.DEFAULT_BATCH_SIZE;
 
-    /** 鍏抽棴璋冨害绾跨▼姹犳椂鐨勭瓑寰呰秴鏃讹紙绉掞級 */
+    /** 关闭调度线程池时的等待超时（秒） */
     private static final long AWAIT_TERMINATION_SECONDS =
             StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
+
+    /** 转移失败后的回写退避（毫秒）：避免 Redis 故障时以 scan 间隔高频热循环重试 */
+    private static final long FAILURE_REQUEUE_BACKOFF_MS = 5_000L;
 
     private final RedissonClient redisson;
     private final String namespace;
@@ -139,11 +141,11 @@ public class RetryScheduler implements StreamMQScheduler {
     }
 
     /**
-     * 娉ㄥ唽涓€涓噸璇曠洰鏍囷紙topic + group锛夈€?
+     * 注册一个重试目标（topic + group）。
      *
-     * @param topic 涓婚
-     * @param group 娑堣垂鑰呯粍鍚?
-     * @param maxReconsumeTimes 鏈€澶ч噸璇曟鏁?
+     * @param topic 主题
+     * @param group 消费者组名
+     * @param maxReconsumeTimes 最大重试次数
      */
     public void registerRetryTarget(String topic, String group, int maxReconsumeTimes) {
         Objects.requireNonNull(topic, "topic");
@@ -157,7 +159,7 @@ public class RetryScheduler implements StreamMQScheduler {
                 maxReconsumeTimes);
     }
 
-    /** 鍚姩璋冨害鍣ㄣ€? */
+    /** 启动调度器。 */
     @Override
     public void start() {
         if (!running.compareAndSet(false, true)) {
@@ -174,7 +176,7 @@ public class RetryScheduler implements StreamMQScheduler {
                 targets.size());
     }
 
-    /** 鍋滄璋冨害鍣紙鍙栨秷鎵弿浠诲姟骞跺叧闂嚎绋嬫睜锛岀嚎绋嬩负 daemon锛屼笉闃诲 JVM 閫€鍑猴級銆? */
+    /** 停止调度器（取消扫描任务但保留线程池，支持后续 restart）。 */
     @Override
     public void stop() {
         if (!running.compareAndSet(true, false)) {
@@ -185,11 +187,10 @@ public class RetryScheduler implements StreamMQScheduler {
             future.cancel(false);
             this.scanFuture = null;
         }
-        scanExecutor.shutdown();
         LOG.info("RetryScheduler stopped");
     }
 
-    /** 鎵弿鎵€鏈夊凡娉ㄥ唽鐨勯噸璇曠洰鏍囥€? */
+    /** 扫描所有已注册的重试目标。 */
     private void scanAllTargets() {
         for (RetryTarget target : targets.values()) {
             try {
@@ -206,9 +207,9 @@ public class RetryScheduler implements StreamMQScheduler {
     }
 
     /**
-     * 鎵弿鎸囧畾鐩爣鐨勫埌鏈熼噸璇曟秷鎭苟杞姇銆?
+     * 扫描指定目标的到期重试消息并转投。
      *
-     * @param target 閲嶈瘯鐩爣
+     * @param target 重试目标
      */
     void scanRetryEntries(RetryTarget target) {
         String retryKey = StreamMQKeys.retryZSet(namespace, target.topic, target.group);
@@ -247,7 +248,7 @@ public class RetryScheduler implements StreamMQScheduler {
                 return;
             }
 
-            // 妫€鏌ユ槸鍚︿负 DLQ 閲嶈瘯鍝ㄥ叺
+            // 检查是否为 DLQ 重试哨兵
             String targetTopic = fields.get(FIELD_TARGET_TOPIC);
             boolean isDlqRetry =
                     io.github.streammq.core.StreamMQConstants.DLQ_RETRY_TARGET_TOPIC_SENTINEL
@@ -263,12 +264,12 @@ public class RetryScheduler implements StreamMQScheduler {
                 }
             }
 
-            // 绉婚櫎璋冨害鍏冩暟鎹瓧娈碉紝鍙繚鐣?Stream Entry 瀛楁
+            // 移除调度元数据字段，只保留 Stream Entry 字段
             fields.remove(FIELD_RETRY_COUNT);
             fields.remove(FIELD_TARGET_TOPIC);
 
             if (isDlqRetry) {
-                // DLQ 閲嶈瘯 鈫?XADD 鍥?DLQ Stream锛屼繚鐣?dlqRetryCount
+                // DLQ 重试 → XADD 回 DLQ Stream，保留 dlqRetryCount
                 fields.remove(io.github.streammq.core.StreamMQConstants.FIELD_DLQ_RETRY_COUNT);
                 fields.put(
                         io.github.streammq.core.StreamMQConstants.FIELD_DLQ_RETRY_COUNT,
@@ -281,13 +282,13 @@ public class RetryScheduler implements StreamMQScheduler {
                         target.group,
                         retryCount);
             } else {
-                // 閫掑 retryTimes 瀛楁锛堢敤浜庢秷璐圭 reconsumeTimes锛?
+                // 递增 retryTimes 字段（用于消费端 reconsumeTimes）
                 int newRetryTimes = retryCount + 1;
                 fields.put(
                         DefaultMessageConverter.FIELD_RETRY_TIMES, Integer.toString(newRetryTimes));
 
                 if (retryCount >= target.maxReconsumeTimes) {
-                    // 杩涘叆 DLQ
+                    // 进入 DLQ
                     fields.put(FIELD_DLQ_REASON, DLQ_REASON_MAX_RETRY);
                     fields.put(FIELD_ORIGINAL_RETRY_COUNT, Integer.toString(retryCount));
                     RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
@@ -318,15 +319,18 @@ public class RetryScheduler implements StreamMQScheduler {
                 }
             }
 
-            // 鍒犻櫎 payload Hash
+            // 删除 payload Hash
             payloadMap.delete();
         } catch (RuntimeException ex) {
             LOG.error("Failed to transfer retry message msgId={}: {}", msgId, ex.getMessage(), ex);
-            // 澶勭悊澶辫触鏃跺皢 msgId 閲嶆柊鍐欏洖 ZSet锛坰core=褰撳墠鏃堕棿锛岀珛鍗抽噸璇曪級锛?
-            // 閬垮厤娑堟伅鍥?ZREM 鍚庡鐞嗗け璐ヨ€屾案涔呬涪澶?
+            // 处理失败时将 msgId 写回 ZSet（带退避延迟），
+            // 避免消息因 ZREM 后处理失败而永久丢失，同时防止 Redis 故障时高频热循环
             try {
-                zset.add(System.currentTimeMillis(), msgId);
-                LOG.warn("Re-added msgId={} to retry ZSet for retry", msgId);
+                zset.add(System.currentTimeMillis() + FAILURE_REQUEUE_BACKOFF_MS, msgId);
+                LOG.warn(
+                        "Re-added msgId={} to retry ZSet (backoff {}ms)",
+                        msgId,
+                        FAILURE_REQUEUE_BACKOFF_MS);
             } catch (RuntimeException reAddEx) {
                 LOG.error(
                         "CRITICAL: Failed to re-add msgId={} to retry ZSet, message may be lost:"
@@ -339,9 +343,9 @@ public class RetryScheduler implements StreamMQScheduler {
     }
 
     /**
-     * 杩斿洖璋冨害鍣ㄦ槸鍚︽鍦ㄨ繍琛屻€?
+     * 返回调度器是否正在运行。
      *
-     * @return true 濡傛灉杩愯涓?
+     * @return true 如果运行中
      */
     @Override
     public boolean isRunning() {
@@ -349,19 +353,18 @@ public class RetryScheduler implements StreamMQScheduler {
     }
 
     /**
-     * 杩斿洖宸叉敞鍐岀殑閲嶈瘯鐩爣鏁伴噺銆?
+     * 返回已注册的重试目标数量。
      *
-     * @return 鐩爣鏁伴噺
+     * @return 目标数量
      */
     public int getTargetCount() {
         return targets.size();
     }
 
     /**
-     * 娓呯悊鎵€鏈夐噸璇?ZSet 涓殑瀛ょ珛 entry锛堟棤瀵瑰簲 payload Hash 鐨勬潯鐩級銆?
+     * 清理所有重试 ZSet 中的孤立 entry（无对应 payload Hash 的条目）。
      *
-     * <p>涓?{@link DelayMessageScheduler#cleanupOrphanedEntries()} 绫讳技锛?娓呯悊鍥犲紓甯稿鑷存畫鐣欑殑閲嶈瘯 ZSet
-     * entry銆?
+     * <p>与 {@link DelayMessageScheduler#cleanupOrphanedEntries()} 类似， 清理因异常导致残留的重试 ZSet entry。
      */
     public void cleanupOrphanedEntries() {
         int totalCleaned = 0;
@@ -392,9 +395,9 @@ public class RetryScheduler implements StreamMQScheduler {
         }
     }
 
-    // ===================== 鍐呴儴绫?=====================
+    // ===================== 内部类 =====================
 
-    /** 閲嶈瘯鐩爣淇℃伅 */
+    /** 重试目标信息 */
     private static final class RetryTarget {
         final String topic;
         final String group;

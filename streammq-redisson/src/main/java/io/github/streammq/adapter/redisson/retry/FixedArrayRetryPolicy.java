@@ -1,6 +1,5 @@
 package io.github.streammq.adapter.redisson.retry;
 
-import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.policy.RetryPolicy;
 import java.time.Duration;
@@ -47,23 +46,47 @@ public class FixedArrayRetryPolicy implements RetryPolicy {
     /** 最大重试次数（与数组长度一致） */
     public static final int MAX_RECONSUME_TIMES = DELAY_MILLIS.length;
 
+    private final long[] delayMillis;
     private final int maxReconsumeTimes;
 
     /** 使用默认最大重试次数（16）。 */
     public FixedArrayRetryPolicy() {
-        this(StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES);
+        this(DELAY_MILLIS, DELAY_MILLIS.length);
     }
 
     /**
-     * 自定义最大重试次数。
+     * 自定义最大重试次数（使用默认 16 级延时数组）。
      *
      * @param maxReconsumeTimes 最大重试次数，必须 > 0
      */
     public FixedArrayRetryPolicy(int maxReconsumeTimes) {
+        this(DELAY_MILLIS, maxReconsumeTimes);
+    }
+
+    /**
+     * 自定义延时数组（对应 {@code streammq.retry.delay-array} 配置，逗号分隔毫秒值）。
+     *
+     * @param delayMillis 延时数组（毫秒），非空
+     */
+    public FixedArrayRetryPolicy(long[] delayMillis) {
+        this(delayMillis, delayMillis == null ? 0 : delayMillis.length);
+    }
+
+    /**
+     * 自定义延时数组与最大重试次数。
+     *
+     * @param delayMillis 延时数组（毫秒），非空
+     * @param maxReconsumeTimes 最大重试次数，必须 > 0
+     */
+    public FixedArrayRetryPolicy(long[] delayMillis, int maxReconsumeTimes) {
+        if (delayMillis == null || delayMillis.length == 0) {
+            throw new IllegalArgumentException("delayMillis must not be null or empty");
+        }
         if (maxReconsumeTimes <= 0) {
             throw new IllegalArgumentException(
                     "maxReconsumeTimes must be positive: " + maxReconsumeTimes);
         }
+        this.delayMillis = delayMillis.clone();
         this.maxReconsumeTimes = maxReconsumeTimes;
     }
 
@@ -76,8 +99,8 @@ public class FixedArrayRetryPolicy implements RetryPolicy {
         if (reconsumeTimes >= maxReconsumeTimes) {
             return null;
         }
-        int index = Math.min(reconsumeTimes, DELAY_MILLIS.length - 1);
-        return Duration.ofMillis(DELAY_MILLIS[index]);
+        int index = Math.min(reconsumeTimes, delayMillis.length - 1);
+        return Duration.ofMillis(delayMillis[index]);
     }
 
     @Override

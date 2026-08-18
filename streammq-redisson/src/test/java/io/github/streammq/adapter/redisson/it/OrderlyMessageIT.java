@@ -354,4 +354,72 @@ class OrderlyMessageIT extends AbstractRedisIT {
         assertThat(container.isRunning()).isFalse();
         assertThat(container.getState()).isEqualTo(ContainerState.STOPPED);
     }
+
+    @Test
+    @DisplayName("顺序消费失败时原地重试：同分片不越过失败消息（严格有序）")
+    void orderlyListener_failureRetriedInPlace_preservesOrder() {
+        String topic = "orderly-retry-order-topic";
+        String group = "orderly-retry-order-group";
+
+        RetryPolicy retryPolicy = new FastRetryPolicy(100, 3);
+        RedissonStreamListenerFactory consumerFactory =
+                new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+                new DefaultStreamMQListenerContainer(
+                        redisson, consumerFactory, converter, retryPolicy, namespace);
+
+        java.util.List<String> processed = new java.util.concurrent.CopyOnWriteArrayList<>();
+        java.util.Map<String, AtomicInteger> calls = new java.util.concurrent.ConcurrentHashMap<>();
+        StreamMessageOrderlyConsumer<String> listener =
+                (msg, ctx) -> {
+                    String key = msg.getKeys();
+                    processed.add(key);
+                    AtomicInteger c = calls.computeIfAbsent(key, k -> new AtomicInteger());
+                    // k2 前两次调用失败，之后成功
+                    if ("k2".equals(key) && c.incrementAndGet() <= 2) {
+                        return ConsumeAction.RECONSUME_LATER;
+                    }
+                    return ConsumeAction.SUCCESS;
+                };
+        container.registerOrderlyConsumer(listener, mkOrderlyAnnotation(topic, group, 3));
+        createConsumerGroup(topic, group);
+        container.start();
+
+        RedissonStreamProducer producer =
+                new RedissonStreamProducer(
+                        redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
+        try {
+            // 同分片（相同 shardingKey）发送 3 条消息
+            for (int i = 1; i <= 3; i++) {
+                producer.syncSend(
+                        MessageBuilder.<String>withTopic(topic)
+                                .shardingKey("shard-1")
+                                .keys("k" + i)
+                                .body("b" + i)
+                                .build());
+            }
+
+            // 等待 k2 重试完成且 k3 被消费
+            await().atMost(15, TimeUnit.SECONDS)
+                    .until(
+                            () ->
+                                    calls.get("k2") != null
+                                            && calls.get("k2").get() >= 3
+                                            && processed.contains("k3"));
+
+            int i1 = processed.indexOf("k1");
+            int i2First = processed.indexOf("k2");
+            int i2Last = processed.lastIndexOf("k2");
+            int i3 = processed.indexOf("k3");
+
+            // 严格有序：k1 在 k2 首次调用前处理；k2 最后一次（成功）在 k3 之前处理；k3 不得在 k2 成功前处理
+            assertThat(i1).isGreaterThanOrEqualTo(0);
+            assertThat(i2First).isGreaterThan(i1);
+            assertThat(i2Last).isLessThan(i3);
+            assertThat(calls.get("k2").get()).isGreaterThanOrEqualTo(3);
+        } finally {
+            producer.close();
+            container.stop();
+        }
+    }
 }

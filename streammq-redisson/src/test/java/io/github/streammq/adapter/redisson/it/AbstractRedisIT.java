@@ -5,8 +5,10 @@ import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.serializer.MessageSerializer;
+import io.github.streammq.core.util.RedisAvailability;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.redisson.Redisson;
 import org.redisson.api.RStream;
@@ -21,6 +23,9 @@ import org.redisson.config.Config;
  *
  * <p>每个测试类在 {@link #setUpRedis()} 中创建独立的 {@link RedissonClient} 与随机 namespace, 在 {@link
  * #tearDownRedis()} 中清理本命名空间所有 key 并关闭客户端,避免测试间相互干扰。
+ *
+ * <p>本地无 Redis 时（如开发环境未启动 Redis / 未配置 CI Redis service）， 通过 JUnit {@code Assumptions} 在 {@code
+ * setUpRedis()} 阶段优雅跳过，避免集成测试因 Connection refused 直接失败。
  */
 public abstract class AbstractRedisIT {
 
@@ -31,6 +36,9 @@ public abstract class AbstractRedisIT {
 
     @BeforeEach
     void setUpRedis() {
+        Assumptions.assumeTrue(
+                RedisAvailability.isAvailable("localhost", 6379),
+                "Redis not available at localhost:6379, skipping integration test");
         Config config = new Config();
         config.useSingleServer().setAddress("redis://localhost:6379").setDatabase(0);
         // 使用 StringCodec 避免 Kryo 反序列化问题（与 Lua 脚本交互时）
@@ -50,13 +58,10 @@ public abstract class AbstractRedisIT {
     }
 
     /**
-     * 显式创建消费者组,绕过主代码 RedissonStreamListener.ensureGroup() 中 使用 StreamMessageId.MIN(序列化为 "-")导致
-     * XGROUP CREATE 失败的 bug。
+     * 显式创建消费者组（{@code id(0-0)} 从头消费）。
      *
-     * <p>主代码 bug 记录:RedissonStreamListener.java:286 使用 {@code StreamMessageId.MIN} 作为 XGROUP CREATE
-     * 的起始 ID,但 MIN 序列化为 "-" 在 Redis 中无效, 应使用 {@code new StreamMessageId(0, 0)}(即 "0-0")。
-     *
-     * <p>本方法使用正确的 ID 创建组后,Consumer 的 ensureGroup() 会得到 BUSYGROUP (已被主代码捕获并忽略),不会影响测试。
+     * <p>主代码 {@code RedissonStreamListener.ensureGroup()} 在首条消息拉取时会自动创建消费者组， 本方法供需要
+     * 提前建组（避免首条消息被跳过/竞态）的测试显式调用。 使用 {@code new StreamMessageId(0, 0)}（即 "0-0"）作为起始 ID。
      *
      * @param topic 主题
      * @param group 消费者组名

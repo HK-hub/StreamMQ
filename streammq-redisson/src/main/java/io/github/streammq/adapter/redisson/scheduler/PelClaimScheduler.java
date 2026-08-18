@@ -26,10 +26,13 @@ import org.slf4j.LoggerFactory;
 /**
  * PEL 认领调度器，用于顺序消费 SUSPEND 后的消息恢复（对齐 RocketMQ 顺序消费的 queue 重投）。
  *
- * <p>顺序消费返回 {@code SUSPEND_CURRENT_QUEUE_A_MOMENT} 时消息留在 PEL 中， 本调度器周期扫描各 orderly 消费组的
- * PEL，将空闲超过阈值的消息通过 {@code XAUTOCLAIM} 重新分配给同组消费者（可能为同一消费者或其他活跃消费者）， 保证顺序消息不会因消费者崩溃或 SUSPEND 而永久卡死。
+ * <p>顺序消费失败时消息留在 PEL 中，本调度器周期扫描各 orderly 消费组的 PEL，将空闲超过阈值的消息重新投递， 保证顺序消息不会因消费者崩溃而永久卡死。
  *
- * <p>当消息的 {@code retryTimes} 字段超过 {@code maxReconsumeTimes} 时， 从 PEL 中 ACK 移除并 XADD 到 DLQ Stream。
+ * <p>实现说明：容器消费者通过 {@code XREADGROUP >}（neverDelivered）读取，XAUTOCLAIM 投递到固定消费者名 的消息永远不会被再次读取（永久卡在
+ * PEL）；因此这里采用「XADD 新 entry（递增 {@code retryTimes}，保留 {@code originalMessageId} 原 ID 字段）+ ACK 旧
+ * entry」的方式，使消息作为新消息被消费者重新拉取。
+ *
+ * <p>当消息的 {@code retryTimes} 字段超过 {@code maxReconsumeTimes} 时，从 PEL 中 ACK 移除并 XADD 到 DLQ Stream。
  *
  * <p>线程安全：所有字段均为 final 或线程安全类型。
  *
@@ -51,6 +54,9 @@ public class PelClaimScheduler implements StreamMQScheduler {
 
     /** DLQ 原因：顺序消费超限 */
     private static final String DLQ_REASON_ORDERLY_MAX_RETRY = "maxRetryOrderly";
+
+    /** 重投消息中保留的原始 Stream Entry ID 字段名（供业务幂等/追踪使用） */
+    private static final String FIELD_ORIGINAL_MESSAGE_ID = "originalMessageId";
 
     private final RedissonClient redisson;
     private final String namespace;
@@ -228,12 +234,13 @@ public class PelClaimScheduler implements StreamMQScheduler {
                     } else {
                         // 重新投递：容器消费者使用 XREADGROUP >（neverDelivered）读取，
                         // XAUTOCLAIM 到固定消费者名（pelclaim-consumer）的消息永远不会被读取（永久卡在 PEL）。
-                        // 因此改为：XADD 新 entry（递增 retryTimes）+ ACK 旧 entry，使其作为新消息被消费者
-                        // 重新拉取；重投次数超限后由上方分支进入 DLQ。
+                        // 因此改为：XADD 新 entry（递增 retryTimes，保留 originalMessageId）+ ACK 旧 entry，
+                        // 使其作为新消息被消费者重新拉取；重投次数超限后由上方分支进入 DLQ。
                         try {
                             fields.put(
                                     DefaultMessageConverter.FIELD_RETRY_TIMES,
                                     Integer.toString(retryTimes + 1));
+                            fields.put(FIELD_ORIGINAL_MESSAGE_ID, id.toString());
                             stream.add(StreamAddArgs.entries(fields));
                             stream.ack(target.group, id);
                             LOG.info(

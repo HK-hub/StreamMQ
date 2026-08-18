@@ -11,10 +11,12 @@ import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.message.BatchMessage;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
+import io.github.streammq.core.message.SendOptions;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.SendCallback;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -24,6 +26,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.redisson.api.RStream;
+import org.redisson.api.StreamMessageId;
 
 /**
  * {@link DefaultStreamMessageTemplate} 的 Redis 联动集成测试。
@@ -278,6 +281,26 @@ class TemplateIT extends AbstractRedisIT {
         RStream<String, String> stream =
                 redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
         assertThat(stream.size()).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("asyncSend(SendOptions) 应用超时/重试参数并写入真实 Entry ID")
+    void asyncSendWithSendOptions_appliesOptions() {
+        String topic = "tpl-options-topic";
+        Message<String> msg =
+                MessageBuilder.<String>withTopic(topic).keys("opt-key").body("opt-body").build();
+
+        SendOptions options = SendOptions.builder().timeoutMillis(5000).retryTimes(1).build();
+        SendResult result = template.asyncSend(msg, options).orTimeout(10, TimeUnit.SECONDS).join();
+
+        assertThat(result.isSuccess()).isTrue();
+        // 返回真实 Stream Entry ID
+        RStream<String, String> stream =
+                redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
+        Map<StreamMessageId, Map<String, String>> entries =
+                stream.range(StreamMessageId.MIN, StreamMessageId.MAX);
+        assertThat(entries.keySet())
+                .anyMatch(id -> id.toString().equals(result.getMessageId().getStreamEntryId()));
     }
 
     @Test

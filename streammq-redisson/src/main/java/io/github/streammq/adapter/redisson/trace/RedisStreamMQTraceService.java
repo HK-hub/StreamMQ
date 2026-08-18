@@ -30,7 +30,15 @@ import org.slf4j.LoggerFactory;
  *
  * <p>追踪记录按日期存储在 {@code streammq:{ns}:trace:{date}} Stream 中， 查询时遍历对应日期范围内的 trace Stream，在内存中过滤匹配。
  *
- * <p>适用于中小规模追踪数据查询。对于大规模数据场景，建议对接专业 APM 系统 （如 Elasticsearch / Zipkin / SkyWalking）。
+ * <p>限制（有意为之，适用于中小规模追踪数据）：
+ *
+ * <ul>
+ *   <li>{@link #queryByMessageId} 仅查询<b>今天与昨天</b>两个 Stream，更早数据需直接查询对应日期 Stream
+ *   <li>单日单次查询最多读取 {@value #MAX_READ_COUNT} 条记录，超出部分静默截断
+ *   <li>时间范围查询遍历范围内的每一天，全量内存过滤
+ * </ul>
+ *
+ * <p>对于大规模数据场景，建议对接专业 APM 系统 （如 Elasticsearch / Zipkin / SkyWalking）。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

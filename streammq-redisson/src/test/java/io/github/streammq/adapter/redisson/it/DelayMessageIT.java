@@ -381,6 +381,36 @@ class DelayMessageIT extends AbstractRedisIT {
         }
     }
 
+    @Test
+    @DisplayName("同时设置 delayLevel 与 delayTimeMillis 时，delayTimeMillis 优先（写入 custom ZSet）")
+    void testDelayTimeMillisTakesPrecedenceWhenBothSet() {
+        String topic = "delay-both-" + UUID.randomUUID().toString().substring(0, 6);
+        RedissonStreamProducer producer = newProducer("delay-both-group");
+
+        try {
+            Message<String> msg =
+                    MessageBuilder.<String>withTopic(topic)
+                            .body("both-set")
+                            .delayLevel(DelayLevel.SECOND_1)
+                            .delayTimeMillis(10_000L)
+                            .build();
+
+            producer.syncSend(msg);
+
+            // 应进入 custom ZSet（任意延时），而非 SECOND_1 级别 ZSet
+            RScoredSortedSet<String> customZset =
+                    redisson.getScoredSortedSet(StreamMQKeys.delayCustomZSet(namespace));
+            RScoredSortedSet<String> levelZset =
+                    redisson.getScoredSortedSet(
+                            StreamMQKeys.delayZSet(namespace, DelayLevel.SECOND_1.name()));
+
+            assertThat(customZset.size()).isEqualTo(1);
+            assertThat(levelZset.size()).isZero();
+        } finally {
+            producer.close();
+        }
+    }
+
     // ===================== 辅助方法 =====================
 
     /**
