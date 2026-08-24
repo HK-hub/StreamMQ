@@ -81,7 +81,7 @@ class DiagnosticsSampleIT {
     }
 
     /** 测试专用消息收集器，使用独立消费者组避免干扰。 */
-    @StreamMQConsumer(topic = "order-events", consumerGroup = TEST_CONSUMER_GROUP)
+    @StreamMQConsumer(topic = SampleConstants.TOPIC, consumerGroup = TEST_CONSUMER_GROUP)
     static class TestMessageCollector implements StreamMessageConcurrentlyConsumer<String> {
 
         final ConcurrentLinkedQueue<Message<String>> receivedMessages =

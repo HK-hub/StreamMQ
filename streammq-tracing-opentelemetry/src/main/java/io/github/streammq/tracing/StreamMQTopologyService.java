@@ -1,5 +1,6 @@
 package io.github.streammq.tracing;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.listener.StreamMQListenerContainer;
 import io.github.streammq.core.listener.StreamMQListenerContainer.ConsumerMetadata;
 import io.github.streammq.core.trace.StreamMQTraceService;
@@ -53,10 +54,43 @@ import lombok.extern.slf4j.Slf4j;
 public class StreamMQTopologyService {
 
     /** 拓扑构建回溯时间窗口（毫秒，最近 5 分钟） */
-    private static final long TOPOLOGY_WINDOW_MS = 5 * 60 * 1000L;
+    private static final long TOPOLOGY_WINDOW_MS = StreamMQConstants.DEFAULT_DIAGNOSTIC_WINDOW_MS;
 
     /** 默认生产者节点名称 */
     private static final String DEFAULT_PRODUCER_NAME = "Producer";
+
+    // ==================== 拓扑节点类型 ====================
+    /** 节点类型：生产者 */
+    private static final String NODE_TYPE_PRODUCER = "PRODUCER";
+
+    /** 节点类型：消费者 */
+    private static final String NODE_TYPE_CONSUMER = "CONSUMER";
+
+    // ==================== 路由路径前缀 ====================
+    /** 路由路径段前缀：Topic */
+    private static final String ROUTE_PREFIX_TOPIC = "Topic:";
+
+    /** 路由路径段前缀：消费组 */
+    private static final String ROUTE_PREFIX_GROUP = "Group:";
+
+    /** 路由路径段前缀：消费者 */
+    private static final String ROUTE_PREFIX_CONSUMER = "Consumer:";
+
+    /** 路由路径首节点：Producer */
+    private static final String ROUTE_NODE_PRODUCER = "Producer";
+
+    // ==================== 链路最终状态 ====================
+    /** 最终状态：处理中 */
+    private static final String FINAL_STATUS_PROCESSING = "PROCESSING";
+
+    /** 最终状态：进入死信 */
+    private static final String FINAL_STATUS_DLQ = "DLQ";
+
+    /** 最终状态：成功 */
+    private static final String FINAL_STATUS_SUCCESS = "SUCCESS";
+
+    /** 最终状态：失败 */
+    private static final String FINAL_STATUS_FAILED = "FAILED";
 
     private final StreamMQTraceService traceService;
     private final StreamMQListenerContainer listenerContainer;
@@ -133,7 +167,7 @@ public class StreamMQTopologyService {
         }
         List<TopologyNode> nodes = new ArrayList<>(producerGroups.size());
         for (String group : producerGroups) {
-            nodes.add(new TopologyNode(group, "PRODUCER", topic, group, true));
+            nodes.add(new TopologyNode(group, NODE_TYPE_PRODUCER, topic, group, true));
         }
         return nodes;
     }
@@ -157,7 +191,7 @@ public class StreamMQTopologyService {
                                         ? metadata.consumerType().getSimpleName()
                                         : "Consumer");
                 nodes.add(
-                        new TopologyNode(name, "CONSUMER", topic, metadata.consumerGroup(), true));
+                        new TopologyNode(name, NODE_TYPE_CONSUMER, topic, metadata.consumerGroup(), true));
             }
         }
         return nodes;
@@ -232,10 +266,10 @@ public class StreamMQTopologyService {
         }
         Map<String, String> attrs = record.attributes();
         if (CollectionUtils.isNotEmpty(attrs)) {
-            if (StringUtils.isNotEmpty(attrs.get("dlqReason"))) {
+            if (StringUtils.isNotEmpty(attrs.get(StreamMQConstants.FIELD_DLQ_REASON))) {
                 return TraceEventType.DLQ;
             }
-            if (StringUtils.isNotEmpty(attrs.get("delayLevel"))) {
+            if (StringUtils.isNotEmpty(attrs.get(StreamMQConstants.TRACE_ATTR_DELAY_LEVEL))) {
                 return TraceEventType.DELAY;
             }
         }
@@ -266,16 +300,16 @@ public class StreamMQTopologyService {
     /** 构建消息流转路径。 */
     private List<String> buildRoutePath(String topic, List<TraceRecord> records) {
         List<String> path = new ArrayList<>();
-        path.add("Producer");
-        path.add("Topic:" + orDefault(topic, "unknown"));
+        path.add(ROUTE_NODE_PRODUCER);
+        path.add(ROUTE_PREFIX_TOPIC + orDefault(topic, "unknown"));
         Set<String> seenGroups = new LinkedHashSet<>();
         if (CollectionUtils.isNotEmpty(records)) {
             for (TraceRecord record : records) {
                 if (record.type() == TraceType.CONSUME) {
                     String group = orDefault(record.group(), "unknown");
                     if (seenGroups.add(group)) {
-                        path.add("Group:" + group);
-                        path.add("Consumer:" + group);
+                        path.add(ROUTE_PREFIX_GROUP + group);
+                        path.add(ROUTE_PREFIX_CONSUMER + group);
                     }
                 }
             }
@@ -286,7 +320,7 @@ public class StreamMQTopologyService {
     /** 计算链路最终状态。 */
     private String computeFinalStatus(List<TraceEvent> events) {
         if (events.isEmpty()) {
-            return "PROCESSING";
+            return FINAL_STATUS_PROCESSING;
         }
         boolean hasDlq = false;
         boolean hasFailed = false;
@@ -303,15 +337,15 @@ public class StreamMQTopologyService {
             }
         }
         if (hasDlq) {
-            return "DLQ";
+            return FINAL_STATUS_DLQ;
         }
         if (hasConsumeSuccess && !hasFailed) {
-            return "SUCCESS";
+            return FINAL_STATUS_SUCCESS;
         }
         if (hasFailed) {
-            return "FAILED";
+            return FINAL_STATUS_FAILED;
         }
-        return "PROCESSING";
+        return FINAL_STATUS_PROCESSING;
     }
 
     // ===================== 内部工具 =====================
@@ -332,7 +366,7 @@ public class StreamMQTopologyService {
         if (CollectionUtils.isEmpty(attrs)) {
             return 0;
         }
-        String value = attrs.get("reconsumeTimes");
+        String value = attrs.get(StreamMQConstants.TRACE_ATTR_RECONSUME_TIMES);
         if (StringUtils.isEmpty(value)) {
             return 0;
         }

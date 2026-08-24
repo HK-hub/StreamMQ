@@ -23,7 +23,7 @@ public class TraceConsumerInterceptor implements ConsumerInterceptor {
 
     @Override
     public boolean beforeConsume(Message<?> message, ConsumeContext context) {
-        String traceId = message.getUserProperties().get("traceId");
+        String traceId = message.getUserProperties().get(SampleConstants.PROP_TRACE_ID);
         log.info(
                 "Trace consumer interceptor beforeConsume: traceId={}, topic={}, tag={}, keys={},"
                         + " group={}",
@@ -37,7 +37,7 @@ public class TraceConsumerInterceptor implements ConsumerInterceptor {
 
     @Override
     public void afterConsume(Message<?> message, ConsumeAction action, ConsumeContext context) {
-        String traceId = message.getUserProperties().get("traceId");
+        String traceId = message.getUserProperties().get(SampleConstants.PROP_TRACE_ID);
         log.info(
                 "Trace consumer interceptor afterConsume: traceId={}, topic={}, action={},"
                         + " group={}, reconsumeTimes={}",

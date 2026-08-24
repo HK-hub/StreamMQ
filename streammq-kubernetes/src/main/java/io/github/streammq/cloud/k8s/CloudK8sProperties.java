@@ -26,18 +26,55 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @Getter
 @Setter
-@ConfigurationProperties(prefix = "streammq.cloud.k8s")
+@ConfigurationProperties(prefix = CloudK8sProperties.PROP_PREFIX)
 public class CloudK8sProperties {
+
+    /** 配置属性前缀：streammq.cloud.k8s */
+    public static final String PROP_PREFIX = "streammq.cloud.k8s";
+
+    /** 开关属性名：enabled */
+    public static final String PROP_NAME_ENABLED = "enabled";
+
+    /** 开关属性值：true */
+    public static final String PROP_VALUE_TRUE = "true";
+
+    /** 默认优雅关闭超时（毫秒，30 秒） */
+    public static final long DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_MS = 30_000L;
+
+    /** 默认调和间隔（秒） */
+    public static final int DEFAULT_RECONCILE_INTERVAL_SECONDS =
+            io.github.streammq.cloud.k8s.operator.StreamMQK8sDefaults
+                    .DEFAULT_RECONCILE_INTERVAL_SECONDS;
 
     /** 是否启用 K8s 云原生增强模块，默认开启 */
     private boolean enabled = true;
 
-    /** 优雅关闭等待处理中消息完成的最长时间（毫秒），默认 30 秒 */
-    private long gracefulShutdownTimeoutMs = 30000L;
+    /** 优雅关闭等待处理中消息完成的最长时间（毫秒） */
+    private long gracefulShutdownTimeoutMs = DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_MS;
 
     /** 是否启用健康探针端点，默认开启 */
     private boolean healthEndpointEnabled = true;
 
     /** 是否启用配置热更新能力，默认关闭 */
     private boolean configRefreshEnabled = false;
+
+    /** CRD 调和间隔（秒），Operator 周期性对账的周期 */
+    private int reconcileIntervalSeconds = DEFAULT_RECONCILE_INTERVAL_SECONDS;
+
+    /** HPA 扫描同步间隔（秒） */
+    private int hpaSyncIntervalSeconds = DEFAULT_RECONCILE_INTERVAL_SECONDS;
+
+    /** HPA 默认目标消费积压（每实例消息数） */
+    private long hpaDefaultTargetLag =
+            io.github.streammq.cloud.k8s.operator.StreamMQK8sDefaults.AUTOSCALE_TARGET_LAG;
+
+    /** HPA 默认扩容阈值百分比 */
+    private int hpaScaleUpThreshold =
+            io.github.streammq.cloud.k8s.operator.StreamMQK8sDefaults
+                    .AUTOSCALE_SCALE_UP_THRESHOLD;
+
+    /** HPA 默认缩容阈值百分比 */
+    private int hpaScaleDownThreshold =
+            io.github.streammq.cloud.k8s.operator.StreamMQK8sDefaults
+                    .AUTOSCALE_SCALE_DOWN_THRESHOLD;
 }

@@ -57,8 +57,8 @@ public class DelayMessageProducer {
                 content);
 
         Message<String> message =
-                MessageBuilder.<String>withTopic("delay-order-topic")
-                        .tag("delay")
+                MessageBuilder.<String>withTopic(SampleConstants.TOPIC)
+                        .tag(SampleConstants.TAG_DELAY)
                         .keys(orderId)
                         .body(content)
                         .delayLevel(delayLevel)
@@ -92,8 +92,8 @@ public class DelayMessageProducer {
                 content);
 
         Message<String> message =
-                MessageBuilder.<String>withTopic("delay-order-topic")
-                        .tag("custom-delay")
+                MessageBuilder.<String>withTopic(SampleConstants.TOPIC)
+                        .tag(SampleConstants.TAG_CUSTOM_DELAY)
                         .keys(orderId)
                         .body(content)
                         .delayTimeMillis(delayMillis)

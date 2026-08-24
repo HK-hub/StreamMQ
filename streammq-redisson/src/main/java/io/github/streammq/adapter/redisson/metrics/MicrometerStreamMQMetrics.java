@@ -36,6 +36,21 @@ public class MicrometerStreamMQMetrics implements StreamMQMetrics {
     public static final String METRIC_TX_ROLLBACK_TOTAL = "streammq.transaction.rollback.total";
     public static final String METRIC_TX_CHECK_TOTAL = "streammq.transaction.check.total";
 
+    /** 指标 tag key：topic */
+    public static final String TAG_TOPIC = "topic";
+
+    /** 指标 tag key：group */
+    public static final String TAG_GROUP = "group";
+
+    /** 指标 tag key：success */
+    public static final String TAG_SUCCESS = "success";
+
+    /** 指标 tag key：level */
+    public static final String TAG_LEVEL = "level";
+
+    /** 指标 tag key：result */
+    public static final String TAG_RESULT = "result";
+
     private final MeterRegistry registry;
 
     public MicrometerStreamMQMetrics(MeterRegistry registry) {
@@ -47,9 +62,9 @@ public class MicrometerStreamMQMetrics implements StreamMQMetrics {
         if (Objects.isNull(registry)) return;
         registry.counter(
                         METRIC_SEND_TOTAL,
-                        Tags.of("topic", topic, "success", String.valueOf(success)))
+                        Tags.of(TAG_TOPIC, topic, TAG_SUCCESS, String.valueOf(success)))
                 .increment();
-        registry.timer(METRIC_SEND_DURATION, Tags.of("topic", topic)).record(duration);
+        registry.timer(METRIC_SEND_DURATION, Tags.of(TAG_TOPIC, topic)).record(duration);
     }
 
     @Override
@@ -57,46 +72,46 @@ public class MicrometerStreamMQMetrics implements StreamMQMetrics {
         if (Objects.isNull(registry)) return;
         registry.counter(
                         METRIC_CONSUME_TOTAL,
-                        Tags.of("topic", topic, "group", group, "success", String.valueOf(success)))
+                        Tags.of(TAG_TOPIC, topic, TAG_GROUP, group, TAG_SUCCESS, String.valueOf(success)))
                 .increment();
-        registry.timer(METRIC_CONSUME_DURATION, Tags.of("topic", topic, "group", group))
+        registry.timer(METRIC_CONSUME_DURATION, Tags.of(TAG_TOPIC, topic, TAG_GROUP, group))
                 .record(duration);
     }
 
     @Override
     public void recordRetry(String topic, String group) {
         if (Objects.isNull(registry)) return;
-        registry.counter(METRIC_RETRY_TOTAL, Tags.of("topic", topic, "group", group)).increment();
+        registry.counter(METRIC_RETRY_TOTAL, Tags.of(TAG_TOPIC, topic, TAG_GROUP, group)).increment();
     }
 
     @Override
     public void recordDlq(String topic, String group) {
         if (Objects.isNull(registry)) return;
-        registry.counter(METRIC_DLQ_TOTAL, Tags.of("topic", topic, "group", group)).increment();
+        registry.counter(METRIC_DLQ_TOTAL, Tags.of(TAG_TOPIC, topic, TAG_GROUP, group)).increment();
     }
 
     @Override
     public void recordDelayDelivery(String level) {
         if (Objects.isNull(registry)) return;
-        registry.counter(METRIC_DELAY_TOTAL, Tags.of("level", level)).increment();
+        registry.counter(METRIC_DELAY_TOTAL, Tags.of(TAG_LEVEL, level)).increment();
     }
 
     @Override
     public void recordTransactionCommit(String group) {
         if (Objects.isNull(registry)) return;
-        registry.counter(METRIC_TX_COMMIT_TOTAL, Tags.of("group", group)).increment();
+        registry.counter(METRIC_TX_COMMIT_TOTAL, Tags.of(TAG_GROUP, group)).increment();
     }
 
     @Override
     public void recordTransactionRollback(String group) {
         if (Objects.isNull(registry)) return;
-        registry.counter(METRIC_TX_ROLLBACK_TOTAL, Tags.of("group", group)).increment();
+        registry.counter(METRIC_TX_ROLLBACK_TOTAL, Tags.of(TAG_GROUP, group)).increment();
     }
 
     @Override
     public void recordTransactionCheck(String group, String result) {
         if (Objects.isNull(registry)) return;
-        registry.counter(METRIC_TX_CHECK_TOTAL, Tags.of("group", group, "result", result))
+        registry.counter(METRIC_TX_CHECK_TOTAL, Tags.of(TAG_GROUP, group, TAG_RESULT, result))
                 .increment();
     }
 }

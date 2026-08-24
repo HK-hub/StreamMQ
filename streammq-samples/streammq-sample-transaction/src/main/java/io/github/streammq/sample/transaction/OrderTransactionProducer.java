@@ -53,8 +53,8 @@ public class OrderTransactionProducer {
      */
     public SendResult sendOrderTransaction(String orderContent) {
         Message<String> msg =
-                MessageBuilder.<String>withTopic("order-topic")
-                        .tag("transaction")
+                MessageBuilder.<String>withTopic(SampleConstants.TOPIC)
+                        .tag(SampleConstants.TAG)
                         .body(orderContent)
                         .withUserProperty("bizType", "order-create")
                         .build();
@@ -122,8 +122,8 @@ public class OrderTransactionProducer {
 
         // 此处演示 TransactionCallback 作为 lambda 的写法
         return template.executeInTransaction(
-                MessageBuilder.<String>withTopic("order-topic")
-                        .tag("transaction")
+                MessageBuilder.<String>withTopic(SampleConstants.TOPIC)
+                        .tag(SampleConstants.TAG)
                         .body(orderContent)
                         .build(),
                 callback);

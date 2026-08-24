@@ -21,7 +21,17 @@ public class EmbeddedRedisServer implements Closeable {
 
     private static final Logger LOG = LoggerFactory.getLogger(EmbeddedRedisServer.class);
 
+    /** Redis 容器镜像 */
     private static final String REDIS_IMAGE = "redis:7.2-alpine";
+
+    /** 容器暴露的 Redis 端口 */
+    private static final int EXPOSED_REDIS_PORT = StreamMQTestBase.DEFAULT_PORT;
+
+    /** 容器环境变量：禁用命令列表 */
+    private static final String ENV_DISABLE_COMMANDS = "REDIS_DISABLE_COMMANDS";
+
+    /** Redis 服务器启动参数：开启 AOF 持久化 */
+    private static final String ARG_APPENDONLY = "--appendonly";
 
     private GenericContainer<?> container;
 
@@ -35,9 +45,9 @@ public class EmbeddedRedisServer implements Closeable {
         LOG.info("Starting embedded Redis server...");
         container =
                 new GenericContainer<>(DockerImageName.parse(REDIS_IMAGE))
-                        .withExposedPorts(6379)
-                        .withEnv("REDIS_DISABLE_COMMANDS", "")
-                        .withCommand("--appendonly", "yes");
+                        .withExposedPorts(EXPOSED_REDIS_PORT)
+                        .withEnv(ENV_DISABLE_COMMANDS, "")
+                        .withCommand(ARG_APPENDONLY, "yes");
 
         container.start();
         LOG.info("Embedded Redis server started: {}:{}", getHost(), getPort());
@@ -73,7 +83,7 @@ public class EmbeddedRedisServer implements Closeable {
         if (container == null) {
             throw new IllegalStateException("Redis container not started");
         }
-        return container.getMappedPort(6379);
+        return container.getMappedPort(EXPOSED_REDIS_PORT);
     }
 
     /**
@@ -82,7 +92,7 @@ public class EmbeddedRedisServer implements Closeable {
      * @return 连接字符串，格式为 redis://host:port
      */
     public String getConnectionString() {
-        return "redis://" + getHost() + ":" + getPort();
+        return StreamMQTestBase.REDIS_URI_PREFIX + getHost() + ":" + getPort();
     }
 
     /**

@@ -77,6 +77,9 @@ public final class StreamMQKeys {
     /** 顺序消费分片锁类型段 */
     public static final String TYPE_SHARDLOCK = "shardlock";
 
+    /** 事务锁类型段 */
+    public static final String TYPE_TXLOCK = "txlock";
+
     /** 元数据类型段 */
     public static final String TYPE_META = "meta";
 
@@ -119,6 +122,9 @@ public final class StreamMQKeys {
 
     /** 配置后缀 */
     public static final String SEG_CONFIG = "config";
+
+    /** 自定义延时等级段 */
+    public static final String SEG_CUSTOM = "custom";
 
     private StreamMQKeys() {}
 
@@ -289,7 +295,7 @@ public final class StreamMQKeys {
      * @return ZSet Key
      */
     public static String delayCustomZSet(String namespace) {
-        return prefix(namespace) + SEP + TYPE_DELAY + SEP + "custom";
+        return prefix(namespace) + SEP + TYPE_DELAY + SEP + SEG_CUSTOM;
     }
 
     /**
@@ -366,7 +372,7 @@ public final class StreamMQKeys {
     public static String transactionLock(String namespace, String txGroup, String txId) {
         return prefix(namespace)
                 + SEP
-                + "txlock"
+                + TYPE_TXLOCK
                 + SEP
                 + requireNonEmpty(txGroup, "txGroup")
                 + SEP

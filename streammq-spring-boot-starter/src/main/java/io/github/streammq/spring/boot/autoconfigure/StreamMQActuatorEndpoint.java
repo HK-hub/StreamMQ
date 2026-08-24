@@ -1,6 +1,7 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.core.policy.ManagementAuthenticator;
+import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import io.github.streammq.core.util.StringUtils;
 import io.github.streammq.core.util.WebRequestAuthSupport;
 import java.util.*;
@@ -24,7 +25,7 @@ import org.springframework.boot.actuate.health.HealthIndicator;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-@WebEndpoint(id = "streammq")
+@WebEndpoint(id = StreamMQSpringConstants.ENDPOINT_ID_STREAMMQ)
 public class StreamMQActuatorEndpoint {
 
     private static final Logger LOG = LoggerFactory.getLogger(StreamMQActuatorEndpoint.class);
@@ -33,6 +34,9 @@ public class StreamMQActuatorEndpoint {
     private final HealthIndicator healthIndicator;
     private final ManagementAuthenticator authenticator;
 
+    /** 管理端点列表默认页大小，可通过 {@link #setListPageSize(int)} 覆盖 */
+    private volatile int listPageSize = StreamMQSpringConstants.DEFAULT_LIST_PAGE_SIZE;
+
     public StreamMQActuatorEndpoint(
             StreamMQAdminEndpoint adminEndpoint,
             HealthIndicator healthIndicator,
@@ -40,6 +44,17 @@ public class StreamMQActuatorEndpoint {
         this.adminEndpoint = Objects.requireNonNull(adminEndpoint, "adminEndpoint");
         this.healthIndicator = healthIndicator;
         this.authenticator = Objects.requireNonNull(authenticator, "authenticator");
+    }
+
+    /**
+     * 设置列表默认页大小。
+     *
+     * @param pageSize 页大小，必须 &gt; 0
+     */
+    public void setListPageSize(int pageSize) {
+        if (pageSize > 0) {
+            this.listPageSize = pageSize;
+        }
     }
 
     /** 校验当前请求是否具有管理权限；无权时返回 HTTP 401 响应，有权限返回 null。 */
@@ -61,7 +76,7 @@ public class StreamMQActuatorEndpoint {
 
     @ReadOperation
     public Object overview() {
-        WebEndpointResponse<?> denied = checkPermission("overview");
+        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_OVERVIEW);
         if (denied != null) {
             return denied;
         }
@@ -78,7 +93,7 @@ public class StreamMQActuatorEndpoint {
 
     @ReadOperation
     public Object groups() {
-        WebEndpointResponse<?> denied = checkPermission("groups");
+        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_GROUPS);
         if (denied != null) {
             return denied;
         }
@@ -88,26 +103,26 @@ public class StreamMQActuatorEndpoint {
     @ReadOperation
     public Object pending(
             @Selector String group, @Selector(match = Selector.Match.ALL_REMAINING) String[] path) {
-        WebEndpointResponse<?> denied = checkPermission("pending:" + group);
+        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_PENDING_PREFIX + group);
         if (denied != null) {
             return denied;
         }
         String topic = path.length > 0 ? path[0] : "";
-        return adminEndpoint.listPending(group, topic, 100);
+        return adminEndpoint.listPending(group, topic, listPageSize);
     }
 
     @ReadOperation
     public Object dlq(@Selector String group) {
-        WebEndpointResponse<?> denied = checkPermission("dlq:" + group);
+        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_DLQ_PREFIX + group);
         if (denied != null) {
             return denied;
         }
-        return adminEndpoint.listDlq(group, 100);
+        return adminEndpoint.listDlq(group, listPageSize);
     }
 
     @WriteOperation
     public Object requeueDlq(@Selector String group, String messageId, String targetTopic) {
-        WebEndpointResponse<?> denied = checkPermission("dlq:" + group);
+        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_DLQ_PREFIX + group);
         if (denied != null) {
             return denied;
         }
@@ -119,7 +134,7 @@ public class StreamMQActuatorEndpoint {
 
     @DeleteOperation
     public Object deleteDlq(@Selector String group, @Selector String messageId) {
-        WebEndpointResponse<?> denied = checkPermission("dlq:" + group);
+        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_DLQ_PREFIX + group);
         if (denied != null) {
             return denied;
         }
@@ -128,7 +143,7 @@ public class StreamMQActuatorEndpoint {
 
     @ReadOperation
     public Object topics() {
-        WebEndpointResponse<?> denied = checkPermission("topics");
+        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_TOPICS);
         if (denied != null) {
             return denied;
         }
@@ -137,7 +152,7 @@ public class StreamMQActuatorEndpoint {
 
     @ReadOperation
     public Object stats(@Selector String group, @Selector String topic) {
-        WebEndpointResponse<?> denied = checkPermission("stats:" + group);
+        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_STATS_PREFIX + group);
         if (denied != null) {
             return denied;
         }
@@ -146,7 +161,7 @@ public class StreamMQActuatorEndpoint {
 
     @WriteOperation
     public Object ackPending(@Selector String group, @Selector String topic, String messageId) {
-        WebEndpointResponse<?> denied = checkPermission("ack:" + group);
+        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_ACK_PREFIX + group);
         if (denied != null) {
             return denied;
         }
@@ -155,7 +170,7 @@ public class StreamMQActuatorEndpoint {
 
     @WriteOperation
     public Object triggerRebalance(@Selector String group) {
-        WebEndpointResponse<?> denied = checkPermission("rebalance:" + group);
+        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_REBALANCE_PREFIX + group);
         if (denied != null) {
             return denied;
         }
@@ -164,7 +179,7 @@ public class StreamMQActuatorEndpoint {
 
     @WriteOperation
     public Object createTopic(String topic) {
-        WebEndpointResponse<?> denied = checkPermission("topics");
+        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_TOPICS);
         if (denied != null) {
             return denied;
         }
@@ -176,7 +191,7 @@ public class StreamMQActuatorEndpoint {
 
     @DeleteOperation
     public Object deleteTopic(@Selector String topic) {
-        WebEndpointResponse<?> denied = checkPermission("topics");
+        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_TOPICS);
         if (denied != null) {
             return denied;
         }
@@ -185,7 +200,7 @@ public class StreamMQActuatorEndpoint {
 
     @WriteOperation
     public Object updateGroupConfig(@Selector String group, Map<String, String> config) {
-        WebEndpointResponse<?> denied = checkPermission("config:" + group);
+        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_CONFIG_PREFIX + group);
         if (denied != null) {
             return denied;
         }

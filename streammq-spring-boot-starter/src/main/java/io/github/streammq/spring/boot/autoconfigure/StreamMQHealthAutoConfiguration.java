@@ -3,6 +3,7 @@ package io.github.streammq.spring.boot.autoconfigure;
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.policy.ManagementAuthenticator;
+import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,9 +33,9 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass({HealthIndicator.class, org.springframework.boot.actuate.health.Health.class})
 @ConditionalOnProperty(
-        prefix = "streammq.health",
-        name = "enabled",
-        havingValue = "true",
+        prefix = StreamMQSpringConstants.PROP_PREFIX_HEALTH,
+        name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+        havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
         matchIfMissing = true)
 public class StreamMQHealthAutoConfiguration {
 
@@ -49,7 +50,7 @@ public class StreamMQHealthAutoConfiguration {
      * @return HealthIndicator
      */
     @Bean
-    @ConditionalOnMissingBean(name = "streamMQHealthIndicator")
+    @ConditionalOnMissingBean(name = StreamMQSpringConstants.BEAN_HEALTH_INDICATOR)
     public HealthIndicator streamMQHealthIndicator(
             RedissonClient redisson,
             org.springframework.beans.factory.ObjectProvider<DefaultStreamMQListenerContainer>
@@ -60,15 +61,20 @@ public class StreamMQHealthAutoConfiguration {
 
     /** 管理端点的后端逻辑 Bean（供 StreamMQActuatorEndpoint 使用）。 */
     @Bean
-    @ConditionalOnMissingBean(name = "streamMQAdminEndpoint")
+    @ConditionalOnMissingBean(name = StreamMQSpringConstants.BEAN_ADMIN_ENDPOINT)
     public StreamMQAdminEndpoint streamMQAdminEndpoint(
             RedissonClient redisson,
             org.springframework.beans.factory.ObjectProvider<DefaultStreamMQListenerContainer>
                     listenerContainerProvider,
             io.github.streammq.spring.boot.properties.StreamMQProperties properties) {
         LOG.debug("Creating StreamMQAdminEndpoint");
-        return new StreamMQAdminEndpoint(
-                redisson, listenerContainerProvider.getIfAvailable(), properties.getNamespace());
+        StreamMQAdminEndpoint adminEndpoint =
+                new StreamMQAdminEndpoint(
+                        redisson,
+                        listenerContainerProvider.getIfAvailable(),
+                        properties.getNamespace());
+        adminEndpoint.setMaxPendingQuerySize(properties.getAdmin().getMaxPendingQuerySize());
+        return adminEndpoint;
     }
 
     /**
@@ -78,16 +84,22 @@ public class StreamMQHealthAutoConfiguration {
      * HealthIndicator} Bean 时触发 {@code NoUniqueBeanDefinitionException}。
      */
     @Bean
-    @ConditionalOnMissingBean(name = "streamMQActuatorEndpoint")
+    @ConditionalOnMissingBean(name = StreamMQSpringConstants.BEAN_ACTUATOR_ENDPOINT)
     @ConditionalOnClass(org.springframework.boot.actuate.endpoint.annotation.Endpoint.class)
     public StreamMQActuatorEndpoint streamMQActuatorEndpoint(
             StreamMQAdminEndpoint adminEndpoint,
             org.springframework.beans.factory.ObjectProvider<StreamMQHealthIndicator>
                     healthIndicatorProvider,
-            ManagementAuthenticator authenticator) {
+            ManagementAuthenticator authenticator,
+            io.github.streammq.spring.boot.properties.StreamMQProperties properties) {
         LOG.debug("Creating StreamMQActuatorEndpoint");
-        return new StreamMQActuatorEndpoint(
-                adminEndpoint, healthIndicatorProvider.getIfAvailable(), authenticator);
+        StreamMQActuatorEndpoint endpoint =
+                new StreamMQActuatorEndpoint(
+                        adminEndpoint,
+                        healthIndicatorProvider.getIfAvailable(),
+                        authenticator);
+        endpoint.setListPageSize(properties.getAdmin().getListPageSize());
+        return endpoint;
     }
 
     /** StreamMQ 健康检查实现。 */
@@ -116,21 +128,30 @@ public class StreamMQHealthAutoConfiguration {
                 long start = System.currentTimeMillis();
                 long val = redisson.getAtomicLong(StreamMQConstants.HEALTH_CHECK_KEY).get();
                 long elapsed = System.currentTimeMillis() - start;
-                builder.withDetail("redis.ping.latencyMs", elapsed);
-                builder.withDetail("redis.health.value", val);
+                builder.withDetail(StreamMQSpringConstants.HEALTH_DETAIL_PING_LATENCY, elapsed);
+                builder.withDetail(StreamMQSpringConstants.HEALTH_DETAIL_HEALTH_VALUE, val);
             } catch (RuntimeException ex) {
                 return Health.down(ex)
-                        .withDetail("error", "Redis ping failed: " + ex.getMessage())
+                        .withDetail(
+                                StreamMQSpringConstants.HEALTH_DETAIL_ERROR,
+                                "Redis ping failed: " + ex.getMessage())
                         .build();
             }
             // Listener 容器状态
             if (listenerContainer != null) {
-                builder.withDetail("listenerContainer.state", listenerContainer.getState().name());
-                builder.withDetail("listenerContainer.running", listenerContainer.isRunning());
                 builder.withDetail(
-                        "listenerContainer.listenerCount", listenerContainer.getConsumers().size());
+                        StreamMQSpringConstants.HEALTH_DETAIL_LC_STATE,
+                        listenerContainer.getState().name());
+                builder.withDetail(
+                        StreamMQSpringConstants.HEALTH_DETAIL_LC_RUNNING,
+                        listenerContainer.isRunning());
+                builder.withDetail(
+                        StreamMQSpringConstants.HEALTH_DETAIL_LC_COUNT,
+                        listenerContainer.getConsumers().size());
             } else {
-                builder.withDetail("listenerContainer.state", "NOT_CONFIGURED");
+                builder.withDetail(
+                        StreamMQSpringConstants.HEALTH_DETAIL_LC_STATE,
+                        StreamMQSpringConstants.HEALTH_VALUE_NOT_CONFIGURED);
             }
             return builder.build();
         }

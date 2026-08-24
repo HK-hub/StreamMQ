@@ -20,8 +20,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @StreamMQConsumer(
-        topic = "order-topic",
-        consumerGroup = "order-consumer-group",
+        topic = SampleConstants.TOPIC,
+        consumerGroup = SampleConstants.CONSUMER_GROUP,
         maxReconsumeTimes = 3)
 public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> {
 

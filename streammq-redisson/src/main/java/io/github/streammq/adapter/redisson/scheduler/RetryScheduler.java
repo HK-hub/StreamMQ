@@ -3,6 +3,7 @@ package io.github.streammq.adapter.redisson.scheduler;
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.core.enums.DlqReason;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
@@ -61,16 +62,16 @@ public class RetryScheduler implements StreamMQScheduler {
     public static final String FIELD_RETRY_COUNT = "retryCount";
 
     /** payload Hash 中的目标 Topic 字段名 */
-    public static final String FIELD_TARGET_TOPIC = "targetTopic";
+    public static final String FIELD_TARGET_TOPIC = StreamMQConstants.FIELD_TARGET_TOPIC;
 
     /** DLQ Stream Entry 字段：进入 DLQ 的原因 */
-    public static final String FIELD_DLQ_REASON = "dlqReason";
+    public static final String FIELD_DLQ_REASON = StreamMQConstants.FIELD_DLQ_REASON;
 
     /** DLQ Stream Entry 字段：原始重试次数 */
     public static final String FIELD_ORIGINAL_RETRY_COUNT = "originalRetryCount";
 
     /** DLQ 原因：达到最大重试次数 */
-    public static final String DLQ_REASON_MAX_RETRY = "maxRetry";
+    public static final String DLQ_REASON_MAX_RETRY = DlqReason.MAX_RETRY.getCode();
 
     /** 默认扫描间隔（毫秒） */
     private static final long DEFAULT_SCAN_INTERVAL_MS = StreamMQConstants.DEFAULT_SCAN_INTERVAL_MS;
@@ -82,8 +83,23 @@ public class RetryScheduler implements StreamMQScheduler {
     private static final long AWAIT_TERMINATION_SECONDS =
             StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
 
-    /** 转移失败后的回写退避（毫秒）：避免 Redis 故障时以 scan 间隔高频热循环重试 */
-    private static final long FAILURE_REQUEUE_BACKOFF_MS = 5_000L;
+    /** 默认转移失败后的回写退避（毫秒）：避免 Redis 故障时以 scan 间隔高频热循环重试 */
+    private static final long DEFAULT_FAILURE_REQUEUE_BACKOFF_MS =
+            StreamMQConstants.DEFAULT_FAILURE_REQUEUE_BACKOFF_MS;
+
+    /** 转移失败后的回写退避（毫秒），可通过 {@link #setFailureRequeueBackoffMs(long)} 覆盖 */
+    private volatile long failureRequeueBackoffMs = DEFAULT_FAILURE_REQUEUE_BACKOFF_MS;
+
+    /**
+     * 设置转移失败后的回写退避间隔（毫秒）。
+     *
+     * @param millis 退避间隔，必须 &gt; 0
+     */
+    public void setFailureRequeueBackoffMs(long millis) {
+        if (millis > 0) {
+            this.failureRequeueBackoffMs = millis;
+        }
+    }
 
     private final RedissonClient redisson;
     private final String namespace;
@@ -134,7 +150,7 @@ public class RetryScheduler implements StreamMQScheduler {
                 new ScheduledThreadPoolExecutor(
                         1,
                         r -> {
-                            Thread t = new Thread(r, "streammq-retry-scheduler");
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_RETRY_SCHEDULER);
                             t.setDaemon(true);
                             return t;
                         });
@@ -251,8 +267,7 @@ public class RetryScheduler implements StreamMQScheduler {
             // 检查是否为 DLQ 重试哨兵
             String targetTopic = fields.get(FIELD_TARGET_TOPIC);
             boolean isDlqRetry =
-                    io.github.streammq.core.StreamMQConstants.DLQ_RETRY_TARGET_TOPIC_SENTINEL
-                            .equals(targetTopic);
+                    StreamMQConstants.DLQ_RETRY_TARGET_TOPIC_SENTINEL.equals(targetTopic);
 
             int retryCount = 0;
             String retryCountStr = fields.get(FIELD_RETRY_COUNT);
@@ -270,9 +285,9 @@ public class RetryScheduler implements StreamMQScheduler {
 
             if (isDlqRetry) {
                 // DLQ 重试 → XADD 回 DLQ Stream，保留 dlqRetryCount
-                fields.remove(io.github.streammq.core.StreamMQConstants.FIELD_DLQ_RETRY_COUNT);
+                fields.remove(StreamMQConstants.FIELD_DLQ_RETRY_COUNT);
                 fields.put(
-                        io.github.streammq.core.StreamMQConstants.FIELD_DLQ_RETRY_COUNT,
+                        StreamMQConstants.FIELD_DLQ_RETRY_COUNT,
                         Integer.toString(retryCount));
                 RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
                 dlqStream.add(StreamAddArgs.entries(fields));
@@ -326,11 +341,11 @@ public class RetryScheduler implements StreamMQScheduler {
             // 处理失败时将 msgId 写回 ZSet（带退避延迟），
             // 避免消息因 ZREM 后处理失败而永久丢失，同时防止 Redis 故障时高频热循环
             try {
-                zset.add(System.currentTimeMillis() + FAILURE_REQUEUE_BACKOFF_MS, msgId);
+                zset.add(System.currentTimeMillis() + failureRequeueBackoffMs, msgId);
                 LOG.warn(
                         "Re-added msgId={} to retry ZSet (backoff {}ms)",
                         msgId,
-                        FAILURE_REQUEUE_BACKOFF_MS);
+                        failureRequeueBackoffMs);
             } catch (RuntimeException reAddEx) {
                 LOG.error(
                         "CRITICAL: Failed to re-add msgId={} to retry ZSet, message may be lost:"

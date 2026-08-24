@@ -66,7 +66,7 @@ public class LimitedRetryDlqFailureStrategy extends AbstractDlqFailureStrategy {
         double multiplier = config.getDlqRetryBackoffMultiplier();
         long delay = (long) (base * Math.pow(multiplier, attempt));
         delay = Math.min(delay, config.getDlqRetryMaxDelayMs());
-        return Duration.ofMillis(Math.max(delay, 1000L)); // at least 1s
+        return Duration.ofMillis(Math.max(delay, config.getMinRetryDelayMs()));
     }
 
     @Override

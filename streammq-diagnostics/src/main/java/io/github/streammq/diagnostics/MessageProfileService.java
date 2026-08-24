@@ -1,5 +1,6 @@
 package io.github.streammq.diagnostics;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.trace.StreamMQTraceService;
 import io.github.streammq.core.trace.TraceRecord;
 import io.github.streammq.core.trace.TraceType;
@@ -40,25 +41,26 @@ public class MessageProfileService {
     private static final Logger log = LoggerFactory.getLogger(MessageProfileService.class);
 
     /** 追踪记录扩展属性键：消息标签 */
-    private static final String ATTR_TAG = "tag";
+    private static final String ATTR_TAG = StreamMQConstants.TRACE_ATTR_TAG;
 
     /** 追踪记录扩展属性键：业务键 */
-    private static final String ATTR_KEYS = "keys";
+    private static final String ATTR_KEYS = StreamMQConstants.TRACE_ATTR_KEYS;
 
     /** 追踪记录扩展属性键：消息体类型 */
-    private static final String ATTR_BODY_TYPE = "bodyType";
+    private static final String ATTR_BODY_TYPE = StreamMQConstants.TRACE_ATTR_BODY_TYPE;
 
     /** 追踪记录扩展属性键：出生主机 */
-    private static final String ATTR_BORN_HOST = "bornHost";
+    private static final String ATTR_BORN_HOST = StreamMQConstants.TRACE_ATTR_BORN_HOST;
 
     /** 追踪记录扩展属性键：消费者实例名 */
-    private static final String ATTR_CONSUMER_NAME = "consumerName";
+    private static final String ATTR_CONSUMER_NAME = StreamMQConstants.TRACE_ATTR_CONSUMER_NAME;
 
     /** 追踪记录扩展属性键：重试次数 */
-    private static final String ATTR_RECONSUME_TIMES = "reconsumeTimes";
+    private static final String ATTR_RECONSUME_TIMES =
+            StreamMQConstants.TRACE_ATTR_RECONSUME_TIMES;
 
     /** 追踪记录扩展属性键：错误信息 */
-    private static final String ATTR_ERROR_MESSAGE = "errorMessage";
+    private static final String ATTR_ERROR_MESSAGE = StreamMQConstants.TRACE_ATTR_ERROR_MESSAGE;
 
     private final StreamMQTraceService traceService;
 
@@ -303,7 +305,9 @@ public class MessageProfileService {
             return false;
         }
         for (String topic : routePath) {
-            if (StringUtils.isNotEmpty(topic) && topic.toLowerCase().contains("dlq")) {
+            if (StringUtils.isNotEmpty(topic)
+                    && topic.toLowerCase()
+                            .contains(StreamMQDiagnosticsDefaults.DLQ_TOPIC_MARKER)) {
                 return true;
             }
         }

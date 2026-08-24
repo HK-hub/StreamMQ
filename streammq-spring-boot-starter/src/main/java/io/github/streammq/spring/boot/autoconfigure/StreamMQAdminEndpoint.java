@@ -1,7 +1,10 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
+import io.github.streammq.adapter.redisson.converter.MessageFields;
+import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
 import java.util.*;
@@ -37,11 +40,32 @@ public class StreamMQAdminEndpoint {
     private final DefaultStreamMQListenerContainer container;
     private final String namespace;
 
+    /** Topic 占位消息字段：占位标记（写入 Stream 以创建 Stream） */
+    private static final String FIELD_PLACEHOLDER = "__placeholder";
+
+    /** Topic 占位消息字段：出生时间戳 */
+    private static final String FIELD_PLACEHOLDER_BORN_TS = MessageFields.BORN_TS;
+
     public StreamMQAdminEndpoint(
             RedissonClient redisson, DefaultStreamMQListenerContainer container, String namespace) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
         this.container = container;
         this.namespace = namespace == null ? "" : namespace;
+    }
+
+    /** pending 列表单次最大拉取条数，可通过 {@link #setMaxPendingQuerySize(int)} 覆盖 */
+    private volatile int maxPendingQuerySize =
+            StreamMQSpringConstants.MAX_PENDING_QUERY_SIZE;
+
+    /**
+     * 设置 pending 列表单次最大拉取条数。
+     *
+     * @param size 最大拉取条数，必须 &gt; 0
+     */
+    public void setMaxPendingQuerySize(int size) {
+        if (size > 0) {
+            this.maxPendingQuerySize = size;
+        }
     }
 
     /** 列出所有已注册的 ConsumerGroup 及其实例数、pending 消息数。 */
@@ -91,7 +115,7 @@ public class StreamMQAdminEndpoint {
                                 meta.consumerGroup(),
                                 StreamMessageId.MIN,
                                 StreamMessageId.MAX,
-                                1000);
+                                maxPendingQuerySize);
                 info.put("pendingCount", pendingInfo.size());
             } catch (RuntimeException ex) {
                 info.put("pendingCount", "N/A: " + ex.getMessage());
@@ -109,7 +133,10 @@ public class StreamMQAdminEndpoint {
         try {
             var pendingInfo =
                     stream.listPending(
-                            group, StreamMessageId.MIN, StreamMessageId.MAX, Math.min(count, 1000));
+                            group,
+                            StreamMessageId.MIN,
+                            StreamMessageId.MAX,
+                            Math.min(count, maxPendingQuerySize));
             for (var entry : pendingInfo) {
                 Map<String, Object> info = new LinkedHashMap<>();
                 info.put("messageId", entry.getId().toString());
@@ -165,8 +192,8 @@ public class StreamMQAdminEndpoint {
             }
             Map<String, String> fields = entries.values().iterator().next();
             // 移除 DLQ 元数据
-            fields.remove("dlqReason");
-            fields.remove("originalMessageId");
+            fields.remove(RetryScheduler.FIELD_DLQ_REASON);
+            fields.remove(MessageFields.ORIGINAL_MESSAGE_ID);
             // XADD 到目标 Stream
             String targetStreamKey = StreamMQKeys.topicStream(namespace, targetTopic);
             RStream<String, String> targetStream = redisson.getStream(targetStreamKey);
@@ -318,8 +345,8 @@ public class StreamMQAdminEndpoint {
         try {
             RStream<String, String> stream = redisson.getStream(streamKey);
             Map<String, String> placeholder = new HashMap<>(2);
-            placeholder.put("__placeholder", "true");
-            placeholder.put("bornTs", Long.toString(System.currentTimeMillis()));
+            placeholder.put(FIELD_PLACEHOLDER, "true");
+            placeholder.put(FIELD_PLACEHOLDER_BORN_TS, Long.toString(System.currentTimeMillis()));
             StreamMessageId id = stream.add(StreamAddArgs.entries(placeholder));
             result.put("success", true);
             result.put("topic", topic);

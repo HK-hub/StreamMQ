@@ -48,7 +48,7 @@ import org.springframework.web.server.ResponseStatusException;
  * @since 0.1.0
  */
 @ResponseBody
-@RequestMapping("/streammq/diagnostics")
+@RequestMapping(StreamMQDiagnosticsEndpointConstants.BASE_PATH)
 public class StreamMQDiagnosticsEndpoint {
 
     private static final Logger log = LoggerFactory.getLogger(StreamMQDiagnosticsEndpoint.class);
@@ -99,7 +99,7 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/profile/{messageId}")
     public ResponseEntity<MessageProfile> getProfile(@PathVariable String messageId) {
-        checkPermission("profile:" + messageId);
+        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_PROFILE_PREFIX + messageId);
         MessageProfile profile = profileService.getProfile(messageId);
         if (Objects.isNull(profile)) {
             return ResponseEntity.notFound().build();
@@ -117,7 +117,7 @@ public class StreamMQDiagnosticsEndpoint {
     @GetMapping("/slow-consume")
     public SlowConsumeReport diagnoseSlowConsume(
             @RequestParam String topic, @RequestParam String group) {
-        checkPermission("slow-consume:" + topic);
+        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_SLOW_CONSUME_PREFIX + topic);
         return diagnosticsService.diagnoseSlowConsume(topic, group);
     }
 
@@ -130,7 +130,7 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/backlog")
     public BacklogReport diagnoseBacklog(@RequestParam String topic, @RequestParam String group) {
-        checkPermission("backlog:" + topic);
+        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_BACKLOG_PREFIX + topic);
         return diagnosticsService.diagnoseBacklog(topic, group);
     }
 
@@ -142,7 +142,7 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/dlq")
     public DlqReport diagnoseDlq(@RequestParam String group) {
-        checkPermission("dlq:" + group);
+        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_DLQ_PREFIX + group);
         return diagnosticsService.diagnoseDlq(group);
     }
 
@@ -153,7 +153,7 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/slow-consumers")
     public List<String> getSlowConsumers() {
-        checkPermission("slow-consumers");
+        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_SLOW_CONSUMERS);
         return diagnosticsService.getSlowConsumers();
     }
 
@@ -164,7 +164,7 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/all-backlogs")
     public List<BacklogReport> getAllBacklogs() {
-        checkPermission("all-backlogs");
+        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_ALL_BACKLOGS);
         return diagnosticsService.getAllBacklogs();
     }
 
@@ -175,18 +175,22 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/health")
     public Map<String, Object> health() {
-        checkPermission("health");
+        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_HEALTH);
         List<String> slowConsumers = diagnosticsService.getSlowConsumers();
         List<BacklogReport> backlogs = diagnosticsService.getAllBacklogs();
         long totalBacklog = backlogs.stream().mapToLong(BacklogReport::currentBacklog).sum();
 
         Map<String, Object> summary = new LinkedHashMap<>();
-        summary.put("status", "UP");
-        summary.put("slowConsumerCount", slowConsumers.size());
-        summary.put("slowConsumers", slowConsumers);
-        summary.put("totalBacklog", totalBacklog);
-        summary.put("backlogReports", backlogs);
-        summary.put("timestamp", System.currentTimeMillis());
+        summary.put(
+                StreamMQDiagnosticsEndpointConstants.KEY_STATUS,
+                StreamMQDiagnosticsEndpointConstants.STATUS_UP);
+        summary.put(
+                StreamMQDiagnosticsEndpointConstants.KEY_SLOW_CONSUMER_COUNT,
+                slowConsumers.size());
+        summary.put(StreamMQDiagnosticsEndpointConstants.KEY_SLOW_CONSUMERS, slowConsumers);
+        summary.put(StreamMQDiagnosticsEndpointConstants.KEY_TOTAL_BACKLOG, totalBacklog);
+        summary.put(StreamMQDiagnosticsEndpointConstants.KEY_BACKLOG_REPORTS, backlogs);
+        summary.put(StreamMQDiagnosticsEndpointConstants.KEY_TIMESTAMP, System.currentTimeMillis());
         return summary;
     }
 }

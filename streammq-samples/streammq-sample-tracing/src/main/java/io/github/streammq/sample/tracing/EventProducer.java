@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class EventProducer {
 
-    private static final String TOPIC = "tracing-events";
+    private static final String TOPIC = SampleConstants.TOPIC;
 
     private final StreamMessageTemplate template;
 
@@ -25,7 +25,7 @@ public class EventProducer {
     public SendResult emitEvent(String eventId, String payload) {
         return template.syncSend(
                 MessageBuilder.<String>withTopic(TOPIC)
-                        .tag("event")
+                        .tag(SampleConstants.TAG)
                         .keys(eventId)
                         .body(payload)
                         .build());

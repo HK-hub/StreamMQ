@@ -32,7 +32,10 @@ public class StreamMQBinderHealthIndicator extends AbstractHealthIndicator {
     @Override
     protected void doHealthCheck(Health.Builder builder) throws Exception {
         if (Objects.isNull(listenerContainer)) {
-            builder.down().withDetail("error", "StreamMQListenerContainer is not configured");
+            builder.down()
+                    .withDetail(
+                            StreamMQBinderConstants.HEALTH_DETAIL_ERROR,
+                            "StreamMQListenerContainer is not configured");
             return;
         }
         boolean running = listenerContainer.isRunning();
@@ -42,7 +45,7 @@ public class StreamMQBinderHealthIndicator extends AbstractHealthIndicator {
         } else {
             builder.down();
         }
-        builder.withDetail("listenerContainer.running", running);
-        builder.withDetail("listenerContainer.consumerCount", consumerCount);
+        builder.withDetail(StreamMQBinderConstants.HEALTH_DETAIL_LC_RUNNING, running);
+        builder.withDetail(StreamMQBinderConstants.HEALTH_DETAIL_LC_CONSUMER_COUNT, consumerCount);
     }
 }

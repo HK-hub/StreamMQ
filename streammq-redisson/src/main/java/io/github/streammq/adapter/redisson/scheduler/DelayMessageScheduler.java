@@ -62,10 +62,13 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     private static final Logger LOG = LoggerFactory.getLogger(DelayMessageScheduler.class);
 
     /** payload Hash 中的目标 Topic 字段名 */
-    public static final String FIELD_TARGET_TOPIC = "targetTopic";
+    public static final String FIELD_TARGET_TOPIC = StreamMQConstants.FIELD_TARGET_TOPIC;
 
     /** payload Hash 中的投递时间字段名 */
-    public static final String FIELD_DELIVER_AT = "deliverAt";
+    public static final String FIELD_DELIVER_AT = StreamMQConstants.FIELD_DELIVER_AT;
+
+    /** 自定义延时等级标识（用于指标与清理逻辑） */
+    public static final String DELAY_CUSTOM_LEVEL = "custom";
 
     /** 默认扫描间隔（毫秒） */
     private static final long DEFAULT_SCAN_INTERVAL_MS = StreamMQConstants.DEFAULT_SCAN_INTERVAL_MS;
@@ -77,8 +80,23 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     private static final long AWAIT_TERMINATION_SECONDS =
             StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
 
-    /** 转移失败后的回写退避（毫秒）：避免 Redis 故障时以 scan 间隔高频热循环重试 */
-    private static final long FAILURE_REQUEUE_BACKOFF_MS = 5_000L;
+    /** 默认转移失败后的回写退避（毫秒）：避免 Redis 故障时以 scan 间隔高频热循环重试 */
+    private static final long DEFAULT_FAILURE_REQUEUE_BACKOFF_MS =
+            StreamMQConstants.DEFAULT_FAILURE_REQUEUE_BACKOFF_MS;
+
+    /** 转移失败后的回写退避（毫秒），可通过 {@link #setFailureRequeueBackoffMs(long)} 覆盖 */
+    private volatile long failureRequeueBackoffMs = DEFAULT_FAILURE_REQUEUE_BACKOFF_MS;
+
+    /**
+     * 设置转移失败后的回写退避间隔（毫秒）。
+     *
+     * @param millis 退避间隔，必须 &gt; 0
+     */
+    public void setFailureRequeueBackoffMs(long millis) {
+        if (millis > 0) {
+            this.failureRequeueBackoffMs = millis;
+        }
+    }
 
     private final RedissonClient redisson;
     private final String namespace;
@@ -111,7 +129,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 new ScheduledThreadPoolExecutor(
                         1,
                         r -> {
-                            Thread t = new Thread(r, "streammq-delay-scheduler");
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_DELAY_SCHEDULER);
                             t.setDaemon(true);
                             return t;
                         });
@@ -239,11 +257,11 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 // 处理失败时将 msgId 写回 ZSet（带退避延迟），
                 // 避免消息因 ZREM 后处理失败而永久丢失，同时防止 Redis 故障时高频热循环
                 try {
-                    zset.add(System.currentTimeMillis() + FAILURE_REQUEUE_BACKOFF_MS, msgId);
+                    zset.add(System.currentTimeMillis() + failureRequeueBackoffMs, msgId);
                     LOG.warn(
                             "Re-added msgId={} to delay ZSet (backoff {}ms)",
                             msgId,
-                            FAILURE_REQUEUE_BACKOFF_MS);
+                            failureRequeueBackoffMs);
                 } catch (RuntimeException reAddEx) {
                     LOG.error(
                             "CRITICAL: Failed to re-add msgId={} to delay ZSet, message may be"
@@ -309,7 +327,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 batch.<String, String>getMap(payloadKey).deleteAsync();
                 transferred++;
 
-                recordDelayMetrics("custom");
+                recordDelayMetrics(DELAY_CUSTOM_LEVEL);
 
                 if (transferred >= batchSize) {
                     executeBatch(batch);
@@ -323,11 +341,11 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                         ex.getMessage(),
                         ex);
                 try {
-                    zset.add(System.currentTimeMillis() + FAILURE_REQUEUE_BACKOFF_MS, msgId);
+                    zset.add(System.currentTimeMillis() + failureRequeueBackoffMs, msgId);
                     LOG.warn(
                             "Re-added msgId={} to custom delay ZSet (backoff {}ms)",
                             msgId,
-                            FAILURE_REQUEUE_BACKOFF_MS);
+                            failureRequeueBackoffMs);
                 } catch (RuntimeException reAddEx) {
                     LOG.error(
                             "CRITICAL: Failed to re-add msgId={} to custom delay ZSet, message may"
@@ -397,7 +415,8 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                     cleanupOrphanedInZSet(
                             StreamMQKeys.delayZSet(namespace, level.name()), level.name());
         }
-        totalCleaned += cleanupOrphanedInZSet(StreamMQKeys.delayCustomZSet(namespace), "custom");
+        totalCleaned +=
+                cleanupOrphanedInZSet(StreamMQKeys.delayCustomZSet(namespace), DELAY_CUSTOM_LEVEL);
         if (totalCleaned > 0) {
             LOG.info("Cleaned up {} orphaned delay ZSet entries", totalCleaned);
         }

@@ -18,6 +18,16 @@ import java.util.Base64;
  */
 public final class WebRequestAuthSupport {
 
+    /** spring-web RequestContextHolder 全限定名（编译期解耦的反射探测目标） */
+    private static final String REQUEST_CONTEXT_HOLDER_CLASS_NAME =
+            "org.springframework.web.context.request.RequestContextHolder";
+
+    /** HTTP Authorization 请求头名称 */
+    private static final String HEADER_AUTHORIZATION = "Authorization";
+
+    /** Basic 鉴权 scheme 前缀 */
+    private static final String BASIC_AUTH_PREFIX = "Basic ";
+
     private WebRequestAuthSupport() {}
 
     /**
@@ -30,8 +40,7 @@ public final class WebRequestAuthSupport {
     public static String[] parseBasicCredentialsFromRequest() {
         Object attrs = null;
         try {
-            Class<?> holder =
-                    Class.forName("org.springframework.web.context.request.RequestContextHolder");
+            Class<?> holder = Class.forName(REQUEST_CONTEXT_HOLDER_CLASS_NAME);
             attrs = holder.getMethod("getRequestAttributes").invoke(null);
         } catch (ReflectiveOperationException | LinkageError ex) {
             // 非 Web 环境：无可用的请求上下文
@@ -52,7 +61,7 @@ public final class WebRequestAuthSupport {
         String authorizationHeader = null;
         try {
             Method getHeader = request.getClass().getMethod("getHeader", String.class);
-            authorizationHeader = (String) getHeader.invoke(request, "Authorization");
+            authorizationHeader = (String) getHeader.invoke(request, HEADER_AUTHORIZATION);
         } catch (ReflectiveOperationException ex) {
             return null;
         }
@@ -67,11 +76,12 @@ public final class WebRequestAuthSupport {
      */
     public static String[] parseBasicCredentials(String authorizationHeader) {
         if (StringUtils.isEmpty(authorizationHeader)
-                || !authorizationHeader.regionMatches(true, 0, "Basic ", 0, 6)) {
+                || !authorizationHeader.regionMatches(
+                        true, 0, BASIC_AUTH_PREFIX, 0, BASIC_AUTH_PREFIX.length())) {
             return null;
         }
         try {
-            String encoded = authorizationHeader.substring(6).trim();
+            String encoded = authorizationHeader.substring(BASIC_AUTH_PREFIX.length()).trim();
             byte[] decoded = Base64.getDecoder().decode(encoded);
             String decodedStr = new String(decoded, StandardCharsets.UTF_8);
             int idx = decodedStr.indexOf(':');

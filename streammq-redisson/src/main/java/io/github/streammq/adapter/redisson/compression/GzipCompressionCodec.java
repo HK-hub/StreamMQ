@@ -22,6 +22,9 @@ import java.util.zip.GZIPOutputStream;
  */
 public class GzipCompressionCodec implements CompressionCodec {
 
+    /** Codec 协议标识（写入 {@code compressed} 字段的值） */
+    public static final String CODEC_NAME = "gzip";
+
     /** 默认缓冲区大小（4KB） */
     private static final int BUFFER_SIZE = 4096;
 
@@ -64,6 +67,6 @@ public class GzipCompressionCodec implements CompressionCodec {
 
     @Override
     public String name() {
-        return "gzip";
+        return CODEC_NAME;
     }
 }

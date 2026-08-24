@@ -21,11 +21,14 @@ public class TraceProducerInterceptor implements ProducerInterceptor {
 
     private static final Logger log = LoggerFactory.getLogger(TraceProducerInterceptor.class);
 
+    /** 示例用固定 spanId 值 */
+    private static final String SPAN_ID_VALUE = "1";
+
     @Override
     public boolean beforeSend(Message<?> message) {
         String traceId = UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-        message.putUserProperty("traceId", traceId);
-        message.putUserProperty("spanId", "1");
+        message.putUserProperty(SampleConstants.PROP_TRACE_ID, traceId);
+        message.putUserProperty(SampleConstants.PROP_SPAN_ID, SPAN_ID_VALUE);
         log.debug(
                 "Trace producer interceptor injected: traceId={}, topic={}",
                 traceId,
@@ -35,7 +38,7 @@ public class TraceProducerInterceptor implements ProducerInterceptor {
 
     @Override
     public void afterSend(Message<?> message, SendResult result) {
-        String traceId = message.getUserProperties().get("traceId");
+        String traceId = message.getUserProperties().get(SampleConstants.PROP_TRACE_ID);
         log.info(
                 "Trace producer interceptor afterSend: traceId={}, topic={}, success={}",
                 traceId,

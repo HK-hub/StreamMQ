@@ -59,8 +59,8 @@ class DlqSampleIT {
 
     private static final String TEST_CONSUMER_GROUP = "test-collector-group";
     private static final String TEST_FAIL_CONSUMER_GROUP = "test-fail-group";
-    private static final String NAMESPACE = "dlq";
-    private static final String TOPIC = "order-topic";
+    private static final String NAMESPACE = SampleConstants.NAMESPACE;
+    private static final String TOPIC = SampleConstants.TOPIC;
 
     @Autowired private OrderProducer orderProducer;
 
@@ -210,7 +210,7 @@ class DlqSampleIT {
      * <p>通过 {@link StreamMQConsumer} 注解注册为 {@code order-topic} 的消费者， 使用独立的测试消费者组（{@value
      * #TEST_CONSUMER_GROUP}）， 避免与生产环境消费者组冲突。
      */
-    @StreamMQConsumer(topic = "order-topic", consumerGroup = TEST_CONSUMER_GROUP)
+    @StreamMQConsumer(topic = SampleConstants.TOPIC, consumerGroup = TEST_CONSUMER_GROUP)
     static class TestMessageCollector implements StreamMessageConcurrentlyConsumer<String> {
 
         final ConcurrentLinkedQueue<Message<String>> receivedMessages =
@@ -239,7 +239,7 @@ class DlqSampleIT {
      * RuntimeException}， 模拟消费失败场景，验证 DLQ 机制。
      */
     @StreamMQConsumer(
-            topic = "order-topic",
+            topic = SampleConstants.TOPIC,
             consumerGroup = TEST_FAIL_CONSUMER_GROUP,
             maxReconsumeTimes = 3)
     static class TestFailConsumer implements StreamMessageConcurrentlyConsumer<String> {
@@ -257,7 +257,7 @@ class DlqSampleIT {
      * <p>通过 {@link StreamMQDlqConsumer} 注解注册为 DLQ 消费者， 监听 {@value #TEST_FAIL_CONSUMER_GROUP}
      * 消费者组的死信队列， 收集死信消息供测试验证。
      */
-    @StreamMQDlqConsumer(consumerGroup = TEST_FAIL_CONSUMER_GROUP, namespace = "dlq")
+    @StreamMQDlqConsumer(consumerGroup = TEST_FAIL_CONSUMER_GROUP, namespace = SampleConstants.NAMESPACE)
     static class TestDlqConsumer extends AbstractDlqMessageConsumer<String> {
 
         final ConcurrentLinkedQueue<Message<String>> receivedDlqMessages =

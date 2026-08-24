@@ -6,6 +6,7 @@ import io.github.streammq.adapter.redisson.trace.RedisStreamMQTraceService;
 import io.github.streammq.adapter.redisson.trace.RedisTraceCollector;
 import io.github.streammq.core.interceptor.TraceCollector;
 import io.github.streammq.core.trace.StreamMQTraceService;
+import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
@@ -37,7 +38,10 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass({RedissonClient.class, StreamMQTraceService.class})
-@ConditionalOnProperty(prefix = "streammq.trace", name = "enabled", havingValue = "true")
+@ConditionalOnProperty(
+        prefix = StreamMQSpringConstants.PROP_PREFIX_TRACE,
+        name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+        havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE)
 @AutoConfigureBefore(StreamMQCoreAutoConfiguration.class)
 @EnableConfigurationProperties(StreamMQProperties.class)
 public class StreamMQTraceAutoConfiguration {
@@ -55,7 +59,10 @@ public class StreamMQTraceAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(TraceCollector.class)
-    @ConditionalOnProperty(prefix = "streammq.trace", name = "storage", havingValue = "redis")
+    @ConditionalOnProperty(
+            prefix = StreamMQSpringConstants.PROP_PREFIX_TRACE,
+            name = StreamMQSpringConstants.PROP_NAME_STORAGE,
+            havingValue = StreamMQSpringConstants.TRACE_STORAGE_REDIS)
     public TraceCollector redisTraceCollector(
             RedissonClient redisson, StreamMQProperties properties) {
         LOG.info(
@@ -73,13 +80,21 @@ public class StreamMQTraceAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(StreamMQTraceService.class)
-    @ConditionalOnProperty(prefix = "streammq.trace", name = "storage", havingValue = "redis")
+    @ConditionalOnProperty(
+            prefix = StreamMQSpringConstants.PROP_PREFIX_TRACE,
+            name = StreamMQSpringConstants.PROP_NAME_STORAGE,
+            havingValue = StreamMQSpringConstants.TRACE_STORAGE_REDIS)
     public StreamMQTraceService redisStreamMQTraceService(
             RedissonClient redisson, StreamMQProperties properties) {
+        RedisStreamMQTraceService service =
+                new RedisStreamMQTraceService(redisson, properties.getNamespace());
+        service.setMaxReadCount(properties.getTrace().getMaxReadCount());
         LOG.info(
-                "Using RedisStreamMQTraceService (trace storage=redis, namespace={})",
-                properties.getNamespace());
-        return new RedisStreamMQTraceService(redisson, properties.getNamespace());
+                "Using RedisStreamMQTraceService (trace storage=redis, namespace={},"
+                        + " maxReadCount={})",
+                properties.getNamespace(),
+                properties.getTrace().getMaxReadCount());
+        return service;
     }
 
     /**

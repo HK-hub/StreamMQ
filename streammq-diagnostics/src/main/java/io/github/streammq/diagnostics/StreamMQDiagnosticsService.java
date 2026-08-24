@@ -1,5 +1,6 @@
 package io.github.streammq.diagnostics;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.listener.StreamMQListenerContainer;
 import io.github.streammq.core.trace.StreamMQTraceService;
 import io.github.streammq.core.trace.TraceRecord;
@@ -51,7 +52,10 @@ public class StreamMQDiagnosticsService {
     private static final Logger log = LoggerFactory.getLogger(StreamMQDiagnosticsService.class);
 
     /** 追踪记录扩展属性键：错误信息 */
-    private static final String ATTR_ERROR_MESSAGE = "errorMessage";
+    private static final String ATTR_ERROR_MESSAGE = StreamMQConstants.TRACE_ATTR_ERROR_MESSAGE;
+
+    /** topic:group 组合 key 分隔符 */
+    private static final String KEY_SEPARATOR = StreamMQDiagnosticsDefaults.KEY_SEPARATOR;
 
     private final StreamMQTraceService traceService;
     private final StreamMQListenerContainer listenerContainer;
@@ -306,7 +310,7 @@ public class StreamMQDiagnosticsService {
                     || StringUtils.isEmpty(metadata.consumerGroup())) {
                 continue;
             }
-            String key = metadata.topic() + ":" + metadata.consumerGroup();
+            String key = metadata.topic() + KEY_SEPARATOR + metadata.consumerGroup();
             if (visited.contains(key)) {
                 continue;
             }
@@ -344,7 +348,7 @@ public class StreamMQDiagnosticsService {
                     || StringUtils.isEmpty(metadata.consumerGroup())) {
                 continue;
             }
-            String key = metadata.topic() + ":" + metadata.consumerGroup();
+            String key = metadata.topic() + KEY_SEPARATOR + metadata.consumerGroup();
             if (visited.contains(key)) {
                 continue;
             }
@@ -484,7 +488,8 @@ public class StreamMQDiagnosticsService {
         }
         List<Long> sorted = new ArrayList<>(durations);
         sorted.sort(Long::compare);
-        int index = (int) Math.ceil(sorted.size() * 0.99) - 1;
+        int index =
+                (int) Math.ceil(sorted.size() * StreamMQDiagnosticsDefaults.P99_PERCENTILE) - 1;
         return sorted.get(Math.max(0, index));
     }
 
@@ -555,14 +560,27 @@ public class StreamMQDiagnosticsService {
      * @param threadPoolMax 线程池最大数
      * @return 优化建议
      */
+    /** 建议线程数上限 */
+    private static final int RECOMMENDED_MAX_THREADS = 128;
+
+    /**
+     * 构建慢消费优化建议。
+     *
+     * @param avgConsumeTime 平均消费耗时
+     * @param consumeRate 消费速率
+     * @param produceRate 生产速率
+     * @param threadPoolMax 线程池最大数
+     * @return 优化建议
+     */
     private String buildSlowConsumeRecommendation(
             double avgConsumeTime, double consumeRate, double produceRate, int threadPoolMax) {
         if (avgConsumeTime > properties.getSlowConsumeThresholdMs()) {
-            return "建议优化消费逻辑，排查外部依赖超时，并考虑增加消费线程数到 " + Math.max(threadPoolMax * 2, 128);
+            return "建议优化消费逻辑，排查外部依赖超时，并考虑增加消费线程数到 "
+                    + Math.max(threadPoolMax * 2, RECOMMENDED_MAX_THREADS);
         }
         if (consumeRate < produceRate) {
-            if (threadPoolMax < 64) {
-                return "建议增加消费线程数到 128";
+            if (threadPoolMax < StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX) {
+                return "建议增加消费线程数到 " + RECOMMENDED_MAX_THREADS;
             }
             return "建议增加消费者实例数以提升并发消费能力";
         }
@@ -715,7 +733,7 @@ public class StreamMQDiagnosticsService {
         for (Map.Entry<String, Long> entry : sortByValueDesc(reasonCounts)) {
             double percentage = totalDlqCount > 0 ? entry.getValue() * 100.0 / totalDlqCount : 0.0;
             reasons.add(new FailureReason(entry.getKey(), entry.getValue(), percentage));
-            if (reasons.size() >= 10) {
+            if (reasons.size() >= StreamMQDiagnosticsDefaults.TOP_N_LIMIT) {
                 break;
             }
         }
@@ -750,7 +768,7 @@ public class StreamMQDiagnosticsService {
             topics.add(
                     new TopicFailureCount(
                             entry.getKey(), entry.getValue()[0], entry.getValue()[1]));
-            if (topics.size() >= 10) {
+            if (topics.size() >= StreamMQDiagnosticsDefaults.TOP_N_LIMIT) {
                 break;
             }
         }

@@ -36,6 +36,9 @@ public class OpenTelemetryProducerInterceptor implements ProducerInterceptor {
     /** 拦截器执行顺序（高优先级，早于业务拦截器执行） */
     public static final int ORDER = -100;
 
+    /** 拦截器标识名 */
+    public static final String NAME = "openTelemetryProducerInterceptor";
+
     private final StreamMQTracing tracing;
 
     @Override
@@ -83,7 +86,7 @@ public class OpenTelemetryProducerInterceptor implements ProducerInterceptor {
 
     @Override
     public String name() {
-        return "openTelemetryProducerInterceptor";
+        return NAME;
     }
 
     @Override

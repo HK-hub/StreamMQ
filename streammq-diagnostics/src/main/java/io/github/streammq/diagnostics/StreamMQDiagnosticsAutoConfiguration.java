@@ -53,14 +53,14 @@ import org.springframework.context.annotation.Bean;
 @AutoConfiguration
 @AutoConfigureAfter(
         name = {
-            "io.github.streammq.spring.boot.autoconfigure.StreamMQTraceAutoConfiguration",
-            "io.github.streammq.spring.boot.autoconfigure.StreamMQListenerContainerAutoConfiguration"
+            StreamMQDiagnosticsDefaults.AUTO_CONFIGURE_AFTER_TRACE,
+            StreamMQDiagnosticsDefaults.AUTO_CONFIGURE_AFTER_LISTENER_CONTAINER
         })
 @ConditionalOnClass(StreamMQTraceService.class)
 @ConditionalOnProperty(
-        prefix = "streammq.diagnostics",
-        name = "enabled",
-        havingValue = "true",
+        prefix = StreamMQDiagnosticsDefaults.PROP_PREFIX,
+        name = StreamMQDiagnosticsDefaults.PROP_NAME_ENABLED,
+        havingValue = StreamMQDiagnosticsDefaults.PROP_VALUE_TRUE,
         matchIfMissing = false)
 @EnableConfigurationProperties(StreamMQDiagnosticsProperties.class)
 public class StreamMQDiagnosticsAutoConfiguration {

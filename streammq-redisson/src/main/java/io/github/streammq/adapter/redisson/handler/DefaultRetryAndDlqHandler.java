@@ -9,6 +9,7 @@ import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.enums.ConsumeAction;
+import io.github.streammq.core.enums.DlqReason;
 import io.github.streammq.core.interceptor.ConsumerInterceptorChain;
 import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.listener.StreamMQListener;
@@ -58,7 +59,8 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
 
     private static final Logger LOG = LoggerFactory.getLogger(DefaultRetryAndDlqHandler.class);
 
-    private static final String FIELD_ORIGINAL_MESSAGE_ID = "originalMessageId";
+    private static final String FIELD_ORIGINAL_MESSAGE_ID =
+            StreamMQConstants.FIELD_ORIGINAL_MESSAGE_ID;
 
     @NonNull private final RedissonClient redisson;
     @NonNull private final MessageConverter messageConverter;
@@ -155,7 +157,9 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             Map<String, String> fields = messageConverter.toStreamFields(message);
             LOG.info("handleDlqFailureWithStrategy: fields.size={}", fields.size());
             int dlqRetryCount = parseDlqRetryCount(fields);
-            String dlqReason = fields.getOrDefault(RetryScheduler.FIELD_DLQ_REASON, "unknown");
+            String dlqReason =
+                    fields.getOrDefault(
+                            RetryScheduler.FIELD_DLQ_REASON, DlqReason.UNKNOWN.getCode());
             String originalMsgId =
                     fields.getOrDefault(FIELD_ORIGINAL_MESSAGE_ID, messageId.getStreamEntryId());
 
@@ -269,7 +273,8 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             MessageId messageId,
             Map<String, String> fields) {
         try {
-            fields.put(RetryScheduler.FIELD_DLQ_REASON, "secondaryDlq");
+            fields.put(
+                    RetryScheduler.FIELD_DLQ_REASON, DlqReason.SECONDARY_DLQ.getCode());
             fields.put(FIELD_ORIGINAL_MESSAGE_ID, messageId.getStreamEntryId());
             String dlq2Key =
                     StreamMQKeys.secondaryDlqStream(

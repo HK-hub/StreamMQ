@@ -67,13 +67,14 @@ public class RedissonStreamProducer implements StreamMessageProducer {
     @Setter private CompressionCodec compressionCodec;
 
     /** 关闭异步执行线程池时的等待超时（秒） */
-    private static final long ASYNC_AWAIT_TERMINATION_SECONDS = 5L;
+    private static final long ASYNC_AWAIT_TERMINATION_SECONDS =
+            StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
 
     /** 延时消息 payload Hash 字段：目标 Topic */
-    private static final String FIELD_TARGET_TOPIC = "targetTopic";
+    private static final String FIELD_TARGET_TOPIC = StreamMQConstants.FIELD_TARGET_TOPIC;
 
     /** 延时消息 payload Hash 字段：投递时间 */
-    private static final String FIELD_DELIVER_AT = "deliverAt";
+    private static final String FIELD_DELIVER_AT = StreamMQConstants.FIELD_DELIVER_AT;
 
     /**
      * 构造 Producer，支持 Builder 模式。

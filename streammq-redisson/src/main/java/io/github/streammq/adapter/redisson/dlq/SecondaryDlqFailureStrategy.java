@@ -51,7 +51,7 @@ public class SecondaryDlqFailureStrategy extends AbstractDlqFailureStrategy {
         double multiplier = config.getDlqRetryBackoffMultiplier();
         long delayMs = (long) (base * Math.pow(multiplier, attempts));
         delayMs = Math.min(delayMs, config.getDlqRetryMaxDelayMs());
-        delayMs = Math.max(delayMs, 1000L);
+        delayMs = Math.max(delayMs, config.getMinRetryDelayMs());
         log.info(
                 "DLQ retry scheduled: attempt={}/{}, delay={}ms (topic={})",
                 attempts + 1,

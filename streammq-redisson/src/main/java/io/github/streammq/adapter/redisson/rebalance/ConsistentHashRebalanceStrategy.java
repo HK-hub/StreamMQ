@@ -42,6 +42,12 @@ public class ConsistentHashRebalanceStrategy implements RebalanceStrategy {
     /** 默认虚拟节点数 */
     public static final int DEFAULT_VIRTUAL_NODES = StreamMQConstants.DEFAULT_VIRTUAL_NODES;
 
+    /** 虚拟节点名称分隔符（改变会重新分布所有分片，需保持稳定） */
+    private static final String VIRTUAL_NODE_SEPARATOR = StreamMQConstants.VIRTUAL_NODE_SEPARATOR;
+
+    /** 分片哈希盐前缀（改变会重新分布所有分片，需保持稳定） */
+    private static final String SHARD_HASH_PREFIX = "shard-";
+
     private final int virtualNodes;
 
     /** 使用默认虚拟节点数（160）。 */
@@ -85,7 +91,7 @@ public class ConsistentHashRebalanceStrategy implements RebalanceStrategy {
         TreeMap<Long, String> ring = new TreeMap<>();
         for (String consumer : consumers) {
             for (int i = 0; i < virtualNodes; i++) {
-                String vn = consumer + "#" + i;
+                String vn = consumer + VIRTUAL_NODE_SEPARATOR + i;
                 ring.put(fnv1aHash(vn), consumer);
             }
         }
@@ -96,7 +102,7 @@ public class ConsistentHashRebalanceStrategy implements RebalanceStrategy {
         if (ring.isEmpty()) {
             return null;
         }
-        long hash = fnv1aHash("shard-" + shardId);
+        long hash = fnv1aHash(SHARD_HASH_PREFIX + shardId);
         // 顺时针查找第一个 >= hash 的节点
         Map.Entry<Long, String> entry = ring.ceilingEntry(hash);
         if (Objects.isNull(entry)) {

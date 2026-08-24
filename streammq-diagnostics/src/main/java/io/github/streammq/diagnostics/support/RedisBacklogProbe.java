@@ -1,6 +1,7 @@
 package io.github.streammq.diagnostics.support;
 
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.diagnostics.StreamMQDiagnosticsDefaults;
 import io.github.streammq.diagnostics.spi.BacklogProbe;
 import java.util.Objects;
 import org.redisson.api.RStream;
@@ -42,7 +43,11 @@ public class RedisBacklogProbe implements BacklogProbe {
             long pendingCount = 0;
             try {
                 pendingCount =
-                        stream.listPending(group, StreamMessageId.MIN, StreamMessageId.MAX, 1000)
+                        stream.listPending(
+                                        group,
+                                        StreamMessageId.MIN,
+                                        StreamMessageId.MAX,
+                                        StreamMQDiagnosticsDefaults.MAX_PENDING_QUERY_SIZE)
                                 .size();
             } catch (RuntimeException ex) {
                 // 消费者组不存在（NOGROUP）时 pending 视为 0

@@ -30,6 +30,15 @@ import org.springframework.boot.actuate.health.HealthIndicator;
  */
 public class StreamMQHealthIndicator implements HealthIndicator {
 
+    /** 健康详情 key：原因 */
+    private static final String DETAIL_REASON = "reason";
+
+    /** 健康详情 key：活跃消费者数量 */
+    private static final String DETAIL_ACTIVE_CONSUMERS = "activeConsumers";
+
+    /** 健康详情 key：运行标志 */
+    private static final String DETAIL_RUNNING = "running";
+
     private final ObjectProvider<StreamMQListenerContainer> containerProvider;
 
     /**
@@ -46,14 +55,14 @@ public class StreamMQHealthIndicator implements HealthIndicator {
         StreamMQListenerContainer container = containerProvider.getIfAvailable();
         if (Objects.isNull(container)) {
             return Health.down()
-                    .withDetail("reason", "StreamMQListenerContainer not available")
+                    .withDetail(DETAIL_REASON, "StreamMQListenerContainer not available")
                     .build();
         }
         boolean running = container.isRunning();
         int activeConsumers = container.getConsumers().size();
         Map<String, Object> details = new LinkedHashMap<>();
-        details.put("activeConsumers", activeConsumers);
-        details.put("running", running);
+        details.put(DETAIL_ACTIVE_CONSUMERS, activeConsumers);
+        details.put(DETAIL_RUNNING, running);
         if (running) {
             return Health.up().withDetails(details).build();
         }

@@ -29,7 +29,7 @@ import org.springframework.web.bind.annotation.RestController;
  * @since 0.1.0
  */
 @RestController
-@RequestMapping("/streammq/health")
+@RequestMapping(StreamMQHealthControllerConstants.BASE_PATH)
 public class StreamMQHealthController {
 
     private final ObjectProvider<StreamMQListenerContainer> containerProvider;
@@ -50,11 +50,15 @@ public class StreamMQHealthController {
      *
      * @return 存活状态响应，包含 {@code status} 与 {@code backend} 字段
      */
-    @GetMapping("/liveness")
+    @GetMapping(StreamMQHealthControllerConstants.PATH_LIVENESS)
     public ResponseEntity<Map<String, Object>> liveness() {
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("status", "UP");
-        body.put("backend", "unknown");
+        body.put(
+                StreamMQHealthControllerConstants.KEY_STATUS,
+                StreamMQHealthControllerConstants.STATUS_UP);
+        body.put(
+                StreamMQHealthControllerConstants.KEY_BACKEND,
+                StreamMQHealthControllerConstants.VALUE_UNKNOWN);
         return ResponseEntity.ok(body);
     }
 
@@ -66,17 +70,19 @@ public class StreamMQHealthController {
      *
      * @return 就绪状态响应，包含 {@code ready} 与 {@code consumerCount} 字段
      */
-    @GetMapping("/readiness")
+    @GetMapping(StreamMQHealthControllerConstants.PATH_READINESS)
     public ResponseEntity<Map<String, Object>> readiness() {
         StreamMQListenerContainer container = containerProvider.getIfAvailable();
         Map<String, Object> body = new LinkedHashMap<>();
         if (Objects.isNull(container)) {
-            body.put("ready", false);
-            body.put("consumerCount", 0);
+            body.put(StreamMQHealthControllerConstants.KEY_READY, false);
+            body.put(StreamMQHealthControllerConstants.KEY_CONSUMER_COUNT, 0);
             return ResponseEntity.ok(body);
         }
-        body.put("ready", container.isRunning());
-        body.put("consumerCount", container.getConsumers().size());
+        body.put(StreamMQHealthControllerConstants.KEY_READY, container.isRunning());
+        body.put(
+                StreamMQHealthControllerConstants.KEY_CONSUMER_COUNT,
+                container.getConsumers().size());
         return ResponseEntity.ok(body);
     }
 }

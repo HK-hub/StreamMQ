@@ -26,7 +26,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @Getter
 @Setter
-@ConfigurationProperties(prefix = "streammq.diagnostics")
+@ConfigurationProperties(prefix = StreamMQDiagnosticsDefaults.PROP_PREFIX)
 public class StreamMQDiagnosticsProperties {
 
     /** 是否启用诊断模块，默认关闭 */
@@ -39,27 +39,28 @@ public class StreamMQDiagnosticsProperties {
      */
     private String namespace = "";
 
-    /** 近期诊断时间窗口（毫秒），默认 5 分钟 */
-    private long recentWindowMs = 5 * 60 * 1000L;
+    /** 近期诊断时间窗口（毫秒） */
+    private long recentWindowMs = StreamMQDiagnosticsDefaults.RECENT_WINDOW_MS;
 
-    /** DLQ 诊断时间窗口（毫秒），默认 1 小时 */
-    private long dlqWindowMs = 60 * 60 * 1000L;
+    /** DLQ 诊断时间窗口（毫秒） */
+    private long dlqWindowMs = StreamMQDiagnosticsDefaults.DLQ_WINDOW_MS;
 
-    /** 慢消费耗时阈值（毫秒），超过此值判定为慢消费，默认 5000ms */
-    private long slowConsumeThresholdMs = 5000L;
+    /** 慢消费耗时阈值（毫秒），超过此值判定为慢消费 */
+    private long slowConsumeThresholdMs = StreamMQDiagnosticsDefaults.SLOW_CONSUME_THRESHOLD_MS;
 
-    /** 积压警告阈值，超过此值触发 WARNING 级别，默认 1000 */
-    private long backlogWarningThreshold = 1000L;
+    /** 积压警告阈值，超过此值触发 WARNING 级别 */
+    private long backlogWarningThreshold = StreamMQDiagnosticsDefaults.BACKLOG_WARNING_THRESHOLD;
 
-    /** 积压严重阈值，超过此值触发 CRITICAL 级别，默认 10000 */
-    private long backlogCriticalThreshold = 10000L;
+    /** 积压严重阈值，超过此值触发 CRITICAL 级别 */
+    private long backlogCriticalThreshold =
+            StreamMQDiagnosticsDefaults.BACKLOG_CRITICAL_THRESHOLD;
 
-    /** DLQ 主题标识关键字（小写匹配），默认 "dlq" */
-    private String dlqTopicMarker = "dlq";
+    /** DLQ 主题标识关键字（小写匹配） */
+    private String dlqTopicMarker = StreamMQDiagnosticsDefaults.DLQ_TOPIC_MARKER;
 
-    /** DLQ 最大重试次数阈值，超过此值判定为死信，默认 3 */
-    private int dlqMaxRetryCount = 3;
+    /** DLQ 最大重试次数阈值，超过此值判定为死信 */
+    private int dlqMaxRetryCount = StreamMQDiagnosticsDefaults.DLQ_MAX_RETRY_COUNT;
 
-    /** 单次画像查询最大消息数，防止大范围查询导致 OOM，默认 1000 */
-    private int maxProfileQuerySize = 1000;
+    /** 单次画像查询最大消息数，防止大范围查询导致 OOM */
+    private int maxProfileQuerySize = StreamMQDiagnosticsDefaults.MAX_PROFILE_QUERY_SIZE;
 }

@@ -36,6 +36,9 @@ public class OpenTelemetryConsumerInterceptor implements ConsumerInterceptor {
     /** 拦截器执行顺序（高优先级，早于业务拦截器执行） */
     public static final int ORDER = -100;
 
+    /** 拦截器标识名 */
+    public static final String NAME = "openTelemetryConsumerInterceptor";
+
     private final StreamMQTracing tracing;
 
     /** 当前线程的消费者 Span */
@@ -85,7 +88,7 @@ public class OpenTelemetryConsumerInterceptor implements ConsumerInterceptor {
 
     @Override
     public String name() {
-        return "openTelemetryConsumerInterceptor";
+        return NAME;
     }
 
     @Override

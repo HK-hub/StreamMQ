@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
  * @since 0.1.0
  */
 @Component
-@StreamMQConsumer(topic = "order-events", consumerGroup = "diagnostics-sample-consumer")
+@StreamMQConsumer(topic = SampleConstants.TOPIC, consumerGroup = SampleConstants.CONSUMER_GROUP)
 public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> {
 
     private static final Logger log = LoggerFactory.getLogger(OrderConsumer.class);

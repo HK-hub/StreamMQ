@@ -2,6 +2,7 @@ package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.core.annotation.EnableStreamMQ;
 import io.github.streammq.core.template.StreamMessageTemplate;
+import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import org.redisson.api.RedissonClient;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -36,9 +37,9 @@ import org.springframework.context.annotation.Import;
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(
-        prefix = "streammq",
-        name = "enabled",
-        havingValue = "true",
+        prefix = StreamMQSpringConstants.PROP_PREFIX,
+        name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+        havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
         matchIfMissing = true)
 @ConditionalOnClass({RedissonClient.class, StreamMessageTemplate.class})
 @Import({

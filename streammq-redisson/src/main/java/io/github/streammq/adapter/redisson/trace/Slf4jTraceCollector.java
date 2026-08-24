@@ -1,5 +1,6 @@
 package io.github.streammq.adapter.redisson.trace;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.interceptor.TraceCollector;
 import java.util.Objects;
 import org.slf4j.Logger;
@@ -25,7 +26,7 @@ public class Slf4jTraceCollector implements TraceCollector {
     private static final Logger LOG = LoggerFactory.getLogger(Slf4jTraceCollector.class);
 
     /** 用户属性中的 traceId 键名 */
-    public static final String TRACE_ID_KEY = "traceId";
+    public static final String TRACE_ID_KEY = StreamMQConstants.TRACE_ATTR_TRACE_ID;
 
     @Override
     public void recordSend(SendTraceContext context) {

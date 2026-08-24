@@ -17,8 +17,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @StreamMQConsumer(
-        topic = "interceptor-order-topic",
-        consumerGroup = "interceptor-order-consumer-group")
+        topic = SampleConstants.TOPIC,
+        consumerGroup = SampleConstants.CONSUMER_GROUP)
 public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> {
 
     private static final Logger log = LoggerFactory.getLogger(OrderConsumer.class);
@@ -30,7 +30,7 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
                 "Processing order message: keys={}, body={}, traceId={}",
                 message.getKeys(),
                 message.getBody(),
-                message.getUserProperties().get("traceId"));
+                message.getUserProperties().get(SampleConstants.PROP_TRACE_ID));
 
         processOrder(message);
         return ConsumeAction.SUCCESS;

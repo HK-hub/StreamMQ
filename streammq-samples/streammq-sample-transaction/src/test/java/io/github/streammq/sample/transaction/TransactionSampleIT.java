@@ -74,8 +74,8 @@ class TransactionSampleIT {
         String content = "test-rollback-order-001";
 
         Message<String> msg =
-                MessageBuilder.<String>withTopic("order-topic")
-                        .tag("transaction")
+                MessageBuilder.<String>withTopic(SampleConstants.TOPIC)
+                        .tag(SampleConstants.TAG)
                         .body(content)
                         .build();
 
@@ -90,7 +90,7 @@ class TransactionSampleIT {
         assertThat(result.getErrorMessage()).contains("rolled back");
     }
 
-    @StreamMQConsumer(topic = "order-topic", consumerGroup = TEST_CONSUMER_GROUP)
+    @StreamMQConsumer(topic = SampleConstants.TOPIC, consumerGroup = TEST_CONSUMER_GROUP)
     static class TestMessageCollector implements StreamMessageConcurrentlyConsumer<String> {
 
         final ConcurrentLinkedQueue<Message<String>> receivedMessages =

@@ -39,7 +39,10 @@ import org.springframework.context.annotation.Configuration;
 @Slf4j
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass(StreamMessageTemplate.class)
-@ConditionalOnProperty(prefix = "streammq.tracing.otel", name = "enabled", havingValue = "true")
+@ConditionalOnProperty(
+        prefix = StreamMQTracingProperties.PROP_PREFIX,
+        name = StreamMQTracingProperties.PROP_NAME_ENABLED,
+        havingValue = StreamMQTracingProperties.PROP_VALUE_TRUE)
 @EnableConfigurationProperties(StreamMQTracingProperties.class)
 public class StreamMQTracingAutoConfiguration {
 

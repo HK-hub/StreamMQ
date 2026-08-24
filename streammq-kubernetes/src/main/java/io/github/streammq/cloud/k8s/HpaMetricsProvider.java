@@ -28,6 +28,15 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 public class HpaMetricsProvider {
 
+    /** 指标名前缀：消费延迟 */
+    public static final String METRIC_PREFIX_LAG = "consumer.lag.";
+
+    /** 指标名前缀：消费速率 */
+    public static final String METRIC_PREFIX_RATE = "consume.rate.";
+
+    /** topic:group 组合 key 分隔符 */
+    private static final String KEY_SEPARATOR = ":";
+
     private final ConcurrentHashMap<String, AtomicLong> lagMap = new ConcurrentHashMap<>();
 
     private final ConcurrentHashMap<String, Double> rateMap = new ConcurrentHashMap<>();
@@ -70,8 +79,8 @@ public class HpaMetricsProvider {
      */
     public Map<String, Double> getConsumerMetrics() {
         Map<String, Double> metrics = new LinkedHashMap<>();
-        lagMap.forEach((k, lagRef) -> metrics.put("consumer.lag." + k, (double) lagRef.get()));
-        rateMap.forEach((k, rate) -> metrics.put("consume.rate." + k, rate));
+        lagMap.forEach((k, lagRef) -> metrics.put(METRIC_PREFIX_LAG + k, (double) lagRef.get()));
+        rateMap.forEach((k, rate) -> metrics.put(METRIC_PREFIX_RATE + k, rate));
         return Collections.unmodifiableMap(metrics);
     }
 
@@ -98,6 +107,6 @@ public class HpaMetricsProvider {
     }
 
     private static String key(String topic, String group) {
-        return topic + ":" + group;
+        return topic + KEY_SEPARATOR + group;
     }
 }

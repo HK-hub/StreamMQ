@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.trace.StreamMQTraceService;
 import io.github.streammq.core.trace.TraceRecord;
 import io.github.streammq.core.trace.TraceType;
@@ -34,7 +35,7 @@ import org.slf4j.LoggerFactory;
  *
  * <ul>
  *   <li>{@link #queryByMessageId} 仅查询<b>今天与昨天</b>两个 Stream，更早数据需直接查询对应日期 Stream
- *   <li>单日单次查询最多读取 {@value #MAX_READ_COUNT} 条记录，超出部分静默截断
+ *   <li>单日单次查询最多读取 {@code streammq.trace.max-read-count}（默认 10000）条记录，超出部分静默截断
  *   <li>时间范围查询遍历范围内的每一天，全量内存过滤
  * </ul>
  *
@@ -48,11 +49,17 @@ public class RedisStreamMQTraceService implements StreamMQTraceService {
     private static final Logger LOG = LoggerFactory.getLogger(RedisStreamMQTraceService.class);
 
     private static final DateTimeFormatter DATE_FMT = DateTimeFormatter.BASIC_ISO_DATE;
-    private static final int MAX_READ_COUNT = 10000;
+
+    /** 单日单次查询默认最大读取条数 */
+    private static final int DEFAULT_MAX_READ_COUNT =
+            StreamMQConstants.DEFAULT_TRACE_MAX_READ_COUNT;
 
     private final RedissonClient redisson;
     private final String namespace;
     private final ObjectMapper objectMapper;
+
+    /** 单日单次查询最大读取条数，可通过 {@link #setMaxReadCount(int)} 覆盖 */
+    private volatile int maxReadCount = DEFAULT_MAX_READ_COUNT;
 
     /**
      * 构造 Redis 追踪查询服务。
@@ -64,6 +71,17 @@ public class RedisStreamMQTraceService implements StreamMQTraceService {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
         this.namespace = namespace == null ? "" : namespace;
         this.objectMapper = new ObjectMapper();
+    }
+
+    /**
+     * 设置单日单次查询最大读取条数。
+     *
+     * @param maxReadCount 最大读取条数，必须 &gt; 0
+     */
+    public void setMaxReadCount(int maxReadCount) {
+        if (maxReadCount > 0) {
+            this.maxReadCount = maxReadCount;
+        }
     }
 
     @Override
@@ -145,7 +163,7 @@ public class RedisStreamMQTraceService implements StreamMQTraceService {
         List<TraceRecord> records = new ArrayList<>();
         try {
             RStream<String, String> stream = redisson.getStream(traceKey);
-            var entries = stream.range(MAX_READ_COUNT, StreamMessageId.MIN, StreamMessageId.MAX);
+            var entries = stream.range(maxReadCount, StreamMessageId.MIN, StreamMessageId.MAX);
             if (entries != null) {
                 for (var entry : entries.entrySet()) {
                     TraceRecord record = parseRecord(entry.getValue());

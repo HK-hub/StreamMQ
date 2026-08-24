@@ -21,8 +21,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @StreamMQConsumer(
-        topic = "orderly-order-topic",
-        consumerGroup = "orderly-order-consumer-group",
+        topic = SampleConstants.TOPIC,
+        consumerGroup = SampleConstants.CONSUMER_GROUP,
         messageModel = MessageModel.ORDERLY,
         shardCount = 8)
 public class OrderlyMessageConsumer implements StreamMessageOrderlyConsumer<String> {
@@ -35,7 +35,7 @@ public class OrderlyMessageConsumer implements StreamMessageOrderlyConsumer<Stri
     public ConsumeAction onMessage(Message<String> message, ConsumeOrderlyContext context)
             throws Exception {
         String orderId = message.getKeys();
-        String sequence = message.getUserProperties().get("sequence");
+        String sequence = message.getUserProperties().get(SampleConstants.PROP_SEQUENCE);
 
         log.info(
                 "Received orderly message: orderId={}, sequence={}, shardingKey={}, body={},"

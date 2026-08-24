@@ -74,7 +74,42 @@ public class ConfigMapConfigRefresher implements StreamMQConfigRefresher, Runnab
 
     private ScheduledFuture<?> syncFuture;
 
+    /** ConfigMap 标签 key */
     private static final String STREAMMQ_CONFIG_LABEL = "streammq.io/config";
+
+    /** 同步线程名 */
+    private static final String THREAD_CONFIGMAP_SYNC = "streammq-configmap-sync";
+
+    /** 全量同步间隔（秒） */
+    private static final int SYNC_INTERVAL_SECONDS = 30;
+
+    /** 默认 watch 命名空间 */
+    private static final String DEFAULT_WATCH_NAMESPACE = "default";
+
+    /** 默认 watch ConfigMap 名称 */
+    public static final String DEFAULT_WATCH_CONFIG_MAP_NAME = "streammq-consumer-config";
+
+    /** 默认 watch 刷新间隔（毫秒） */
+    private static final long DEFAULT_WATCH_REFRESH_INTERVAL_MS = 5_000L;
+
+    // ==================== ConfigMap data key 契约 ====================
+    /** data key：最大重试次数 */
+    public static final String CM_KEY_MAX_RECONSUME_TIMES = "maxReconsumeTimes";
+
+    /** data key：重试间隔数组（逗号分隔毫秒值） */
+    public static final String CM_KEY_RETRY_INTERVALS = "retryIntervals";
+
+    /** data key：最小消费线程数 */
+    public static final String CM_KEY_CONSUMER_THREAD_MIN = "consumerThreadMin";
+
+    /** data key：最大消费线程数 */
+    public static final String CM_KEY_CONSUMER_THREAD_MAX = "consumerThreadMax";
+
+    /** data key：重试扫描间隔（毫秒） */
+    public static final String CM_KEY_RETRY_SCAN_MS = "retryScanMs";
+
+    /** data key：延时扫描间隔（毫秒） */
+    public static final String CM_KEY_DELAY_SCAN_MS = "delayScanMs";
 
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
@@ -109,11 +144,16 @@ public class ConfigMapConfigRefresher implements StreamMQConfigRefresher, Runnab
         syncScheduler =
                 Executors.newSingleThreadScheduledExecutor(
                         r -> {
-                            Thread t = new Thread(r, "streammq-configmap-sync");
+                            Thread t = new Thread(r, THREAD_CONFIGMAP_SYNC);
                             t.setDaemon(true);
                             return t;
                         });
-        syncFuture = syncScheduler.scheduleAtFixedRate(this, 30, 30, TimeUnit.SECONDS);
+        syncFuture =
+                syncScheduler.scheduleAtFixedRate(
+                        this,
+                        SYNC_INTERVAL_SECONDS,
+                        SYNC_INTERVAL_SECONDS,
+                        TimeUnit.SECONDS);
         log.info("ConfigMapConfigRefresher started");
     }
 
@@ -242,8 +282,8 @@ public class ConfigMapConfigRefresher implements StreamMQConfigRefresher, Runnab
         }
         boolean changed = false;
 
-        String maxReconsumeTimesStr = data.get("maxReconsumeTimes");
-        String retryIntervalsStr = data.get("retryIntervals");
+        String maxReconsumeTimesStr = data.get(CM_KEY_MAX_RECONSUME_TIMES);
+        String retryIntervalsStr = data.get(CM_KEY_RETRY_INTERVALS);
         if (maxReconsumeTimesStr != null) {
             try {
                 int maxReconsumeTimes = Integer.parseInt(maxReconsumeTimesStr.trim());
@@ -255,8 +295,8 @@ public class ConfigMapConfigRefresher implements StreamMQConfigRefresher, Runnab
             }
         }
 
-        String consumerThreadMinStr = data.get("consumerThreadMin");
-        String consumerThreadMaxStr = data.get("consumerThreadMax");
+        String consumerThreadMinStr = data.get(CM_KEY_CONSUMER_THREAD_MIN);
+        String consumerThreadMaxStr = data.get(CM_KEY_CONSUMER_THREAD_MAX);
         if (consumerThreadMinStr != null && consumerThreadMaxStr != null) {
             try {
                 int min = Integer.parseInt(consumerThreadMinStr.trim());
@@ -271,14 +311,18 @@ public class ConfigMapConfigRefresher implements StreamMQConfigRefresher, Runnab
             }
         }
 
-        String retryScanMsStr = data.get("retryScanMs");
-        String delayScanMsStr = data.get("delayScanMs");
+        String retryScanMsStr = data.get(CM_KEY_RETRY_SCAN_MS);
+        String delayScanMsStr = data.get(CM_KEY_DELAY_SCAN_MS);
         if (retryScanMsStr != null || delayScanMsStr != null) {
             try {
                 long retryScanMs =
-                        retryScanMsStr != null ? Long.parseLong(retryScanMsStr.trim()) : 5000L;
+                        retryScanMsStr != null
+                                ? Long.parseLong(retryScanMsStr.trim())
+                                : io.github.streammq.core.StreamMQConstants.DEFAULT_PEL_CLAIM_SCAN_INTERVAL_MS;
                 long delayScanMs =
-                        delayScanMsStr != null ? Long.parseLong(delayScanMsStr.trim()) : 1000L;
+                        delayScanMsStr != null
+                                ? Long.parseLong(delayScanMsStr.trim())
+                                : io.github.streammq.core.StreamMQConstants.DEFAULT_SCAN_INTERVAL_MS;
                 refreshScanInterval(retryScanMs, delayScanMs);
                 changed = true;
             } catch (NumberFormatException e) {
@@ -365,9 +409,9 @@ public class ConfigMapConfigRefresher implements StreamMQConfigRefresher, Runnab
 
     private void addDefaultWatchConfig() {
         var defaultConfig = new ConfigMapWatchConfig();
-        defaultConfig.setNamespace("default");
-        defaultConfig.setName("streammq-consumer-config");
-        defaultConfig.setRefreshIntervalMs(5000);
+        defaultConfig.setNamespace(DEFAULT_WATCH_NAMESPACE);
+        defaultConfig.setName(DEFAULT_WATCH_CONFIG_MAP_NAME);
+        defaultConfig.setRefreshIntervalMs(DEFAULT_WATCH_REFRESH_INTERVAL_MS);
         defaultConfig.setEnabled(true);
         watchConfigs.add(defaultConfig);
     }
@@ -384,9 +428,9 @@ public class ConfigMapConfigRefresher implements StreamMQConfigRefresher, Runnab
 
     /** ConfigMap watch configuration. */
     public static class ConfigMapWatchConfig {
-        private String namespace = "default";
-        private String name = "streammq-consumer-config";
-        private long refreshIntervalMs = 5000;
+        private String namespace = DEFAULT_WATCH_NAMESPACE;
+        private String name = DEFAULT_WATCH_CONFIG_MAP_NAME;
+        private long refreshIntervalMs = DEFAULT_WATCH_REFRESH_INTERVAL_MS;
         private boolean enabled = true;
 
         public String getNamespace() {

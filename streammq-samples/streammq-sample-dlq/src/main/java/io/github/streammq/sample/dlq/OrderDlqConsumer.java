@@ -25,8 +25,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @StreamMQDlqConsumer(
-        consumerGroup = "order-consumer-group",
-        namespace = "dlq",
+        consumerGroup = SampleConstants.CONSUMER_GROUP,
+        namespace = SampleConstants.NAMESPACE,
         maxDlqRetryAttempts = 3,
         dlqRetryDelayMs = 10000)
 public class OrderDlqConsumer extends AbstractDlqMessageConsumer<String> {

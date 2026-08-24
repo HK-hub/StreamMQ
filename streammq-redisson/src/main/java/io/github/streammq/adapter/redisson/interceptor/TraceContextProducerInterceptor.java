@@ -1,5 +1,6 @@
 package io.github.streammq.adapter.redisson.interceptor;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.interceptor.TraceCollector;
 import io.github.streammq.core.message.Message;
@@ -32,7 +33,7 @@ public class TraceContextProducerInterceptor implements ProducerInterceptor {
             LoggerFactory.getLogger(TraceContextProducerInterceptor.class);
 
     /** userProperties 中 traceId 的键名 */
-    public static final String TRACE_ID_KEY = "traceId";
+    public static final String TRACE_ID_KEY = StreamMQConstants.TRACE_ATTR_TRACE_ID;
 
     private final TraceCollector traceCollector;
 

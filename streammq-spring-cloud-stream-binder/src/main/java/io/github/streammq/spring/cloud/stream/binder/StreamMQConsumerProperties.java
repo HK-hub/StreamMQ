@@ -28,13 +28,16 @@ package io.github.streammq.spring.cloud.stream.binder;
 public class StreamMQConsumerProperties {
 
     /** 默认 Tag 过滤表达式 */
-    public static final String DEFAULT_SELECTOR_EXPRESSION = "*";
+    public static final String DEFAULT_SELECTOR_EXPRESSION =
+            io.github.streammq.core.StreamMQConstants.SELECTOR_WILDCARD;
 
     /** 默认过滤类型 */
-    public static final String DEFAULT_SELECTOR_TYPE = "TAG";
+    public static final String DEFAULT_SELECTOR_TYPE =
+            StreamMQBinderConstants.DEFAULT_SELECTOR_TYPE_CODE;
 
     /** 默认顺序消费分区数 */
-    public static final int DEFAULT_SHARD_COUNT = 4;
+    public static final int DEFAULT_SHARD_COUNT =
+            io.github.streammq.core.StreamMQConstants.DEFAULT_SHARD_COUNT;
 
     /** 默认值标记：表示未设置，使用 Binder 全局默认值 */
     public static final int UNSET = -1;

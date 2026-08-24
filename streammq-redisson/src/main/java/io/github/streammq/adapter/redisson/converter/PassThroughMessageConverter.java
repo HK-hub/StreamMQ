@@ -39,38 +39,38 @@ import java.util.*;
 public class PassThroughMessageConverter extends AbstractMessageConverter {
 
     // ================================================================
-    // 字段名常量
+    // 字段名常量（统一委托到 {@link MessageFields}，保证各转换器协议一致）
     // ================================================================
 
     /** Stream Entry 字段名：消息体（原始字符串） */
-    public static final String FIELD_BODY = "body";
+    public static final String FIELD_BODY = MessageFields.BODY;
 
     /** Stream Entry 字段名：消息体类型全限定名 */
-    public static final String FIELD_BODY_TYPE = "bodyType";
+    public static final String FIELD_BODY_TYPE = MessageFields.BODY_TYPE;
 
     /** Stream Entry 字段名：标签 */
-    public static final String FIELD_TAG = "tag";
+    public static final String FIELD_TAG = MessageFields.TAG;
 
     /** Stream Entry 字段名：业务键 */
-    public static final String FIELD_KEYS = "keys";
+    public static final String FIELD_KEYS = MessageFields.KEYS;
 
     /** Stream Entry 字段名：分片键 */
-    public static final String FIELD_SHARDING_KEY = "shardingKey";
+    public static final String FIELD_SHARDING_KEY = MessageFields.SHARDING_KEY;
 
     /** Stream Entry 字段名：属性 JSON（sys + user 合并） */
-    public static final String FIELD_PROPS = "props";
+    public static final String FIELD_PROPS = MessageFields.PROPS;
 
     /** Stream Entry 字段名：出生时间戳（毫秒） */
-    public static final String FIELD_BORN_TS = "bornTs";
+    public static final String FIELD_BORN_TS = MessageFields.BORN_TS;
 
     /** Stream Entry 字段名：出生主机 */
-    public static final String FIELD_BORN_HOST = "bornHost";
+    public static final String FIELD_BORN_HOST = MessageFields.BORN_HOST;
 
     /** Stream Entry 字段名：事务 ID */
-    public static final String FIELD_TX_ID = "txId";
+    public static final String FIELD_TX_ID = MessageFields.TX_ID;
 
     /** Stream Entry 字段名：重试次数 */
-    public static final String FIELD_RETRY_TIMES = "retryTimes";
+    public static final String FIELD_RETRY_TIMES = MessageFields.RETRY_TIMES;
 
     /** {@inheritDoc} */
     @Override

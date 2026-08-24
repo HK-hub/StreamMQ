@@ -56,4 +56,8 @@ public class DlqConfig {
     /** 重试延迟上限（毫秒，默认 300000 = 5 分钟） */
     @Builder.Default
     private long dlqRetryMaxDelayMs = StreamMQConstants.DEFAULT_DLQ_RETRY_MAX_DELAY_MS;
+
+    /** 重试最小延迟下限（毫秒，默认 1000 = 1 秒），防止退避计算出过短的间隔 */
+    @Builder.Default
+    private long minRetryDelayMs = StreamMQConstants.MIN_DLQ_RETRY_DELAY_MS;
 }

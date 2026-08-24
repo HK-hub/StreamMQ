@@ -37,28 +37,33 @@ import org.springframework.messaging.support.ErrorMessage;
 public class StreamMQMessageHandler implements MessageHandler {
 
     /** 消息头：业务键（keys） */
-    public static final String HEADER_KEYS = "streammq_keys";
+    public static final String HEADER_KEYS = StreamMQBinderConstants.HEADER_PREFIX + "keys";
 
     /** 消息头：分片键（shardingKey） */
-    public static final String HEADER_SHARDING_KEY = "streammq_shardingKey";
+    public static final String HEADER_SHARDING_KEY =
+            StreamMQBinderConstants.HEADER_PREFIX + "shardingKey";
 
     /** 消息头：消息 ID */
-    public static final String HEADER_MESSAGE_ID = "streammq_messageId";
+    public static final String HEADER_MESSAGE_ID =
+            StreamMQBinderConstants.HEADER_PREFIX + "messageId";
 
     /** 消息头：Topic */
-    public static final String HEADER_TOPIC = "streammq_topic";
+    public static final String HEADER_TOPIC = StreamMQBinderConstants.HEADER_PREFIX + "topic";
 
     /** 消息头：Tag */
-    public static final String HEADER_TAG = "streammq_tag";
+    public static final String HEADER_TAG = StreamMQBinderConstants.HEADER_PREFIX + "tag";
 
     /** 消息头：重试消费次数 */
-    public static final String HEADER_RECONSUME_TIMES = "streammq_reconsumeTimes";
+    public static final String HEADER_RECONSUME_TIMES =
+            StreamMQBinderConstants.HEADER_PREFIX + "reconsumeTimes";
 
     /** 消息头：出生时间戳 */
-    public static final String HEADER_BORN_TIMESTAMP = "streammq_bornTimestamp";
+    public static final String HEADER_BORN_TIMESTAMP =
+            StreamMQBinderConstants.HEADER_PREFIX + "bornTimestamp";
 
     /** 消息头：出生主机 */
-    public static final String HEADER_BORN_HOST = "streammq_bornHost";
+    public static final String HEADER_BORN_HOST =
+            StreamMQBinderConstants.HEADER_PREFIX + "bornHost";
 
     /** 用户属性键：Spring Messaging contentType（透传内容类型，确保消费端能正确反序列化） */
     public static final String USER_PROPERTY_CONTENT_TYPE = "contentType";
@@ -176,15 +181,6 @@ public class StreamMQMessageHandler implements MessageHandler {
         return builder.build();
     }
 
-    /** 默认 contentType：纯文本 */
-    private static final String CONTENT_TYPE_TEXT = "text/plain";
-
-    /** 默认 contentType：JSON */
-    private static final String CONTENT_TYPE_JSON = "application/json";
-
-    /** 默认 contentType：二进制 */
-    private static final String CONTENT_TYPE_OCTET_STREAM = "application/octet-stream";
-
     /**
      * 根据 payload 类型推断默认 contentType。
      *
@@ -201,12 +197,12 @@ public class StreamMQMessageHandler implements MessageHandler {
      */
     private String inferContentType(Object payload) {
         if (payload instanceof String) {
-            return CONTENT_TYPE_TEXT;
+            return StreamMQBinderConstants.CONTENT_TYPE_TEXT_PLAIN;
         }
         if (payload instanceof byte[]) {
-            return CONTENT_TYPE_OCTET_STREAM;
+            return StreamMQBinderConstants.CONTENT_TYPE_OCTET_STREAM;
         }
-        return CONTENT_TYPE_JSON;
+        return StreamMQBinderConstants.CONTENT_TYPE_APPLICATION_JSON;
     }
 
     /**
@@ -280,7 +276,7 @@ public class StreamMQMessageHandler implements MessageHandler {
                 && !MessageHeaders.CONTENT_TYPE.equals(headerName)
                 && !MessageHeaders.REPLY_CHANNEL.equals(headerName)
                 && !MessageHeaders.ERROR_CHANNEL.equals(headerName)
-                && !headerName.startsWith("streammq_");
+                && !headerName.startsWith(StreamMQBinderConstants.HEADER_PREFIX);
     }
 
     /**

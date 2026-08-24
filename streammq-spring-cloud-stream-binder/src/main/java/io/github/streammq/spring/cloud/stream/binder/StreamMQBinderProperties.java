@@ -1,5 +1,6 @@
 package io.github.streammq.spring.cloud.stream.binder;
 
+import io.github.streammq.core.StreamMQConstants;
 import lombok.Data;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
@@ -30,7 +31,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-@ConfigurationProperties(prefix = "spring.cloud.stream.streammq.binder")
+@ConfigurationProperties(prefix = StreamMQBinderConstants.BINDER_PREFIX)
 @Data
 public class StreamMQBinderProperties {
 
@@ -43,24 +44,24 @@ public class StreamMQBinderProperties {
      */
     private String namespace = "";
 
-    /** 默认发送超时（毫秒），默认 3000 */
-    private long sendTimeout = 3000L;
+    /** 默认发送超时（毫秒） */
+    private long sendTimeout = StreamMQConstants.DEFAULT_SEND_TIMEOUT_MS;
 
-    /** 默认同步发送重试次数，默认 2 */
-    private int retryTimes = 2;
+    /** 默认同步发送重试次数 */
+    private int retryTimes = StreamMQConstants.DEFAULT_SYNC_RETRY_TIMES;
 
-    /** 最小消费线程数，默认 1 */
-    private int consumeThreadMin = 1;
+    /** 最小消费线程数 */
+    private int consumeThreadMin = StreamMQConstants.DEFAULT_CONSUME_THREAD_MIN;
 
-    /** 最大消费线程数，默认 64 */
-    private int consumeThreadMax = 64;
+    /** 最大消费线程数 */
+    private int consumeThreadMax = StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX;
 
-    /** 最大重试消费次数，默认 16 */
-    private int maxReconsumeTimes = 16;
+    /** 最大重试消费次数 */
+    private int maxReconsumeTimes = StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
 
-    /** 单条消息消费超时（毫秒），默认 30000 */
-    private long consumeTimeout = 30000L;
+    /** 单条消息消费超时（毫秒） */
+    private long consumeTimeout = StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS;
 
-    /** 单次拉取批量大小，默认 32 */
-    private int pullBatchSize = 32;
+    /** 单次拉取批量大小 */
+    private int pullBatchSize = StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE;
 }

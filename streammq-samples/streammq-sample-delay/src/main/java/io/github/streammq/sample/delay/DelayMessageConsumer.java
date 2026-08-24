@@ -19,8 +19,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @StreamMQConsumer(
-        topic = "delay-order-topic",
-        consumerGroup = "delay-order-consumer-group",
+        topic = SampleConstants.TOPIC,
+        consumerGroup = SampleConstants.CONSUMER_GROUP,
         maxReconsumeTimes = 3)
 public class DelayMessageConsumer implements StreamMessageConcurrentlyConsumer<String> {
 

@@ -80,7 +80,7 @@ class TracingSampleIT {
     }
 
     /** 测试专用消息收集器，记录 traceparent 属性。 */
-    @StreamMQConsumer(topic = "tracing-events", consumerGroup = TEST_CONSUMER_GROUP)
+    @StreamMQConsumer(topic = SampleConstants.TOPIC, consumerGroup = TEST_CONSUMER_GROUP)
     static class TestEventCollector implements StreamMessageConcurrentlyConsumer<String> {
 
         final ConcurrentLinkedQueue<Message<String>> receivedMessages =

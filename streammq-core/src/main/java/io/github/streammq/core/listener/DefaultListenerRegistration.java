@@ -18,6 +18,12 @@ import lombok.Setter;
 @Getter
 public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
 
+    /** DLQ 监听器注册 key 前缀 */
+    private static final String DLQ_KEY_PREFIX = "dlq:";
+
+    /** 注册 key 中 topic 与 group 的分隔符 */
+    private static final String KEY_SEPARATOR = ":";
+
     private final ListenerType type;
     private final StreamMessageConsumer<T> consumer;
     private final String topic;
@@ -110,6 +116,6 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
 
     @Override
     public String key() {
-        return (dlqMode ? "dlq:" : "") + topic + ":" + group;
+        return (dlqMode ? DLQ_KEY_PREFIX : "") + topic + KEY_SEPARATOR + group;
     }
 }

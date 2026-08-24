@@ -2,6 +2,7 @@ package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.metrics.MicrometerStreamMQMetrics;
 import io.github.streammq.core.metrics.StreamMQMetrics;
+import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -30,9 +31,9 @@ import org.springframework.context.annotation.Configuration;
         org.springframework.boot.actuate.autoconfigure.metrics.MetricsAutoConfiguration.class)
 @ConditionalOnClass(MeterRegistry.class)
 @ConditionalOnProperty(
-        prefix = "streammq",
-        name = "enabled",
-        havingValue = "true",
+        prefix = StreamMQSpringConstants.PROP_PREFIX,
+        name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+        havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
         matchIfMissing = true)
 public class StreamMQMetricsAutoConfiguration {
 

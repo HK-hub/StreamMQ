@@ -4,6 +4,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.fabric8.kubernetes.client.CustomResource;
+import io.github.streammq.core.StreamMQConstants;
 import java.util.List;
 import java.util.Map;
 import lombok.Data;
@@ -72,8 +73,8 @@ public class StreamMQCluster extends CustomResource {
         /** 功能配置 */
         private Config config;
 
-        /** 消费者副本数（默认 3） */
-        private Integer replicas = 3;
+        /** 消费者副本数 */
+        private Integer replicas = StreamMQK8sDefaults.DEFAULT_REPLICAS;
 
         /** 资源限制与请求 */
         private Resources resources;
@@ -150,7 +151,7 @@ public class StreamMQCluster extends CustomResource {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class Backend {
         /** 存储后端类型：redis */
-        private String type = "redis";
+        private String type = StreamMQK8sDefaults.BACKEND_TYPE_REDIS;
 
         /** Redis 连接配置 */
         private Redis redis;
@@ -188,13 +189,13 @@ public class StreamMQCluster extends CustomResource {
             private String password;
 
             /** 连接池大小 */
-            private Integer poolSize = 50;
+            private Integer poolSize = StreamMQK8sDefaults.DEFAULT_POOL_SIZE;
 
             /** 连接超时（毫秒） */
-            private Integer connectTimeoutMs = 5000;
+            private Integer connectTimeoutMs = StreamMQK8sDefaults.DEFAULT_CONNECT_TIMEOUT_MS;
 
             /** 读取超时（毫秒） */
-            private Integer readTimeoutMs = 3000;
+            private Integer readTimeoutMs = StreamMQK8sDefaults.DEFAULT_READ_TIMEOUT_MS;
 
             public String getAddress() {
                 return address;
@@ -306,8 +307,8 @@ public class StreamMQCluster extends CustomResource {
         @JsonIgnoreProperties(ignoreUnknown = true)
         @JsonInclude(JsonInclude.Include.NON_NULL)
         public static class Retry {
-            /** 最大重试次数（默认 16） */
-            private Integer maxReconsumeTimes = 16;
+            /** 最大重试次数 */
+            private Integer maxReconsumeTimes = StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
 
             /** 重试间隔毫秒数组（长度需与 maxReconsumeTimes 一致） */
             private Long[] retryIntervals;
@@ -360,14 +361,14 @@ public class StreamMQCluster extends CustomResource {
         @JsonIgnoreProperties(ignoreUnknown = true)
         @JsonInclude(JsonInclude.Include.NON_NULL)
         public static class Tracing {
-            /** 是否启用链路追踪（默认 false） */
+            /** 是否启用链路追踪 */
             private Boolean enabled = false;
 
-            /** 采样率 0.0-1.0（默认 0.1） */
-            private Double sampleRate = 0.1;
+            /** 采样率 0.0-1.0 */
+            private Double sampleRate = StreamMQK8sDefaults.DEFAULT_SAMPLE_RATE;
 
             /** 导出器类型：otlp, zipkin, jaeger */
-            private String exporter = "otlp";
+            private String exporter = StreamMQK8sDefaults.EXPORTER_OTLP;
 
             /** 导出器端点地址 */
             private String endpoint;
@@ -413,10 +414,10 @@ public class StreamMQCluster extends CustomResource {
             private Boolean enabled = false;
 
             /** 压缩算法：gzip, lz4, snappy, zstd */
-            private String algorithm = "gzip";
+            private String algorithm = StreamMQK8sDefaults.COMPRESSION_GZIP;
 
             /** 压缩阈值（字节），超过此大小触发压缩 */
-            private Integer threshold = 1024;
+            private Integer threshold = StreamMQK8sDefaults.DEFAULT_COMPRESS_THRESHOLD_BYTES;
 
             public Boolean getEnabled() {
                 return enabled;
@@ -449,16 +450,16 @@ public class StreamMQCluster extends CustomResource {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class Resources {
         /** CPU 请求核数（如 "500m"） */
-        private String cpuRequest = "500m";
+        private String cpuRequest = StreamMQK8sDefaults.RESOURCE_CPU_REQUEST;
 
         /** CPU 限制核数（如 "1000m"） */
-        private String cpuLimit = "1000m";
+        private String cpuLimit = StreamMQK8sDefaults.RESOURCE_CPU_LIMIT;
 
         /** 内存请求（如 "512Mi"） */
-        private String memoryRequest = "512Mi";
+        private String memoryRequest = StreamMQK8sDefaults.RESOURCE_MEMORY_REQUEST;
 
         /** 内存限制（如 "1Gi"） */
-        private String memoryLimit = "1Gi";
+        private String memoryLimit = StreamMQK8sDefaults.RESOURCE_MEMORY_LIMIT;
 
         public String getCpuRequest() {
             return cpuRequest;
@@ -497,32 +498,35 @@ public class StreamMQCluster extends CustomResource {
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class AutoScale {
-        /** 是否启用自动扩缩容（默认 false） */
+        /** 是否启用自动扩缩容 */
         private Boolean enabled = false;
 
-        /** 最小副本数（默认 1） */
-        private Integer minReplicas = 1;
+        /** 最小副本数 */
+        private Integer minReplicas = StreamMQK8sDefaults.AUTOSCALE_MIN_REPLICAS;
 
-        /** 最大副本数（默认 10） */
-        private Integer maxReplicas = 10;
+        /** 最大副本数 */
+        private Integer maxReplicas = StreamMQK8sDefaults.AUTOSCALE_MAX_REPLICAS;
 
-        /** 目标消费积压阈值（每实例积压消息数，默认 100） */
-        private Integer targetLag = 100;
+        /** 目标消费积压阈值（每实例积压消息数） */
+        private Integer targetLag = StreamMQK8sDefaults.AUTOSCALE_TARGET_LAG;
 
-        /** 扩容阈值百分比（默认 80%） */
-        private Integer scaleUpThreshold = 80;
+        /** 扩容阈值百分比 */
+        private Integer scaleUpThreshold = StreamMQK8sDefaults.AUTOSCALE_SCALE_UP_THRESHOLD;
 
-        /** 缩容阈值百分比（默认 20%） */
-        private Integer scaleDownThreshold = 20;
+        /** 缩容阈值百分比 */
+        private Integer scaleDownThreshold = StreamMQK8sDefaults.AUTOSCALE_SCALE_DOWN_THRESHOLD;
 
-        /** 稳定窗口秒数（防抖动，默认 300s） */
-        private Integer stabilizationWindowSeconds = 300;
+        /** 稳定窗口秒数（防抖动） */
+        private Integer stabilizationWindowSeconds =
+                StreamMQK8sDefaults.AUTOSCALE_STABILIZATION_WINDOW_SECONDS;
 
         /** 扩容冷却时间（秒） */
-        private Integer scaleUpCooldownSeconds = 60;
+        private Integer scaleUpCooldownSeconds =
+                StreamMQK8sDefaults.AUTOSCALE_SCALE_UP_COOLDOWN_SECONDS;
 
         /** 缩容冷却时间（秒） */
-        private Integer scaleDownCooldownSeconds = 300;
+        private Integer scaleDownCooldownSeconds =
+                StreamMQK8sDefaults.AUTOSCALE_SCALE_DOWN_COOLDOWN_SECONDS;
 
         public Boolean getEnabled() {
             return enabled;
@@ -602,7 +606,7 @@ public class StreamMQCluster extends CustomResource {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class Status {
         /** 集群状态：Pending, Ready, NotReady, Updating, Failed */
-        private String phase = "Pending";
+        private String phase = StreamMQK8sDefaults.PHASE_PENDING;
 
         /** 当前副本数 */
         private Integer replicas = 0;

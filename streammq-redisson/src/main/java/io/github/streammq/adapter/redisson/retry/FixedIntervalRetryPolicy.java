@@ -1,5 +1,6 @@
 package io.github.streammq.adapter.redisson.retry;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.policy.RetryPolicy;
 import java.time.Duration;
@@ -23,10 +24,11 @@ import java.util.Objects;
 public class FixedIntervalRetryPolicy implements RetryPolicy {
 
     /** 默认重试间隔（毫秒） */
-    public static final long DEFAULT_INTERVAL_MS = 10_000L;
+    public static final long DEFAULT_INTERVAL_MS = StreamMQConstants.DEFAULT_RETRY_INTERVAL_MS;
 
     /** 默认最大重试次数 */
-    public static final int DEFAULT_MAX_RETRIES = 16;
+    public static final int DEFAULT_MAX_RETRIES =
+            StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
 
     private final long intervalMs;
     private final int maxRetries;

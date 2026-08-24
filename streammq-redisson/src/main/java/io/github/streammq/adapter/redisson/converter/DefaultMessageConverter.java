@@ -51,47 +51,48 @@ import lombok.Setter;
 public class DefaultMessageConverter extends AbstractMessageConverter {
 
     // ================================================================
-    // 字段名常量（public 供外部如 RedissonStreamProducer / RedissonStreamListener 引用）
+    // 字段名常量（public 供外部如 RedissonStreamProducer / RedissonStreamListener 引用，
+    // 统一委托到 {@link MessageFields}，保证各转换器协议一致）
     // ================================================================
 
     /** Stream Entry 字段名：消息体（Base64 编码） */
-    public static final String FIELD_BODY = "body";
+    public static final String FIELD_BODY = MessageFields.BODY;
 
     /** Stream Entry 字段名：消息体类型全限定名 */
-    public static final String FIELD_BODY_TYPE = "bodyType";
+    public static final String FIELD_BODY_TYPE = MessageFields.BODY_TYPE;
 
     /** Stream Entry 字段名：消息体类型简称 */
-    public static final String FIELD_BODY_TYPE_NAME = "bodyTypeName";
+    public static final String FIELD_BODY_TYPE_NAME = MessageFields.BODY_TYPE_NAME;
 
     /** Stream Entry 字段名：标签 */
-    public static final String FIELD_TAG = "tag";
+    public static final String FIELD_TAG = MessageFields.TAG;
 
     /** Stream Entry 字段名：业务键 */
-    public static final String FIELD_KEYS = "keys";
+    public static final String FIELD_KEYS = MessageFields.KEYS;
 
     /** Stream Entry 字段名：分片键 */
-    public static final String FIELD_SHARDING_KEY = "shardingKey";
+    public static final String FIELD_SHARDING_KEY = MessageFields.SHARDING_KEY;
 
     /** Stream Entry 字段名：属性 JSON（sys + user 合并） */
-    public static final String FIELD_PROPS = "props";
+    public static final String FIELD_PROPS = MessageFields.PROPS;
 
     /** Stream Entry 字段名：出生时间戳（毫秒） */
-    public static final String FIELD_BORN_TS = "bornTs";
+    public static final String FIELD_BORN_TS = MessageFields.BORN_TS;
 
     /** Stream Entry 字段名：出生主机 */
-    public static final String FIELD_BORN_HOST = "bornHost";
+    public static final String FIELD_BORN_HOST = MessageFields.BORN_HOST;
 
     /** Stream Entry 字段名：重试次数 */
-    public static final String FIELD_RETRY_TIMES = "retryTimes";
+    public static final String FIELD_RETRY_TIMES = MessageFields.RETRY_TIMES;
 
     /** Stream Entry 字段名：事务 ID */
-    public static final String FIELD_TX_ID = "txId";
+    public static final String FIELD_TX_ID = MessageFields.TX_ID;
 
     /** Stream Entry 字段名：原始 Topic（重试/DLQ 场景） */
-    public static final String FIELD_ORIGIN_TOPIC = "originTopic";
+    public static final String FIELD_ORIGIN_TOPIC = MessageFields.ORIGIN_TOPIC;
 
     /** Stream Entry 字段名：压缩算法标识（"gzip" 或旧格式 "true"） */
-    public static final String FIELD_COMPRESSED = "compressed";
+    public static final String FIELD_COMPRESSED = MessageFields.COMPRESSED;
 
     /** {@inheritDoc} */
     @Override
@@ -249,7 +250,8 @@ public class DefaultMessageConverter extends AbstractMessageConverter {
                 bodyBytes = decompressBody(bodyBytes, compressedFlag);
             }
             if (targetType == byte[].class
-                    || targetType == Object.class && "[B".equals(bodyTypeField)) {
+                    || targetType == Object.class
+                            && MessageFields.BYTE_ARRAY_DESCRIPTOR.equals(bodyTypeField)) {
                 message.setBody((T) bodyBytes);
                 return;
             }
@@ -304,6 +306,12 @@ public class DefaultMessageConverter extends AbstractMessageConverter {
     // 压缩解压 —— 旧格式 ("true") + 新格式 (codec 名称) + 注册表
     // ================================================================
 
+    /** 旧版压缩标识值（新格式为 codec 名称，如 gzip） */
+    private static final String LEGACY_COMPRESSED_FLAG = "true";
+
+    /** Converter 标识名称 */
+    private static final String CONVERTER_NAME = "default";
+
     /**
      * 按压缩标识字符串解压消息体。
      *
@@ -321,7 +329,7 @@ public class DefaultMessageConverter extends AbstractMessageConverter {
      * @throws SerializationException 当无法找到 Codec 进行解压时
      */
     private byte[] decompressBody(byte[] compressedBytes, String compressedFlag) {
-        if ("true".equals(compressedFlag)) {
+        if (LEGACY_COMPRESSED_FLAG.equals(compressedFlag)) {
             if (Objects.isNull(compressionCodec)) {
                 throw new SerializationException(
                         "Message body is marked as compressed (legacy format) but no"
@@ -359,7 +367,7 @@ public class DefaultMessageConverter extends AbstractMessageConverter {
      */
     @Override
     public String name() {
-        return "default";
+        return CONVERTER_NAME;
     }
 
     // ================================================================

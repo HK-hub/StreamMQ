@@ -27,7 +27,7 @@ import org.springframework.stereotype.Component;
  * @since 0.1.0
  */
 @Component
-@StreamMQTransactionConsumer(transactionGroup = "default-tx-group")
+@StreamMQTransactionConsumer(transactionGroup = SampleConstants.TRANSACTION_GROUP)
 public class OrderTransactionChecker implements TransactionChecker<String> {
 
     private static final Logger log = LoggerFactory.getLogger(OrderTransactionChecker.class);

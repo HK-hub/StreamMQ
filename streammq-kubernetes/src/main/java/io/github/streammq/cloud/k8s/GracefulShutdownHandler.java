@@ -1,5 +1,6 @@
 package io.github.streammq.cloud.k8s;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.listener.StreamMQListenerContainer;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -29,6 +30,9 @@ import org.springframework.beans.factory.ObjectProvider;
  */
 @Slf4j
 public class GracefulShutdownHandler implements DisposableBean {
+
+    /** in-flight 消息等待宽限期上限（毫秒） */
+    private static final long INFLIGHT_GRACE_CAP_MS = 1_000L;
 
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
@@ -96,11 +100,14 @@ public class GracefulShutdownHandler implements DisposableBean {
      * @param container 监听器容器
      */
     private void waitForInFlightMessages(StreamMQListenerContainer container) {
-        long gracePeriod = Math.min(properties.getGracefulShutdownTimeoutMs(), 1000L);
+        long gracePeriod =
+                Math.min(
+                        properties.getGracefulShutdownTimeoutMs(),
+                        INFLIGHT_GRACE_CAP_MS);
         long deadline = System.currentTimeMillis() + gracePeriod;
         while (System.currentTimeMillis() < deadline) {
             try {
-                Thread.sleep(100L);
+                Thread.sleep(StreamMQConstants.DEFAULT_PAUSED_SLEEP_MS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 log.warn("Interrupted while waiting for in-flight messages to complete");

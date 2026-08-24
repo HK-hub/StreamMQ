@@ -3,6 +3,7 @@ package io.github.streammq.cloud.k8s.autoscaler;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.github.streammq.cloud.k8s.HpaMetricsProvider;
 import io.github.streammq.cloud.k8s.operator.StreamMQCluster;
+import io.github.streammq.cloud.k8s.operator.StreamMQK8sDefaults;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -41,26 +42,45 @@ import org.springframework.stereotype.Component;
 @Component
 public class HpaAutoScaler implements InitializingBean, DisposableBean {
 
+    /** 消费者组后缀约定 */
+    private static final String GROUP_SUFFIX = "-cg";
+
+    /** 扩缩方向：无操作 */
+    private static final String DIRECTION_NONE = "none";
+
+    /** 扩缩方向：扩容 */
+    private static final String DIRECTION_UP = "up";
+
+    /** 扩缩方向：缩容 */
+    private static final String DIRECTION_DOWN = "down";
+
     @Autowired(required = false)
     private KubernetesClient kubernetesClient;
 
     @Autowired private HpaMetricsProvider metricsProvider;
 
-    private long syncIntervalSeconds = 30;
+    /** 同步间隔（秒） */
+    private long syncIntervalSeconds = StreamMQK8sDefaults.DEFAULT_RECONCILE_INTERVAL_SECONDS;
 
-    private long defaultTargetLag = 100;
+    /** 默认目标积压 */
+    private long defaultTargetLag = StreamMQK8sDefaults.AUTOSCALE_TARGET_LAG;
 
-    private int scaleUpThreshold = 80;
+    /** 默认扩容阈值百分比 */
+    private int scaleUpThreshold = StreamMQK8sDefaults.AUTOSCALE_SCALE_UP_THRESHOLD;
 
-    private int scaleDownThreshold = 20;
+    /** 默认缩容阈值百分比 */
+    private int scaleDownThreshold = StreamMQK8sDefaults.AUTOSCALE_SCALE_DOWN_THRESHOLD;
 
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor(
                     r -> {
-                        Thread t = new Thread(r, "streammq-hpa-scaler");
+                        Thread t = new Thread(r, THREAD_HPA_SCALER);
                         t.setDaemon(true);
                         return t;
                     });
+
+    /** HPA 调度线程名 */
+    private static final String THREAD_HPA_SCALER = "streammq-hpa-scaler";
 
     private ScheduledFuture<?> scanFuture;
 
@@ -110,7 +130,8 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
         }
         scheduler.shutdown();
         try {
-            if (!scheduler.awaitTermination(10, TimeUnit.SECONDS)) {
+            if (!scheduler.awaitTermination(
+                    StreamMQK8sDefaults.OPERATOR_AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
                 scheduler.shutdownNow();
             }
         } catch (InterruptedException e) {
@@ -163,8 +184,14 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
             return;
         }
 
-        int minReplicas = autoScale.getMinReplicas() != null ? autoScale.getMinReplicas() : 1;
-        int maxReplicas = autoScale.getMaxReplicas() != null ? autoScale.getMaxReplicas() : 10;
+        int minReplicas =
+                autoScale.getMinReplicas() != null
+                        ? autoScale.getMinReplicas()
+                        : StreamMQK8sDefaults.AUTOSCALE_MIN_REPLICAS;
+        int maxReplicas =
+                autoScale.getMaxReplicas() != null
+                        ? autoScale.getMaxReplicas()
+                        : StreamMQK8sDefaults.AUTOSCALE_MAX_REPLICAS;
         int targetLag =
                 autoScale.getTargetLag() != null
                         ? autoScale.getTargetLag()
@@ -180,24 +207,26 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
         int scaleUpCooldown =
                 autoScale.getScaleUpCooldownSeconds() != null
                         ? autoScale.getScaleUpCooldownSeconds()
-                        : 60;
+                        : StreamMQK8sDefaults.AUTOSCALE_SCALE_UP_COOLDOWN_SECONDS;
         int scaleDownCooldown =
                 autoScale.getScaleDownCooldownSeconds() != null
                         ? autoScale.getScaleDownCooldownSeconds()
-                        : 300;
+                        : StreamMQK8sDefaults.AUTOSCALE_SCALE_DOWN_COOLDOWN_SECONDS;
         int stabilizationSecs =
                 autoScale.getStabilizationWindowSeconds() != null
                         ? autoScale.getStabilizationWindowSeconds()
-                        : 300;
+                        : StreamMQK8sDefaults.AUTOSCALE_STABILIZATION_WINDOW_SECONDS;
 
         int currentReplicas = getCurrentReplicas(cluster);
         if (currentReplicas <= 0) {
             currentReplicas =
-                    cluster.getSpec().getReplicas() != null ? cluster.getSpec().getReplicas() : 3;
+                    cluster.getSpec().getReplicas() != null
+                            ? cluster.getSpec().getReplicas()
+                            : StreamMQK8sDefaults.DEFAULT_REPLICAS;
         }
 
         String topic = cluster.getMetadata().getName();
-        String group = cluster.getMetadata().getName() + "-cg";
+        String group = topic + GROUP_SUFFIX;
 
         long currentLag = metricsProvider.getConsumerLag(topic, group);
         double currentRate = metricsProvider.getConsumeRate(topic, group);
@@ -205,19 +234,19 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
         double targetLagVal = targetLag;
         double avgLag = currentLag;
         int desiredReplicas = currentReplicas;
-        String direction = "none";
+        String direction = DIRECTION_NONE;
 
         if (avgLag > targetLagVal * scaleUpPct / 100.0) {
             double ratio = avgLag / Math.max(targetLagVal, 1);
             desiredReplicas = Math.min(maxReplicas, (int) Math.ceil(currentReplicas * ratio));
-            direction = "up";
+            direction = DIRECTION_UP;
         } else if (avgLag < targetLagVal * scaleDownPct / 100.0) {
             double ratio = avgLag / Math.max(targetLagVal, 1);
             desiredReplicas = Math.max(minReplicas, (int) Math.floor(currentReplicas * ratio));
-            direction = "down";
+            direction = DIRECTION_DOWN;
         }
 
-        if ("none".equals(direction)) {
+        if (DIRECTION_NONE.equals(direction)) {
             stabilizationWindows.remove(key);
             return;
         }
@@ -254,7 +283,9 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
         String lastDir = lastScaleDirection.get(key);
         if (lastTime != null && lastDir != null && lastDir.equals(direction)) {
             long cooldownMs =
-                    "up".equals(direction) ? scaleUpCooldown * 1000L : scaleDownCooldown * 1000L;
+                    DIRECTION_UP.equals(direction)
+                            ? scaleUpCooldown * 1000L
+                            : scaleDownCooldown * 1000L;
             long elapsed = System.currentTimeMillis() - lastTime;
             if (elapsed < cooldownMs) {
                 log.debug(
@@ -312,7 +343,7 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
         if (cluster.getSpec().getReplicas() != null && cluster.getSpec().getReplicas() > 0) {
             return cluster.getSpec().getReplicas();
         }
-        return 3;
+        return StreamMQK8sDefaults.DEFAULT_REPLICAS;
     }
 
     private boolean isHpaEnabled(StreamMQCluster cluster) {

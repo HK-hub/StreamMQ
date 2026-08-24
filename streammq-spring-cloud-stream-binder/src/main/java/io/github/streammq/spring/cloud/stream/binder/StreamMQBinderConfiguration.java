@@ -54,9 +54,9 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass(StreamMessageTemplate.class)
 @ConditionalOnProperty(
-        prefix = "spring.cloud.stream.streammq.binder",
-        name = "enabled",
-        havingValue = "true",
+        prefix = StreamMQBinderConstants.ENABLED_PROPERTY_PREFIX,
+        name = StreamMQBinderConstants.PROP_NAME_ENABLED,
+        havingValue = StreamMQBinderConstants.PROP_VALUE_TRUE,
         matchIfMissing = true)
 @EnableConfigurationProperties({
     StreamMQBinderProperties.class,
@@ -101,8 +101,8 @@ public class StreamMQBinderConfiguration {
      * @return 健康检查指标
      */
     @Bean
-    @ConditionalOnMissingBean(name = "streamMQBinderHealthIndicator")
-    @ConditionalOnClass(name = "org.springframework.boot.actuate.health.AbstractHealthIndicator")
+    @ConditionalOnMissingBean(name = StreamMQBinderConstants.BEAN_BINDER_HEALTH_INDICATOR)
+    @ConditionalOnClass(name = StreamMQBinderConstants.ABSTRACT_HEALTH_INDICATOR_CLASS_NAME)
     public org.springframework.boot.actuate.health.HealthIndicator streamMQBinderHealthIndicator(
             StreamMQListenerContainer listenerContainer) {
         log.info("创建 StreamMQBinderHealthIndicator");

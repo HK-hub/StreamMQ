@@ -81,12 +81,48 @@ public final class StreamMQConstants {
     /** 默认背压队列容量（0=不启用背压） */
     public static final int DEFAULT_INFLIGHT_CAPACITY = 0;
 
+    /** 默认单次事务回查超时（毫秒） */
+    public static final long DEFAULT_CHECK_TIMEOUT_MS = 60_000L;
+
+    /** 默认心跳存活窗口（毫秒），超过该时间无心跳视为不活跃 */
+    public static final long DEFAULT_HEARTBEAT_ALIVE_WINDOW_MS = 30_000L;
+
+    /** 默认心跳上报间隔（毫秒） */
+    public static final long DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000L;
+
+    /** 默认消费者实例超时时间（毫秒） */
+    public static final long DEFAULT_INSTANCE_TIMEOUT_MS = 20_000L;
+
+    /** 调度失败重新入队退避间隔（毫秒） */
+    public static final long DEFAULT_FAILURE_REQUEUE_BACKOFF_MS = 5_000L;
+
+    /** 消费超时取消后的宽限期（毫秒） */
+    public static final long DEFAULT_TIMEOUT_CANCEL_GRACE_MS = 2_000L;
+
+    /** 默认固定间隔重试策略的间隔（毫秒） */
+    public static final long DEFAULT_RETRY_INTERVAL_MS = 10_000L;
+
+    /** 默认消费线程下限 */
+    public static final int DEFAULT_CONSUME_THREAD_MIN = 1;
+
+    /** 消费超时取消宽限期默认批量（占位，供配置对齐） */
+    public static final int DEFAULT_TRACE_MAX_READ_COUNT = 10_000;
+
+    /** DLQ 重试最小延迟下限（毫秒） */
+    public static final long MIN_DLQ_RETRY_DELAY_MS = 1_000L;
+
+    /** 诊断默认统计窗口（毫秒，5 分钟） */
+    public static final long DEFAULT_DIAGNOSTIC_WINDOW_MS = 5 * 60 * 1000L;
+
     // ==================== 消息大小限制 ====================
     /** Redis Stream 单条消息最大大小（字节），512MB。 实际建议不超过 1MB，超大消息会增加网络传输和内存压力。 */
     public static final long MAX_MESSAGE_SIZE_BYTES = 512L * 1024 * 1024;
 
     /** 推荐的消息体最大大小（字节），超过此值建议使用压缩或分片。 */
     public static final long RECOMMENDED_MAX_BODY_SIZE_BYTES = 1024L * 1024;
+
+    /** 默认消息体压缩阈值（字节），0 = 禁用压缩 */
+    public static final int DEFAULT_COMPRESS_THRESHOLD_BYTES = 0;
 
     // ==================== DLQ 配置默认值 ====================
     /** 默认 DLQ 失败策略实现类全限定名（LogAndDropDlqFailureStrategy） */
@@ -147,6 +183,9 @@ public final class StreamMQConstants {
     public static final String THREAD_RETRY_SCHEDULER = "streammq-retry-scheduler";
     public static final String THREAD_TXCHECK_SCHEDULER = "streammq-txcheck-scheduler";
     public static final String THREAD_DELAY_SCHEDULER = "streammq-delay-scheduler";
+    public static final String THREAD_PELCLAIM_SCHEDULER = "streammq-pelclaim-scheduler";
+    public static final String THREAD_HEARTBEAT_PREFIX = "streammq-hb-";
+    public static final String THREAD_PROCESS_PREFIX = "streammq-process-";
 
     // ==================== Bean 名前缀 ====================
     public static final String BEAN_PRODUCER_PREFIX = "streamMQTemplate-";
@@ -168,4 +207,50 @@ public final class StreamMQConstants {
 
     /** 事务状态 Hash 中半消息 Stream Entry ID 字段后缀 */
     public static final String TX_FIELD_HALF_ID_SUFFIX = ".halfId";
+
+    // ==================== 消息字段 / 协议常量 ====================
+    /** Stream Entry 字段：原始消息 ID（DLQ / 重试场景） */
+    public static final String FIELD_ORIGINAL_MESSAGE_ID = "originalMessageId";
+
+    /** 延时消息 Hash 载荷字段：目标 topic */
+    public static final String FIELD_TARGET_TOPIC = "targetTopic";
+
+    /** 延时消息 Hash 载荷字段：投递时间 */
+    public static final String FIELD_DELIVER_AT = "deliverAt";
+
+    /** DLQ 条目元数据字段：死信原因 */
+    public static final String FIELD_DLQ_REASON = "dlqReason";
+
+    /** 选择器通配符表达式（订阅全部消息） */
+    public static final String SELECTOR_WILDCARD = "*";
+
+    /** 广播消费模式下的生效分组分隔符（group:consumerName） */
+    public static final String BROADCAST_GROUP_SEPARATOR = ":";
+
+    /** 一致性哈希虚拟节点名称分隔符 */
+    public static final String VIRTUAL_NODE_SEPARATOR = "#";
+
+    // ==================== 追踪属性 Key（Trace 属性契约） ====================
+    /** 追踪属性：traceId */
+    public static final String TRACE_ATTR_TRACE_ID = "traceId";
+    /** 追踪属性：errorMessage */
+    public static final String TRACE_ATTR_ERROR_MESSAGE = "errorMessage";
+    /** 追踪属性：regionId */
+    public static final String TRACE_ATTR_REGION_ID = "regionId";
+    /** 追踪属性：keys */
+    public static final String TRACE_ATTR_KEYS = "keys";
+    /** 追踪属性：tag */
+    public static final String TRACE_ATTR_TAG = "tag";
+    /** 追踪属性：consumerName */
+    public static final String TRACE_ATTR_CONSUMER_NAME = "consumerName";
+    /** 追踪属性：reconsumeTimes */
+    public static final String TRACE_ATTR_RECONSUME_TIMES = "reconsumeTimes";
+    /** 追踪属性：action */
+    public static final String TRACE_ATTR_ACTION = "action";
+    /** 追踪属性：delayLevel */
+    public static final String TRACE_ATTR_DELAY_LEVEL = "delayLevel";
+    /** 追踪属性：bodyType */
+    public static final String TRACE_ATTR_BODY_TYPE = "bodyType";
+    /** 追踪属性：bornHost */
+    public static final String TRACE_ATTR_BORN_HOST = "bornHost";
 }

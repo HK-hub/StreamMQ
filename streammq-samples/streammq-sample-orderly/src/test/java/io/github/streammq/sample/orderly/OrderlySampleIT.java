@@ -226,7 +226,7 @@ class OrderlySampleIT {
     }
 
     @StreamMQConsumer(
-            topic = "orderly-order-topic",
+            topic = SampleConstants.TOPIC,
             consumerGroup = TEST_CONSUMER_GROUP,
             messageModel = MessageModel.ORDERLY,
             shardCount = 8)

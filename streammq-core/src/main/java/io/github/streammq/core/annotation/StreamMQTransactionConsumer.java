@@ -41,11 +41,11 @@ public @interface StreamMQTransactionConsumer {
     String transactionGroup();
 
     /**
-     * 单次回查超时（毫秒），默认 60000（60 秒）。
+     * 单次回查超时（毫秒），默认 {@link StreamMQConstants#DEFAULT_CHECK_TIMEOUT_MS}。
      *
      * @return 超时毫秒数
      */
-    long checkTimeout() default 60000L;
+    long checkTimeout() default StreamMQConstants.DEFAULT_CHECK_TIMEOUT_MS;
 
     /**
      * 回查间隔（毫秒），默认 {@link StreamMQConstants#DEFAULT_CHECK_INTERVAL_MS}。

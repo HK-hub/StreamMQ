@@ -25,10 +25,25 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-@ConfigurationProperties(prefix = "streammq.tracing.otel")
+@ConfigurationProperties(prefix = StreamMQTracingProperties.PROP_PREFIX)
 @Getter
 @Setter
 public class StreamMQTracingProperties {
+
+    /** 配置属性前缀：streammq.tracing.otel */
+    public static final String PROP_PREFIX = "streammq.tracing.otel";
+
+    /** 开关属性名：enabled */
+    public static final String PROP_NAME_ENABLED = "enabled";
+
+    /** 开关属性值：true */
+    public static final String PROP_VALUE_TRUE = "true";
+
+    /** 默认服务名称 */
+    public static final String DEFAULT_SERVICE_NAME = "streammq";
+
+    /** 默认 Span 导出间隔（毫秒） */
+    public static final long DEFAULT_EXPORTER_INTERVAL_MS = 5_000L;
 
     /** 是否启用 OpenTelemetry 追踪自动装配，默认 false */
     private boolean enabled = false;
@@ -36,9 +51,9 @@ public class StreamMQTracingProperties {
     /** OTLP 导出端点（如 {@code http://localhost:4317}），未配置时默认 OpenTelemetry 为 no-op */
     private String otlpEndpoint;
 
-    /** 服务名称，用于标识遥测数据来源，默认 {@code streammq} */
-    private String serviceName = "streammq";
+    /** 服务名称，用于标识遥测数据来源 */
+    private String serviceName = DEFAULT_SERVICE_NAME;
 
-    /** Span 导出间隔（毫秒），默认 5000 */
-    private long exporterIntervalMs = 5000L;
+    /** Span 导出间隔（毫秒） */
+    private long exporterIntervalMs = DEFAULT_EXPORTER_INTERVAL_MS;
 }

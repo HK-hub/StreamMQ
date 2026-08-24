@@ -38,8 +38,8 @@ public class OrderProducer {
         log.info("Producing order message (may enter DLQ): orderId={}", orderId);
 
         Message<String> message =
-                MessageBuilder.<String>withTopic("order-topic")
-                        .tag("dlq-test")
+                MessageBuilder.<String>withTopic(SampleConstants.TOPIC)
+                        .tag(SampleConstants.TAG)
                         .keys(orderId)
                         .body(content)
                         .withUserProperty("source", "dlq-sample")

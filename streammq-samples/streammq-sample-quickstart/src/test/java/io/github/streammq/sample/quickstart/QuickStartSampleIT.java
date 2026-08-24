@@ -190,7 +190,7 @@ class QuickStartSampleIT {
      *
      * <p>将所有接收到的消息存入 {@link ConcurrentLinkedQueue}， 供测试方法通过 Awaitility + AssertJ 进行验证。
      */
-    @StreamMQConsumer(topic = "order-topic", consumerGroup = TEST_CONSUMER_GROUP)
+    @StreamMQConsumer(topic = SampleConstants.TOPIC, consumerGroup = TEST_CONSUMER_GROUP)
     static class TestMessageCollector implements StreamMessageConcurrentlyConsumer<String> {
 
         /** 已接收的消息集合，线程安全 */

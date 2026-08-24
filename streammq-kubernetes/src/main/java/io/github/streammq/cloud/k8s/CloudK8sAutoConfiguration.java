@@ -41,19 +41,16 @@ import org.springframework.context.annotation.Import;
 @AutoConfiguration
 @ConditionalOnClass(StreamMQListenerContainer.class)
 @ConditionalOnProperty(
-        prefix = "streammq.cloud.k8s",
-        name = "enabled",
-        havingValue = "true",
+        prefix = CloudK8sProperties.PROP_PREFIX,
+        name = CloudK8sProperties.PROP_NAME_ENABLED,
+        havingValue = CloudK8sProperties.PROP_VALUE_TRUE,
         matchIfMissing = true)
 @EnableConfigurationProperties(CloudK8sProperties.class)
 @Import({
     StreamMQHealthIndicator.class,
     StreamMQHealthController.class,
     GracefulShutdownHandler.class,
-    HpaMetricsProvider.class,
-    StreamMQClusterController.class,
-    HpaAutoScaler.class,
-    ConfigMapConfigRefresher.class
+    HpaMetricsProvider.class
 })
 public class CloudK8sAutoConfiguration {
 
@@ -67,5 +64,46 @@ public class CloudK8sAutoConfiguration {
     @ConditionalOnMissingBean(StreamMQConfigRefresher.class)
     public StreamMQConfigRefresher noopConfigRefresher() {
         return new NoopConfigRefresher();
+    }
+
+    /**
+     * StreamMQCluster CRD Operator controller，注入调和间隔配置。
+     *
+     * @param properties K8s 云原生增强配置
+     * @return Operator 控制器实例
+     */
+    @Bean
+    public StreamMQClusterController streamMQClusterController(CloudK8sProperties properties) {
+        StreamMQClusterController controller = new StreamMQClusterController();
+        controller.setReconcileIntervalSeconds(properties.getReconcileIntervalSeconds());
+        return controller;
+    }
+
+    /**
+     * HPA 自动扩缩容控制器，注入扫描间隔与扩缩阈值默认值。
+     *
+     * <p>{@code metricsProvider} 通过 {@code @Autowired} 字段注入，由 Spring 生命周期自动完成。
+     *
+     * @param properties K8s 云原生增强配置
+     * @return HPA 控制器实例
+     */
+    @Bean
+    public HpaAutoScaler hpaAutoScaler(CloudK8sProperties properties) {
+        HpaAutoScaler scaler = new HpaAutoScaler();
+        scaler.setSyncIntervalSeconds(properties.getHpaSyncIntervalSeconds());
+        scaler.setDefaultTargetLag(properties.getHpaDefaultTargetLag());
+        scaler.setScaleUpThreshold(properties.getHpaScaleUpThreshold());
+        scaler.setScaleDownThreshold(properties.getHpaScaleDownThreshold());
+        return scaler;
+    }
+
+    /**
+     * ConfigMap 配置热更新实现（支持 label 过滤与多命名空间监听）。
+     *
+     * @return ConfigMap 配置热更新实例
+     */
+    @Bean
+    public ConfigMapConfigRefresher configMapConfigRefresher() {
+        return new ConfigMapConfigRefresher();
     }
 }

@@ -16,14 +16,14 @@ import org.springframework.stereotype.Component;
  * @since 0.1.0
  */
 @Component
-@StreamMQConsumer(topic = "tracing-events", consumerGroup = "tracing-sample-consumer")
+@StreamMQConsumer(topic = SampleConstants.TOPIC, consumerGroup = SampleConstants.CONSUMER_GROUP)
 public class EventConsumer implements StreamMessageConcurrentlyConsumer<String> {
 
     private static final Logger log = LoggerFactory.getLogger(EventConsumer.class);
 
     @Override
     public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
-        String traceparent = message.getUserProperties().get("traceparent");
+        String traceparent = message.getUserProperties().get(SampleConstants.PROP_TRACEPARENT);
         log.info("Received event: keys={}, traceparent={}", message.getKeys(), traceparent);
         return ConsumeAction.SUCCESS;
     }

@@ -1,5 +1,6 @@
 package io.github.streammq.core.policy;
 
+import io.github.streammq.core.StreamMQConstants;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -79,12 +80,13 @@ public interface RebalanceStrategy {
         }
 
         /**
-         * 返回是否活跃（30s 内有心跳）。
+         * 返回是否活跃（默认心跳存活窗口内有心跳）。
          *
          * @return true 活跃
          */
         public boolean isActive() {
-            return System.currentTimeMillis() - lastHeartbeatTimestamp < 30_000L;
+            return System.currentTimeMillis() - lastHeartbeatTimestamp
+                    < StreamMQConstants.DEFAULT_HEARTBEAT_ALIVE_WINDOW_MS;
         }
 
         /**

@@ -1,5 +1,6 @@
 package io.github.streammq.core.filter;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.util.StringUtils;
@@ -15,7 +16,10 @@ import java.util.Objects;
  */
 public abstract class TagSelectorFilter implements ExpressionSelectorFilter {
 
-    protected static final String WILD_CARD = "*";
+    /** 内置过滤器的默认优先级 */
+    protected static final int BUILTIN_FILTER_ORDER = -1;
+
+    protected static final String WILD_CARD = StreamMQConstants.SELECTOR_WILDCARD;
 
     protected final String selectorExpression;
 
@@ -60,6 +64,6 @@ public abstract class TagSelectorFilter implements ExpressionSelectorFilter {
 
     @Override
     public int order() {
-        return -1;
+        return BUILTIN_FILTER_ORDER;
     }
 }

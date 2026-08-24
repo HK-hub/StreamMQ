@@ -32,6 +32,7 @@ import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.service.DefaultStreamMessageService;
 import io.github.streammq.core.service.StreamMessageService;
 import io.github.streammq.core.template.StreamMessageTemplate;
+import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import jakarta.annotation.PostConstruct;
 import org.redisson.api.RedissonClient;
@@ -71,9 +72,9 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(
-        prefix = "streammq",
-        name = "enabled",
-        havingValue = "true",
+        prefix = StreamMQSpringConstants.PROP_PREFIX,
+        name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+        havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
         matchIfMissing = true)
 @ConditionalOnClass({RedissonClient.class, StreamMessageTemplate.class})
 @EnableConfigurationProperties(StreamMQProperties.class)
@@ -253,6 +254,7 @@ public class StreamMQCoreAutoConfiguration {
                 .dlqAlertThreshold(dlqProps.getAlertThreshold())
                 .dlqRetryBackoffMultiplier(dlqProps.getRetryBackoffMultiplier())
                 .dlqRetryMaxDelayMs(dlqProps.getRetryMaxDelayMs())
+                .minRetryDelayMs(dlqProps.getMinRetryDelayMs())
                 .build();
     }
 
@@ -404,8 +406,8 @@ public class StreamMQCoreAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(TraceCollector.class)
     @ConditionalOnProperty(
-            prefix = "streammq.tracing",
-            name = "enabled",
+            prefix = StreamMQSpringConstants.PROP_PREFIX_TRACING,
+            name = StreamMQSpringConstants.PROP_NAME_ENABLED,
             havingValue = "false",
             matchIfMissing = true)
     public TraceCollector streamMQNoopTraceCollector() {
@@ -422,7 +424,10 @@ public class StreamMQCoreAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(TraceCollector.class)
-    @ConditionalOnProperty(prefix = "streammq.tracing", name = "enabled", havingValue = "true")
+    @ConditionalOnProperty(
+            prefix = StreamMQSpringConstants.PROP_PREFIX_TRACING,
+            name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+            havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE)
     public TraceCollector streamMQSlf4jTraceCollector() {
         LOG.debug("Using Slf4jTraceCollector (tracing enabled)");
         return new Slf4jTraceCollector();
@@ -450,7 +455,10 @@ public class StreamMQCoreAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(TraceContextProducerInterceptor.class)
-    @ConditionalOnProperty(prefix = "streammq.tracing", name = "enabled", havingValue = "true")
+    @ConditionalOnProperty(
+            prefix = StreamMQSpringConstants.PROP_PREFIX_TRACING,
+            name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+            havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE)
     public TraceContextProducerInterceptor streamMQTraceContextProducerInterceptor(
             TraceCollector traceCollector) {
         LOG.debug("Using TraceContextProducerInterceptor (tracing enabled)");
@@ -465,7 +473,10 @@ public class StreamMQCoreAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(TraceContextConsumerInterceptor.class)
-    @ConditionalOnProperty(prefix = "streammq.tracing", name = "enabled", havingValue = "true")
+    @ConditionalOnProperty(
+            prefix = StreamMQSpringConstants.PROP_PREFIX_TRACING,
+            name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+            havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE)
     public TraceContextConsumerInterceptor streamMQTraceContextConsumerInterceptor(
             TraceCollector traceCollector) {
         LOG.debug("Using TraceContextConsumerInterceptor (tracing enabled)");

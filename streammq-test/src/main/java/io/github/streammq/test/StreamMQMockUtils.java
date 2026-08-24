@@ -14,6 +14,12 @@ import io.github.streammq.core.message.SendStatus;
  */
 public final class StreamMQMockUtils {
 
+    /** 固定的 Mock 消息 ID（timestamp-sequence 格式） */
+    public static final String MOCK_MESSAGE_ID = "1234567890-0";
+
+    /** Mock 消息 ID 的 sequence 后缀 */
+    public static final String MSG_ID_SEQ_SUFFIX = "-0";
+
     private StreamMQMockUtils() {}
 
     public static <T> Message<T> createMockMessage(String topic, String tag, String keys, T body) {
@@ -30,7 +36,7 @@ public final class StreamMQMockUtils {
 
     public static SendResult createSuccessResult(String topic, String tag) {
         return new SendResult(
-                new MessageId("1234567890-0"), topic, tag, System.currentTimeMillis());
+                new MessageId(MOCK_MESSAGE_ID), topic, tag, System.currentTimeMillis());
     }
 
     public static SendResult createSuccessResult(String topic) {
@@ -39,7 +45,7 @@ public final class StreamMQMockUtils {
 
     public static SendResult createFailedResult(String topic, String tag, String errorMessage) {
         return new SendResult(
-                new MessageId("1234567890-0"),
+                new MessageId(MOCK_MESSAGE_ID),
                 topic,
                 tag,
                 SendStatus.SEND_FAILED,
@@ -53,10 +59,10 @@ public final class StreamMQMockUtils {
     }
 
     public static MessageId createMockMessageId() {
-        return new MessageId(System.currentTimeMillis() + "-0");
+        return new MessageId(System.currentTimeMillis() + MSG_ID_SEQ_SUFFIX);
     }
 
     public static MessageId createMockMessageId(long timestamp) {
-        return new MessageId(timestamp + "-0");
+        return new MessageId(timestamp + MSG_ID_SEQ_SUFFIX);
     }
 }

@@ -1,5 +1,6 @@
 package io.github.streammq.adapter.redisson.interceptor;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.interceptor.ConsumerInterceptor;
@@ -33,10 +34,10 @@ public class TraceContextConsumerInterceptor implements ConsumerInterceptor {
             LoggerFactory.getLogger(TraceContextConsumerInterceptor.class);
 
     /** userProperties 中 traceId 的键名 */
-    public static final String TRACE_ID_KEY = "traceId";
+    public static final String TRACE_ID_KEY = StreamMQConstants.TRACE_ATTR_TRACE_ID;
 
     /** MDC 中 traceId 的键名 */
-    public static final String MDC_TRACE_ID_KEY = "traceId";
+    public static final String MDC_TRACE_ID_KEY = StreamMQConstants.TRACE_ATTR_TRACE_ID;
 
     /** 线程局部消费起始时间戳，用于计算消费耗时 */
     private final ThreadLocal<Long> consumeStartTimestamp = new ThreadLocal<>();
@@ -77,7 +78,7 @@ public class TraceContextConsumerInterceptor implements ConsumerInterceptor {
         long duration = Objects.nonNull(start) ? System.currentTimeMillis() - start : 0L;
         boolean success = action == ConsumeAction.SUCCESS;
         Map<String, String> attributes = new HashMap<>(2);
-        attributes.put("action", action.name());
+        attributes.put(StreamMQConstants.TRACE_ATTR_ACTION, action.name());
 
         try {
             TraceCollector.ConsumeTraceContext ctx =

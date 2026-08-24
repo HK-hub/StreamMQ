@@ -10,6 +10,7 @@ import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.policy.DlqConfig;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
+import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
@@ -42,9 +43,9 @@ import org.springframework.context.annotation.Configuration;
 @Configuration(proxyBeanMethods = false)
 @AutoConfigureAfter(StreamMQCoreAutoConfiguration.class)
 @ConditionalOnProperty(
-        prefix = "streammq",
-        name = "enabled",
-        havingValue = "true",
+        prefix = StreamMQSpringConstants.PROP_PREFIX,
+        name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+        havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
         matchIfMissing = true)
 @ConditionalOnClass({DefaultStreamMQListenerContainer.class, RedissonClient.class})
 @ConditionalOnBean(StreamMQListenerFactory.class)
@@ -100,6 +101,11 @@ public class StreamMQListenerContainerAutoConfiguration {
         container.setDefaultPullIntervalMillis(properties.getConsumer().getPullInterval());
         container.setMaxBatchSizeLimit(properties.getConsumer().getMaxBatchSizeLimit());
         container.setDefaultVirtualNodes(properties.getRebalance().getVirtualNodes());
+        // 消费超时取消宽限期与消费者组心跳/实例超时（streammq.consumer.* / streammq.group.*）
+        container.setTimeoutCancelGraceMillis(
+                properties.getConsumer().getTimeoutCancelGraceMillis());
+        container.setHeartbeatIntervalMs(properties.getGroup().getHeartbeatIntervalMs());
+        container.setInstanceTimeoutMs(properties.getGroup().getInstanceTimeoutMs());
         LOG.info(
                 "ListenerContainer defaults: pullBatchSize={}, pullBlockTimeout={}ms,"
                         + " pullInterval={}ms, maxBatchSizeLimit={}, virtualNodes={}",
@@ -177,7 +183,7 @@ public class StreamMQListenerContainerAutoConfiguration {
      * @return 生命周期包装
      */
     @Bean
-    @ConditionalOnMissingBean(name = "streamMQListenerContainerLifecycle")
+    @ConditionalOnMissingBean(name = StreamMQSpringConstants.BEAN_LISTENER_CONTAINER_LIFECYCLE)
     public StreamMQListenerContainerLifecycle streamMQListenerContainerLifecycle(
             DefaultStreamMQListenerContainer listenerContainer) {
         return new StreamMQListenerContainerLifecycle(listenerContainer);

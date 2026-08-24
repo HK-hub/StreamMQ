@@ -45,8 +45,8 @@ public class OrderlyMessageProducer {
                 content);
 
         Message<String> message =
-                MessageBuilder.<String>withTopic("orderly-order-topic")
-                        .tag("orderly")
+                MessageBuilder.<String>withTopic(SampleConstants.TOPIC)
+                        .tag(SampleConstants.TAG)
                         .keys(orderId)
                         .shardingKey(orderId)
                         .body(content)

@@ -7,6 +7,7 @@ import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
+import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -33,9 +34,9 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnProperty(
-        prefix = "streammq",
-        name = "enabled",
-        havingValue = "true",
+        prefix = StreamMQSpringConstants.PROP_PREFIX,
+        name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+        havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
         matchIfMissing = true)
 @ConditionalOnClass({RetryScheduler.class, RedissonClient.class})
 public class StreamMQSchedulerAutoConfiguration {
@@ -56,9 +57,9 @@ public class StreamMQSchedulerAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(RetryScheduler.class)
     @ConditionalOnProperty(
-            prefix = "streammq.retry",
-            name = "enabled",
-            havingValue = "true",
+            prefix = StreamMQSpringConstants.PROP_PREFIX_RETRY,
+            name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+            havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
             matchIfMissing = true)
     public RetryScheduler streamMQRetryScheduler(
             RedissonClient redisson,
@@ -73,8 +74,16 @@ public class StreamMQSchedulerAutoConfiguration {
                 batchSize,
                 streamMaxLen);
         // RetryScheduler 当前未暴露指标埋点接口；重试指标由 DefaultRetryAndDlqHandler 在调度重试时记录。
-        return new RetryScheduler(
-                redisson, properties.getNamespace(), interval.toMillis(), batchSize, streamMaxLen);
+        RetryScheduler retryScheduler =
+                new RetryScheduler(
+                        redisson,
+                        properties.getNamespace(),
+                        interval.toMillis(),
+                        batchSize,
+                        streamMaxLen);
+        retryScheduler.setFailureRequeueBackoffMs(
+                properties.getRetry().getFailureRequeueBackoffMs());
+        return retryScheduler;
     }
 
     /**
@@ -87,9 +96,9 @@ public class StreamMQSchedulerAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(DelayMessageScheduler.class)
     @ConditionalOnProperty(
-            prefix = "streammq.delay",
-            name = "enabled",
-            havingValue = "true",
+            prefix = StreamMQSpringConstants.PROP_PREFIX_DELAY,
+            name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+            havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
             matchIfMissing = true)
     public DelayMessageScheduler streamMQDelayMessageScheduler(
             RedissonClient redisson,
@@ -104,6 +113,8 @@ public class StreamMQSchedulerAutoConfiguration {
         DelayMessageScheduler scheduler =
                 new DelayMessageScheduler(
                         redisson, properties.getNamespace(), interval.toMillis(), batchSize);
+        scheduler.setFailureRequeueBackoffMs(
+                properties.getDelay().getFailureRequeueBackoffMs());
         StreamMQMetrics metrics = metricsProvider.getIfAvailable();
         if (metrics != null) {
             scheduler.setMetrics(metrics);
@@ -125,9 +136,9 @@ public class StreamMQSchedulerAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(TransactionScanner.class)
     @ConditionalOnProperty(
-            prefix = "streammq.transaction",
-            name = "enabled",
-            havingValue = "true",
+            prefix = StreamMQSpringConstants.PROP_PREFIX_TRANSACTION,
+            name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+            havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
             matchIfMissing = true)
     public TransactionScanner streamMQTransactionScanner(
             RedissonClient redisson,
@@ -171,9 +182,9 @@ public class StreamMQSchedulerAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(PelClaimScheduler.class)
     @ConditionalOnProperty(
-            prefix = "streammq.retry",
-            name = "enabled",
-            havingValue = "true",
+            prefix = StreamMQSpringConstants.PROP_PREFIX_RETRY,
+            name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+            havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
             matchIfMissing = true)
     public PelClaimScheduler streamMQPelClaimScheduler(
             RedissonClient redisson, StreamMQProperties properties) {
@@ -201,7 +212,7 @@ public class StreamMQSchedulerAutoConfiguration {
      * @return SmartLifecycle
      */
     @Bean
-    @ConditionalOnMissingBean(name = "streamMQSchedulerLifecycle")
+    @ConditionalOnMissingBean(name = StreamMQSpringConstants.BEAN_SCHEDULER_LIFECYCLE)
     public SmartLifecycle streamMQSchedulerLifecycle(
             org.springframework.beans.factory.ObjectProvider<RetryScheduler> retrySchedulerProvider,
             org.springframework.beans.factory.ObjectProvider<DelayMessageScheduler>

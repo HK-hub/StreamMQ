@@ -1,5 +1,6 @@
 package io.github.streammq.core.template;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.message.BatchMessage;
@@ -51,13 +52,13 @@ import java.util.concurrent.CompletableFuture;
 public interface StreamMessageTemplate extends TransactionExecutor {
 
     /** 默认发送超时（毫秒） */
-    long DEFAULT_SEND_TIMEOUT_MILLIS = 3000L;
+    long DEFAULT_SEND_TIMEOUT_MILLIS = StreamMQConstants.DEFAULT_SEND_TIMEOUT_MS;
 
     /** 默认同步发送重试次数 */
-    int DEFAULT_SYNC_RETRY_TIMES = 2;
+    int DEFAULT_SYNC_RETRY_TIMES = StreamMQConstants.DEFAULT_SYNC_RETRY_TIMES;
 
     /** 默认异步发送重试次数（不重试） */
-    int DEFAULT_ASYNC_RETRY_TIMES = 0;
+    int DEFAULT_ASYNC_RETRY_TIMES = StreamMQConstants.DEFAULT_ASYNC_RETRY_TIMES;
 
     /**
      * 同步发送（默认超时、默认重试次数）。

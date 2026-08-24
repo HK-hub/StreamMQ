@@ -9,6 +9,7 @@ import io.fabric8.kubernetes.client.informers.ResourceEventHandler;
 import io.fabric8.kubernetes.client.informers.SharedIndexInformer;
 import io.fabric8.kubernetes.client.informers.SharedInformerFactory;
 import io.github.streammq.cloud.k8s.StreamMQConfigRefresher;
+import io.github.streammq.core.StreamMQConstants;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -68,7 +69,7 @@ public class StreamMQClusterController
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor(
                     r -> {
-                        Thread t = new Thread(r, "streammq-operator-scheduler");
+                        Thread t = new Thread(r, StreamMQK8sDefaults.THREAD_OPERATOR_SCHEDULER);
                         t.setDaemon(true);
                         return t;
                     });
@@ -77,7 +78,20 @@ public class StreamMQClusterController
 
     private final AtomicBoolean running = new AtomicBoolean(false);
 
-    private long reconcileIntervalSeconds = 30;
+    /** 调和间隔（秒） */
+    private long reconcileIntervalSeconds =
+            StreamMQK8sDefaults.DEFAULT_RECONCILE_INTERVAL_SECONDS;
+
+    /**
+     * 设置调和间隔（秒）。
+     *
+     * @param seconds 间隔秒数，必须 &gt; 0
+     */
+    public void setReconcileIntervalSeconds(long seconds) {
+        if (seconds > 0) {
+            this.reconcileIntervalSeconds = seconds;
+        }
+    }
 
     @Override
     public void afterPropertiesSet() {
@@ -101,7 +115,9 @@ public class StreamMQClusterController
         log.info("Starting StreamMQClusterController...");
 
         informerFactory = kubernetesClient.informers();
-        clusterInformer = informerFactory.sharedIndexInformerFor(StreamMQCluster.class, 30 * 1000L);
+        clusterInformer =
+                informerFactory.sharedIndexInformerFor(
+                        StreamMQCluster.class, StreamMQK8sDefaults.DEFAULT_RESYNC_PERIOD_MILLIS);
 
         clusterInformer.addEventHandler(
                 new ResourceEventHandler<StreamMQCluster>() {
@@ -179,17 +195,20 @@ public class StreamMQClusterController
 
         var spec = cluster.getSpec();
         if (spec == null) {
-            updateStatus(cluster, "Failed", "Spec is null");
+            updateStatus(cluster, StreamMQK8sDefaults.PHASE_FAILED, "Spec is null");
             return;
         }
 
-        int replicas = spec.getReplicas() != null ? spec.getReplicas() : 3;
+        int replicas =
+                spec.getReplicas() != null
+                        ? spec.getReplicas()
+                        : StreamMQK8sDefaults.DEFAULT_REPLICAS;
 
         ensureDeployment(cluster, ns, name, replicas, spec);
 
         refreshConfigIfNeeded(cluster, spec);
 
-        updateStatus(cluster, "Running", null);
+        updateStatus(cluster, StreamMQK8sDefaults.PHASE_RUNNING, null);
         clusterContexts.put(key, new ClusterContext(cluster, System.currentTimeMillis()));
     }
 
@@ -283,9 +302,9 @@ public class StreamMQClusterController
                 .endMetadata()
                 .withNewSpec()
                 .addNewContainer()
-                .withName("streammq-consumer")
-                .withImage("streammq/streammq-consumer:latest")
-                .withImagePullPolicy("IfNotPresent")
+                .withName(StreamMQK8sDefaults.CONTAINER_NAME)
+                .withImage(StreamMQK8sDefaults.DEFAULT_IMAGE)
+                .withImagePullPolicy(StreamMQK8sDefaults.PULL_POLICY_IF_NOT_PRESENT)
                 .withEnv(buildEnvVarList(envVars))
                 .withPorts(buildPortList())
                 .withResources(buildResources(spec.getResources()))
@@ -298,34 +317,37 @@ public class StreamMQClusterController
 
     private List<EnvVar> collectEnvVars(String name, String ns, StreamMQCluster.Spec spec) {
         var vars = new ArrayList<EnvVar>();
-        vars.add(new EnvVar("STREAMMQ_CLUSTER_NAME", name));
-        vars.add(new EnvVar("STREAMMQ_NAMESPACE", ns));
+        vars.add(new EnvVar(StreamMQK8sDefaults.ENV_CLUSTER_NAME, name));
+        vars.add(new EnvVar(StreamMQK8sDefaults.ENV_NAMESPACE, ns));
 
         if (spec.getBackend() != null && spec.getBackend().getRedis() != null) {
             var redis = spec.getBackend().getRedis();
             vars.add(
                     new EnvVar(
-                            "STREAMMQ_REDIS_ADDRESS",
+                            StreamMQK8sDefaults.ENV_REDIS_ADDRESS,
                             redis.getAddress() != null ? redis.getAddress() : ""));
             vars.add(
                     new EnvVar(
-                            "STREAMMQ_REDIS_NAMESPACE",
+                            StreamMQK8sDefaults.ENV_REDIS_NAMESPACE,
                             redis.getNamespace() != null ? redis.getNamespace() : ""));
             if (redis.getPassword() != null) {
-                vars.add(new EnvVar("STREAMMQ_REDIS_PASSWORD", redis.getPassword()));
+                vars.add(new EnvVar(StreamMQK8sDefaults.ENV_REDIS_PASSWORD, redis.getPassword()));
             }
         }
 
         if (spec.getConfig() != null && spec.getConfig().getTracing() != null) {
             var tracing = spec.getConfig().getTracing();
-            vars.add(new EnvVar("STREAMMQ_TRACING_ENABLED", String.valueOf(tracing.getEnabled())));
             vars.add(
                     new EnvVar(
-                            "STREAMMQ_TRACING_EXPORTER",
+                            StreamMQK8sDefaults.ENV_TRACING_ENABLED,
+                            String.valueOf(tracing.getEnabled())));
+            vars.add(
+                    new EnvVar(
+                            StreamMQK8sDefaults.ENV_TRACING_EXPORTER,
                             tracing.getExporter() != null ? tracing.getExporter() : ""));
             vars.add(
                     new EnvVar(
-                            "STREAMMQ_TRACING_ENDPOINT",
+                            StreamMQK8sDefaults.ENV_TRACING_ENDPOINT,
                             tracing.getEndpoint() != null ? tracing.getEndpoint() : ""));
         }
 
@@ -348,12 +370,12 @@ public class StreamMQClusterController
     private List<io.fabric8.kubernetes.api.model.ContainerPort> buildPortList() {
         return List.of(
                 new io.fabric8.kubernetes.api.model.ContainerPortBuilder()
-                        .withContainerPort(8080)
-                        .withName("http")
+                        .withContainerPort(StreamMQK8sDefaults.PORT_HTTP)
+                        .withName(StreamMQK8sDefaults.PORT_NAME_HTTP)
                         .build(),
                 new io.fabric8.kubernetes.api.model.ContainerPortBuilder()
-                        .withContainerPort(9090)
-                        .withName("metrics")
+                        .withContainerPort(StreamMQK8sDefaults.PORT_METRICS)
+                        .withName(StreamMQK8sDefaults.PORT_NAME_METRICS)
                         .build());
     }
 
@@ -380,10 +402,14 @@ public class StreamMQClusterController
 
     private Map<String, String> buildLabels(String name) {
         return Map.of(
-                "app", name,
-                "app.kubernetes.io/name", "streammq",
-                "app.kubernetes.io/component", "consumer",
-                "app.kubernetes.io/managed-by", "streammq-operator");
+                StreamMQK8sDefaults.LABEL_APP,
+                name,
+                StreamMQK8sDefaults.LABEL_APP_K8S_NAME,
+                StreamMQK8sDefaults.LABEL_VALUE_APP_NAME,
+                StreamMQK8sDefaults.LABEL_APP_K8S_COMPONENT,
+                StreamMQK8sDefaults.LABEL_VALUE_COMPONENT_CONSUMER,
+                StreamMQK8sDefaults.LABEL_APP_K8S_MANAGED_BY,
+                StreamMQK8sDefaults.LABEL_VALUE_MANAGED_BY);
     }
 
     private void updateContainerResources(
@@ -432,7 +458,10 @@ public class StreamMQClusterController
         var config = spec.getConfig();
         if (config.getRetry() != null) {
             var retry = config.getRetry();
-            int maxTimes = retry.getMaxReconsumeTimes() != null ? retry.getMaxReconsumeTimes() : 16;
+            int maxTimes =
+                    retry.getMaxReconsumeTimes() != null
+                            ? retry.getMaxReconsumeTimes()
+                            : StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
             long[] intervals =
                     retry.getRetryIntervals() != null
                             ? java.util.Arrays.stream(retry.getRetryIntervals())
@@ -443,7 +472,10 @@ public class StreamMQClusterController
         }
         if (config.getDelay() != null) {
             var delay = config.getDelay();
-            long scanMs = delay.getScanIntervalMs() != null ? delay.getScanIntervalMs() : 1000L;
+            long scanMs =
+                    delay.getScanIntervalMs() != null
+                            ? delay.getScanIntervalMs()
+                            : StreamMQConstants.DEFAULT_SCAN_INTERVAL_MS;
             configRefresher.refreshScanInterval(scanMs, scanMs);
         }
     }
@@ -460,7 +492,9 @@ public class StreamMQClusterController
 
         if (cluster.getSpec() != null) {
             status.setReplicas(
-                    cluster.getSpec().getReplicas() != null ? cluster.getSpec().getReplicas() : 3);
+                    cluster.getSpec().getReplicas() != null
+                            ? cluster.getSpec().getReplicas()
+                            : StreamMQK8sDefaults.DEFAULT_REPLICAS);
         }
 
         try {
@@ -491,7 +525,8 @@ public class StreamMQClusterController
         }
         scheduler.shutdown();
         try {
-            if (!scheduler.awaitTermination(10, TimeUnit.SECONDS)) {
+            if (!scheduler.awaitTermination(
+                    StreamMQK8sDefaults.OPERATOR_AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
                 scheduler.shutdownNow();
             }
         } catch (InterruptedException e) {

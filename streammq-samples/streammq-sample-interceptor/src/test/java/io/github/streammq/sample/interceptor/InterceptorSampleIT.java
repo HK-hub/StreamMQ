@@ -79,8 +79,8 @@ class InterceptorSampleIT {
                             assertThat(received.getBody()).isEqualTo(content);
                             assertThat(received.getTag()).isEqualTo("order");
                             assertThat(received.getUserProperties()).containsKey("traceId");
-                            assertThat(received.getUserProperties().get("traceId")).isNotNull();
-                            assertThat(received.getUserProperties().get("traceId")).isNotEmpty();
+                            assertThat(received.getUserProperties().get(SampleConstants.PROP_TRACE_ID)).isNotNull();
+                            assertThat(received.getUserProperties().get(SampleConstants.PROP_TRACE_ID)).isNotEmpty();
                         });
     }
 
@@ -126,7 +126,7 @@ class InterceptorSampleIT {
                         });
     }
 
-    @StreamMQConsumer(topic = "interceptor-order-topic", consumerGroup = TEST_CONSUMER_GROUP)
+    @StreamMQConsumer(topic = SampleConstants.TOPIC, consumerGroup = TEST_CONSUMER_GROUP)
     static class TestMessageCollector implements StreamMessageConcurrentlyConsumer<String> {
 
         final ConcurrentLinkedQueue<Message<String>> receivedMessages =

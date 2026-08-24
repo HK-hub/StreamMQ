@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class OrderProducer {
 
-    private static final String TOPIC = "order-events";
+    private static final String TOPIC = SampleConstants.TOPIC;
 
     private final StreamMessageTemplate template;
 
@@ -25,7 +25,7 @@ public class OrderProducer {
     public SendResult createOrder(String orderId, String content) {
         return template.syncSend(
                 MessageBuilder.<String>withTopic(TOPIC)
-                        .tag("created")
+                        .tag(SampleConstants.TAG)
                         .keys(orderId)
                         .body(content)
                         .withUserProperty("source", "diagnostics-sample")

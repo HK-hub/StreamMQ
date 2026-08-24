@@ -94,8 +94,23 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     private static final long AWAIT_TERMINATION_SECONDS =
             StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
 
-    /** 消费超时取消后，等待业务线程真正终止的宽限期（毫秒），用于缩小与重试副本的重叠窗口 */
-    private static final long TIMEOUT_CANCEL_GRACE_MILLIS = 2_000L;
+    /** 消费超时取消后，等待业务线程真正终止的默认宽限期（毫秒），用于缩小与重试副本的重叠窗口 */
+    private static final long DEFAULT_TIMEOUT_CANCEL_GRACE_MILLIS =
+            StreamMQConstants.DEFAULT_TIMEOUT_CANCEL_GRACE_MS;
+
+    /** 默认心跳上报间隔（毫秒） */
+    private static final long DEFAULT_HEARTBEAT_INTERVAL_MS =
+            StreamMQConstants.DEFAULT_HEARTBEAT_INTERVAL_MS;
+
+    /** 默认消费者实例超时时间（毫秒） */
+    private static final long DEFAULT_INSTANCE_TIMEOUT_MS =
+            StreamMQConstants.DEFAULT_INSTANCE_TIMEOUT_MS;
+
+    /** 消费 future 注册 key 的重试后缀 */
+    private static final String RETRY_FUTURE_SUFFIX = ":retry";
+
+    /** 虚拟处理线程名前缀 */
+    private static final String THREAD_PROCESS_PREFIX = StreamMQConstants.THREAD_PROCESS_PREFIX;
 
     private final RedissonClient redisson;
     private final StreamMQListenerFactory consumerFactory;
@@ -145,6 +160,15 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     /** 暂停标志 */
     private volatile boolean paused = false;
+
+    /** 消费超时取消后的宽限期（毫秒），可通过 {@link #setTimeoutCancelGraceMillis(long)} 覆盖 */
+    private volatile long timeoutCancelGraceMillis = DEFAULT_TIMEOUT_CANCEL_GRACE_MILLIS;
+
+    /** 心跳上报间隔（毫秒），可通过 {@link #setHeartbeatIntervalMs(long)} 覆盖 */
+    private volatile long heartbeatIntervalMs = DEFAULT_HEARTBEAT_INTERVAL_MS;
+
+    /** 消费者实例超时时间（毫秒），可通过 {@link #setInstanceTimeoutMs(long)} 覆盖 */
+    private volatile long instanceTimeoutMs = DEFAULT_INSTANCE_TIMEOUT_MS;
 
     /** 消费者过滤器解析器（用于从容器中获取 per-consumer 过滤器实例） */
     private volatile ConsumerFilterResolver filterResolver;
@@ -295,6 +319,39 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     public void setDefaultVirtualNodes(int virtualNodes) {
         if (virtualNodes > 0) {
             this.defaultVirtualNodes = virtualNodes;
+        }
+    }
+
+    /**
+     * 设置消费超时取消后的宽限期（毫秒）。
+     *
+     * @param millis 宽限期，必须 &gt; 0
+     */
+    public void setTimeoutCancelGraceMillis(long millis) {
+        if (millis > 0) {
+            this.timeoutCancelGraceMillis = millis;
+        }
+    }
+
+    /**
+     * 设置消费者组心跳上报间隔（毫秒）。
+     *
+     * @param millis 心跳间隔，必须 &gt; 0
+     */
+    public void setHeartbeatIntervalMs(long millis) {
+        if (millis > 0) {
+            this.heartbeatIntervalMs = millis;
+        }
+    }
+
+    /**
+     * 设置消费者实例超时时间（毫秒）。
+     *
+     * @param millis 实例超时，必须 &gt; 0
+     */
+    public void setInstanceTimeoutMs(long millis) {
+        if (millis > 0) {
+            this.instanceTimeoutMs = millis;
         }
     }
 
@@ -640,7 +697,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                 resolvePullBatchSize(StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE))
                         .pullBlockTimeoutMillis(defaultPullBlockTimeoutMillis)
                         .pullIntervalMillis(0L)
-                        .selectorExpression("*")
+                        .selectorExpression(StreamMQConstants.SELECTOR_WILDCARD)
                         .serializer(MessageSerializer.class)
                         .retryPolicy(RetryPolicy.class)
                         .messageConverter(MessageConverter.class)
@@ -902,7 +959,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                 reg.getNamespace(),
                                 reg.getGroup(),
                                 instanceId,
-                                resolveRebalanceStrategy(reg));
+                                resolveRebalanceStrategy(reg),
+                                heartbeatIntervalMs,
+                                instanceTimeoutMs);
                 cgm.register();
                 cgm.cleanupStaleGroups();
                 consumerGroupManagers.put(reg.key(), cgm);
@@ -985,7 +1044,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 Future<?> origFuture = consumeExecutor.submit(() -> consumeLoop(reg, false));
                 consumeFutures.put(reg.key(), origFuture);
                 Future<?> retryFuture = consumeExecutor.submit(() -> consumeLoop(reg, true));
-                consumeFutures.put(reg.key() + ":retry", retryFuture);
+                consumeFutures.put(reg.key() + RETRY_FUTURE_SUFFIX, retryFuture);
             } else {
                 // 顺序消费 / DLQ 消费者：单 listener
                 Future<?> future = consumeExecutor.submit(() -> consumeLoop(reg, false));
@@ -1023,7 +1082,11 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             inflightQueue = new LinkedBlockingQueue<>(inflightCapacity);
             // 启动独立的处理线程
             Thread.ofVirtual()
-                    .name("streammq-process-" + reg.getTopic() + "-" + reg.getGroup())
+                    .name(
+                            THREAD_PROCESS_PREFIX
+                                    + reg.getTopic()
+                                    + "-"
+                                    + reg.getGroup())
                     .start(() -> processFromInflightQueue(reg, listener, inflightQueue));
         } else {
             inflightQueue = null;
@@ -1298,7 +1361,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             Thread t = taskThread.get();
             if (t != null && t != Thread.currentThread()) {
                 try {
-                    t.join(TIMEOUT_CANCEL_GRACE_MILLIS);
+                    t.join(timeoutCancelGraceMillis);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                 }
@@ -1476,7 +1539,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         List<ConsumerFilter> allFilters = new ArrayList<>();
 
         String selectorExpression = reg.getSelectorExpression();
-        if (StringUtils.isNotEmpty(selectorExpression) && !"*".equals(selectorExpression)) {
+        if (StringUtils.isNotEmpty(selectorExpression)
+                && !StreamMQConstants.SELECTOR_WILDCARD.equals(selectorExpression)) {
             SelectorType selectorType = reg.getSelectorType();
             ExpressionSelectorFilter selectorFilter =
                     switch (selectorType) {

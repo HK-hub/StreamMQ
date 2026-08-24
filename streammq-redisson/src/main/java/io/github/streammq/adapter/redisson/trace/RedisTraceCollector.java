@@ -3,6 +3,7 @@ package io.github.streammq.adapter.redisson.trace;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.interceptor.TraceCollector;
 import io.github.streammq.core.trace.TraceType;
 import io.github.streammq.core.util.CollectionUtils;
@@ -174,7 +175,7 @@ public class RedisTraceCollector implements TraceCollector {
         }
         Map<String, String> result =
                 attributes != null ? new HashMap<>(attributes) : new HashMap<>();
-        result.put("tag", tag);
+        result.put(StreamMQConstants.TRACE_ATTR_TAG, tag);
         return result;
     }
 
@@ -185,13 +186,15 @@ public class RedisTraceCollector implements TraceCollector {
                         ? new HashMap<>(context.attributes())
                         : new HashMap<>();
         if (context.consumerName() != null && !context.consumerName().isEmpty()) {
-            result.put("consumerName", context.consumerName());
+            result.put(StreamMQConstants.TRACE_ATTR_CONSUMER_NAME, context.consumerName());
         }
         if (context.reconsumeTimes() > 0) {
-            result.put("reconsumeTimes", String.valueOf(context.reconsumeTimes()));
+            result.put(
+                    StreamMQConstants.TRACE_ATTR_RECONSUME_TIMES,
+                    String.valueOf(context.reconsumeTimes()));
         }
         if (context.tag() != null && !context.tag().isEmpty()) {
-            result.put("tag", context.tag());
+            result.put(StreamMQConstants.TRACE_ATTR_TAG, context.tag());
         }
         return result;
     }

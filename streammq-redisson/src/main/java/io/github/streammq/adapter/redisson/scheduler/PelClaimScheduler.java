@@ -2,6 +2,8 @@ package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.core.enums.DlqReason;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
@@ -43,20 +45,17 @@ public class PelClaimScheduler implements StreamMQScheduler {
 
     private static final Logger LOG = LoggerFactory.getLogger(PelClaimScheduler.class);
 
-    /** PEL 空闲阈值（毫秒）：消息在 PEL 中超过此时间未被 ACK 则触发 XAUTOCLAIM */
-    private static final long DEFAULT_MIN_IDLE_MS = 30_000L;
+    /** PEL 空闲阈值默认值（毫秒）：消息在 PEL 中超过此时间未被 ACK 则触发 XAUTOCLAIM */
+    private static final long DEFAULT_MIN_IDLE_MS = StreamMQConstants.DEFAULT_PEL_CLAIM_MIN_IDLE_MS;
 
     /** 默认扫描间隔（毫秒） */
-    private static final long DEFAULT_SCAN_INTERVAL_MS = 5_000L;
+    private static final long DEFAULT_SCAN_INTERVAL_MS = StreamMQConstants.DEFAULT_PEL_CLAIM_SCAN_INTERVAL_MS;
 
     /** 默认单次扫描批量 */
-    private static final int DEFAULT_BATCH_SIZE = 100;
-
-    /** DLQ 原因：顺序消费超限 */
-    private static final String DLQ_REASON_ORDERLY_MAX_RETRY = "maxRetryOrderly";
+    private static final int DEFAULT_BATCH_SIZE = StreamMQConstants.DEFAULT_BATCH_SIZE;
 
     /** 重投消息中保留的原始 Stream Entry ID 字段名（供业务幂等/追踪使用） */
-    private static final String FIELD_ORIGINAL_MESSAGE_ID = "originalMessageId";
+    private static final String FIELD_ORIGINAL_MESSAGE_ID = StreamMQConstants.FIELD_ORIGINAL_MESSAGE_ID;
 
     private final RedissonClient redisson;
     private final String namespace;
@@ -107,7 +106,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
                 new ScheduledThreadPoolExecutor(
                         1,
                         r -> {
-                            Thread t = new Thread(r, "streammq-pelclaim-scheduler");
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_PELCLAIM_SCHEDULER);
                             t.setDaemon(true);
                             return t;
                         });
@@ -218,7 +217,9 @@ public class PelClaimScheduler implements StreamMQScheduler {
                     if (retryTimes >= target.maxReconsumeTimes) {
                         // 超限 → ACK 移除 + XADD 到 DLQ
                         stream.ack(target.group, id);
-                        fields.put(RetryScheduler.FIELD_DLQ_REASON, DLQ_REASON_ORDERLY_MAX_RETRY);
+                        fields.put(
+                                RetryScheduler.FIELD_DLQ_REASON,
+                                DlqReason.MAX_RETRY_ORDERLY.getCode());
                         fields.put(
                                 RetryScheduler.FIELD_ORIGINAL_RETRY_COUNT,
                                 Integer.toString(retryTimes));

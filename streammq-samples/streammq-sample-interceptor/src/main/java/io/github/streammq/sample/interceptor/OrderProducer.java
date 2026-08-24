@@ -29,8 +29,8 @@ public class OrderProducer {
         log.info("Producing order message with interceptors: orderId={}", orderId);
 
         Message<String> message =
-                MessageBuilder.<String>withTopic("interceptor-order-topic")
-                        .tag("order")
+                MessageBuilder.<String>withTopic(SampleConstants.TOPIC)
+                        .tag(SampleConstants.TAG)
                         .keys(orderId)
                         .body(content)
                         .build();

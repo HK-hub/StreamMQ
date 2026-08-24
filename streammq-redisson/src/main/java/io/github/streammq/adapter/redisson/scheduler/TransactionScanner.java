@@ -5,6 +5,7 @@ import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.enums.LocalTransactionState;
+import io.github.streammq.core.enums.TransactionScanState;
 import io.github.streammq.core.exception.StreamMQBrokerException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.metrics.StreamMQMetrics;
@@ -66,18 +67,18 @@ public class TransactionScanner implements StreamMQScheduler {
     /** Class.forName 缓存，避免重复类加载查找 */
     private static final ConcurrentMap<String, Class<?>> CLASS_CACHE = new ConcurrentHashMap<>();
 
-    /** 事务状态字段值 */
-    public static final String STATE_PREPARE = "PREPARE";
+    /** 事务状态字段值（线上协议编码，委托给 {@link TransactionScanState} 枚举） */
+    public static final String STATE_PREPARE = TransactionScanState.PREPARE.getCode();
 
-    public static final String STATE_COMMIT = "COMMIT";
-    public static final String STATE_ROLLBACK = "ROLLBACK";
-    public static final String STATE_UNKNOWN = "UNKNOWN";
+    public static final String STATE_COMMIT = TransactionScanState.COMMIT.getCode();
+    public static final String STATE_ROLLBACK = TransactionScanState.ROLLBACK.getCode();
+    public static final String STATE_UNKNOWN = TransactionScanState.UNKNOWN.getCode();
 
     /** 中间状态：提交中（实例已原子抢占事务，正在执行转投，其它实例见到此状态应等待或重新执行） */
-    public static final String STATE_COMMITTING = "COMMITTING";
+    public static final String STATE_COMMITTING = TransactionScanState.COMMITTING.getCode();
 
     /** 中间状态：回滚中（实例已原子抢占事务，正在执行删除，其它实例见到此状态应等待或重新执行） */
-    public static final String STATE_ROLLBACKING = "ROLLBACKING";
+    public static final String STATE_ROLLBACKING = TransactionScanState.ROLLBACKING.getCode();
 
     /**
      * Lua 脚本：原子检查状态并设置目标状态，返回旧状态。
@@ -180,7 +181,7 @@ public class TransactionScanner implements StreamMQScheduler {
                 new ScheduledThreadPoolExecutor(
                         1,
                         r -> {
-                            Thread t = new Thread(r, "streammq-txcheck-scheduler");
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_TXCHECK_SCHEDULER);
                             t.setDaemon(true);
                             return t;
                         });

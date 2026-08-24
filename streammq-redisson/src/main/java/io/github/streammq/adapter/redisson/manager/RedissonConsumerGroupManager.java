@@ -1,6 +1,7 @@
 package io.github.streammq.adapter.redisson.manager;
 
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.policy.ConsumerGroupManager;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.util.CollectionUtils;
@@ -36,10 +37,12 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
     private static final Logger LOG = LoggerFactory.getLogger(RedissonConsumerGroupManager.class);
 
     /** 默认心跳间隔 5s */
-    public static final long DEFAULT_HEARTBEAT_INTERVAL_MS = 5_000L;
+    public static final long DEFAULT_HEARTBEAT_INTERVAL_MS =
+            StreamMQConstants.DEFAULT_HEARTBEAT_INTERVAL_MS;
 
     /** 默认实例超时 20s（4 个心跳周期） */
-    public static final long DEFAULT_INSTANCE_TIMEOUT_MS = 20_000L;
+    public static final long DEFAULT_INSTANCE_TIMEOUT_MS =
+            StreamMQConstants.DEFAULT_INSTANCE_TIMEOUT_MS;
 
     private final RedissonClient redisson;
     private final String namespace;
@@ -63,6 +66,12 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
 
     /** 心跳失败阈值 */
     private static final int HEARTBEAT_FAIL_THRESHOLD = 3;
+
+    /** 重平衡通知 Pub/Sub 载荷 */
+    private static final String NOTIFY_REBALANCE = "REBALANCE";
+
+    /** 分片分配 CSV 序列化分隔符 */
+    private static final String SHARD_CSV_DELIMITER = ",";
 
     /**
      * 构造 ConsumerGroupManager。
@@ -122,7 +131,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
                 new ScheduledThreadPoolExecutor(
                         1,
                         r -> {
-                            Thread t = new Thread(r, "streammq-hb-" + group);
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_HEARTBEAT_PREFIX + group);
                             t.setDaemon(true);
                             return t;
                         });
@@ -176,7 +185,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
                 topic.addListener(
                         String.class,
                         (channel, msg) -> {
-                            if ("REBALANCE".equals(msg)) {
+                            if (NOTIFY_REBALANCE.equals(msg)) {
                                 LOG.info(
                                         "Received REBALANCE notification: group={}, instanceId={}",
                                         group,
@@ -359,13 +368,14 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
                 for (Map.Entry<String, List<Integer>> entry : assignment.entrySet()) {
                     String shardsCsv =
                             String.join(
-                                    ",", entry.getValue().stream().map(String::valueOf).toList());
+                                    SHARD_CSV_DELIMITER,
+                                    entry.getValue().stream().map(String::valueOf).toList());
                     assignMap.put(entry.getKey(), shardsCsv);
                 }
                 // 广播 REBALANCE 通知
                 String notifyKey = StreamMQKeys.consumerGroupNotify(namespace, group);
                 RTopic topic = redisson.getTopic(notifyKey);
-                topic.publish("REBALANCE");
+                topic.publish(NOTIFY_REBALANCE);
                 LOG.info(
                         "Rebalance completed: group={}, instances={}, assignment={}",
                         group,
@@ -391,7 +401,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
             return List.of();
         }
         List<Integer> shards = new ArrayList<>();
-        for (String part : csv.split(",")) {
+        for (String part : csv.split(SHARD_CSV_DELIMITER)) {
             try {
                 shards.add(Integer.parseInt(part.trim()));
             } catch (NumberFormatException ignored) {
