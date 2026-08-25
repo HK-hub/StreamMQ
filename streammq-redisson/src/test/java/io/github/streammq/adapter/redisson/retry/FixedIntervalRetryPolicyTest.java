@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.retry;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -17,7 +22,21 @@ import org.junit.jupiter.api.Test;
 @DisplayName("FixedIntervalRetryPolicy 固定间隔重试策略测试")
 class FixedIntervalRetryPolicyTest {
 
-    private final Message<String> msg = new Message<>();
+    private final Message<String> msg =
+            new Message<>(
+                    "retry-topic",
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    "b",
+                    null,
+                    null,
+                    0L,
+                    null,
+                    null,
+                    0);
 
     @Test
     @DisplayName("默认构造 intervalMs=10000, maxRetries=16")

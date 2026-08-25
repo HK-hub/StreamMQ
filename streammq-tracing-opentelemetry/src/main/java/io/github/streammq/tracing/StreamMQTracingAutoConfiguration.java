@@ -1,9 +1,20 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.tracing;
 
 import io.github.streammq.core.listener.StreamMQListenerContainer;
 import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.core.trace.StreamMQTraceService;
 import io.opentelemetry.api.OpenTelemetry;
+import io.opentelemetry.api.common.Attributes;
+import io.opentelemetry.exporter.otlp.trace.OtlpGrpcSpanExporter;
+import io.opentelemetry.sdk.OpenTelemetrySdk;
+import io.opentelemetry.sdk.resources.Resource;
+import io.opentelemetry.sdk.trace.SdkTracerProvider;
+import io.opentelemetry.sdk.trace.export.BatchSpanProcessor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -47,22 +58,62 @@ import org.springframework.context.annotation.Configuration;
 public class StreamMQTracingAutoConfiguration {
 
     /**
-     * 默认 OpenTelemetry 实例（no-op）。
+     * 默认 OpenTelemetry 实例。
      *
-     * <p>当用户未提供自定义 {@link OpenTelemetry} Bean 时使用 no-op 实例，追踪操作将优雅降级为空操作。 建议用户通过 OTel Spring Boot
-     * Starter 或 Agent 注入真实 SDK 实例以启用数据导出。
+     * <p>行为由配置决定：
      *
+     * <ul>
+     *   <li>配置 {@code streammq.tracing.otel.otlp-endpoint} 时：构建完整 SDK（BatchSpanProcessor + OTLP
+     *       gRPC Exporter），Span 按配置间隔批量导出到指定端点
+     *   <li>未配置端点且用户未提供自定义 Bean 时：no-op 实例，优雅降级为空操作；建议通过 OTel Spring Boot Starter / Agent 注入真实 SDK
+     *       以启用导出
+     * </ul>
+     *
+     * @param properties 追踪配置
      * @return OpenTelemetry 实例
      */
-    @Bean
+    @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
-    public OpenTelemetry streamMQOpenTelemetry(StreamMQTracingProperties properties) {
+    public OpenTelemetrySdk streamMQOpenTelemetry(StreamMQTracingProperties properties) {
+        String otlpEndpoint = properties.getOtlpEndpoint();
+        if (otlpEndpoint == null || otlpEndpoint.isBlank()) {
+            log.info(
+                    "StreamMQ OpenTelemetry 追踪已启用，未配置 otlp-endpoint，使用 no-op 默认实例"
+                            + "（不会导出任何数据）；serviceName={}",
+                    properties.getServiceName());
+            return (OpenTelemetrySdk) OpenTelemetry.noop();
+        }
+        // 真实 SDK + OTLP 导出
+        // service.name 使用原生 AttributeKey，避免依赖 -alpha 语义约定构件
+        Resource resource =
+                Resource.getDefault()
+                        .merge(
+                                Resource.create(
+                                        Attributes.of(
+                                                io.opentelemetry.api.common.AttributeKey.stringKey(
+                                                        "service.name"),
+                                                properties.getServiceName())));
+        OtlpGrpcSpanExporter exporter =
+                OtlpGrpcSpanExporter.builder()
+                        .setEndpoint(otlpEndpoint)
+                        .setTimeout(java.time.Duration.ofSeconds(10))
+                        .build();
+        BatchSpanProcessor spanProcessor =
+                BatchSpanProcessor.builder(exporter)
+                        .setScheduleDelay(
+                                java.time.Duration.ofMillis(properties.getExporterIntervalMs()))
+                        .build();
+        SdkTracerProvider tracerProvider =
+                SdkTracerProvider.builder()
+                        .setResource(resource)
+                        .addSpanProcessor(spanProcessor)
+                        .build();
         log.info(
-                "StreamMQ OpenTelemetry 追踪已启用，未检测到自定义 OpenTelemetry Bean，使用 no-op 默认实例；"
-                        + "serviceName={}, otlpEndpoint={}",
+                "StreamMQ OpenTelemetry SDK 已启用，OTLP gRPC 导出至 {}，serviceName={}，批次间隔={}ms",
+                otlpEndpoint,
                 properties.getServiceName(),
-                properties.getOtlpEndpoint());
-        return OpenTelemetry.noop();
+                properties.getExporterIntervalMs());
+        return OpenTelemetrySdk.builder().setTracerProvider(tracerProvider).build();
     }
 
     /**

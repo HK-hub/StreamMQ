@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.core.enums;
 
 import java.util.Arrays;
@@ -61,10 +66,7 @@ public enum TransactionScanState {
      * @return 匹配的枚举；未匹配时返回 {@link #UNKNOWN}
      */
     public static TransactionScanState ofCode(String code) {
-        return Arrays.stream(values())
-                .filter(s -> s.code.equals(code))
-                .findFirst()
-                .orElse(UNKNOWN);
+        return Arrays.stream(values()).filter(s -> s.code.equals(code)).findFirst().orElse(UNKNOWN);
     }
 
     /**

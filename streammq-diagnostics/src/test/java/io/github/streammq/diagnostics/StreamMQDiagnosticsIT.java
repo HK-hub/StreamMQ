@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.diagnostics;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -14,6 +19,7 @@ import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.core.trace.StreamMQTraceService;
 import io.github.streammq.core.trace.TraceRecord;
 import io.github.streammq.core.trace.TraceType;
+import io.github.streammq.core.util.RedisAvailability;
 import io.github.streammq.diagnostics.model.BacklogReport;
 import io.github.streammq.diagnostics.model.ConsumeAttempt;
 import io.github.streammq.diagnostics.model.DlqReport;
@@ -25,10 +31,13 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
@@ -76,7 +85,17 @@ import org.springframework.test.context.DynamicPropertySource;
 })
 @DirtiesContext
 @DisplayName("StreamMQ Diagnostics 真实集成测试")
+@EnabledIf(
+        value = "io.github.streammq.core.util.RedisAvailability#localhostAvailable",
+        disabledReason = "Redis not available at localhost:6379")
 class StreamMQDiagnosticsIT {
+    @BeforeAll
+    static void requireRedis() {
+        // 无本地 Redis 时跳过（上下文/用例依赖真实 Redis），保证 mvn verify 任意环境可复现
+        Assumptions.assumeTrue(
+                RedisAvailability.isAvailable("localhost", 6379),
+                "Redis not available at localhost:6379, skipping IT");
+    }
 
     @DynamicPropertySource
     static void redisPassword(DynamicPropertyRegistry registry) {

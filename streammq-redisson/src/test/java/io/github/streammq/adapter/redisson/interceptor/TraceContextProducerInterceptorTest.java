@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.interceptor;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -31,20 +36,35 @@ import org.mockito.ArgumentCaptor;
 @DisplayName("TraceContextProducerInterceptor 追踪上下文生产者拦截器测试")
 class TraceContextProducerInterceptorTest {
 
+    /** 构造仅含 body 的测试消息（不可变）。 */
+    private Message<String> sample(String topic, String body) {
+        return new Message<>(
+                topic != null ? topic : "t",
+                null,
+                null,
+                null,
+                null,
+                null,
+                body,
+                null,
+                null,
+                0L,
+                null,
+                null,
+                0);
+    }
+
     @Test
-    @DisplayName("beforeSend 消息无 traceId 时生成 UUID 写入 userProperties")
+    @DisplayName("beforeSend 消息无 traceId 时生成 UUID 写入派生消息的 userProperties")
     void beforeSendGeneratesTraceId() {
         TraceCollector collector = new NoopTraceCollector();
         TraceContextProducerInterceptor interceptor =
                 new TraceContextProducerInterceptor(collector);
 
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
+        Message<?> result = interceptor.beforeSend(sample(null, "hello"));
 
-        boolean result = interceptor.beforeSend(msg);
-
-        assertThat(result).isTrue();
-        String traceId = msg.getUserProperties().get(TraceContextProducerInterceptor.TRACE_ID_KEY);
+        String traceId =
+                result.getUserProperties().get(TraceContextProducerInterceptor.TRACE_ID_KEY);
         assertThat(traceId).isNotNull().isNotEmpty();
         // 应为合法 UUID
         assertThat(UUID.fromString(traceId)).isNotNull();
@@ -57,13 +77,16 @@ class TraceContextProducerInterceptorTest {
         TraceContextProducerInterceptor interceptor =
                 new TraceContextProducerInterceptor(collector);
 
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.putUserProperty(TraceContextProducerInterceptor.TRACE_ID_KEY, "existing-trace-id");
+        Message<String> msg =
+                sample(null, "hello")
+                        .addUserProperty(
+                                TraceContextProducerInterceptor.TRACE_ID_KEY, "existing-trace-id");
 
-        interceptor.beforeSend(msg);
+        Message<?> result = interceptor.beforeSend(msg);
 
-        assertThat(msg.getUserProperties().get(TraceContextProducerInterceptor.TRACE_ID_KEY))
+        // 未携带 traceId 的原实例应原样返回
+        assertThat(result).isSameAs(msg);
+        assertThat(result.getUserProperties().get(TraceContextProducerInterceptor.TRACE_ID_KEY))
                 .isEqualTo("existing-trace-id");
     }
 
@@ -85,11 +108,11 @@ class TraceContextProducerInterceptorTest {
         TraceContextProducerInterceptor interceptor =
                 new TraceContextProducerInterceptor(collector);
 
-        Message<String> msg = new Message<>();
-        msg.setTopic("topic-1");
-        msg.setBody("hello");
-        msg.putUserProperty(TraceContextProducerInterceptor.TRACE_ID_KEY, "trace-1");
-        interceptor.beforeSend(msg);
+        Message<String> msg = sample("topic-1", "hello");
+        Message<?> effective =
+                interceptor
+                        .beforeSend(msg)
+                        .addUserProperty(TraceContextProducerInterceptor.TRACE_ID_KEY, "trace-1");
 
         SendResult result =
                 new SendResult(
@@ -101,7 +124,7 @@ class TraceContextProducerInterceptorTest {
                         null,
                         null);
 
-        interceptor.afterSend(msg, result);
+        interceptor.afterSend(effective, result);
 
         ArgumentCaptor<TraceCollector.SendTraceContext> captor =
                 ArgumentCaptor.forClass(TraceCollector.SendTraceContext.class);
@@ -122,9 +145,7 @@ class TraceContextProducerInterceptorTest {
         TraceContextProducerInterceptor interceptor =
                 new TraceContextProducerInterceptor(collector);
 
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        interceptor.beforeSend(msg);
+        Message<?> effective = interceptor.beforeSend(sample(null, "hello"));
 
         SendResult result =
                 new SendResult(
@@ -135,7 +156,7 @@ class TraceContextProducerInterceptorTest {
                         System.currentTimeMillis(),
                         null,
                         null);
-        interceptor.afterSend(msg, result);
+        interceptor.afterSend(effective, result);
 
         verify(collector, never()).recordSend(any(TraceCollector.SendTraceContext.class));
     }
@@ -148,10 +169,7 @@ class TraceContextProducerInterceptorTest {
         TraceContextProducerInterceptor interceptor =
                 new TraceContextProducerInterceptor(collector);
 
-        Message<String> msg = new Message<>();
-        msg.setTopic("topic-1");
-        msg.setBody("hello");
-        interceptor.beforeSend(msg);
+        Message<?> effective = interceptor.beforeSend(sample("topic-1", "hello"));
 
         SendResult result =
                 new SendResult(
@@ -162,7 +180,7 @@ class TraceContextProducerInterceptorTest {
                         System.currentTimeMillis(),
                         "region-1",
                         "boom");
-        interceptor.afterSend(msg, result);
+        interceptor.afterSend(effective, result);
 
         ArgumentCaptor<TraceCollector.SendTraceContext> captor =
                 ArgumentCaptor.forClass(TraceCollector.SendTraceContext.class);
@@ -184,9 +202,7 @@ class TraceContextProducerInterceptorTest {
         TraceContextProducerInterceptor interceptor =
                 new TraceContextProducerInterceptor(collector);
 
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        interceptor.beforeSend(msg);
+        Message<?> effective = interceptor.beforeSend(sample(null, "hello"));
 
         SendResult result =
                 new SendResult(
@@ -198,7 +214,7 @@ class TraceContextProducerInterceptorTest {
                         null,
                         null);
         // 不应抛异常
-        interceptor.afterSend(msg, result);
+        interceptor.afterSend(effective, result);
     }
 
     @Test
@@ -209,10 +225,9 @@ class TraceContextProducerInterceptorTest {
         TraceContextProducerInterceptor interceptor =
                 new TraceContextProducerInterceptor(collector);
 
-        Message<String> msg = new Message<>();
-        msg.setTopic("topic-1");
-        msg.setBody("hello");
-        msg.putUserProperty(TraceContextProducerInterceptor.TRACE_ID_KEY, "trace-1");
+        Message<String> msg =
+                sample("topic-1", "hello")
+                        .addUserProperty(TraceContextProducerInterceptor.TRACE_ID_KEY, "trace-1");
 
         SendResult result =
                 new SendResult(

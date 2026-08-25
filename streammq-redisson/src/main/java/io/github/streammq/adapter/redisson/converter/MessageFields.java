@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.converter;
 
 import io.github.streammq.core.StreamMQConstants;
@@ -55,8 +60,7 @@ public final class MessageFields {
     public static final String DLQ_REASON = StreamMQConstants.FIELD_DLQ_REASON;
 
     /** Stream Entry 字段名：原始消息 ID（DLQ / 重试场景） */
-    public static final String ORIGINAL_MESSAGE_ID =
-            StreamMQConstants.FIELD_ORIGINAL_MESSAGE_ID;
+    public static final String ORIGINAL_MESSAGE_ID = StreamMQConstants.FIELD_ORIGINAL_MESSAGE_ID;
 
     /** JVM byte[] 类型的类描述符（bodyType 探测用） */
     public static final String BYTE_ARRAY_DESCRIPTOR = "[B";

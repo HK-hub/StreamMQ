@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.benchmark;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
@@ -10,7 +15,7 @@ import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.template.StreamMessageTemplate;
-import io.github.streammq.test.EmbeddedRedisServer;
+import io.github.streammq.test.ContainerizedRedisServer;
 import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -49,7 +54,7 @@ public class StreamConsumerBenchmark {
 
     private RedissonClient redisson;
     private StreamMessageTemplate template;
-    private EmbeddedRedisServer redisServer;
+    private ContainerizedRedisServer redisServer;
 
     @Param({"1024", "10240"})
     private int payloadSize;
@@ -61,7 +66,7 @@ public class StreamConsumerBenchmark {
         String mode = System.getProperty("streammq.redis.mode", "docker");
         if ("docker".equalsIgnoreCase(mode)) {
             LOG.info("Starting Redis via Testcontainers...");
-            redisServer = new EmbeddedRedisServer();
+            redisServer = new ContainerizedRedisServer();
             redisServer.start();
         }
 

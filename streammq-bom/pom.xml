@@ -12,6 +12,32 @@
     <name>StreamMQ BOM</name>
     <description>StreamMQ 物料清单 (Bill of Materials)，统一管理 StreamMQ 各模块与第三方依赖版本。本 BOM 独立于 streammq-parent，可被任意项目 import。</description>
 
+    <url>https://github.com/HK-hub/StreamMQ</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>streammq-contributors</id>
+            <name>StreamMQ Contributors</name>
+            <email>3161880795@qq.com</email>
+            <url>https://github.com/HK-hub/StreamMQ</url>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:https://github.com/HK-hub/StreamMQ.git</connection>
+        <developerConnection>scm:git:https://github.com/HK-hub/StreamMQ.git</developerConnection>
+        <url>https://github.com/HK-hub/StreamMQ</url>
+        <tag>v0.1.0</tag>
+    </scm>
+
     <properties>
         <!-- StreamMQ 自身版本 -->
         <streammq.version>0.1.0</streammq.version>
@@ -230,19 +256,7 @@
             </plugin>
         </plugins>
     </build>
-
-    <!-- ========== 发布仓库（Maven Central / OSSRH）==========
-         BOM 独立于 streammq-parent，不继承其 distributionManagement，需显式声明以支持 mvn deploy。 -->
-    <distributionManagement>
-        <snapshotRepository>
-            <id>ossrh</id>
-            <url>https://s01.oss.sonatype.org/content/repositories/snapshots</url>
-        </snapshotRepository>
-        <repository>
-            <id>ossrh</id>
-            <url>https://s01.oss.sonatype.org/service/local/staging/deploy/maven2</url>
-        </repository>
-    </distributionManagement>
+    <!-- 发布走根 POM 的 central-publishing-maven-plugin（Central Portal），不再使用已停用的 OSSRH -->
 
     <!-- ========== 发布 Profile：GPG 签名 ========== -->
     <profiles>

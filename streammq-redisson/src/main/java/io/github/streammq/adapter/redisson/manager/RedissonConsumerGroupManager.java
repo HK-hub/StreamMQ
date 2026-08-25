@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.manager;
 
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
@@ -131,7 +136,9 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
                 new ScheduledThreadPoolExecutor(
                         1,
                         r -> {
-                            Thread t = new Thread(r, StreamMQConstants.THREAD_HEARTBEAT_PREFIX + group);
+                            Thread t =
+                                    new Thread(
+                                            r, StreamMQConstants.THREAD_HEARTBEAT_PREFIX + group);
                             t.setDaemon(true);
                             return t;
                         });
@@ -170,12 +177,14 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
         instances().put(instanceId, String.valueOf(System.currentTimeMillis()));
         LOG.info("Consumer instance registered: group={}, instanceId={}", group, instanceId);
 
-        // 2. 申请 RSemaphore（防并发 Rebalance）
+        // 2. 初始化 Rebalance 互斥信号量（1 个许可；仅 rebalance() 临界区内 acquire/release，
+        //    注册时不再长期占用许可——此前注册即 acquire 且从不释放，导致其它实例的
+        //    rebalance 永远拿不到许可、注销时又释放从未持有的许可，计数被破坏）
         try {
             RSemaphore sem = redisson.getSemaphore(semaphoreKey);
-            sem.tryAcquire();
+            sem.trySetPermits(1);
         } catch (RuntimeException ex) {
-            LOG.warn("Failed to acquire RSemaphore for group={}: {}", group, ex.getMessage());
+            LOG.warn("Failed to init RSemaphore for group={}: {}", group, ex.getMessage());
         }
 
         // 3. 订阅 Rebalance 通知
@@ -229,13 +238,6 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
         }
         // 从 instances Hash 移除
         instances().remove(instanceId);
-        // 释放信号量
-        try {
-            RSemaphore sem = redisson.getSemaphore(semaphoreKey);
-            sem.release();
-        } catch (RuntimeException ex) {
-            LOG.warn("Failed to release RSemaphore for group={}: {}", group, ex.getMessage());
-        }
         // 关闭心跳线程池，避免线程泄漏
         heartbeatExecutor.shutdown();
         LOG.info("Consumer instance unregistered: group={}, instanceId={}", group, instanceId);

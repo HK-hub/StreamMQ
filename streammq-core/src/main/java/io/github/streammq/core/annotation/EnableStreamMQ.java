@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.core.annotation;
 
 import io.github.streammq.core.StreamMQConstants;
@@ -33,15 +38,19 @@ import java.lang.annotation.*;
 public @interface EnableStreamMQ {
 
     /**
-     * 启用模式，默认 {@link StreamMQConstants#MODE_STANDARD}。 v1.0+ 支持 {@link
-     * StreamMQConstants#MODE_LITE}（轻量模式，不启用 Actuator 指标）。
+     * 启用模式，默认 {@link StreamMQConstants#MODE_STANDARD}。
+     *
+     * <p><b>预留属性（0.1.0 未生效）</b>：{@code MODE_LITE} 轻量模式规划中，当前任何取值均不改变装配行为。
      *
      * @return 模式字符串
      */
     String mode() default StreamMQConstants.MODE_STANDARD;
 
     /**
-     * 全局追踪开关，默认 false。 设置为 true 时启用全局消息追踪（注册 Slf4jTraceCollector 与追踪拦截器）。
+     * 全局追踪开关，默认 false。
+     *
+     * <p><b>预留属性（0.1.0 未生效）</b>：追踪请通过配置文件 {@code streammq.tracing.enabled=true} 或 引入 {@code
+     * streammq-tracing-opentelemetry} 模块启用，本属性当前不注册任何追踪组件。
      *
      * @return true 启用追踪
      */
@@ -49,6 +58,8 @@ public @interface EnableStreamMQ {
 
     /**
      * 自定义扫描包路径（默认使用 Spring Boot 启动类所在包）。
+     *
+     * <p><b>预留属性（0.1.0 未生效）</b>：消费者扫描基于 Spring Bean 发现机制，无需指定包路径； 本属性当前不参与扫描行为。
      *
      * @return 扫描包路径数组
      */

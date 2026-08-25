@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+    <!--
+        OWASP dependency-check 抑制清单。
+        CI 安全任务（mvn verify -Dowasp.skip=false）依赖本文件存在；
+        新增抑制时请附 CVE 编号与理由，便于审计。
+    -->
+</suppressions>

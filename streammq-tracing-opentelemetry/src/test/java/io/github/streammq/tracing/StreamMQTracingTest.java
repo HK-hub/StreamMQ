@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.tracing;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -6,7 +11,6 @@ import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.message.Message;
 import io.opentelemetry.api.OpenTelemetry;
 import io.opentelemetry.api.trace.Span;
-import io.opentelemetry.api.trace.SpanContext;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.samplers.Sampler;
@@ -39,41 +43,35 @@ class StreamMQTracingTest {
         if (java.util.Objects.nonNull(tracerProvider)) {
             tracerProvider.shutdown();
         }
-        tracing.clearCurrentProducerSpan();
     }
 
     @Test
-    @DisplayName("injectProducerSpan 应将合法 W3C traceparent 注入消息属性")
+    @DisplayName("injectProducerSpan 应将合法 W3C traceparent 注入派生消息属性")
     void injectProducerSpan_shouldInjectTraceparent() {
         Message<String> message = buildMessage("order-topic");
 
-        tracing.injectProducerSpan(message);
+        Message<?> enriched = tracing.injectProducerSpan(message);
 
-        String traceparent = message.getUserProperties().get(StreamMQTracing.TRACEPARENT_KEY);
+        String traceparent = enriched.getUserProperties().get(StreamMQTracing.TRACEPARENT_KEY);
         assertThat(traceparent).isNotNull().matches(TRACEPARENT_REGEX);
 
-        Span producerSpan = tracing.getCurrentProducerSpan();
-        assertThat(producerSpan).isNotNull();
-        SpanContext ctx = producerSpan.getSpanContext();
-        assertThat(ctx.isValid()).isTrue();
-        // traceparent 中的 traceId / spanId 应与生产者 Span 一致
-        String[] parts = traceparent.split("-", 4);
-        assertThat(parts[1]).isEqualTo(ctx.getTraceId());
-        assertThat(parts[2]).isEqualTo(ctx.getSpanId());
-
-        tracing.endSpan(producerSpan, true);
-        tracing.clearCurrentProducerSpan();
+        // 通过消息配对结束生产者 Span（注册表按派生消息引用查找）
+        tracing.endProducerSpan(enriched, true);
     }
 
     @Test
-    @DisplayName("startConsumerSpan 应从消息属性提取父级上下文，复用同一 traceId")
+    @DisplayName("startConsumerSpan 应从派生消息属性提取父级上下文，复用同一 traceId")
     void startConsumerSpan_shouldExtractParentContext() {
         Message<String> message = buildMessage("order-topic");
-        tracing.injectProducerSpan(message);
-        Span producerSpan = tracing.getCurrentProducerSpan();
-        String producerTraceId = producerSpan.getSpanContext().getTraceId();
+        Message<?> enriched = tracing.injectProducerSpan(message);
+        String producerTraceparent =
+                enriched.getUserProperties().get(StreamMQTracing.TRACEPARENT_KEY);
+        String producerTraceId = producerTraceparent.split("-", 4)[1];
 
-        Span consumerSpan = tracing.startConsumerSpan(message, buildContext("order-group", 0));
+        // 消费端拿到的是注入后的消息（Redis 往返后即该形态）
+        @SuppressWarnings("unchecked")
+        Message<String> consumed = (Message<String>) enriched;
+        Span consumerSpan = tracing.startConsumerSpan(consumed, buildContext("order-group", 0));
 
         assertThat(consumerSpan).isNotNull();
         assertThat(consumerSpan.getSpanContext().isValid()).isTrue();
@@ -81,8 +79,7 @@ class StreamMQTracingTest {
         assertThat(consumerSpan.getSpanContext().getTraceId()).isEqualTo(producerTraceId);
 
         tracing.endSpan(consumerSpan, true);
-        tracing.endSpan(producerSpan, true);
-        tracing.clearCurrentProducerSpan();
+        tracing.endProducerSpan(enriched, true);
     }
 
     @Test
@@ -98,12 +95,13 @@ class StreamMQTracingTest {
     }
 
     @Test
-    @DisplayName("endSpan 失败重载应安全处理 null Span")
+    @DisplayName("endSpan 失败重载应安全处理 null Span；endProducerSpan 未配对时静默跳过")
     void endSpan_shouldHandleNullSpan() {
         tracing.endSpan(null, false);
         tracing.endSpan(null, false, "error");
-        // 无异常即通过
-        assertThat(tracing.getCurrentProducerSpan()).isNull();
+        tracing.endProducerSpan(null, true);
+        // 无配对消息引用：静默跳过，无异常即通过
+        tracing.endProducerSpan(buildMessage("t"), true);
     }
 
     @Test
@@ -112,22 +110,28 @@ class StreamMQTracingTest {
         StreamMQTracing noopTracing = new StreamMQTracing(OpenTelemetry.noop());
         Message<String> message = buildMessage("order-topic");
 
-        noopTracing.injectProducerSpan(message);
+        Message<?> result = noopTracing.injectProducerSpan(message);
 
-        assertThat(message.getUserProperties().get(StreamMQTracing.TRACEPARENT_KEY)).isNull();
-        Span span = noopTracing.getCurrentProducerSpan();
-        assertThat(span).isNotNull();
-        noopTracing.endSpan(span, true);
-        noopTracing.clearCurrentProducerSpan();
+        assertThat(result.getUserProperties().get(StreamMQTracing.TRACEPARENT_KEY)).isNull();
+        // 无有效 Span 时 endProducerSpan 应为安全 no-op
+        noopTracing.endProducerSpan(result, true);
     }
 
     private Message<String> buildMessage(String topic) {
-        Message<String> message = new Message<>();
-        message.setTopic(topic);
-        message.setTag("created");
-        message.setKeys("order-123");
-        message.setBody("payload");
-        return message;
+        return new Message<>(
+                topic,
+                "created",
+                "order-123",
+                null,
+                null,
+                null,
+                "payload",
+                null,
+                null,
+                System.currentTimeMillis(),
+                "host:8080",
+                null,
+                0);
     }
 
     private ConsumeContext buildContext(String group, int reconsumeTimes) {

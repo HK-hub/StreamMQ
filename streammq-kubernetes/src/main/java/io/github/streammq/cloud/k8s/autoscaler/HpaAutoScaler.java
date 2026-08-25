@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.cloud.k8s.autoscaler;
 
 import io.fabric8.kubernetes.client.KubernetesClient;
@@ -231,6 +236,16 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
         long currentLag = metricsProvider.getConsumerLag(topic, group);
         double currentRate = metricsProvider.getConsumeRate(topic, group);
 
+        // FAIL-CLOSED：无任何真实指标数据时绝不缩容。此前空指标 → avgLag=0 → 命中
+        // 缩容分支 → 把繁忙消费者压到 minReplicas，是严重事故源。
+        if (currentLag <= 0 && currentRate <= 0) {
+            log.debug(
+                    "No metrics available for {}/{}, skipping scaling decision (fail-closed)",
+                    ns,
+                    name);
+            return;
+        }
+
         double targetLagVal = targetLag;
         double avgLag = currentLag;
         int desiredReplicas = currentReplicas;
@@ -240,7 +255,7 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
             double ratio = avgLag / Math.max(targetLagVal, 1);
             desiredReplicas = Math.min(maxReplicas, (int) Math.ceil(currentReplicas * ratio));
             direction = DIRECTION_UP;
-        } else if (avgLag < targetLagVal * scaleDownPct / 100.0) {
+        } else if (avgLag > 0 && avgLag < targetLagVal * scaleDownPct / 100.0) {
             double ratio = avgLag / Math.max(targetLagVal, 1);
             desiredReplicas = Math.max(minReplicas, (int) Math.floor(currentReplicas * ratio));
             direction = DIRECTION_DOWN;
@@ -316,12 +331,25 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
         return true;
     }
 
+    @SuppressWarnings("deprecation")
     private boolean executeScaling(StreamMQCluster cluster, int replicas) {
         String ns = cluster.getMetadata().getNamespace();
         String name = cluster.getMetadata().getName();
         try {
             kubernetesClient.apps().deployments().inNamespace(ns).withName(name).scale(replicas);
-            cluster.getSpec().setReplicas(replicas);
+            // 同步持久化 spec.replicas 到 CR：否则 reconcile 在 resync 周期会按旧 spec 把
+            // Deployment 缩回去，两个控制器互相拉抖。写入后 reconcile 与 HPA 目标一致。
+            StreamMQCluster toUpdate = new StreamMQCluster();
+            toUpdate.setApiVersion(cluster.getApiVersion());
+            toUpdate.setKind(cluster.getKind());
+            toUpdate.setMetadata(cluster.getMetadata());
+            toUpdate.setSpec(cluster.getSpec());
+            toUpdate.getSpec().setReplicas(replicas);
+            kubernetesClient
+                    .resources(StreamMQCluster.class)
+                    .inNamespace(ns)
+                    .withName(name)
+                    .replace(toUpdate);
             return true;
         } catch (Exception e) {
             log.error(

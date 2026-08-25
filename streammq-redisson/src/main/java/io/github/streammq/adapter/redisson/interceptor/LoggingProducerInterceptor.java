@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.interceptor;
 
 import io.github.streammq.core.enums.InvokeTiming;
@@ -31,13 +36,13 @@ public class LoggingProducerInterceptor implements ProducerInterceptor {
     private static final Logger LOG = LoggerFactory.getLogger(LoggingProducerInterceptor.class);
 
     @Override
-    public boolean beforeSend(Message<?> message) {
+    public Message<?> beforeSend(Message<?> message) {
         Objects.requireNonNull(message, "message");
         LOG.info(
                 "[ProducerLog] beforeSend topic={}, keys={}",
                 message.getTopic(),
                 message.getKeys());
-        return true;
+        return message;
     }
 
     @Override

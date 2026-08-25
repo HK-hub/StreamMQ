@@ -4,3 +4,4 @@ io.github.streammq.spring.boot.autoconfigure.StreamMQCoreAutoConfiguration
 io.github.streammq.spring.boot.autoconfigure.StreamMQSchedulerAutoConfiguration
 io.github.streammq.spring.boot.autoconfigure.StreamMQListenerContainerAutoConfiguration
 io.github.streammq.spring.boot.autoconfigure.StreamMQHealthAutoConfiguration
+io.github.streammq.spring.boot.autoconfigure.StreamMQMetricsAutoConfiguration

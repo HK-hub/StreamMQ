@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.core.util;
 
 import java.io.IOException;
@@ -33,5 +38,16 @@ public final class RedisAvailability {
         } catch (IOException ex) {
             return false;
         }
+    }
+
+    /**
+     * 判断本地默认端口 (localhost:6379) 的 Redis 是否可用。
+     *
+     * <p>供测试类通过 {@code @EnabledIf} 引用（要求无参静态方法）， 在 Spring 上下文加载之前完成跳过判定。
+     *
+     * @return true 表示可连接
+     */
+    public static boolean localhostAvailable() {
+        return isAvailable("localhost", 6379);
     }
 }

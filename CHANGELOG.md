@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- 集成测试在无 Redis 环境统一自动跳过（含 Spring Boot 自动装配 IT），保证 `mvn verify` 在任意环境可复现
+- 调度器（Retry/Delay/Transaction/PelClaim）SmartLifecycle 相位调整为先于消费容器启动、晚于其停止
+- 事务消息：未注入 TransactionScanner 时快速失败（不再提供"先投递再回滚"的假事务回退路径）
+- 诊断 REST 报告增加 locale-neutral `code` 字段，message 文本改为英文；移除伪造的线程池活跃度指标
+
+### Removed
+
+- 移除未生效的配置项：`streammq.event.*`、`streammq.thread-name-prefix`、`streammq.tracing.collector`、`streammq.tracing.trace-topic`（自定义 TraceCollector 请直接声明 Spring Bean）
+- 移除 Kubernetes 模块中无控制器的 StreamMQTopic / StreamMQConsumerGroup CRD 与模型
+- 移除不可拉取的默认镜像名；`spec.image` 现为必填
+
+### Fixed
+
+#### streammq-redisson（投递可靠性）
+
+- 并发消费组新增 PEL 启动排空 + PelClaim 认领覆盖，修复实例崩溃后消息永久滞留 PEL 的问题
+- 毒丸消息逐条隔离进入 DLQ，不再拖垮整批已投递消息
+- 延时消息改为「先写 payload 后写调度」+ 批量失败回补 ZSet，消除两处崩溃丢消息窗口
+- 事务消息引入执行权锁（SETNX+TTL）串行化发布临界区，消除 COMMITTING 状态双实例重复发布
+- PelClaim DLQ 分支调整为「先写 DLQ 后 ACK」，消除崩溃丢失窗口
+- 同步发送仅在"确定未送达"的异常上重试；超时后已确认成功的结果直接返回，避免模板重试导致重复消息
+- 重试/DLQ 调度改为单原子批次写入并附带 payload TTL；二级 DLQ 路由失败时保留 PEL 不再静默丢弃
+- Rebalance 信号量初始化修复（此前许可从未初始化、注册期误占用）
+- 广播模式消费者组改用稳定实例标识并在停止时销毁，修复组无限累积与全量重放
+- 延时消息补齐 maxMessageSize 校验
+
+#### streammq-spring-boot-starter
+
+- 修复 Micrometer 指标自动装配失效（未注册为顶层 AutoConfiguration 导致排序失序）
+- AOP 代理消费者的注解解析改用 target class，修复代理 Bean 无法注册消费的问题
+- `@StreamMQDlqConsumer` 支持 `${}` 占位符解析
+- 新增独立 `streammq.admin.enabled` 开关，与 `streammq.health.enabled` 解耦
+
+#### streammq-tracing-opentelemetry
+
+- 修复异步发送场景 Producer Span 泄漏（跨线程 ThreadLocal 配对失效），改为有界消息级注册表
+- 实现 OTLP gRPC 导出器：配置 `otlp-endpoint` 即构建真实 SDK 导出链路（此前仅 no-op 且静默忽略端点配置）
+- 消费 Span 增加 makeCurrent 作用域，业务侧 `Span.current()` 可正确挂接
+
+#### 其他模块
+
+- Kubernetes 控制器 phase 由 Deployment 就绪副本推导（对齐 CRD enum）；HPA 无指标时 fail-closed；扩缩容结果持久化到 CR spec；Redis 密码支持 SecretKeyRef；模块默认关闭并标注实验性
+- 诊断积压探针改用 XPENDING 总数形式，消除 >1000 条时的静默截断
+- 测试工具 flushdb 增加 `-Dstreammq.test.redis.flushAllowed=true` 本地模式守卫；Embedded Redis 更名为 ContainerizedRedisServer 并前置 Docker 可用性检查
+
+## [0.1.0]
+
 ### Planned (V2.0, 规划中，尚未实现)
 
 - Multi-backend abstraction (BackendProvider SPI) supporting Redis / Kafka / RabbitMQ / Pulsar
@@ -76,8 +125,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - README with architecture overview, feature list, quick start guide
 - V1.0 design documents: PRD, architecture, functional design, detailed design
-- Full API documentation in `docs/doc-site/`
+- Design documents under `docs/` (PRD / architecture / functional / detailed)
 - Configuration reference, deployment guide, FAQ
 
-[Unreleased]: https://github.com/streammq/streammq/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/streammq/streammq/releases/tag/v0.1.0
+[Unreleased]: https://github.com/HK-hub/StreamMQ/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/HK-hub/StreamMQ/releases/tag/v0.1.0

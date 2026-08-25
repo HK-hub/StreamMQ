@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.core.message;
 
 import io.github.streammq.core.enums.DelayLevel;
@@ -8,114 +13,79 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
-import lombok.AccessLevel;
 import lombok.Getter;
-import lombok.Setter;
 
 /**
- * 消息载体，封装 Topic / Tag / Keys / ShardingKey / Properties / Body 等字段。
+ * 消息载体（不可变值对象），封装 Topic / Tag / Keys / ShardingKey / Properties / Body 等字段。
  *
  * <p>对应一条 Redis Stream Entry。元信息（tag/keys/shardingKey/properties）始终为 String， 仅 {@link #body} 通过
  * {@code MessageSerializer} 序列化为 byte[]。
  *
- * <p><b>构造方式（用户代码）：</b>推荐使用 {@link MessageBuilder#build()}， 或通过已有的 Message 实例调用 {@code withXxx()}
- * 方法获得修改后的新实例。
+ * <p><b>构造方式：</b>业务代码统一使用 {@link MessageBuilder#build()}；框架代码可使用公开全参构造器或 {@code withXxx()}
+ * 派生方法。所有字段均为 {@code final}，实例创建后不可修改，可安全地在多线程间共享。
  *
- * <p><b>关于 {@code @Setter}：</b>类级 Lombok {@code @Setter} 注解仅保留给框架内部 （如 {@code MessageConverter}
- * 在反序列化时逐字段 set），<strong>业务代码不应直接使用 setter</strong>。 全参构造器已覆盖所有字段（含 {@code reconsumeTimes}），{@link
- * MessageBuilder#build()} 直接调用构造器。
+ * <p>发送成功后的消息 ID 由 {@link SendResult} 承载，框架不会回填修改传入的 Message 实例。
  *
  * @param <T> body 类型
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
 @Getter
-@Setter
 public final class Message<T> implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
     /** Topic（必填），对应一个 Redis Key（Stream） */
-    private String topic;
+    private final String topic;
 
     /** Tag（可选），同一 Topic 下的二级分类，用于消费端过滤 */
-    private String tag;
+    private final String tag;
 
     /** 业务键（可选），用于业务层幂等/查询，框架不使用此字段做去重 */
-    private String keys;
+    private final String keys;
 
     /** 分片键（可选），仅顺序消费场景使用，相同 shardingKey 的消息路由到同一分片保证顺序 */
-    private String shardingKey;
+    private final String shardingKey;
 
-    /** 系统属性（不可变），框架使用，例如 traceId。手写 getter/setter 做防御性拷贝。 */
-    @Getter(AccessLevel.NONE)
-    @Setter(AccessLevel.NONE)
-    private Map<String, String> properties;
+    /** 系统属性（防御性拷贝），框架使用，例如 traceId。getter 返回不可修改视图。 */
+    private final Map<String, String> properties;
 
-    /** 用户属性（不可变），用户自定义透传。手写 getter/setter 做防御性拷贝。 */
-    @Getter(AccessLevel.NONE)
-    @Setter(AccessLevel.NONE)
-    private Map<String, String> userProperties;
+    /** 用户属性（防御性拷贝），用户自定义透传。getter 返回不可修改视图。 */
+    private final Map<String, String> userProperties;
 
     /** 消息体（必填），由序列化器决定如何转 byte[] */
-    private T body;
+    private final T body;
 
     /**
      * 延时级别（可选），18 级固定延时，非空时表示延时消息。 与 {@link #delayTimeMillis} 互斥，同时设置时 {@code delayTimeMillis} 优先。
      *
-     * <p>实现机制：通过 {@link io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler} 周期扫描
-     * ZSet，将到期消息转投到目标 Stream。 精度取决于扫描间隔（默认 1000ms），实际延时可能有 ±1000ms 误差。
+     * <p>实现机制：通过延时调度器周期扫描 ZSet，将到期消息转投到目标 Stream。 精度取决于扫描间隔（默认 1000ms）。
      */
-    private DelayLevel delayLevel;
+    private final DelayLevel delayLevel;
+
+    /** 任意延时毫秒数（可选）。优先级高于 {@link #delayLevel}，同时设置时此字段生效。 */
+    private final Long delayTimeMillis;
 
     /**
-     * 任意延时毫秒数（可选），v1.0+ 支持。 优先级高于 {@link #delayLevel}，同时设置时此字段生效。
-     *
-     * <p>实现机制：与 {@link #delayLevel} 相同，使用 ScoredSortedSet 存储， score 为触发时间戳。精度取决于扫描间隔（默认 1000ms）。
-     *
-     * <p>两种延时方式的可靠性相同，均基于 Redis ZSet + 定时扫描。
+     * 消息 ID（对应 Redis Stream Entry ID，格式 {@code {timestamp}-{sequence}}）。 发送场景下由发送结果 {@link
+     * SendResult} 承载；消费/重试场景由框架从 Stream Entry 派生。
      */
-    private Long delayTimeMillis;
-
-    /**
-     * 消息 ID（发送成功后由框架回填，对应 Redis Stream Entry ID）。 格式为 {@code {timestamp}-{sequence}}，由 Redis XADD
-     * 自动生成。 用户发送时无需设置，框架会在发送成功后回填。
-     */
-    private MessageId messageId;
+    private final MessageId messageId;
 
     /** 出生时间戳（毫秒），发送端写入，用于消息溯源和超时判断 */
-    private long bornTimestamp;
+    private final long bornTimestamp;
 
     /** 出生主机（发送端 host:port），用于消息溯源，分布式环境下仅供参考 */
-    private String bornHost;
+    private final String bornHost;
 
-    /**
-     * 已重试消费次数（框架在每次重试时自动递增）。
-     *
-     * <p>管理规则：
-     *
-     * <ul>
-     *   <li>首次发送时此字段为 0，用户无需设置
-     *   <li>每次消费失败进入重试时，框架自动递增此值并写入 retry ZSet
-     *   <li>如果用户手动设置了此值，框架会在下次重试时覆盖为实际重试次数
-     *   <li>此字段用于 {@link io.github.streammq.core.policy.RetryPolicy} 计算下次重试延迟
-     * </ul>
-     *
-     * <p>在 {@link MessageBuilder#build()} 中，如果用户未设置，框架默认初始化为 0。
-     */
-    private int reconsumeTimes;
+    /** 已重试消费次数（框架在每次重试时通过 {@link #withReconsumeTimes(int)} 派生新实例递增） */
+    private final int reconsumeTimes;
 
     /** 事务 ID（仅事务消息） */
-    @Getter private String transactionId;
-
-    /** 默认构造（用于反序列化）。 */
-    public Message() {
-        this.properties = new HashMap<>();
-        this.userProperties = new HashMap<>();
-    }
+    private final String transactionId;
 
     /**
-     * 通过 Builder 调用的全参构造。
+     * 公开全参构造器（框架与 Builder 使用），messageId 初始为 null。
      *
      * @param topic 主题
      * @param tag 标签
@@ -145,6 +115,39 @@ public final class Message<T> implements Serializable {
             String bornHost,
             String transactionId,
             int reconsumeTimes) {
+        this(
+                topic,
+                tag,
+                keys,
+                shardingKey,
+                properties,
+                userProperties,
+                body,
+                delayLevel,
+                delayTimeMillis,
+                null,
+                bornTimestamp,
+                bornHost,
+                transactionId,
+                reconsumeTimes);
+    }
+
+    /** 私有全参构造器（含 messageId，供 withXxx 与框架反序列化派生使用）。 */
+    private Message(
+            String topic,
+            String tag,
+            String keys,
+            String shardingKey,
+            Map<String, String> properties,
+            Map<String, String> userProperties,
+            T body,
+            DelayLevel delayLevel,
+            Long delayTimeMillis,
+            MessageId messageId,
+            long bornTimestamp,
+            String bornHost,
+            String transactionId,
+            int reconsumeTimes) {
         Objects.requireNonNull(topic, "topic");
         if (topic.trim().isEmpty()) {
             throw new IllegalArgumentException("topic must not be empty");
@@ -155,17 +158,20 @@ public final class Message<T> implements Serializable {
         this.shardingKey = shardingKey;
         this.properties = Objects.isNull(properties) ? new HashMap<>() : new HashMap<>(properties);
         this.userProperties =
-                Objects.isNull(userProperties) ? new HashMap<>() : new HashMap<>(userProperties);
+                Objects.isNull(userProperties)
+                        ? new HashMap<>()
+                        : new LinkedHashMap<>(userProperties);
         this.body = body;
         this.delayLevel = delayLevel;
         this.delayTimeMillis = delayTimeMillis;
+        this.messageId = messageId;
         this.bornTimestamp = bornTimestamp;
         this.bornHost = bornHost;
         this.transactionId = transactionId;
         this.reconsumeTimes = reconsumeTimes;
     }
 
-    // ===================== properties / userProperties 手写访问器（含防御性拷贝）=====================
+    // ===================== properties / userProperties 访问器 =====================
 
     /**
      * 返回系统属性（不可修改视图）。
@@ -176,17 +182,6 @@ public final class Message<T> implements Serializable {
         return Collections.unmodifiableMap(properties);
     }
 
-    public void setProperties(Map<String, String> properties) {
-        this.properties =
-                Objects.isNull(properties) ? new HashMap<>() : new LinkedHashMap<>(properties);
-    }
-
-    public void putProperty(String key, String value) {
-        Objects.requireNonNull(key, "property key");
-        Objects.requireNonNull(value, "property value");
-        this.properties.put(key, value);
-    }
-
     /**
      * 返回用户属性（不可修改视图）。
      *
@@ -194,19 +189,6 @@ public final class Message<T> implements Serializable {
      */
     public Map<String, String> getUserProperties() {
         return Collections.unmodifiableMap(userProperties);
-    }
-
-    public void setUserProperties(Map<String, String> userProperties) {
-        this.userProperties =
-                Objects.isNull(userProperties)
-                        ? new HashMap<>()
-                        : new LinkedHashMap<>(userProperties);
-    }
-
-    public void putUserProperty(String key, String value) {
-        Objects.requireNonNull(key, "userProperty key");
-        Objects.requireNonNull(value, "userProperty value");
-        this.userProperties.put(key, value);
     }
 
     // ===================== 业务方法 =====================
@@ -229,7 +211,7 @@ public final class Message<T> implements Serializable {
         return StringUtils.isNotEmpty(transactionId);
     }
 
-    // ===================== 不可变操作（withXxx 方法） =====================
+    // ===================== 不可变操作（withXxx / addXxx 方法） =====================
 
     /**
      * 返回带有指定 topic 的新 Message 实例。
@@ -242,9 +224,21 @@ public final class Message<T> implements Serializable {
         if (topic.trim().isEmpty()) {
             throw new IllegalArgumentException("topic must not be empty");
         }
-        Message<T> copy = copyInternal();
-        copy.topic = topic;
-        return copy;
+        return new Message<>(
+                topic,
+                tag,
+                keys,
+                shardingKey,
+                properties,
+                userProperties,
+                body,
+                delayLevel,
+                delayTimeMillis,
+                messageId,
+                bornTimestamp,
+                bornHost,
+                transactionId,
+                reconsumeTimes);
     }
 
     /**
@@ -254,9 +248,7 @@ public final class Message<T> implements Serializable {
      * @return 新的 Message 实例
      */
     public Message<T> withTag(String tag) {
-        Message<T> copy = copyInternal();
-        copy.tag = tag;
-        return copy;
+        return derive(tag, keys, shardingKey, properties, userProperties, body);
     }
 
     /**
@@ -266,9 +258,21 @@ public final class Message<T> implements Serializable {
      * @return 新的 Message 实例
      */
     public Message<T> withKeys(String keys) {
-        Message<T> copy = copyInternal();
-        copy.keys = keys;
-        return copy;
+        return new Message<>(
+                topic,
+                tag,
+                keys,
+                shardingKey,
+                properties,
+                userProperties,
+                body,
+                delayLevel,
+                delayTimeMillis,
+                messageId,
+                bornTimestamp,
+                bornHost,
+                transactionId,
+                reconsumeTimes);
     }
 
     /**
@@ -278,9 +282,21 @@ public final class Message<T> implements Serializable {
      * @return 新的 Message 实例
      */
     public Message<T> withShardingKey(String shardingKey) {
-        Message<T> copy = copyInternal();
-        copy.shardingKey = shardingKey;
-        return copy;
+        return new Message<>(
+                topic,
+                tag,
+                keys,
+                shardingKey,
+                properties,
+                userProperties,
+                body,
+                delayLevel,
+                delayTimeMillis,
+                messageId,
+                bornTimestamp,
+                bornHost,
+                transactionId,
+                reconsumeTimes);
     }
 
     /**
@@ -290,9 +306,7 @@ public final class Message<T> implements Serializable {
      * @return 新的 Message 实例
      */
     public Message<T> withBody(T body) {
-        Message<T> copy = copyInternal();
-        copy.body = body;
-        return copy;
+        return derive(tag, keys, shardingKey, properties, userProperties, body);
     }
 
     /**
@@ -302,9 +316,21 @@ public final class Message<T> implements Serializable {
      * @return 新的 Message 实例
      */
     public Message<T> withDelayLevel(DelayLevel delayLevel) {
-        Message<T> copy = copyInternal();
-        copy.delayLevel = delayLevel;
-        return copy;
+        return new Message<>(
+                topic,
+                tag,
+                keys,
+                shardingKey,
+                properties,
+                userProperties,
+                body,
+                delayLevel,
+                delayTimeMillis,
+                messageId,
+                bornTimestamp,
+                bornHost,
+                transactionId,
+                reconsumeTimes);
     }
 
     /**
@@ -314,9 +340,21 @@ public final class Message<T> implements Serializable {
      * @return 新的 Message 实例
      */
     public Message<T> withDelayTimeMillis(Long delayTimeMillis) {
-        Message<T> copy = copyInternal();
-        copy.delayTimeMillis = delayTimeMillis;
-        return copy;
+        return new Message<>(
+                topic,
+                tag,
+                keys,
+                shardingKey,
+                properties,
+                userProperties,
+                body,
+                delayLevel,
+                delayTimeMillis,
+                messageId,
+                bornTimestamp,
+                bornHost,
+                transactionId,
+                reconsumeTimes);
     }
 
     /**
@@ -326,57 +364,117 @@ public final class Message<T> implements Serializable {
      * @return 新的 Message 实例
      */
     public Message<T> withMessageId(MessageId messageId) {
-        Message<T> copy = copyInternal();
-        copy.messageId = messageId;
-        return copy;
+        return new Message<>(
+                topic,
+                tag,
+                keys,
+                shardingKey,
+                properties,
+                userProperties,
+                body,
+                delayLevel,
+                delayTimeMillis,
+                messageId,
+                bornTimestamp,
+                bornHost,
+                transactionId,
+                reconsumeTimes);
     }
 
     /**
-     * 返回带有指定 bornTimestamp 的新 Message 实例。
+     * 返回带有指定出生时间戳的新 Message 实例。
      *
-     * @param bornTimestamp 新的 bornTimestamp
+     * @param bornTimestamp 新的出生时间戳
      * @return 新的 Message 实例
      */
     public Message<T> withBornTimestamp(long bornTimestamp) {
-        Message<T> copy = copyInternal();
-        copy.bornTimestamp = bornTimestamp;
-        return copy;
+        return new Message<>(
+                topic,
+                tag,
+                keys,
+                shardingKey,
+                properties,
+                userProperties,
+                body,
+                delayLevel,
+                delayTimeMillis,
+                messageId,
+                bornTimestamp,
+                bornHost,
+                transactionId,
+                reconsumeTimes);
     }
 
     /**
-     * 返回带有指定 bornHost 的新 Message 实例。
+     * 返回带有指定出生主机的新 Message 实例。
      *
-     * @param bornHost 新的 bornHost
+     * @param bornHost 新的出生主机
      * @return 新的 Message 实例
      */
     public Message<T> withBornHost(String bornHost) {
-        Message<T> copy = copyInternal();
-        copy.bornHost = bornHost;
-        return copy;
+        return new Message<>(
+                topic,
+                tag,
+                keys,
+                shardingKey,
+                properties,
+                userProperties,
+                body,
+                delayLevel,
+                delayTimeMillis,
+                messageId,
+                bornTimestamp,
+                bornHost,
+                transactionId,
+                reconsumeTimes);
     }
 
     /**
-     * 返回带有指定 reconsumeTimes 的新 Message 实例。
+     * 返回带有指定重试次数的新 Message 实例。
      *
      * @param reconsumeTimes 新的重试次数
      * @return 新的 Message 实例
      */
     public Message<T> withReconsumeTimes(int reconsumeTimes) {
-        Message<T> copy = copyInternal();
-        copy.reconsumeTimes = reconsumeTimes;
-        return copy;
+        return new Message<>(
+                topic,
+                tag,
+                keys,
+                shardingKey,
+                properties,
+                userProperties,
+                body,
+                delayLevel,
+                delayTimeMillis,
+                messageId,
+                bornTimestamp,
+                bornHost,
+                transactionId,
+                reconsumeTimes);
     }
 
     /**
-     * 返回带有指定 transactionId 的新 Message 实例。
+     * 返回带有指定事务 ID 的新 Message 实例。
      *
      * @param transactionId 新的事务 ID
      * @return 新的 Message 实例
      */
     public Message<T> withTransactionId(String transactionId) {
-        Message<T> copy = copyInternal();
-        copy.transactionId = transactionId;
-        return copy;
+        return new Message<>(
+                topic,
+                tag,
+                keys,
+                shardingKey,
+                properties,
+                userProperties,
+                body,
+                delayLevel,
+                delayTimeMillis,
+                messageId,
+                bornTimestamp,
+                bornHost,
+                transactionId,
+                reconsumeTimes);
     }
 
     /**
@@ -386,10 +484,9 @@ public final class Message<T> implements Serializable {
      * @return 新的 Message 实例
      */
     public Message<T> withProperties(Map<String, String> properties) {
-        Message<T> copy = copyInternal();
-        copy.properties =
+        Map<String, String> copied =
                 Objects.isNull(properties) ? new HashMap<>() : new LinkedHashMap<>(properties);
-        return copy;
+        return derive(tag, keys, shardingKey, copied, userProperties, body);
     }
 
     /**
@@ -402,9 +499,9 @@ public final class Message<T> implements Serializable {
     public Message<T> addProperty(String key, String value) {
         Objects.requireNonNull(key, "property key");
         Objects.requireNonNull(value, "property value");
-        Message<T> copy = copyInternal();
-        copy.properties.put(key, value);
-        return copy;
+        Map<String, String> copied = new HashMap<>(this.properties);
+        copied.put(key, value);
+        return derive(tag, keys, shardingKey, copied, userProperties, body);
     }
 
     /**
@@ -414,12 +511,11 @@ public final class Message<T> implements Serializable {
      * @return 新的 Message 实例
      */
     public Message<T> withUserProperties(Map<String, String> userProperties) {
-        Message<T> copy = copyInternal();
-        copy.userProperties =
+        Map<String, String> copied =
                 Objects.isNull(userProperties)
                         ? new HashMap<>()
                         : new LinkedHashMap<>(userProperties);
-        return copy;
+        return derive(tag, keys, shardingKey, properties, copied, body);
     }
 
     /**
@@ -430,37 +526,38 @@ public final class Message<T> implements Serializable {
      * @return 新的 Message 实例
      */
     public Message<T> addUserProperty(String key, String value) {
-        Objects.requireNonNull(key, "userProperty key");
+        Objects.requireNonNull(key, "property key");
         Objects.requireNonNull(value, "userProperty value");
-        Message<T> copy = copyInternal();
-        copy.userProperties.put(key, value);
-        return copy;
+        Map<String, String> copied = new LinkedHashMap<>(this.userProperties);
+        copied.put(key, value);
+        return derive(tag, keys, shardingKey, properties, copied, body);
     }
 
     // ===================== 内部工具方法 =====================
 
-    /**
-     * 创建当前消息的防御性拷贝（内部使用）。
-     *
-     * @return 消息副本
-     */
-    private Message<T> copyInternal() {
-        Message<T> copy = new Message<>();
-        copy.topic = this.topic;
-        copy.tag = this.tag;
-        copy.keys = this.keys;
-        copy.shardingKey = this.shardingKey;
-        copy.properties = new HashMap<>(this.properties);
-        copy.userProperties = new LinkedHashMap<>(this.userProperties);
-        copy.body = this.body;
-        copy.delayLevel = this.delayLevel;
-        copy.delayTimeMillis = this.delayTimeMillis;
-        copy.messageId = this.messageId;
-        copy.bornTimestamp = this.bornTimestamp;
-        copy.bornHost = this.bornHost;
-        copy.reconsumeTimes = this.reconsumeTimes;
-        copy.transactionId = this.transactionId;
-        return copy;
+    /** 以当前实例为基础派生新实例（仅变化元信息字段，其余字段原样保留）。 */
+    private Message<T> derive(
+            String newTag,
+            String newKeys,
+            String newShardingKey,
+            Map<String, String> newProperties,
+            Map<String, String> newUserProperties,
+            T newBody) {
+        return new Message<>(
+                topic,
+                newTag,
+                newKeys,
+                newShardingKey,
+                newProperties,
+                newUserProperties,
+                newBody,
+                delayLevel,
+                delayTimeMillis,
+                messageId,
+                bornTimestamp,
+                bornHost,
+                transactionId,
+                reconsumeTimes);
     }
 
     @Override

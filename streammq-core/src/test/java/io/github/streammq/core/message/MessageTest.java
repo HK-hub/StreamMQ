@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.core.message;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -11,39 +16,26 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
-/** {@link Message} 单元测试，覆盖构造、getter/setter、延时/事务判断、属性视图与 toString。 */
+/** {@link Message} 单元测试：不可变值对象语义，覆盖构造、派生（withXxx/addXxx）、防御性拷贝、 延时/事务判断、属性视图与 toString。 */
 @DisplayName("Message 消息载体测试")
 class MessageTest {
 
-    @Nested
-    @DisplayName("默认构造")
-    class DefaultConstructor {
-
-        @Test
-        @DisplayName("默认构造时 properties 与 userProperties 为空 Map")
-        void defaultConstructor_shouldInitEmptyProperties() {
-            Message<String> message = new Message<>();
-            assertThat(message.getProperties()).isEmpty();
-            assertThat(message.getUserProperties()).isEmpty();
-        }
-
-        @Test
-        @DisplayName("默认构造时引用类型字段为 null，基本类型为零值")
-        void defaultConstructor_fieldsAreDefault() {
-            Message<String> message = new Message<>();
-            assertThat(message.getTopic()).isNull();
-            assertThat(message.getTag()).isNull();
-            assertThat(message.getKeys()).isNull();
-            assertThat(message.getShardingKey()).isNull();
-            assertThat(message.getBody()).isNull();
-            assertThat(message.getDelayLevel()).isNull();
-            assertThat(message.getDelayTimeMillis()).isNull();
-            assertThat(message.getMessageId()).isNull();
-            assertThat(message.getBornTimestamp()).isZero();
-            assertThat(message.getBornHost()).isNull();
-            assertThat(message.getReconsumeTimes()).isZero();
-            assertThat(message.getTransactionId()).isNull();
-        }
+    /** 标准测试消息工厂。 */
+    private Message<String> sample() {
+        return new Message<>(
+                "topic",
+                "tag",
+                "keys",
+                "shard",
+                null,
+                null,
+                "body",
+                null,
+                null,
+                1234567890L,
+                "host:8080",
+                null,
+                0);
     }
 
     @Nested
@@ -89,6 +81,12 @@ class MessageTest {
         }
 
         @Test
+        @DisplayName("messageId 初始为 null，发送结果承载真实 ID")
+        void fullConstructor_messageIdNull() {
+            assertThat(sample().getMessageId()).isNull();
+        }
+
+        @Test
         @DisplayName("全参构造对 null properties/userProperties 创建空 Map")
         void fullConstructor_nullPropertiesBecomesEmpty() {
             Message<String> message =
@@ -111,66 +109,64 @@ class MessageTest {
             props.put("k2", "v2");
             assertThat(message.getProperties()).hasSize(1).containsEntry("k", "v");
         }
+
+        @Test
+        @DisplayName("topic 为 null 抛 NPE，空字符串抛 IAE")
+        void fullConstructor_topicValidation() {
+            assertThatThrownBy(
+                            () ->
+                                    new Message<>(
+                                            null, null, null, null, null, null, "body", null, null,
+                                            0L, null, null, 0))
+                    .isInstanceOf(NullPointerException.class);
+            assertThatThrownBy(
+                            () ->
+                                    new Message<>(
+                                            " ", null, null, null, null, null, "body", null, null,
+                                            0L, null, null, 0))
+                    .isInstanceOf(IllegalArgumentException.class);
+        }
     }
 
     @Nested
-    @DisplayName("Getter/Setter")
-    class GetterSetter {
+    @DisplayName("withXxx 派生方法")
+    class DerivedInstances {
 
         @Test
-        @DisplayName("所有 setter 正确写入，getter 正确读取")
-        void settersAndGetters() {
-            Message<String> message = new Message<>();
-            message.setTopic("topic");
-            message.setTag("tag");
-            message.setKeys("keys");
-            message.setShardingKey("shard");
-            message.setBody("body");
-            message.setDelayLevel(DelayLevel.MINUTE_1);
-            message.setDelayTimeMillis(500L);
-            message.setBornTimestamp(999L);
-            message.setBornHost("host");
-            message.setReconsumeTimes(3);
-            message.setTransactionId("tx");
+        @DisplayName("每个 withXxx 返回新实例且只改变目标字段")
+        void derivedMethods_returnNewInstanceAndChangeOnlyTargetField() {
+            Message<String> base = sample();
 
-            assertThat(message.getTopic()).isEqualTo("topic");
-            assertThat(message.getTag()).isEqualTo("tag");
-            assertThat(message.getKeys()).isEqualTo("keys");
-            assertThat(message.getShardingKey()).isEqualTo("shard");
-            assertThat(message.getBody()).isEqualTo("body");
-            assertThat(message.getDelayLevel()).isEqualTo(DelayLevel.MINUTE_1);
-            assertThat(message.getDelayTimeMillis()).isEqualTo(500L);
-            assertThat(message.getBornTimestamp()).isEqualTo(999L);
-            assertThat(message.getBornHost()).isEqualTo("host");
-            assertThat(message.getReconsumeTimes()).isEqualTo(3);
-            assertThat(message.getTransactionId()).isEqualTo("tx");
-        }
+            assertThat(base.withTopic("t2").getTopic()).isEqualTo("t2");
+            assertThat(base.withTag("tag2").getTag()).isEqualTo("tag2");
+            assertThat(base.withKeys("k2").getKeys()).isEqualTo("k2");
+            assertThat(base.withShardingKey("s2").getShardingKey()).isEqualTo("s2");
+            assertThat(base.withBody("b2").getBody()).isEqualTo("b2");
+            assertThat(base.withDelayLevel(DelayLevel.MINUTE_1).getDelayLevel())
+                    .isEqualTo(DelayLevel.MINUTE_1);
+            assertThat(base.withDelayTimeMillis(500L).getDelayTimeMillis()).isEqualTo(500L);
+            assertThat(base.withBornTimestamp(999L).getBornTimestamp()).isEqualTo(999L);
+            assertThat(base.withBornHost("h2").getBornHost()).isEqualTo("h2");
+            assertThat(base.withReconsumeTimes(3).getReconsumeTimes()).isEqualTo(3);
+            assertThat(base.withTransactionId("tx").getTransactionId()).isEqualTo("tx");
 
-        @Test
-        @DisplayName("setMessageId 正确设置与读取")
-        void messageIdSetter() {
-            Message<String> message = new Message<>();
             MessageId id = new MessageId("100-0");
-            message.setMessageId(id);
-            assertThat(message.getMessageId()).isEqualTo(id);
+            assertThat(base.withMessageId(id).getMessageId()).isEqualTo(id);
+
+            // 原实例不受影响
+            assertThat(base.getTag()).isEqualTo("tag");
+            assertThat(base.getBody()).isEqualTo("body");
         }
 
         @Test
-        @DisplayName("setProperties 传入 null 时清空为空 Map")
-        void setProperties_nullBecomesEmpty() {
-            Message<String> message = new Message<>();
-            message.putProperty("k", "v");
-            message.setProperties(null);
-            assertThat(message.getProperties()).isEmpty();
-        }
-
-        @Test
-        @DisplayName("setUserProperties 传入 null 时清空为空 Map")
-        void setUserProperties_nullBecomesEmpty() {
-            Message<String> message = new Message<>();
-            message.putUserProperty("k", "v");
-            message.setUserProperties(null);
-            assertThat(message.getUserProperties()).isEmpty();
+        @DisplayName("派生实例保留原实例的全部其他字段")
+        void derived_preservesOtherFields() {
+            Message<String> derived = sample().withTag("changed").withReconsumeTimes(5);
+            assertThat(derived.getTopic()).isEqualTo("topic");
+            assertThat(derived.getKeys()).isEqualTo("keys");
+            assertThat(derived.getShardingKey()).isEqualTo("shard");
+            assertThat(derived.getBornHost()).isEqualTo("host:8080");
+            assertThat(derived.getReconsumeTimes()).isEqualTo(5);
         }
     }
 
@@ -179,26 +175,21 @@ class MessageTest {
     class IsDelayMessage {
 
         @Test
-        @DisplayName("设置 delayLevel 时返回 true")
+        @DisplayName("delayLevel 派生后返回 true")
         void withDelayLevel() {
-            Message<String> message = new Message<>();
-            message.setDelayLevel(DelayLevel.SECOND_5);
-            assertThat(message.isDelayMessage()).isTrue();
+            assertThat(sample().withDelayLevel(DelayLevel.SECOND_5).isDelayMessage()).isTrue();
         }
 
         @Test
-        @DisplayName("设置 delayTimeMillis 时返回 true")
+        @DisplayName("delayTimeMillis 派生后返回 true")
         void withDelayTimeMillis() {
-            Message<String> message = new Message<>();
-            message.setDelayTimeMillis(2000L);
-            assertThat(message.isDelayMessage()).isTrue();
+            assertThat(sample().withDelayTimeMillis(2000L).isDelayMessage()).isTrue();
         }
 
         @Test
         @DisplayName("两者均未设置时返回 false")
         void withoutAnyDelay() {
-            Message<String> message = new Message<>();
-            assertThat(message.isDelayMessage()).isFalse();
+            assertThat(sample().isDelayMessage()).isFalse();
         }
     }
 
@@ -209,82 +200,55 @@ class MessageTest {
         @Test
         @DisplayName("transactionId 为 null 时返回 false")
         void nullTransactionId() {
-            Message<String> message = new Message<>();
-            message.setTransactionId(null);
-            assertThat(message.isTransactionMessage()).isFalse();
+            assertThat(sample().isTransactionMessage()).isFalse();
         }
 
         @Test
         @DisplayName("transactionId 为空字符串时返回 false")
         void emptyTransactionId() {
-            Message<String> message = new Message<>();
-            message.setTransactionId("");
-            assertThat(message.isTransactionMessage()).isFalse();
+            assertThat(sample().withTransactionId("").isTransactionMessage()).isFalse();
         }
 
         @Test
         @DisplayName("transactionId 为非空字符串时返回 true")
         void nonEmptyTransactionId() {
-            Message<String> message = new Message<>();
-            message.setTransactionId("tx-001");
-            assertThat(message.isTransactionMessage()).isTrue();
+            assertThat(sample().withTransactionId("tx-001").isTransactionMessage()).isTrue();
         }
     }
 
     @Nested
-    @DisplayName("putProperty / putUserProperty 校验")
-    class PutPropertyValidation {
+    @DisplayName("addProperty / addUserProperty 校验")
+    class AddPropertyValidation {
 
         @Test
-        @DisplayName("putProperty key 为 null 抛 NPE")
-        void putProperty_nullKey() {
-            Message<String> message = new Message<>();
-            assertThatThrownBy(() -> message.putProperty(null, "v"))
+        @DisplayName("addProperty key 为 null 抛 NPE")
+        void addProperty_nullKey() {
+            assertThatThrownBy(() -> sample().addProperty(null, "v"))
                     .isInstanceOf(NullPointerException.class)
                     .hasMessageContaining("property key");
         }
 
         @Test
-        @DisplayName("putProperty value 为 null 抛 NPE")
-        void putProperty_nullValue() {
-            Message<String> message = new Message<>();
-            assertThatThrownBy(() -> message.putProperty("k", null))
-                    .isInstanceOf(NullPointerException.class)
-                    .hasMessageContaining("property value");
-        }
-
-        @Test
-        @DisplayName("putUserProperty key 为 null 抛 NPE")
-        void putUserProperty_nullKey() {
-            Message<String> message = new Message<>();
-            assertThatThrownBy(() -> message.putUserProperty(null, "v"))
-                    .isInstanceOf(NullPointerException.class)
-                    .hasMessageContaining("userProperty key");
-        }
-
-        @Test
-        @DisplayName("putUserProperty value 为 null 抛 NPE")
-        void putUserProperty_nullValue() {
-            Message<String> message = new Message<>();
-            assertThatThrownBy(() -> message.putUserProperty("k", null))
+        @DisplayName("addUserProperty value 为 null 抛 NPE")
+        void addUserProperty_nullValue() {
+            assertThatThrownBy(() -> sample().addUserProperty("k", null))
                     .isInstanceOf(NullPointerException.class)
                     .hasMessageContaining("userProperty value");
         }
 
         @Test
-        @DisplayName("putProperty 正常写入")
-        void putProperty_normal() {
-            Message<String> message = new Message<>();
-            message.putProperty("traceId", "t-001");
-            assertThat(message.getProperties()).containsEntry("traceId", "t-001");
+        @DisplayName("addProperty 返回携带新属性的派生实例，原实例不变")
+        void addProperty_normal() {
+            Message<String> enriched = sample().addProperty("traceId", "t-001");
+            assertThat(enriched.getProperties()).containsEntry("traceId", "t-001");
+            assertThat(sample().getProperties()).isEmpty();
         }
 
         @Test
-        @DisplayName("putUserProperty 正常写入")
-        void putUserProperty_normal() {
-            Message<String> message = new Message<>();
-            message.putUserProperty("bizKey", "bizVal");
-            assertThat(message.getUserProperties()).containsEntry("bizKey", "bizVal");
+        @DisplayName("addUserProperty 正常写入")
+        void addUserProperty_normal() {
+            Message<String> enriched = sample().addUserProperty("bizKey", "bizVal");
+            assertThat(enriched.getUserProperties()).containsEntry("bizKey", "bizVal");
         }
     }
 
@@ -295,8 +259,7 @@ class MessageTest {
         @Test
         @DisplayName("getProperties 返回不可修改视图，写入抛 UnsupportedOperationException")
         void getProperties_unmodifiable() {
-            Message<String> message = new Message<>();
-            message.putProperty("k", "v");
+            Message<String> message = sample().addProperty("k", "v");
             assertThatExceptionOfType(UnsupportedOperationException.class)
                     .isThrownBy(() -> message.getProperties().put("new", "val"));
         }
@@ -304,8 +267,7 @@ class MessageTest {
         @Test
         @DisplayName("getUserProperties 返回不可修改视图，写入抛 UnsupportedOperationException")
         void getUserProperties_unmodifiable() {
-            Message<String> message = new Message<>();
-            message.putUserProperty("k", "v");
+            Message<String> message = sample().addUserProperty("k", "v");
             assertThatExceptionOfType(UnsupportedOperationException.class)
                     .isThrownBy(() -> message.getUserProperties().put("new", "val"));
         }
@@ -318,13 +280,21 @@ class MessageTest {
         @Test
         @DisplayName("toString 包含 topic/tag/keys/messageId/bornTimestamp 等关键字段")
         void toString_containsKeyFields() {
-            Message<String> message = new Message<>();
-            message.setTopic("order-topic");
-            message.setTag("created");
-            message.setKeys("order-123");
-            message.setBornTimestamp(1000L);
-            message.setTransactionId("tx-1");
-            message.setBody("hello");
+            Message<String> message =
+                    new Message<>(
+                            "order-topic",
+                            "created",
+                            "order-123",
+                            null,
+                            null,
+                            null,
+                            "hello",
+                            null,
+                            null,
+                            1000L,
+                            null,
+                            "tx-1",
+                            0);
 
             String str = message.toString();
             assertThat(str).contains("topic='order-topic'");

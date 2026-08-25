@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.diagnostics;
 
 import io.github.streammq.core.StreamMQConstants;
@@ -40,8 +45,7 @@ public final class StreamMQDiagnosticsDefaults {
     public static final String DLQ_TOPIC_MARKER = "dlq";
 
     /** DLQ 最大重试次数阈值 */
-    public static final int DLQ_MAX_RETRY_COUNT =
-            StreamMQConstants.DEFAULT_DLQ_MAX_RETRY_ATTEMPTS;
+    public static final int DLQ_MAX_RETRY_COUNT = StreamMQConstants.DEFAULT_DLQ_MAX_RETRY_ATTEMPTS;
 
     /** 单次画像查询最大消息数 */
     public static final int MAX_PROFILE_QUERY_SIZE = 1_000;

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
@@ -102,7 +107,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     private final String namespace;
     private final long scanIntervalMs;
     private final int batchSize;
-    private final ScheduledExecutorService scanExecutor;
+    private volatile ScheduledExecutorService scanExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     /** 当前的扫描调度任务，stop 时取消以支持后续 restart */
@@ -142,6 +147,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
             LOG.warn("DelayMessageScheduler already started");
             return;
         }
+        ensureScanExecutorAlive();
         scanFuture =
                 scanExecutor.scheduleAtFixedRate(
                         this::scanAllLevels, 0, scanIntervalMs, TimeUnit.MILLISECONDS);
@@ -149,6 +155,21 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 "DelayMessageScheduler started, scanIntervalMs={}, batchSize={}",
                 scanIntervalMs,
                 batchSize);
+    }
+
+    /** restart 支持：stop 后 executor 已关闭，start 前按需重建。 */
+    private synchronized void ensureScanExecutorAlive() {
+        if (Objects.nonNull(scanExecutor) && !scanExecutor.isShutdown()) {
+            return;
+        }
+        scanExecutor =
+                new ScheduledThreadPoolExecutor(
+                        1,
+                        r -> {
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_DELAY_SCHEDULER);
+                            t.setDaemon(true);
+                            return t;
+                        });
     }
 
     /** 停止调度器（取消扫描任务并关闭线程池，线程为 daemon，不阻塞 JVM 退出）。 */
@@ -163,6 +184,14 @@ public class DelayMessageScheduler implements StreamMQScheduler {
             this.scanFuture = null;
         }
         scanExecutor.shutdown();
+        try {
+            if (!scanExecutor.awaitTermination(AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
+                scanExecutor.shutdownNow();
+            }
+        } catch (InterruptedException ex) {
+            scanExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
         LOG.info("DelayMessageScheduler stopped");
     }
 
@@ -201,6 +230,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
 
         int transferred = 0;
         RBatch batch = null;
+        java.util.List<String> batchMsgIds = new java.util.ArrayList<>();
         for (String msgId : expired) {
             // ZREM 原子移除，返回 true 表示当前实例成功获取
             boolean acquired = zset.remove(msgId);
@@ -238,14 +268,18 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 StreamAddArgs<String, String> args = StreamAddArgs.entries(fields);
                 batch.<String, String>getStream(targetStreamKey).addAsync(args);
                 batch.<String, String>getMap(payloadKey).deleteAsync();
+                batchMsgIds.add(msgId);
                 transferred++;
 
                 recordDelayMetrics(level.name());
 
-                // 批量达到阈值时执行
+                // 批量达到阈值时执行；失败则整批回补 ZSet（ZREM 已生效，不回补即丢失）
                 if (transferred >= batchSize) {
-                    executeBatch(batch);
+                    if (!executeBatch(batch)) {
+                        requeueBatchOnFailure(zset, batchMsgIds);
+                    }
                     batch = null;
+                    batchMsgIds = new java.util.ArrayList<>();
                     transferred = 0;
                 }
             } catch (RuntimeException ex) {
@@ -273,7 +307,9 @@ public class DelayMessageScheduler implements StreamMQScheduler {
             }
         }
         if (Objects.nonNull(batch)) {
-            executeBatch(batch);
+            if (!executeBatch(batch)) {
+                requeueBatchOnFailure(zset, batchMsgIds);
+            }
         }
     }
 
@@ -290,6 +326,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
 
         int transferred = 0;
         RBatch batch = null;
+        java.util.List<String> batchMsgIds = new java.util.ArrayList<>();
         for (String msgId : expired) {
             boolean acquired = zset.remove(msgId);
             if (!acquired) {
@@ -325,6 +362,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 StreamAddArgs<String, String> args = StreamAddArgs.entries(fields);
                 batch.<String, String>getStream(targetStreamKey).addAsync(args);
                 batch.<String, String>getMap(payloadKey).deleteAsync();
+                batchMsgIds.add(msgId);
                 transferred++;
 
                 recordDelayMetrics(DELAY_CUSTOM_LEVEL);
@@ -357,15 +395,50 @@ public class DelayMessageScheduler implements StreamMQScheduler {
             }
         }
         if (Objects.nonNull(batch)) {
-            executeBatch(batch);
+            if (!executeBatch(batch)) {
+                requeueBatchOnFailure(zset, batchMsgIds);
+            }
         }
     }
 
-    private void executeBatch(RBatch batch) {
+    /**
+     * 执行批量转投。
+     *
+     * @return true 批量成功；false 执行失败（调用方必须把本批 msgId 写回 ZSet，否则消息因 ZREM 已生效而丢失）
+     */
+    private boolean executeBatch(RBatch batch) {
         try {
             batch.execute();
+            return true;
         } catch (RuntimeException ex) {
             LOG.error("Delay batch execute failed: {}", ex.getMessage(), ex);
+            return false;
+        }
+    }
+
+    /**
+     * 批量执行失败后的补偿：将本批已 ZREM 的 msgId 重新写回延时 ZSet（score = now + backoff）， 等待下一轮扫描重试。写回失败仅能记录
+     * ERROR（此时消息已不可达，需人工介入）。
+     */
+    private void requeueBatchOnFailure(
+            RScoredSortedSet<String> zset, java.util.List<String> msgIds) {
+        for (String msgId : msgIds) {
+            try {
+                zset.add(System.currentTimeMillis() + failureRequeueBackoffMs, msgId);
+            } catch (RuntimeException reAddEx) {
+                LOG.error(
+                        "CRITICAL: Failed to re-add msgId={} to delay ZSet after batch failure,"
+                                + " message unreachable until manual repair: {}",
+                        msgId,
+                        reAddEx.getMessage(),
+                        reAddEx);
+            }
+        }
+        if (!msgIds.isEmpty()) {
+            LOG.warn(
+                    "Requeued {} delay message(s) after batch failure (backoff {}ms)",
+                    msgIds.size(),
+                    failureRequeueBackoffMs);
         }
     }
 

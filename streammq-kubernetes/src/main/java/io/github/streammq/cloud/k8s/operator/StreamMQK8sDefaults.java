@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.cloud.k8s.operator;
 
 import io.github.streammq.core.StreamMQConstants;
@@ -6,7 +11,7 @@ import io.github.streammq.core.StreamMQConstants;
  * StreamMQ Kubernetes Operator 默认值与协议常量。
  *
  * <p>集中管理 CRD 模型默认值、容器环境变量名、标签、端口与 CR 状态 phase， 供 {@link StreamMQCluster} / {@link
- * StreamMQTopic} / {@link StreamMQConsumerGroup} 与控制器共享， 避免同一默认值散落在多个模型中导致漂移。
+ * 控制器与 CRD 模型共享， 避免同一默认值散落在多个模型中导致漂移。
  *
  * @author StreamMQ Contributors
  * @since 1.1.0
@@ -119,9 +124,6 @@ public final class StreamMQK8sDefaults {
     // ==================== 容器与工作负载 ====================
     /** 消费者容器名称 */
     public static final String CONTAINER_NAME = "streammq-consumer";
-
-    /** 消费者镜像默认值 */
-    public static final String DEFAULT_IMAGE = "streammq/streammq-consumer:latest";
 
     /** 镜像拉取策略 */
     public static final String PULL_POLICY_IF_NOT_PRESENT = "IfNotPresent";

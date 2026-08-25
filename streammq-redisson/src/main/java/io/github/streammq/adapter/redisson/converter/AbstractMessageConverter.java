@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.converter;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -221,7 +226,7 @@ public abstract class AbstractMessageConverter implements MessageConverter {
     protected abstract void encodeBody(Message<?> message, Map<String, String> fields);
 
     /**
-     * 从 Stream Entry 字段解码消息体并设置到 message 上。
+     * 从 Stream Entry 字段解码消息体并写入装配草稿。
      *
      * <p>需处理两种来源：
      *
@@ -232,12 +237,12 @@ public abstract class AbstractMessageConverter implements MessageConverter {
      *
      * @param fields Stream Entry 全部字段
      * @param targetType 目标 body 类型
-     * @param message 输出消息（通过 {@code message.setBody()} 设置解码结果）
+     * @param draft 装配草稿（解码结果写入 {@code draft.body}）
      * @param bodyStr body 字段的原始字符串值（已从 Map 中取出）
      * @param <T> body 泛型类型
      */
     protected abstract <T> void decodeBody(
-            Map<String, String> fields, Class<T> targetType, Message<T> message, String bodyStr);
+            Map<String, String> fields, Class<T> targetType, MessageDraft<T> draft, String bodyStr);
 
     /**
      * 将消息的系统属性和用户属性编码写入 Stream Entry 字段。
@@ -250,15 +255,16 @@ public abstract class AbstractMessageConverter implements MessageConverter {
     protected abstract void encodeProperties(Message<?> message, Map<String, String> fields);
 
     /**
-     * 从 Stream Entry 字段解码属性并设置到 message 上。
+     * 从 Stream Entry 字段解码属性并写入装配草稿。
      *
-     * <p>典型实现：调用 {@link #readPropsJson(Map, String, Consumer)} 从 JSON 读取。
+     * <p>典型实现：调用 {@link #readPropsJson(Map, String, Consumer)} 从 JSON 读取后合并进 {@code
+     * draft.properties} / {@code draft.userProperties}。
      *
-     * @param message 输出消息（通过 setter 设置属性）
+     * @param draft 装配草稿
      * @param fields Stream Entry 全部字段
      * @param <T> body 泛型类型
      */
-    protected abstract <T> void decodeProperties(Message<T> message, Map<String, String> fields);
+    protected abstract <T> void decodeProperties(MessageDraft<T> draft, Map<String, String> fields);
 
     /**
      * 编码扩展字段（钩子方法，默认空实现）。
@@ -273,13 +279,13 @@ public abstract class AbstractMessageConverter implements MessageConverter {
     /**
      * 解码扩展字段（钩子方法，默认空实现）。
      *
-     * <p>用于读取模板方法未覆盖的自定义字段。 在 {@link #fromStreamFields(Map, Class)} 末尾调用。
+     * <p>用于读取模板方法未覆盖的自定义字段。 在 {@link #fromStreamFields(Map, Class, String)} 末尾调用。
      *
-     * @param message 输出消息（通过 setter 设置扩展字段值）
+     * @param draft 装配草稿
      * @param fields Stream Entry 全部字段
      * @param <T> body 泛型类型
      */
-    protected <T> void decodeExtra(Message<T> message, Map<String, String> fields) {}
+    protected <T> void decodeExtra(MessageDraft<T> draft, Map<String, String> fields) {}
 
     // ================================================================
     // 模板方法：编码 —— final，子类不可覆写
@@ -330,46 +336,56 @@ public abstract class AbstractMessageConverter implements MessageConverter {
     /**
      * {@inheritDoc}
      *
-     * <p><b>模板骨架（final）：</b>
-     *
-     * <ol>
-     *   <li>null 校验
-     *   <li>新建空 Message
-     *   <li>读取 topic（若 Converter 支持）
-     *   <li>调用 {@link #decodeBody(Map, Class, Message, String)} — 子类实现
-     *   <li>读取 tag / keys / shardingKey / bornHost / txId（通过 {@link #getField} 封装 null 安全）
-     *   <li>调用 {@link #decodeProperties(Message, Map)} — 子类实现
-     *   <li>解析 bornTs（带容错）
-     *   <li>解析 retryTimes（若 Converter 支持，带容错）
-     *   <li>调用 {@link #decodeExtra(Message, Map)} — 钩子
-     * </ol>
+     * <p>委托到 {@link #fromStreamFields(Map, Class, String)}，不允许字段缺失 Topic。
      */
     @Override
     public final <T> Message<T> fromStreamFields(Map<String, String> fields, Class<T> targetType) {
+        return fromStreamFields(fields, targetType, null);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>模板骨架（final）：</b>
+     *
+     * <ol>
+     *   <li>null 校验，创建装配草稿
+     *   <li>读取 topic（若 Converter 支持）
+     *   <li>调用 {@link #decodeBody(Map, Class, MessageDraft, String)} — 子类实现
+     *   <li>读取 tag / keys / shardingKey / bornHost / txId（通过 {@link #getField} 封装 null 安全）
+     *   <li>调用 {@link #decodeProperties(MessageDraft, Map)} — 子类实现
+     *   <li>解析 bornTs / retryTimes（带容错）
+     *   <li>调用 {@link #decodeExtra(MessageDraft, Map)} — 钩子
+     *   <li>一次性构造不可变 Message（Topic 缺失时回填 fallbackTopic）
+     * </ol>
+     */
+    @Override
+    public final <T> Message<T> fromStreamFields(
+            Map<String, String> fields, Class<T> targetType, String fallbackTopic) {
         Objects.requireNonNull(fields, "fields");
         Objects.requireNonNull(targetType, "targetType");
 
-        Message<T> message = new Message<>();
+        MessageDraft<T> draft = new MessageDraft<>();
 
-        getField(fields, fieldTopic(), message::setTopic);
+        getField(fields, fieldTopic(), value -> draft.topic = value);
 
         String bodyStr = fields.get(fieldBody());
         if (StringUtils.isNotEmpty(bodyStr)) {
-            decodeBody(fields, targetType, message, bodyStr);
+            decodeBody(fields, targetType, draft, bodyStr);
         }
 
-        getField(fields, fieldTag(), message::setTag);
-        getField(fields, fieldKeys(), message::setKeys);
-        getField(fields, fieldShardingKey(), message::setShardingKey);
-        getField(fields, fieldBornHost(), message::setBornHost);
-        getField(fields, fieldTxId(), message::setTransactionId);
+        getField(fields, fieldTag(), value -> draft.tag = value);
+        getField(fields, fieldKeys(), value -> draft.keys = value);
+        getField(fields, fieldShardingKey(), value -> draft.shardingKey = value);
+        getField(fields, fieldBornHost(), value -> draft.bornHost = value);
+        getField(fields, fieldTxId(), value -> draft.transactionId = value);
 
-        decodeProperties(message, fields);
+        decodeProperties(draft, fields);
 
         String bornTs = fields.get(fieldBornTs());
         if (StringUtils.isNotEmpty(bornTs)) {
             try {
-                message.setBornTimestamp(Long.parseLong(bornTs));
+                draft.bornTimestamp = Long.parseLong(bornTs);
             } catch (NumberFormatException ex) {
                 throw new SerializationException("Failed to parse bornTs: " + bornTs, ex);
             }
@@ -380,15 +396,15 @@ public abstract class AbstractMessageConverter implements MessageConverter {
             String retryStr = fields.get(retryField);
             if (StringUtils.isNotEmpty(retryStr)) {
                 try {
-                    message.setReconsumeTimes(Integer.parseInt(retryStr));
+                    draft.reconsumeTimes = Integer.parseInt(retryStr);
                 } catch (NumberFormatException ex) {
                     throw new SerializationException("Failed to parse retryTimes: " + retryStr, ex);
                 }
             }
         }
 
-        decodeExtra(message, fields);
-        return message;
+        decodeExtra(draft, fields);
+        return draft.toMessage(fallbackTopic);
     }
 
     // ================================================================
@@ -413,12 +429,11 @@ public abstract class AbstractMessageConverter implements MessageConverter {
     /**
      * null 安全的字段读取：name 为 null 或字段不存在时跳过。
      *
-     * <p>消除子类中大量的 {@code if (fields.containsKey(xxx)) message.setXxx(...)} 样板代码。
+     * <p>消除子类中大量的 {@code if (fields.containsKey(xxx)) draft.xxx = ...} 样板代码。
      *
      * @param fields Stream Entry 全部字段
      * @param name 字段名，为 null 表示此 Converter 不支持该字段
-     * @param setter 消息 setter 引用（如 {@code message::setTag}）
-     * @param <T> body 泛型类型
+     * @param consumer 草稿字段赋值逻辑
      */
     protected static <T> void getField(
             Map<String, String> fields, String name, Consumer<String> setter) {

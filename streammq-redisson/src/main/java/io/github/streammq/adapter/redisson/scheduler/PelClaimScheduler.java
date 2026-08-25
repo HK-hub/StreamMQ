@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
@@ -49,20 +54,27 @@ public class PelClaimScheduler implements StreamMQScheduler {
     private static final long DEFAULT_MIN_IDLE_MS = StreamMQConstants.DEFAULT_PEL_CLAIM_MIN_IDLE_MS;
 
     /** 默认扫描间隔（毫秒） */
-    private static final long DEFAULT_SCAN_INTERVAL_MS = StreamMQConstants.DEFAULT_PEL_CLAIM_SCAN_INTERVAL_MS;
+    private static final long DEFAULT_SCAN_INTERVAL_MS =
+            StreamMQConstants.DEFAULT_PEL_CLAIM_SCAN_INTERVAL_MS;
 
     /** 默认单次扫描批量 */
     private static final int DEFAULT_BATCH_SIZE = StreamMQConstants.DEFAULT_BATCH_SIZE;
 
     /** 重投消息中保留的原始 Stream Entry ID 字段名（供业务幂等/追踪使用） */
-    private static final String FIELD_ORIGINAL_MESSAGE_ID = StreamMQConstants.FIELD_ORIGINAL_MESSAGE_ID;
+    private static final String FIELD_ORIGINAL_MESSAGE_ID =
+            StreamMQConstants.FIELD_ORIGINAL_MESSAGE_ID;
 
     private final RedissonClient redisson;
     private final String namespace;
     private final long scanIntervalMs;
     private final int batchSize;
+
+    /** 关闭调度线程池时的等待超时（秒） */
+    private static final long AWAIT_TERMINATION_SECONDS =
+            StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
+
     private final long minIdleMs;
-    private final ScheduledExecutorService scanExecutor;
+    private volatile ScheduledExecutorService scanExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ConcurrentMap<String, PelClaimTarget> targets = new ConcurrentHashMap<>();
 
@@ -137,6 +149,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
             LOG.warn("PelClaimScheduler already started");
             return;
         }
+        ensureScanExecutorAlive();
         scanFuture =
                 scanExecutor.scheduleAtFixedRate(
                         this::scanAllTargets, 0, scanIntervalMs, TimeUnit.MILLISECONDS);
@@ -145,6 +158,21 @@ public class PelClaimScheduler implements StreamMQScheduler {
                 scanIntervalMs,
                 minIdleMs,
                 targets.size());
+    }
+
+    /** restart 支持：stop 后 executor 已关闭，start 前按需重建。 */
+    private synchronized void ensureScanExecutorAlive() {
+        if (Objects.nonNull(scanExecutor) && !scanExecutor.isShutdown()) {
+            return;
+        }
+        scanExecutor =
+                new ScheduledThreadPoolExecutor(
+                        1,
+                        r -> {
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_PELCLAIM_SCHEDULER);
+                            t.setDaemon(true);
+                            return t;
+                        });
     }
 
     /** 停止调度器（取消扫描任务并关闭线程池，线程为 daemon，不阻塞 JVM 退出）。 */
@@ -159,6 +187,14 @@ public class PelClaimScheduler implements StreamMQScheduler {
             this.scanFuture = null;
         }
         scanExecutor.shutdown();
+        try {
+            if (!scanExecutor.awaitTermination(AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
+                scanExecutor.shutdownNow();
+            }
+        } catch (InterruptedException ex) {
+            scanExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
         LOG.info("PelClaimScheduler stopped");
     }
 
@@ -215,8 +251,8 @@ public class PelClaimScheduler implements StreamMQScheduler {
                             (Map<String, String>) readResult.values().iterator().next();
                     int retryTimes = parseRetryTimes(fields);
                     if (retryTimes >= target.maxReconsumeTimes) {
-                        // 超限 → ACK 移除 + XADD 到 DLQ
-                        stream.ack(target.group, id);
+                        // 超限 → 先 XADD 到 DLQ，成功后再 ACK 移除（顺序不可颠倒：
+                        // 若先 ACK 后写 DLQ，两步之间崩溃会导致消息永久丢失）
                         fields.put(
                                 RetryScheduler.FIELD_DLQ_REASON,
                                 DlqReason.MAX_RETRY_ORDERLY.getCode());
@@ -225,6 +261,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
                                 Integer.toString(retryTimes));
                         RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
                         dlqStream.add(StreamAddArgs.entries(fields));
+                        stream.ack(target.group, id);
                         LOG.info(
                                 "Orderly message entered DLQ: topic={}, group={}, id={},"
                                         + " retryTimes={}",

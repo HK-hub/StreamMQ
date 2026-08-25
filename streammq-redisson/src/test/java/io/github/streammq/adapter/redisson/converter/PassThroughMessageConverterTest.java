@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.converter;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -5,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.message.Message;
 import java.util.HashMap;
@@ -24,14 +30,41 @@ class PassThroughMessageConverterTest {
     private final PassThroughMessageConverter converter = new PassThroughMessageConverter();
     private final ObjectMapper propsMapper = new ObjectMapper();
 
+    /** 构造测试消息（不可变工厂）。 */
+    private Message<String> msg(
+            String body,
+            String tag,
+            String keys,
+            String shardingKey,
+            long bornTs,
+            String bornHost,
+            int retryTimes,
+            String txId) {
+        return new Message<>(
+                "test-topic",
+                tag,
+                keys,
+                shardingKey,
+                null,
+                null,
+                body,
+                (DelayLevel) null,
+                null,
+                bornTs,
+                bornHost,
+                txId,
+                retryTimes);
+    }
+
+    /** 最小消息：仅 body + bornTs。 */
+    private Message<String> msg(String body, long bornTs) {
+        return msg(body, null, null, null, bornTs, null, 0, null);
+    }
+
     @Test
     @DisplayName("toStreamFields body 直接 toString() 写入（非 Base64）")
     void toStreamFieldsBodyToString() {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello-world");
-        msg.setBornTimestamp(1L);
-
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields = converter.toStreamFields(msg("hello-world", 1L));
 
         assertThat(fields).containsEntry("body", "hello-world");
         assertThat(fields).containsEntry("bodyType", "java.lang.String");
@@ -40,15 +73,9 @@ class PassThroughMessageConverterTest {
     @Test
     @DisplayName("toStreamFields 完整字段映射（tag/keys/shardingKey/bornTs/bornHost）")
     void toStreamFieldsFullMapping() {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setTag("vip");
-        msg.setKeys("k1");
-        msg.setShardingKey("shard-1");
-        msg.setBornTimestamp(123456789L);
-        msg.setBornHost("host:8080");
+        Message<String> m = msg("hello", "vip", "k1", "shard-1", 123456789L, "host:8080", 0, null);
 
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields = converter.toStreamFields(m);
 
         assertThat(fields).containsEntry("body", "hello");
         assertThat(fields).containsEntry("bodyType", "java.lang.String");
@@ -62,10 +89,7 @@ class PassThroughMessageConverterTest {
     @Test
     @DisplayName("toStreamFields body 为 null 时不写入 body/bodyType")
     void toStreamFieldsNullBody() {
-        Message<String> msg = new Message<>();
-        msg.setBornTimestamp(1L);
-
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields = converter.toStreamFields(msg(null, 1L));
 
         assertThat(fields).doesNotContainKey("body");
         assertThat(fields).doesNotContainKey("bodyType");
@@ -75,11 +99,7 @@ class PassThroughMessageConverterTest {
     @Test
     @DisplayName("toStreamFields 可选字段为 null 时不写入")
     void toStreamFieldsOptionalNull() {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setBornTimestamp(1L);
-
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields = converter.toStreamFields(msg("hello", 1L));
 
         assertThat(fields).doesNotContainKey("tag");
         assertThat(fields).doesNotContainKey("keys");
@@ -93,13 +113,10 @@ class PassThroughMessageConverterTest {
     @Test
     @DisplayName("toStreamFields 包含 properties 与 userProperties 时合并为 JSON 字符串")
     void toStreamFieldsMergedProps() throws Exception {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setBornTimestamp(1L);
-        msg.putProperty("traceId", "t1");
-        msg.putUserProperty("u1", "v1");
+        Message<String> m =
+                msg("hello", 1L).addProperty("traceId", "t1").addUserProperty("u1", "v1");
 
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields = converter.toStreamFields(m);
 
         assertThat(fields).containsKey("props");
         Map<String, String> parsed =
@@ -111,36 +128,23 @@ class PassThroughMessageConverterTest {
     @Test
     @DisplayName("toStreamFields retryTimes > 0 时写入")
     void toStreamFieldsRetryTimesPositive() {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setBornTimestamp(1L);
-        msg.setReconsumeTimes(3);
-
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields =
+                converter.toStreamFields(msg("hello", 1L).withReconsumeTimes(3));
         assertThat(fields).containsEntry("retryTimes", "3");
     }
 
     @Test
     @DisplayName("toStreamFields retryTimes == 0 时不写入")
     void toStreamFieldsRetryTimesZero() {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setBornTimestamp(1L);
-        msg.setReconsumeTimes(0);
-
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields = converter.toStreamFields(msg("hello", 1L));
         assertThat(fields).doesNotContainKey("retryTimes");
     }
 
     @Test
     @DisplayName("toStreamFields transactionId 非空时写入")
     void toStreamFieldsTransactionId() {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setBornTimestamp(1L);
-        msg.setTransactionId("tx-001");
-
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields =
+                converter.toStreamFields(msg("hello", 1L).withTransactionId("tx-001"));
         assertThat(fields).containsEntry("txId", "tx-001");
     }
 
@@ -155,20 +159,13 @@ class PassThroughMessageConverterTest {
     @Test
     @DisplayName("fromStreamFields 往返：body 字符串直读，元信息字段一致")
     void fromStreamFieldsRoundTrip() {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setTag("vip");
-        msg.setKeys("k1");
-        msg.setShardingKey("shard-1");
-        msg.setBornTimestamp(123456789L);
-        msg.setBornHost("host:8080");
-        msg.setReconsumeTimes(2);
-        msg.setTransactionId("tx-1");
-        msg.putProperty("traceId", "t1");
-        msg.putUserProperty("u1", "v1");
+        Message<String> source =
+                msg("hello", "vip", "k1", "shard-1", 123456789L, "host:8080", 2, "tx-1")
+                        .addProperty("traceId", "t1")
+                        .addUserProperty("u1", "v1");
 
-        Map<String, String> fields = converter.toStreamFields(msg);
-        Message<String> restored = converter.fromStreamFields(fields, String.class);
+        Map<String, String> fields = converter.toStreamFields(source);
+        Message<String> restored = converter.fromStreamFields(fields, String.class, "test-topic");
 
         // body 直接取字符串，未经序列化/反序列化
         assertThat(restored.getBody()).isEqualTo("hello");
@@ -192,8 +189,8 @@ class PassThroughMessageConverterTest {
         fields.put("bodyType", "java.lang.String");
         fields.put("bornTs", "1");
 
-        Message<String> msg = converter.fromStreamFields(fields, String.class);
-        assertThat(msg.getBody()).isEqualTo("{\"key\":\"value\"}");
+        Message<String> restored = converter.fromStreamFields(fields, String.class, "t");
+        assertThat(restored.getBody()).isEqualTo("{\"key\":\"value\"}");
     }
 
     @Test
@@ -203,16 +200,16 @@ class PassThroughMessageConverterTest {
         fields.put("body", "hi");
         fields.put("bornTs", "999");
 
-        Message<String> msg = converter.fromStreamFields(fields, String.class);
+        Message<String> restored = converter.fromStreamFields(fields, String.class, "t");
 
-        assertThat(msg.getBody()).isEqualTo("hi");
-        assertThat(msg.getBornTimestamp()).isEqualTo(999L);
-        assertThat(msg.getTag()).isNull();
-        assertThat(msg.getKeys()).isNull();
-        assertThat(msg.getShardingKey()).isNull();
-        assertThat(msg.getBornHost()).isNull();
-        assertThat(msg.getTransactionId()).isNull();
-        assertThat(msg.getReconsumeTimes()).isZero();
+        assertThat(restored.getBody()).isEqualTo("hi");
+        assertThat(restored.getBornTimestamp()).isEqualTo(999L);
+        assertThat(restored.getTag()).isNull();
+        assertThat(restored.getKeys()).isNull();
+        assertThat(restored.getShardingKey()).isNull();
+        assertThat(restored.getBornHost()).isNull();
+        assertThat(restored.getTransactionId()).isNull();
+        assertThat(restored.getReconsumeTimes()).isZero();
     }
 
     @Test
@@ -263,19 +260,17 @@ class PassThroughMessageConverterTest {
     }
 
     @Test
-    @DisplayName("applyTopic 为消息回填 topic")
+    @DisplayName("applyTopic 返回携带指定 topic 的派生实例")
     void applyTopic() {
-        Message<String> msg = new Message<>();
-        PassThroughMessageConverter.applyTopic(msg, "topic-1");
-        assertThat(msg.getTopic()).isEqualTo("topic-1");
+        Message<String> derived = PassThroughMessageConverter.applyTopic(msg("b", 1L), "topic-1");
+        assertThat(derived.getTopic()).isEqualTo("topic-1");
     }
 
     @Test
-    @DisplayName("applyMessageId 为消息回填 MessageId")
+    @DisplayName("applyMessageId 返回携带 MessageId 的派生实例")
     void applyMessageId() {
-        Message<String> msg = new Message<>();
-        PassThroughMessageConverter.applyMessageId(msg, "123-0");
-        assertThat(msg.getMessageId()).isNotNull();
-        assertThat(msg.getMessageId().getStreamEntryId()).isEqualTo("123-0");
+        Message<String> derived = PassThroughMessageConverter.applyMessageId(msg("b", 1L), "123-0");
+        assertThat(derived.getMessageId()).isNotNull();
+        assertThat(derived.getMessageId().getStreamEntryId()).isEqualTo("123-0");
     }
 }

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.cloud.k8s;
 
 import lombok.Getter;
@@ -70,11 +75,21 @@ public class CloudK8sProperties {
 
     /** HPA 默认扩容阈值百分比 */
     private int hpaScaleUpThreshold =
-            io.github.streammq.cloud.k8s.operator.StreamMQK8sDefaults
-                    .AUTOSCALE_SCALE_UP_THRESHOLD;
+            io.github.streammq.cloud.k8s.operator.StreamMQK8sDefaults.AUTOSCALE_SCALE_UP_THRESHOLD;
 
     /** HPA 默认缩容阈值百分比 */
     private int hpaScaleDownThreshold =
             io.github.streammq.cloud.k8s.operator.StreamMQK8sDefaults
                     .AUTOSCALE_SCALE_DOWN_THRESHOLD;
+
+    /** ConfigMap 热更新 watch 命名空间列表（默认 default） */
+    private java.util.List<String> configWatchNamespaces;
+
+    public java.util.List<String> getConfigWatchNamespaces() {
+        return configWatchNamespaces;
+    }
+
+    public void setConfigWatchNamespaces(java.util.List<String> namespaces) {
+        this.configWatchNamespaces = namespaces;
+    }
 }

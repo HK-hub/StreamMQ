@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.tracing;
 
 import io.github.streammq.core.enums.InvokeTiming;
@@ -5,7 +10,6 @@ import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.util.StringUtils;
-import io.opentelemetry.api.trace.Span;
 import java.util.Objects;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -42,45 +46,34 @@ public class OpenTelemetryProducerInterceptor implements ProducerInterceptor {
     private final StreamMQTracing tracing;
 
     @Override
-    public boolean beforeSend(Message<?> message) {
+    public Message<?> beforeSend(Message<?> message) {
         try {
-            tracing.injectProducerSpan(message);
+            return tracing.injectProducerSpan(message);
         } catch (Exception ex) {
-            log.warn("生产者追踪注入失败，不影响发送: {}", ex.getMessage());
+            log.warn("链路追踪注入失败，不影响发送: {}", ex.getMessage());
+            return message;
         }
-        return true;
     }
 
     @Override
     public void afterSend(Message<?> message, SendResult result) {
         try {
-            Span span = tracing.getCurrentProducerSpan();
-            if (Objects.isNull(span)) {
-                return;
-            }
             boolean success = Objects.nonNull(result) && result.isSuccess();
             String errorMessage = Objects.nonNull(result) ? result.getErrorMessage() : null;
-            tracing.endSpan(
-                    span, success, StringUtils.isNotEmpty(errorMessage) ? errorMessage : null);
+            tracing.endProducerSpan(
+                    message, success, StringUtils.isNotEmpty(errorMessage) ? errorMessage : null);
         } catch (Exception ex) {
             log.warn("生产者追踪结束失败: {}", ex.getMessage());
-        } finally {
-            tracing.clearCurrentProducerSpan();
         }
     }
 
     @Override
     public void onException(Message<?> message, Exception exception, InvokeTiming timing) {
         try {
-            Span span = tracing.getCurrentProducerSpan();
-            if (Objects.nonNull(span)) {
-                tracing.endSpan(
-                        span, false, Objects.nonNull(exception) ? exception.getMessage() : "发送异常");
-            }
+            tracing.endProducerSpan(
+                    message, false, Objects.nonNull(exception) ? exception.getMessage() : "发送异常");
         } catch (Exception ex) {
             log.warn("生产者异常追踪结束失败: {}", ex.getMessage());
-        } finally {
-            tracing.clearCurrentProducerSpan();
         }
     }
 

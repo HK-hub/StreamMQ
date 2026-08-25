@@ -27,15 +27,7 @@ jobs:
 
       - name: Build (compile + enforcer)
         run: mvn clean compile -DskipTests
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-artifacts
-          path: |
-            **/target/*-sources.jar
-            **/target/*-javadoc.jar
-          if-no-files-found: warn
+        # 注：sources/javadoc jar 在 package 阶段才会产出，此处无可上传物，故不配置上传步骤
 
   test:
     name: Test

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.diagnostics;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -94,8 +99,8 @@ class StreamMQDiagnosticsServiceTest {
             assertThat(report).isNotNull();
             assertThat(report.consumeRate()).isEqualTo(0.0);
             assertThat(report.produceRate()).isEqualTo(0.0);
-            assertThat(report.bottleneck()).contains("无追踪数据");
-            assertThat(report.recommendation()).contains("追踪服务");
+            assertThat(report.code()).isEqualTo(DiagnosticsCodes.NO_TRACE_DATA);
+            assertThat(report.recommendation()).contains("tracing");
         }
 
         @Test
@@ -113,8 +118,8 @@ class StreamMQDiagnosticsServiceTest {
                     diagnosticsService.diagnoseSlowConsume("test-topic", "test-group");
 
             assertThat(report.avgConsumeTimeMillis()).isEqualTo(8000.0);
-            assertThat(report.bottleneck()).contains("消费耗时过长");
-            assertThat(report.recommendation()).contains("优化消费逻辑");
+            assertThat(report.code()).isEqualTo(DiagnosticsCodes.SLOW_CONSUME);
+            assertThat(report.recommendation()).contains("Optimize consume logic");
         }
     }
 
@@ -143,7 +148,7 @@ class StreamMQDiagnosticsServiceTest {
             assertThat(report).isNotNull();
             assertThat(report.currentBacklog()).isEqualTo(2);
             assertThat(report.severity()).isEqualTo(Severity.INFO);
-            assertThat(report.recommendation()).contains("正常范围");
+            assertThat(report.recommendation()).contains("normal range");
         }
 
         @Test
@@ -161,7 +166,7 @@ class StreamMQDiagnosticsServiceTest {
 
             assertThat(report.currentBacklog()).isEqualTo(1001);
             assertThat(report.severity()).isEqualTo(Severity.WARNING);
-            assertThat(report.recommendation()).contains("增加消费者实例数");
+            assertThat(report.recommendation()).contains("add consumer instances");
         }
 
         @Test
@@ -179,7 +184,7 @@ class StreamMQDiagnosticsServiceTest {
 
             assertThat(report.currentBacklog()).isEqualTo(10001);
             assertThat(report.severity()).isEqualTo(Severity.CRITICAL);
-            assertThat(report.recommendation()).contains("立即扩容");
+            assertThat(report.recommendation()).contains("scale out consumers immediately");
         }
 
         @Test
@@ -193,7 +198,7 @@ class StreamMQDiagnosticsServiceTest {
             assertThat(report).isNotNull();
             assertThat(report.currentBacklog()).isEqualTo(0);
             assertThat(report.severity()).isEqualTo(Severity.INFO);
-            assertThat(report.recommendation()).contains("追踪服务");
+            assertThat(report.recommendation()).contains("tracing");
         }
     }
 
@@ -300,7 +305,7 @@ class StreamMQDiagnosticsServiceTest {
             assertThat(report.totalDlqCount()).isEqualTo(0);
             assertThat(report.topFailureReasons()).isEmpty();
             assertThat(report.topFailedTopics()).isEmpty();
-            assertThat(report.recommendation()).contains("追踪服务");
+            assertThat(report.recommendation()).contains("tracing");
         }
     }
 

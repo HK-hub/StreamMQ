@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.test;
 
 import io.github.streammq.core.util.RedisAvailability;
@@ -73,7 +78,7 @@ public abstract class StreamMQTestBase {
     /** Redis URI scheme 前缀 */
     public static final String REDIS_URI_PREFIX = "redis://";
 
-    protected static EmbeddedRedisServer redisServer;
+    protected static ContainerizedRedisServer redisServer;
     protected static RedissonClient redissonClient;
     protected static boolean useDocker;
 
@@ -84,7 +89,7 @@ public abstract class StreamMQTestBase {
 
         if (useDocker) {
             LOG.info("Starting Redis via Testcontainers (Docker mode)...");
-            redisServer = new EmbeddedRedisServer();
+            redisServer = new ContainerizedRedisServer();
             redisServer.start();
         } else {
             LOG.info("Connecting to local Redis (local mode)...");
@@ -145,9 +150,25 @@ public abstract class StreamMQTestBase {
         return REDIS_URI_PREFIX + getRedisHost() + ":" + getRedisPort();
     }
 
+    /**
+     * 清空当前连接数据库中的全部数据（flushdb）。
+     *
+     * <p><b>安全守卫：</b>默认 mode=local 直连 localhost:6379，开发机上可能存有非 StreamMQ 的数据。 为避免误删，本地模式下必须显式设置系统属性
+     * {@code -Dstreammq.test.redis.flushAllowed=true} 才会执行 flush；docker/container
+     * 模式下实例是测试独占的，无需该开关。
+     */
     protected void clearRedisData() {
-        if (redissonClient != null) {
-            redissonClient.getKeys().flushdb();
+        if (redissonClient == null) {
+            return;
         }
+        if (!useDocker && !Boolean.getBoolean("streammq.test.redis.flushAllowed")) {
+            LOG.warn(
+                    "Skipped flushdb against {}:{} — set -Dstreammq.test.redis.flushAllowed=true"
+                            + " to allow flushing a LOCAL Redis (may contain non-StreamMQ data)",
+                    getRedisHost(),
+                    getRedisPort());
+            return;
+        }
+        redissonClient.getKeys().flushdb();
     }
 }

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.diagnostics.endpoint;
 
 import io.github.streammq.core.policy.ManagementAuthenticator;
@@ -185,8 +190,7 @@ public class StreamMQDiagnosticsEndpoint {
                 StreamMQDiagnosticsEndpointConstants.KEY_STATUS,
                 StreamMQDiagnosticsEndpointConstants.STATUS_UP);
         summary.put(
-                StreamMQDiagnosticsEndpointConstants.KEY_SLOW_CONSUMER_COUNT,
-                slowConsumers.size());
+                StreamMQDiagnosticsEndpointConstants.KEY_SLOW_CONSUMER_COUNT, slowConsumers.size());
         summary.put(StreamMQDiagnosticsEndpointConstants.KEY_SLOW_CONSUMERS, slowConsumers);
         summary.put(StreamMQDiagnosticsEndpointConstants.KEY_TOTAL_BACKLOG, totalBacklog);
         summary.put(StreamMQDiagnosticsEndpointConstants.KEY_BACKLOG_REPORTS, backlogs);

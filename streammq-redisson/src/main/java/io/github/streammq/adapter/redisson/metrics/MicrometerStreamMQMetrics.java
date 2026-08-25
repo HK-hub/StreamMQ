@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.metrics;
 
 import io.github.streammq.core.metrics.StreamMQMetrics;
@@ -72,7 +77,13 @@ public class MicrometerStreamMQMetrics implements StreamMQMetrics {
         if (Objects.isNull(registry)) return;
         registry.counter(
                         METRIC_CONSUME_TOTAL,
-                        Tags.of(TAG_TOPIC, topic, TAG_GROUP, group, TAG_SUCCESS, String.valueOf(success)))
+                        Tags.of(
+                                TAG_TOPIC,
+                                topic,
+                                TAG_GROUP,
+                                group,
+                                TAG_SUCCESS,
+                                String.valueOf(success)))
                 .increment();
         registry.timer(METRIC_CONSUME_DURATION, Tags.of(TAG_TOPIC, topic, TAG_GROUP, group))
                 .record(duration);
@@ -81,7 +92,8 @@ public class MicrometerStreamMQMetrics implements StreamMQMetrics {
     @Override
     public void recordRetry(String topic, String group) {
         if (Objects.isNull(registry)) return;
-        registry.counter(METRIC_RETRY_TOTAL, Tags.of(TAG_TOPIC, topic, TAG_GROUP, group)).increment();
+        registry.counter(METRIC_RETRY_TOTAL, Tags.of(TAG_TOPIC, topic, TAG_GROUP, group))
+                .increment();
     }
 
     @Override

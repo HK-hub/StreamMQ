@@ -100,7 +100,7 @@ mvn spring-boot:run
 ### Scene 7：结尾（57-60 秒）
 
 - **画面**：静态结尾卡
-- **内容**：`GitHub · streammq/streammq · ⭐ Star`
+- **内容**：`GitHub · HK-hub/StreamMQ · ⭐ Star`
 - **操作**：显示仓库地址和 Star 按钮
 
 ---

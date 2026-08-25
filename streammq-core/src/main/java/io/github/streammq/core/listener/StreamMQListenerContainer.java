@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.core.listener;
 
 import io.github.streammq.core.annotation.StreamMQConsumer;
@@ -60,6 +65,17 @@ public interface StreamMQListenerContainer {
      * @param <T> body 类型
      */
     <T> void registerDlqConsumer(DlqMessageConsumer<T> consumer, StreamMQDlqConsumer annotation);
+
+    /**
+     * 注销指定 topic + 消费者组的监听器。
+     *
+     * <p>移除对应的注册项、取消其消费任务并释放组管理资源；主要用于动态绑定场景（如 Spring Cloud Stream binder 的
+     * stop/rebind）。任何容器状态下调用均安全：运行中会先停止该监听器再注销，未注册时为幂等空操作。
+     *
+     * @param topic 主题
+     * @param consumerGroup 消费者组
+     */
+    void unregister(String topic, String consumerGroup);
 
     /**
      * 返回所有已注册的 Consumer 元信息。

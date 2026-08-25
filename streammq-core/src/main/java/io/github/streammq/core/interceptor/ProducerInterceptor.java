@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.core.interceptor;
 
 import io.github.streammq.core.enums.InvokeTiming;
@@ -26,10 +31,13 @@ public interface ProducerInterceptor {
     /**
      * 发送前回调。
      *
-     * @param message 待发送消息（可修改）
-     * @return true 继续发送（含后续拦截器），false 中止发送（返回 SEND_FAILED）
+     * <p>{@link Message} 为不可变对象；需要补全字段（如注入 traceId）时返回派生实例（{@code message.addUserProperty(...)}
+     * 等），模板会将返回值作为后续发送与 afterSend 回调的入参。
+     *
+     * @param message 待发送消息
+     * @return 继续发送使用的消息实例；返回 {@code null} 中止发送（后续拦截器不再执行， 结果为 SEND_FAILED）
      */
-    boolean beforeSend(Message<?> message);
+    Message<?> beforeSend(Message<?> message);
 
     /**
      * 发送后回调。

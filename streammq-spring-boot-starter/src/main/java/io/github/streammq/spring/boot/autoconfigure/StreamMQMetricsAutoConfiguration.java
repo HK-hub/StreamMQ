@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.metrics.MicrometerStreamMQMetrics;
@@ -18,8 +23,10 @@ import org.springframework.context.annotation.Configuration;
  * <p>当 classpath 中存在 {@link MeterRegistry} 且用户已引入 Actuator 时， 自动注册 {@link StreamMQMetrics} Bean，供容器
  * / 模板 / 调度器记录指标。
  *
- * <p>通过 {@link AutoConfigureAfter} 确保在 Spring Boot 的 {@code MetricsAutoConfiguration}（注册 {@code
- * MeterRegistry}）之后装配，避免 {@code @ConditionalOnBean(MeterRegistry)} 因装配顺序而静默失效。
+ * <p>通过 {@link AutoConfigureAfter} 确保在 Spring Boot 的 {@code MetricsAutoConfiguration} 与 {@code
+ * CompositeMeterRegistryAutoConfiguration}（注册 {@code MeterRegistry}）之后装配， 避免
+ * {@code @ConditionalOnBean(MeterRegistry)} 因装配顺序而静默失效。本配置类必须同时登记在 {@code
+ * AutoConfiguration.imports} 文件中，排序提示才会生效（{@code @Import} 引入的配置类不参与 .imports 排序）。
  *
  * <p>禁用方式：{@code streammq.enabled=false}。
  *
@@ -28,7 +35,10 @@ import org.springframework.context.annotation.Configuration;
  */
 @Configuration(proxyBeanMethods = false)
 @AutoConfigureAfter(
-        org.springframework.boot.actuate.autoconfigure.metrics.MetricsAutoConfiguration.class)
+        name = {
+            "org.springframework.boot.actuate.autoconfigure.metrics.MetricsAutoConfiguration",
+            "org.springframework.boot.actuate.autoconfigure.metrics.CompositeMeterRegistryAutoConfiguration"
+        })
 @ConditionalOnClass(MeterRegistry.class)
 @ConditionalOnProperty(
         prefix = StreamMQSpringConstants.PROP_PREFIX,

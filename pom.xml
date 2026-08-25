@@ -42,7 +42,7 @@
         <developer>
             <id>streammq-contributors</id>
             <name>StreamMQ Contributors</name>
-            <email>streammq@example.com</email>
+            <email>3161880795@qq.com</email>
             <url>https://github.com/HK-hub/StreamMQ</url>
         </developer>
     </developers>
@@ -488,6 +488,16 @@
                             <reflowLongStrings>true</reflowLongStrings>
                             <formatJavadoc>true</formatJavadoc>
                         </googleJavaFormat>
+                        <licenseHeader>
+                            <content>
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
+                            </content>
+                            <delimiter>package</delimiter>
+                        </licenseHeader>
                         <includes>
                             <include>src/main/java/**/*.java</include>
                             <include>src/test/java/**/*.java</include>

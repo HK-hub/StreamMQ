@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.boot.it;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -12,10 +17,14 @@ import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.core.producer.StreamMessageProducerFactory;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.template.StreamMessageTemplate;
+import io.github.streammq.core.util.RedisAvailability;
 import io.github.streammq.spring.boot.autoconfigure.*;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.actuate.health.HealthIndicator;
@@ -45,6 +54,9 @@ import org.springframework.test.context.ContextConfiguration;
 @ActiveProfiles("it")
 @ContextConfiguration(classes = RedissonTestConfig.class)
 @DisplayName("Spring Boot 自动装配集成测试")
+@EnabledIf(
+        value = "io.github.streammq.core.util.RedisAvailability#localhostAvailable",
+        disabledReason = "Redis not available at localhost:6379")
 class SpringBootAutoConfigIT {
 
     @Autowired private ApplicationContext applicationContext;
@@ -52,6 +64,15 @@ class SpringBootAutoConfigIT {
     @Autowired private StreamMQProperties properties;
 
     @Autowired private RedissonClient redissonClient;
+
+    @BeforeAll
+    static void requireRedis() {
+        // 静态守卫必须在上下文加载之前执行：RedissonTestConfig 连接 localhost:6379，
+        // 无 Redis 时上下文会因 Bean 创建失败而无法启动。此处跳过而非失败，与其余 IT 行为一致。
+        Assumptions.assumeTrue(
+                RedisAvailability.isAvailable("localhost", 6379),
+                "Redis not available at localhost:6379, skipping Spring Boot auto-config IT");
+    }
 
     // ===================== 核心 Bean 装配验证 =====================
 
@@ -269,15 +290,16 @@ class SpringBootAutoConfigIT {
     // ===================== 生命周期相位验证 =====================
 
     @Test
-    @DisplayName("SchedulerLifecycle 相位为 Integer.MAX_VALUE - 100(高于 ListenerContainer)")
+    @DisplayName("SchedulerLifecycle 相位为 Integer.MAX_VALUE - 300（低于 ListenerContainer，先启动后停止）")
     void schedulerLifecycle_phaseHigherThanListener() {
         StreamMQSchedulerLifecycle schedulerLifecycle =
                 applicationContext.getBean(StreamMQSchedulerLifecycle.class);
         StreamMQListenerContainerLifecycle listenerLifecycle =
                 applicationContext.getBean(StreamMQListenerContainerLifecycle.class);
-        assertThat(schedulerLifecycle.getPhase()).isEqualTo(Integer.MAX_VALUE - 100);
+        assertThat(schedulerLifecycle.getPhase()).isEqualTo(Integer.MAX_VALUE - 300);
         assertThat(listenerLifecycle.getPhase()).isEqualTo(Integer.MAX_VALUE - 200);
-        assertThat(schedulerLifecycle.getPhase()).isGreaterThan(listenerLifecycle.getPhase());
+        // Spring 按 phase 升序启动：调度器相位更小 → 先启动；停止时降序 → 容器先停
+        assertThat(schedulerLifecycle.getPhase()).isLessThan(listenerLifecycle.getPhase());
     }
 
     @Test

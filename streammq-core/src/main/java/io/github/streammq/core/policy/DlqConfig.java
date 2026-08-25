@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.core.policy;
 
 import io.github.streammq.core.StreamMQConstants;
@@ -58,6 +63,5 @@ public class DlqConfig {
     private long dlqRetryMaxDelayMs = StreamMQConstants.DEFAULT_DLQ_RETRY_MAX_DELAY_MS;
 
     /** 重试最小延迟下限（毫秒，默认 1000 = 1 秒），防止退避计算出过短的间隔 */
-    @Builder.Default
-    private long minRetryDelayMs = StreamMQConstants.MIN_DLQ_RETRY_DELAY_MS;
+    @Builder.Default private long minRetryDelayMs = StreamMQConstants.MIN_DLQ_RETRY_DELAY_MS;
 }

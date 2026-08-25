@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
@@ -8,6 +13,7 @@ import io.github.streammq.core.enums.LocalTransactionState;
 import io.github.streammq.core.enums.TransactionScanState;
 import io.github.streammq.core.exception.StreamMQBrokerException;
 import io.github.streammq.core.message.Message;
+import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.core.transaction.TransactionChecker;
@@ -99,6 +105,24 @@ public class TransactionScanner implements StreamMQScheduler {
                     + "redis.call('HSET', KEYS[1], ARGV[1], ARGV[2]);"
                     + "if current == false then return 'nil'; else return current; end;";
 
+    /**
+     * Lua 脚本：仅当当前状态非终态时置为 UNKNOWN，绝不覆盖 COMMIT/ROLLBACK。
+     *
+     * <p>KEYS[1] = txstate Hash key, ARGV[1] = txId。返回 'OK' 表示已写入 UNKNOWN；
+     * 返回终态值表示状态已被其它实例终态化，本次不覆盖。
+     */
+    private static final String LUA_CAS_TO_UNKNOWN =
+            "local current = redis.call('HGET', KEYS[1], ARGV[1]);"
+                    + "if current == 'COMMIT' or current == 'ROLLBACK' then return current; end;"
+                    + "redis.call('HSET', KEYS[1], ARGV[1], 'UNKNOWN');"
+                    + "return 'OK';";
+
+    /** 事务执行权锁默认 TTL（毫秒）：持有者崩溃后其它实例可在 TTL 过期后接管 */
+    public static final long DEFAULT_TX_LOCK_TTL_MS = 30_000L;
+
+    /** 本实例的锁持有者标识（进程级唯一） */
+    private final String lockHolderId = java.util.UUID.randomUUID().toString();
+
     /** 默认扫描间隔 60s */
     public static final long DEFAULT_CHECK_INTERVAL_MS =
             StreamMQConstants.DEFAULT_CHECK_INTERVAL_MS;
@@ -125,7 +149,7 @@ public class TransactionScanner implements StreamMQScheduler {
     private final long checkIntervalMs;
     private final int maxCheckTimes;
     private final int batchSize;
-    private final ScheduledExecutorService scanExecutor;
+    private volatile ScheduledExecutorService scanExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ConcurrentMap<String, TransactionChecker<?>> checkerRegistry =
             new ConcurrentHashMap<>();
@@ -223,24 +247,57 @@ public class TransactionScanner implements StreamMQScheduler {
         Objects.requireNonNull(targetTopic, "targetTopic");
         Objects.requireNonNull(fields, "fields");
 
-        // 1. XADD 到 half Stream
+        // 写入顺序（崩溃安全性分析，顺序不可调整）：
+        //  1. 先原子写入 txstate(PREPARE) + 回查 ZSet —— 若在此步后崩溃，回查发现半消息缺失，
+        //     走"force rollback"安全终止（本地事务尚未执行，不存在业务消息已发布的风险）；
+        //  2. 再 XADD 半消息并补写 halfId —— 若在此步失败/崩溃，最坏情况是残留一条无状态引用的
+        //     半消息条目（可被运维清理），绝不会出现"半消息已投递但事务无状态"导致的重复发布。
+        long firstCheckAt = System.currentTimeMillis() + checkIntervalMs;
+        RBatch batch =
+                redisson.createBatch(
+                        BatchOptions.defaults()
+                                .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
+        String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
+        RMapAsync<String, String> stateMapAsync = batch.getMap(stateHashKey);
+        stateMapAsync.putAsync(txId, STATE_PREPARE);
+        stateMapAsync.putAsync(txId + FIELD_TARGET_SUFFIX, targetTopic);
+        batch.getScoredSortedSet(StreamMQKeys.transactionCheckZSet(namespace, txGroup))
+                .addAsync(firstCheckAt, txId);
+        batch.execute();
+
+        // XADD 到 half Stream
         String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
         RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
-        StreamMessageId halfId = halfStream.add(StreamAddArgs.entries(fields));
+        StreamMessageId halfId;
+        try {
+            halfId = halfStream.add(StreamAddArgs.entries(fields));
+        } catch (RuntimeException ex) {
+            // 补偿：清理步骤 1 写入的状态与调度条目，避免留下永远无法推进的 PREPARE 幽灵事务
+            LOG.error(
+                    "XADD half message failed, compensating txstate/check entry:"
+                            + " txId={}, txGroup={}",
+                    txId,
+                    txGroup,
+                    ex);
+            try {
+                RMap<String, String> stateMap = redisson.getMap(stateHashKey);
+                stateMap.remove(txId);
+                stateMap.remove(txId + FIELD_TARGET_SUFFIX);
+                stateMap.remove(txId + FIELD_HALF_ID_SUFFIX);
+                redisson.getScoredSortedSet(StreamMQKeys.transactionCheckZSet(namespace, txGroup))
+                        .remove(txId);
+            } catch (RuntimeException cleanupEx) {
+                LOG.error(
+                        "Compensation failed, orphan PREPARE entry remains (scanner will"
+                                + " force-rollback it safely): txId={}",
+                        txId,
+                        cleanupEx);
+            }
+            throw ex;
+        }
 
-        // 2. 写入 txstate Hash
-        String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
-        RMap<String, String> stateMap = redisson.getMap(stateHashKey);
-        Map<String, String> stateFields = new HashMap<>(3);
-        stateFields.put(txId, STATE_PREPARE);
-        stateFields.put(txId + FIELD_TARGET_SUFFIX, targetTopic);
-        stateFields.put(txId + FIELD_HALF_ID_SUFFIX, halfId.toString());
-        stateMap.putAll(stateFields);
-
-        // 3. 写入 txcheck ZSet，score = now + checkInterval
-        String checkZSetKey = StreamMQKeys.transactionCheckZSet(namespace, txGroup);
-        long firstCheckAt = System.currentTimeMillis() + checkIntervalMs;
-        redisson.getScoredSortedSet(checkZSetKey).add(firstCheckAt, txId);
+        // 补写 halfId 引用
+        redisson.getMap(stateHashKey).put(txId + FIELD_HALF_ID_SUFFIX, halfId.toString());
 
         LOG.debug(
                 "Half message registered: txId={}, txGroup={}, targetTopic={}, halfId={}",
@@ -260,6 +317,7 @@ public class TransactionScanner implements StreamMQScheduler {
             LOG.warn("TransactionScanner already started");
             return;
         }
+        ensureScanExecutorAlive();
         scanFuture =
                 scanExecutor.scheduleAtFixedRate(
                         this::scanAllGroups, 0, checkIntervalMs, TimeUnit.MILLISECONDS);
@@ -270,6 +328,21 @@ public class TransactionScanner implements StreamMQScheduler {
                 maxCheckTimes,
                 batchSize,
                 checkerRegistry.size());
+    }
+
+    /** restart 支持：stop 后 executor 已关闭，start 前按需重建。 */
+    private synchronized void ensureScanExecutorAlive() {
+        if (Objects.nonNull(scanExecutor) && !scanExecutor.isShutdown()) {
+            return;
+        }
+        scanExecutor =
+                new ScheduledThreadPoolExecutor(
+                        1,
+                        r -> {
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_TXCHECK_SCHEDULER);
+                            t.setDaemon(true);
+                            return t;
+                        });
     }
 
     /** 停止调度器（取消扫描任务并关闭线程池，线程为 daemon，不阻塞 JVM 退出）。 */
@@ -284,6 +357,14 @@ public class TransactionScanner implements StreamMQScheduler {
             this.scanFuture = null;
         }
         scanExecutor.shutdown();
+        try {
+            if (!scanExecutor.awaitTermination(AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
+                scanExecutor.shutdownNow();
+            }
+        } catch (InterruptedException ex) {
+            scanExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
         LOG.info("TransactionScanner stopped");
     }
 
@@ -327,26 +408,42 @@ public class TransactionScanner implements StreamMQScheduler {
                     oldState);
             return;
         }
-        // COMMITTING/ROLLBACKING 表示其它实例正在处理，我们的执行是幂等的
+        // COMMITTING/ROLLBACKING 表示其它实例正在处理；发布临界区由事务执行权锁保护（见
+        // publishHalfAndMarkCommit），非持有者不会重复转投，等待其完成或锁 TTL 过期后接管。
 
         String targetTopic = stateMap.get(txId + FIELD_TARGET_SUFFIX);
         String halfIdStr = stateMap.get(txId + FIELD_HALF_ID_SUFFIX);
         if (Objects.isNull(targetTopic) || Objects.isNull(halfIdStr)) {
-            LOG.warn(
-                    "markCommit missing target/halfId in txstate: txId={}, txGroup={}",
+            // 元数据丢失：不能静默卡死在 COMMITTING。转为 UNKNOWN 并重新调度回查，
+            // 由 maxCheckTimes 兜底强制回滚；ERROR 日志供运维排查。
+            LOG.error(
+                    "markCommit missing target/halfId in txstate, degrading to UNKNOWN for"
+                            + " bounded recheck: txId={}, txGroup={}",
                     txId,
                     txGroup);
+            degradeToUnknown(stateHashKey, stateMap, txId, txGroup);
             return;
         }
 
-        // 转投半消息到目标 Stream + 原子标记 COMMIT
-        boolean published = publishHalfAndMarkCommit(txGroup, halfIdStr, targetTopic, txId);
-        if (!published) {
-            // 半消息不存在：直接按已提交终态终止，避免状态卡在 COMMITTING
-            stateMap.put(txId, STATE_COMMIT);
+        // 转投半消息到目标 Stream + 原子标记 COMMIT（执行权锁内串行化）
+        PublishOutcome outcome = publishHalfAndMarkCommit(txGroup, halfIdStr, targetTopic, txId);
+        switch (outcome) {
+            case PUBLISHED -> {
+                /* 终态已由原子批写入 */
+            }
+            case HALF_MISSING -> {
+                // 半消息不存在：直接按已提交终态终止，避免状态卡在 COMMITTING
+                stateMap.put(txId, STATE_COMMIT);
+            }
+            case LOCK_BUSY -> {
+                // 其它实例持有执行权：保持 COMMITTING 与回查条目，等待其完成或 TTL 过期后接管
+                LOG.debug("Publish skipped, another instance holds the tx lock: txId={}", txId);
+                return;
+            }
         }
 
-        // 终态
+        // 终态收尾
+        releaseTransactionLock(txGroup, txId);
         removeCheckEntry(txId, txGroup);
         cleanupTerminalState(stateMap, txId);
 
@@ -388,15 +485,18 @@ public class TransactionScanner implements StreamMQScheduler {
         }
 
         String halfIdStr = stateMap.get(txId + FIELD_HALF_ID_SUFFIX);
+        boolean halfRemoved = true;
         if (Objects.nonNull(halfIdStr)) {
-            // XDEL 半消息
+            // XDEL 半消息；失败时不得终结事务（否则半消息永久残留），保持 ROLLBACKING 并重新调度重试
             String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
             RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
             try {
                 halfStream.remove(parseStreamId(halfIdStr));
             } catch (RuntimeException ex) {
+                halfRemoved = false;
                 LOG.warn(
-                        "XDEL half message failed: txId={}, halfId={}: {}",
+                        "XDEL half message failed, will retry on next scan: txId={}, halfId={}:"
+                                + " {}",
                         txId,
                         halfIdStr,
                         ex.getMessage(),
@@ -404,7 +504,25 @@ public class TransactionScanner implements StreamMQScheduler {
             }
         }
 
+        if (!halfRemoved) {
+            // 有界重试：超过 maxCheckTimes 后强制终结（此时可能残留半消息条目，ERROR 提示人工清理）
+            int checkCount = getCheckCount(txId, txGroup);
+            if (checkCount >= maxCheckTimes) {
+                LOG.error(
+                        "Force-finalize ROLLBACK after {} failed XDEL attempts; orphan half entry"
+                                + " may remain: txId={}, halfId={}",
+                        checkCount,
+                        txId,
+                        halfIdStr);
+            } else {
+                incrementCheckCount(txId, txGroup);
+                rescheduleCheck(txId, txGroup);
+                return;
+            }
+        }
+
         stateMap.put(txId, STATE_ROLLBACK);
+        releaseTransactionLock(txGroup, txId);
         removeCheckEntry(txId, txGroup);
         cleanupTerminalState(stateMap, txId);
 
@@ -563,19 +681,22 @@ public class TransactionScanner implements StreamMQScheduler {
                             txId);
                     doMarkRollback(txId, txGroup);
                 } else {
-                    // 更新状态 + 重新调度 + 递增计数
-                    stateMap.put(txId, STATE_UNKNOWN);
+                    // 更新状态（Lua CAS：绝不覆盖其它实例已写入的终态）+ 重新调度 + 递增计数
+                    RScript script = redisson.getScript(StringCodec.INSTANCE);
+                    script.eval(
+                            RScript.Mode.READ_WRITE,
+                            LUA_CAS_TO_UNKNOWN,
+                            RScript.ReturnType.STATUS,
+                            Collections.singletonList(stateHashKey),
+                            txId);
                     incrementCheckCount(txId, txGroup);
-                    long nextCheckAt = System.currentTimeMillis() + checkIntervalMs;
-                    redisson.getScoredSortedSet(
-                                    StreamMQKeys.transactionCheckZSet(namespace, txGroup))
-                            .add(nextCheckAt, txId);
+                    rescheduleCheck(txId, txGroup);
                     LOG.debug(
                             "Transaction check UNKNOWN, rescheduled: txId={}, checkCount={},"
                                     + " nextCheckAt={}",
                             txId,
                             checkCount + 1,
-                            nextCheckAt);
+                            System.currentTimeMillis() + checkIntervalMs);
                 }
             }
             default -> LOG.warn("Unknown LocalTransactionState: txId={}, state={}", txId, state);
@@ -584,9 +705,79 @@ public class TransactionScanner implements StreamMQScheduler {
 
     // ===================== 辅助方法 =====================
 
-    /** 将半消息从 half Stream 转投到目标 Stream 并原子标记 COMMIT（COMMIT 时调用）。 */
-    private boolean publishHalfAndMarkCommit(
+    /** 发布结果：PUBLISHED 成功；HALF_MISSING 半消息不存在；LOCK_BUSY 执行权被其它实例持有。 */
+    private enum PublishOutcome {
+        PUBLISHED,
+        HALF_MISSING,
+        LOCK_BUSY
+    }
+
+    /** 将事务降级为 UNKNOWN 并重新调度回查（元数据丢失时的有界兜底路径）。 */
+    private void degradeToUnknown(
+            String stateHashKey, RMap<String, String> stateMap, String txId, String txGroup) {
+        RScript script = redisson.getScript(StringCodec.INSTANCE);
+        script.eval(
+                RScript.Mode.READ_WRITE,
+                LUA_CAS_TO_UNKNOWN,
+                RScript.ReturnType.STATUS,
+                Collections.singletonList(stateHashKey),
+                txId);
+        int checkCount = getCheckCount(txId, txGroup);
+        if (checkCount < maxCheckTimes) {
+            incrementCheckCount(txId, txGroup);
+            rescheduleCheck(txId, txGroup);
+        } else {
+            LOG.error(
+                    "Degrade-to-UNKNOWN exceeded maxCheckTimes, force rollback: txId={},"
+                            + " txGroup={}",
+                    txId,
+                    txGroup);
+            doMarkRollback(txId, txGroup);
+        }
+    }
+
+    /** 将 txId 重新加入回查 ZSet（score = now + checkInterval），用于失败重试。 */
+    private void rescheduleCheck(String txId, String txGroup) {
+        long nextCheckAt = System.currentTimeMillis() + checkIntervalMs;
+        redisson.getScoredSortedSet(StreamMQKeys.transactionCheckZSet(namespace, txGroup))
+                .add(nextCheckAt, txId);
+    }
+
+    /**
+     * 获取事务执行权锁（SETNX + TTL）。
+     *
+     * @return true 获取成功；false 其它实例持有中
+     */
+    private boolean tryAcquireTransactionLock(String txGroup, String txId) {
+        RBucket<String> lockBucket =
+                redisson.getBucket(StreamMQKeys.transactionLock(namespace, txGroup, txId));
+        return Boolean.TRUE.equals(lockBucket.setIfAbsent(lockHolderId));
+    }
+
+    /** 释放事务执行权锁（仅持有者本人可删除，避免误释放他人接管后的锁）。 */
+    private void releaseTransactionLock(String txGroup, String txId) {
+        try {
+            RBucket<String> lockBucket =
+                    redisson.getBucket(StreamMQKeys.transactionLock(namespace, txGroup, txId));
+            lockBucket.compareAndSet(lockHolderId, "");
+            lockBucket.delete();
+        } catch (RuntimeException ex) {
+            LOG.debug("Release transaction lock failed (TTL will expire): txId={}", txId, ex);
+        }
+    }
+
+    /**
+     * 将半消息从 half Stream 转投到目标 Stream 并原子标记 COMMIT（COMMIT 时调用）。
+     *
+     * <p><b>并发控制：</b>进入临界区前必须通过事务执行权锁（SETNX+TTL，{@link StreamMQKeys#transactionLock}）串行化——Lua CAS
+     * 只保证状态机迁移互斥，但 CAS→批量执行之间存在窗口， 两个实例可先后看到 COMMITTING 并各自转投造成业务消息重复发布；执行权锁保证同一时刻仅一个实例执行 XADD。
+     * 持有者崩溃时锁随 TTL 过期，其它实例可在后续回查中接管。
+     */
+    private PublishOutcome publishHalfAndMarkCommit(
             String txGroup, String halfIdStr, String targetTopic, String txId) {
+        if (!tryAcquireTransactionLock(txGroup, txId)) {
+            return PublishOutcome.LOCK_BUSY;
+        }
         String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
         RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
         StreamMessageId halfId = parseStreamId(halfIdStr);
@@ -598,7 +789,7 @@ public class TransactionScanner implements StreamMQScheduler {
                     "Half message not found, cannot publish: txGroup={}, halfId={}",
                     txGroup,
                     halfIdStr);
-            return false;
+            return PublishOutcome.HALF_MISSING;
         }
         Map<String, String> fields = new HashMap<>(entries.values().iterator().next());
         // 移除 originTopic 等调度元数据（如有）
@@ -618,7 +809,7 @@ public class TransactionScanner implements StreamMQScheduler {
         stateMapAsync.putAsync(txId, STATE_COMMIT);
         try {
             batch.execute();
-            return true;
+            return PublishOutcome.PUBLISHED;
         } catch (RuntimeException ex) {
             LOG.error(
                     "Failed to atomically publish transaction message, txId={}: {}",
@@ -669,10 +860,9 @@ public class TransactionScanner implements StreamMQScheduler {
                 }
             }
         }
-        Message<?> message = messageConverter.fromStreamFields(fields, (Class) bodyType);
-        DefaultMessageConverter.applyTopic(message, targetTopic);
-        DefaultMessageConverter.applyMessageId(message, entry.getKey().toString());
-        return message;
+        return messageConverter
+                .fromStreamFields(fields, (Class) bodyType, targetTopic)
+                .withMessageId(MessageId.fromStreamEntry(entry.getKey().toString()));
     }
 
     /** 从 txcheck ZSet 移除 txId。 */

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.interceptor;
 
 import io.github.streammq.core.StreamMQConstants;
@@ -50,15 +55,14 @@ public class TraceContextProducerInterceptor implements ProducerInterceptor {
     }
 
     @Override
-    public boolean beforeSend(Message<?> message) {
+    public Message<?> beforeSend(Message<?> message) {
         Objects.requireNonNull(message, "message");
-        // 如果消息没有 traceId，生成 UUID 作为 traceId
-        Map<String, String> userProps = message.getUserProperties();
-        if (Objects.isNull(userProps.get(TRACE_ID_KEY))) {
-            message.putUserProperty(TRACE_ID_KEY, UUID.randomUUID().toString());
-        }
         sendStartTimestamp.set(System.currentTimeMillis());
-        return true;
+        // 如果消息没有 traceId，生成 UUID 作为 traceId（返回派生的不可变实例）
+        if (Objects.isNull(message.getUserProperties().get(TRACE_ID_KEY))) {
+            return message.addUserProperty(TRACE_ID_KEY, UUID.randomUUID().toString());
+        }
+        return message;
     }
 
     @Override

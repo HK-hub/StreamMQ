@@ -1,0 +1,101 @@
+{
+  "hints": [
+    {
+      "name": "streammq.producer.serializer",
+      "values": [
+        {
+          "value": "io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer",
+          "description": "JSON 序列化（默认），可读性好、跨语言通用"
+        },
+        {
+          "value": "io.github.streammq.adapter.redisson.serializer.FurySerializer",
+          "description": "Apache Fury 二进制序列化，吞吐量约为 Jackson 的 7 倍"
+        },
+        {
+          "value": "io.github.streammq.adapter.redisson.serializer.ProtostuffSerializer",
+          "description": "Protostuff 二进制序列化，兼容 Protocol Buffer 生态"
+        }
+      ]
+    },
+    {
+      "name": "streammq.producer.compression-codec",
+      "values": [
+        {
+          "value": "io.github.streammq.adapter.redisson.compression.GzipCompressionCodec",
+          "description": "GZIP 压缩（默认实现）"
+        }
+      ]
+    },
+    {
+      "name": "streammq.consumer.retry-policy",
+      "values": [
+        {
+          "value": "io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy",
+          "description": "固定间隔数组重试策略（默认，对齐 RocketMQ）"
+        },
+        {
+          "value": "io.github.streammq.adapter.redisson.retry.ExponentialBackoffRetryPolicy",
+          "description": "指数退避重试策略"
+        },
+        {
+          "value": "io.github.streammq.adapter.redisson.retry.FixedIntervalRetryPolicy",
+          "description": "固定间隔重试策略"
+        },
+        {
+          "value": "io.github.streammq.adapter.redisson.retry.NoRetryPolicy",
+          "description": "不重试策略"
+        }
+      ]
+    },
+    {
+      "name": "streammq.rebalance.strategy",
+      "values": [
+        {
+          "value": "io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy",
+          "description": "一致性哈希分配（默认，虚拟节点数可配）"
+        },
+        {
+          "value": "io.github.streammq.adapter.redisson.rebalance.RoundRobinRebalanceStrategy",
+          "description": "轮询均分分配"
+        }
+      ]
+    },
+    {
+      "name": "streammq.dlq.failure-strategy",
+      "values": [
+        {
+          "value": "io.github.streammq.adapter.redisson.dlq.LimitedRetryDlqFailureStrategy",
+          "description": "DLQ 内有限次重试后进入二级 DLQ（默认）"
+        },
+        {
+          "value": "io.github.streammq.adapter.redisson.dlq.SecondaryDlqFailureStrategy",
+          "description": "直接转入二级死信队列"
+        },
+        {
+          "value": "io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy",
+          "description": "记录日志后丢弃"
+        }
+      ]
+    }
+  ],
+  "properties": [
+    {
+      "name": "streammq.enabled",
+      "type": "java.lang.Boolean",
+      "description": "StreamMQ 总开关，设为 false 时全部自动装配回退。",
+      "defaultValue": true
+    },
+    {
+      "name": "streammq.namespace",
+      "type": "java.lang.String",
+      "description": "Redis Key 命名空间前缀。",
+      "defaultValue": "streammq"
+    },
+    {
+      "name": "streammq.tracing.enabled",
+      "type": "java.lang.Boolean",
+      "description": "是否启用消息链路追踪（traceId 透传与 MDC 日志）。自定义 TraceCollector 请直接声明 Spring Bean。",
+      "defaultValue": false
+    }
+  ]
+}

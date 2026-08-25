@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.it;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -149,9 +154,9 @@ class TemplateIT extends AbstractRedisIT {
         template.addProducerInterceptor(
                 new ProducerInterceptor() {
                     @Override
-                    public boolean beforeSend(Message<?> message) {
+                    public Message<?> beforeSend(Message<?> message) {
                         beforeCalled.set(true);
-                        return true;
+                        return message;
                     }
 
                     @Override
@@ -174,8 +179,8 @@ class TemplateIT extends AbstractRedisIT {
         template.addProducerInterceptor(
                 new ProducerInterceptor() {
                     @Override
-                    public boolean beforeSend(Message<?> message) {
-                        return false;
+                    public Message<?> beforeSend(Message<?> message) {
+                        return null;
                     }
 
                     @Override
@@ -204,9 +209,9 @@ class TemplateIT extends AbstractRedisIT {
         template.addProducerInterceptor(
                 new ProducerInterceptor() {
                     @Override
-                    public boolean beforeSend(Message<?> message) {
+                    public Message<?> beforeSend(Message<?> message) {
                         firstOrder.set(counter.incrementAndGet());
-                        return true;
+                        return message;
                     }
 
                     @Override
@@ -220,9 +225,9 @@ class TemplateIT extends AbstractRedisIT {
         template.addProducerInterceptor(
                 new ProducerInterceptor() {
                     @Override
-                    public boolean beforeSend(Message<?> message) {
+                    public Message<?> beforeSend(Message<?> message) {
                         secondOrder.set(counter.incrementAndGet());
-                        return true;
+                        return message;
                     }
 
                     @Override
@@ -327,9 +332,8 @@ class TemplateIT extends AbstractRedisIT {
         template.addProducerInterceptor(
                 new ProducerInterceptor() {
                     @Override
-                    public boolean beforeSend(Message<?> message) {
-                        message.putUserProperty("injected", "yes");
-                        return true;
+                    public Message<?> beforeSend(Message<?> message) {
+                        return message.addUserProperty("injected", "yes");
                     }
 
                     @Override

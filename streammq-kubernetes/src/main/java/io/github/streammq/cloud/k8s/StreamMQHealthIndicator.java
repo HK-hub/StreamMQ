@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.cloud.k8s;
 
 import io.github.streammq.core.listener.StreamMQListenerContainer;
@@ -18,12 +23,12 @@ import org.springframework.boot.actuate.health.HealthIndicator;
  * <p>暴露的健康信息：
  *
  * <ul>
- *   <li>状态：容器运行中为 UP，否则为 DOWN
+ *   <li>状态：容器运行中为 UP，否则为 DOWN；纯生产者应用（无容器）视为 UP
  *   <li>activeConsumers：当前已注册的消费者数量
  *   <li>running：容器是否正在运行
  * </ul>
  *
- * <p>当 {@link StreamMQListenerContainer} 不存在时，健康状态为 DOWN 并标注原因。
+ * <p>当 {@link StreamMQListenerContainer} 未装配时（纯生产者应用）报告 UP 并标注 producer-only。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -54,8 +59,10 @@ public class StreamMQHealthIndicator implements HealthIndicator {
     public Health health() {
         StreamMQListenerContainer container = containerProvider.getIfAvailable();
         if (Objects.isNull(container)) {
-            return Health.down()
-                    .withDetail(DETAIL_REASON, "StreamMQListenerContainer not available")
+            // 纯生产者应用（未装配 Listener 容器）是合法形态：不应把整体健康拖为 DOWN，
+            // 否则 K8s 会重启健康的生产者 Pod
+            return Health.up()
+                    .withDetail(DETAIL_REASON, "producer-only (no listener container)")
                     .build();
         }
         boolean running = container.isRunning();

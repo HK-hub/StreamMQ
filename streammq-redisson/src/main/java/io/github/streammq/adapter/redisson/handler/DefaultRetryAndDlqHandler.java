@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.handler;
 
 import io.github.streammq.adapter.redisson.dlq.DefaultDlqFailureContext;
@@ -30,8 +35,8 @@ import java.util.Objects;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
-import org.redisson.api.RMap;
-import org.redisson.api.RScoredSortedSet;
+import org.redisson.api.BatchOptions;
+import org.redisson.api.RBatch;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.stream.StreamAddArgs;
@@ -56,6 +61,9 @@ import org.slf4j.LoggerFactory;
  */
 @RequiredArgsConstructor
 public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
+
+    /** 重试/DLQ payload Hash 的保留时长：超期自动过期，防止孤儿 payload 无限累积 */
+    static final java.time.Duration RETRY_PAYLOAD_TTL = java.time.Duration.ofDays(7);
 
     private static final Logger LOG = LoggerFactory.getLogger(DefaultRetryAndDlqHandler.class);
 
@@ -198,8 +206,18 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                                 dlqRetryCount,
                                 decision.retryDelay());
                 case SECONDARY_DLQ -> {
-                    routeToSecondaryDlq(message, reg, messageId, fields);
-                    listener.ack(messageId);
+                    // 仅在成功写入二级 DLQ 后才 ACK；失败保留 PEL 等待重试（否则消息既不在
+                    // 二级 DLQ 也不在 PEL，造成静默丢失）
+                    if (routeToSecondaryDlq(message, reg, messageId, fields)) {
+                        listener.ack(messageId);
+                    } else {
+                        LOG.error(
+                                "Secondary DLQ routing failed, keeping message in PEL:"
+                                        + " topic={}, group={}, messageId={}",
+                                reg.getTopic(),
+                                reg.getGroup(),
+                                messageId);
+                    }
                 }
                 default -> {
                     LOG.warn(
@@ -248,13 +266,31 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         payload.put(
                 RetryScheduler.FIELD_TARGET_TOPIC,
                 StreamMQConstants.DLQ_RETRY_TARGET_TOPIC_SENTINEL);
-        RMap<String, String> payloadMap = redisson.getMap(payloadKey);
-        payloadMap.putAll(payload);
 
+        // 原子写入：payload Hash（带 TTL）+ 调度 ZSet 必须同生同死——拆成两条命令时，
+        // 第二条失败会导致消息既不在 PEL 也不再调度，造成静默丢失
         String retryKey =
                 StreamMQKeys.retryZSet(reg.getNamespace(), reg.getTopic(), reg.getGroup());
-        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
-        zset.add(nextRetryAt, msgIdStr);
+        RBatch batch =
+                redisson.createBatch(
+                        BatchOptions.defaults()
+                                .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
+        batch.<String, String>getMap(payloadKey).putAllAsync(payload);
+        batch.<String, String>getMap(payloadKey).expireAsync(RETRY_PAYLOAD_TTL);
+        batch.<String>getScoredSortedSet(retryKey).addAsync(nextRetryAt, msgIdStr);
+        try {
+            batch.execute();
+        } catch (RuntimeException ex) {
+            LOG.error(
+                    "Failed to schedule DLQ retry, keeping message in PEL (topic={}, group={},"
+                            + " messageId={}): {}",
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    messageId,
+                    ex.getMessage(),
+                    ex);
+            return;
+        }
 
         LOG.info(
                 "DLQ retry scheduled: topic={}, group={}, dlqRetryCount={}/{}, delayMs={}",
@@ -266,15 +302,18 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         listener.ack(messageId);
     }
 
-    /** 路由到二级死信队列 */
-    private void routeToSecondaryDlq(
+    /**
+     * 路由到二级死信队列。
+     *
+     * @return true 写入成功（调用方应 ACK）；false 写入失败（调用方必须保留 PEL）
+     */
+    private boolean routeToSecondaryDlq(
             Message<?> message,
             ListenerRegistration<?> reg,
             MessageId messageId,
             Map<String, String> fields) {
         try {
-            fields.put(
-                    RetryScheduler.FIELD_DLQ_REASON, DlqReason.SECONDARY_DLQ.getCode());
+            fields.put(RetryScheduler.FIELD_DLQ_REASON, DlqReason.SECONDARY_DLQ.getCode());
             fields.put(FIELD_ORIGINAL_MESSAGE_ID, messageId.getStreamEntryId());
             String dlq2Key =
                     StreamMQKeys.secondaryDlqStream(
@@ -289,12 +328,14 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                     reg.getGroup(),
                     messageId,
                     dlq2Key);
+            return true;
         } catch (RuntimeException ex) {
             LOG.error(
-                    "Failed to route to secondary DLQ, falling back to drop (messageId={}): {}",
+                    "Failed to route to secondary DLQ, caller must keep PEL (messageId={}): {}",
                     messageId,
                     ex.getMessage(),
                     ex);
+            return false;
         }
     }
 
@@ -412,13 +453,30 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         payload.putAll(fields);
         payload.put(RetryScheduler.FIELD_RETRY_COUNT, Integer.toString(retryCount));
         payload.put(RetryScheduler.FIELD_TARGET_TOPIC, reg.getTopic());
-        RMap<String, String> payloadMap = redisson.getMap(payloadKey);
-        payloadMap.putAll(payload);
 
+        // 原子写入：payload Hash（带 TTL）+ 调度 ZSet 同生同死（见 scheduleDlqRetry 注释）
         String retryKey =
                 StreamMQKeys.retryZSet(reg.getNamespace(), reg.getTopic(), reg.getGroup());
-        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
-        zset.add(nextRetryAt, msgIdStr);
+        RBatch batch =
+                redisson.createBatch(
+                        BatchOptions.defaults()
+                                .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
+        batch.<String, String>getMap(payloadKey).putAllAsync(payload);
+        batch.<String, String>getMap(payloadKey).expireAsync(RETRY_PAYLOAD_TTL);
+        batch.<String>getScoredSortedSet(retryKey).addAsync(nextRetryAt, msgIdStr);
+        try {
+            batch.execute();
+        } catch (RuntimeException ex) {
+            LOG.error(
+                    "Failed to schedule retry, keeping message in PEL (topic={}, group={},"
+                            + " messageId={}): {}",
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    messageId,
+                    ex.getMessage(),
+                    ex);
+            return;
+        }
 
         recordRetryMetrics(reg.getTopic(), reg.getGroup());
 

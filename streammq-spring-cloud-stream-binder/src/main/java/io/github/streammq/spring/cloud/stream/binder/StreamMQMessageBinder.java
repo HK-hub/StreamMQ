@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.cloud.stream.binder;
 
 import io.github.streammq.core.listener.StreamMQListenerContainer;
@@ -125,6 +130,14 @@ public class StreamMQMessageBinder
             ExtendedProducerProperties<StreamMQProducerProperties> producerProperties,
             MessageChannel errorChannel)
             throws Exception {
+        // 分区生产未实现：静默忽略会导致用户以为按 partitionKey 路由而实际单流写入，宁可启动即失败
+        if (producerProperties.isPartitioned()) {
+            throw new IllegalStateException(
+                    "StreamMQ binder does not support partitioned producers yet"
+                            + " (destination="
+                            + destination.getName()
+                            + "). Remove 'partitioned=true' or use shardingKey extension instead.");
+        }
         StreamMQProducerProperties extension = producerProperties.getExtension();
         long sendTimeout =
                 extension.getSendTimeout() > 0

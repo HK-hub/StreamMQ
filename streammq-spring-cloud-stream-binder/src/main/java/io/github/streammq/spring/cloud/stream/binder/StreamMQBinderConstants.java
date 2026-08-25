@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.cloud.stream.binder;
 
 import io.github.streammq.core.enums.SelectorType;
@@ -61,8 +66,7 @@ public final class StreamMQBinderConstants {
     public static final String HEALTH_DETAIL_LC_RUNNING = "listenerContainer.running";
 
     /** 健康详情：容器消费者数量 */
-    public static final String HEALTH_DETAIL_LC_CONSUMER_COUNT =
-            "listenerContainer.consumerCount";
+    public static final String HEALTH_DETAIL_LC_CONSUMER_COUNT = "listenerContainer.consumerCount";
 
     /** 默认选择器类型编码（对应 {@link SelectorType#TAG}） */
     public static final String DEFAULT_SELECTOR_TYPE_CODE = SelectorType.TAG.name();

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.converter;
 
 import io.github.streammq.core.compression.CompressionCodec;
@@ -239,7 +244,10 @@ public class DefaultMessageConverter extends AbstractMessageConverter {
     @Override
     @SuppressWarnings("unchecked")
     protected <T> void decodeBody(
-            Map<String, String> fields, Class<T> targetType, Message<T> message, String bodyStr) {
+            Map<String, String> fields,
+            Class<T> targetType,
+            MessageDraft<T> draft,
+            String bodyStr) {
         String compressedFlag = fields.get(FIELD_COMPRESSED);
         String bodyTypeField = fields.get(FIELD_BODY_TYPE);
         boolean compressed = StringUtils.isNotEmpty(compressedFlag);
@@ -252,28 +260,27 @@ public class DefaultMessageConverter extends AbstractMessageConverter {
             if (targetType == byte[].class
                     || targetType == Object.class
                             && MessageFields.BYTE_ARRAY_DESCRIPTOR.equals(bodyTypeField)) {
-                message.setBody((T) bodyBytes);
+                draft.body = (T) bodyBytes;
                 return;
             }
-            message.setBody(serializer.deserialize(bodyBytes, targetType));
+            draft.body = serializer.deserialize(bodyBytes, targetType);
             return;
         }
         if (compressed) {
             byte[] bodyBytes = Base64.getDecoder().decode(bodyStr);
             bodyBytes = decompressBody(bodyBytes, compressedFlag);
             if (targetType == String.class) {
-                message.setBody((T) new String(bodyBytes, StandardCharsets.UTF_8));
+                draft.body = (T) new String(bodyBytes, StandardCharsets.UTF_8);
                 return;
             }
-            message.setBody(serializer.deserialize(bodyBytes, targetType));
+            draft.body = serializer.deserialize(bodyBytes, targetType);
             return;
         }
         if (targetType == String.class) {
-            message.setBody((T) bodyStr);
+            draft.body = (T) bodyStr;
             return;
         }
-        message.setBody(
-                serializer.deserialize(bodyStr.getBytes(StandardCharsets.UTF_8), targetType));
+        draft.body = serializer.deserialize(bodyStr.getBytes(StandardCharsets.UTF_8), targetType);
     }
 
     // ================================================================
@@ -292,14 +299,14 @@ public class DefaultMessageConverter extends AbstractMessageConverter {
     }
 
     /**
-     * 从单个 JSON 字段反序列化属性（sys + user 合并 → 写入 userProperties）。
+     * 从单个 JSON 字段反序列化属性（sys + user 合并 → 写入草稿用户属性）。
      *
-     * @param message 输出消息
+     * @param draft 装配草稿
      * @param fields Stream Entry 全部字段
      */
     @Override
-    protected <T> void decodeProperties(Message<T> message, Map<String, String> fields) {
-        readPropsJson(fields, FIELD_PROPS, message::setUserProperties);
+    protected <T> void decodeProperties(MessageDraft<T> draft, Map<String, String> fields) {
+        readPropsJson(fields, FIELD_PROPS, draft.userProperties::putAll);
     }
 
     // ================================================================
@@ -375,28 +382,26 @@ public class DefaultMessageConverter extends AbstractMessageConverter {
     // ================================================================
 
     /**
-     * 为消费端还原的消息回填 topic 字段。
+     * 为消费端还原的消息派生携带指定 Topic 的不可变新实例。
      *
-     * <p><b>向后兼容：</b>此静态方法供外部调用方直接引用， 内部等同于 {@code message.setTopic(topic)}。
-     *
-     * @param message 消息载体
+     * @param message 原始消息
      * @param topic 主题名
      * @param <T> body 类型
+     * @return Topic 已设置的不可变新实例
      */
-    public static <T> void applyTopic(Message<T> message, String topic) {
-        message.setTopic(topic);
+    public static <T> Message<T> applyTopic(Message<T> message, String topic) {
+        return message.withTopic(topic);
     }
 
     /**
-     * 为消费端还原的消息回填 messageId 字段。
+     * 为消费端还原的消息派生携带 {@link MessageId} 的不可变新实例。
      *
-     * <p>从 Redis Stream Entry ID 字符串构造 {@link MessageId} 并设置到消息上。
-     *
-     * @param message 消息载体
+     * @param message 原始消息
      * @param streamEntryId Redis Stream Entry ID（格式 {@code {timestamp}-{sequence}}）
      * @param <T> body 类型
+     * @return messageId 已设置的不可变新实例
      */
-    public static <T> void applyMessageId(Message<T> message, String streamEntryId) {
-        message.setMessageId(MessageId.fromStreamEntry(streamEntryId));
+    public static <T> Message<T> applyMessageId(Message<T> message, String streamEntryId) {
+        return message.withMessageId(MessageId.fromStreamEntry(streamEntryId));
     }
 }

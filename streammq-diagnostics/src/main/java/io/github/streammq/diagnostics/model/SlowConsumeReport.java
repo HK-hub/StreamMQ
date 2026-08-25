@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.diagnostics.model;
 
 /**
@@ -31,4 +36,5 @@ public record SlowConsumeReport(
         int threadPoolActive,
         int threadPoolMax,
         String bottleneck,
-        String recommendation) {}
+        String recommendation,
+        String code) {}

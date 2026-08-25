@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.diagnostics;
 
 import io.github.streammq.core.listener.StreamMQListenerContainer;
@@ -73,8 +78,11 @@ public class StreamMQDiagnosticsAutoConfiguration {
      */
     @Bean
     @ConditionalOnBean(StreamMQTraceService.class)
-    public MessageProfileService messageProfileService(StreamMQTraceService traceService) {
-        return new MessageProfileService(traceService);
+    public MessageProfileService messageProfileService(
+            StreamMQTraceService traceService, StreamMQDiagnosticsProperties properties) {
+        MessageProfileService service = new MessageProfileService(traceService);
+        service.setMaxProfileQuerySize(properties.getMaxProfileQuerySize());
+        return service;
     }
 
     /**

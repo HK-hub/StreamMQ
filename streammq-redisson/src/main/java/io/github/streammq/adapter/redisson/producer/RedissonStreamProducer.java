@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.producer;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
@@ -128,6 +133,13 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         return syncSend(message, defaultTimeoutMillis);
     }
 
+    /**
+     * 同步发送：XADD 写入目标 Stream。
+     *
+     * <p><b>超时语义：</b>XADD 已成功（返回真实 Entry ID）后即使总耗时超过 timeoutMillis， 也返回成功结果并记录
+     * WARN——发送实际已成功，抛出超时异常会误导调用方重试从而产生重复消息。 超时异常仅在网络调用本身失败/超时（未获得 Entry ID）时抛出，此时消息状态未知，
+     * 重试可能产生重复投递（at-least-once 语义，业务侧需幂等）。
+     */
     @Override
     public SendResult syncSend(Message<?> message, long timeoutMillis) {
         ensureOpen();
@@ -161,13 +173,15 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             StreamMessageId streamId = appendStream(streamKey, fields, timeoutMillis);
             long elapsed = System.currentTimeMillis() - start;
             if (elapsed > timeoutMillis) {
-                throw new ProducerTimeoutException(
-                        "syncSend timeout after " + elapsed + "ms (limit=" + timeoutMillis + "ms)",
+                LOG.warn(
+                        "syncSend completed but exceeded timeout budget: topic={}, elapsed={}ms,"
+                                + " limit={}ms — message WAS delivered (id={})",
                         message.getTopic(),
-                        timeoutMillis);
+                        elapsed,
+                        timeoutMillis,
+                        streamId);
             }
             MessageId messageId = MessageId.fromStreamMessageId(streamId);
-            message.setMessageId(messageId);
             return new SendResult(
                     messageId, message.getTopic(), message.getTag(), message.getBornTimestamp());
         } catch (ProducerTimeoutException ex) {
@@ -303,7 +317,6 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         for (int i = 0; i < messageList.size(); i++) {
             Message<?> message = messageList.get(i);
             MessageId messageId = toRealMessageId(responses, i);
-            message.setMessageId(messageId);
             results.add(
                     new SendResult(
                             messageId,
@@ -334,10 +347,33 @@ public class RedissonStreamProducer implements StreamMessageProducer {
     /**
      * 同步发送延时消息：写入延时 ZSet + payload Hash，不直接写入 Stream。
      *
+     * <p><b>写入顺序：</b>先写 payload Hash，再写 ZSet 调度条目。若进程在两步之间崩溃， 只会残留一个无调度条目的孤儿
+     * payload（由清理任务回收），绝不会出现"已调度但 payload 缺失"导致的永久消息丢失。
+     *
+     * <p>发送结果中的 messageId 为占位 ID（{@link MessageId#sentinel()}）： 延时消息的真实 Stream Entry ID 在到期投递时才由
+     * Redis 生成。
+     *
      * @param message 延时消息
-     * @return 发送结果（使用合成的 msgId）
+     * @return 发送结果（占位 messageId）
      */
     private SendResult sendDelayMessage(Message<?> message) {
+        ensureOpen();
+        Map<String, String> delayFields = converter.toStreamFields(message);
+
+        // 消息大小预检：与直发路径保持一致，防止超大消息绕过校验进入延时链路
+        int estimatedSize = estimateFieldSize(delayFields);
+        if (estimatedSize > maxMessageSize) {
+            throw new StreamMQBrokerException(
+                    "Delay message size "
+                            + estimatedSize
+                            + " bytes exceeds max "
+                            + maxMessageSize
+                            + " bytes for topic "
+                            + message.getTopic(),
+                    null,
+                    null);
+        }
+
         String msgId = UUID.randomUUID().toString();
         long now = System.currentTimeMillis();
 
@@ -352,16 +388,17 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             String zsetKey = StreamMQKeys.delayCustomZSet(namespace);
             String payloadHashKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
 
-            Map<String, String> fields = converter.toStreamFields(message);
+            Map<String, String> fields = new java.util.HashMap<>(delayFields);
             fields.put(FIELD_TARGET_TOPIC, message.getTopic());
             fields.put(FIELD_DELIVER_AT, Long.toString(deliverAt));
 
             try {
-                RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
-                zset.add(deliverAt, msgId);
-
+                // 先写 payload，再写调度条目（顺序不可颠倒）
                 RMap<String, String> payloadMap = redisson.getMap(payloadHashKey);
                 payloadMap.putAll(fields);
+
+                RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
+                zset.add(deliverAt, msgId);
 
                 LOG.debug(
                         "Custom delay message queued: msgId={}, delayMs={}, deliverAt={}, topic={}",
@@ -370,10 +407,8 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                         deliverAt,
                         message.getTopic());
 
-                MessageId messageId = MessageId.of(now, 0x7fffffff & msgId.hashCode());
-                message.setMessageId(messageId);
                 return new SendResult(
-                        messageId,
+                        MessageId.sentinel(),
                         message.getTopic(),
                         message.getTag(),
                         message.getBornTimestamp());
@@ -394,16 +429,17 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         String zsetKey = StreamMQKeys.delayZSet(namespace, level.name());
         String payloadHashKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
 
-        Map<String, String> fields = converter.toStreamFields(message);
+        Map<String, String> fields = new java.util.HashMap<>(delayFields);
         fields.put(FIELD_TARGET_TOPIC, message.getTopic());
         fields.put(FIELD_DELIVER_AT, Long.toString(deliverAt));
 
         try {
-            RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
-            zset.add(deliverAt, msgId);
-
+            // 先写 payload，再写调度条目（顺序不可颠倒）
             RMap<String, String> payloadMap = redisson.getMap(payloadHashKey);
             payloadMap.putAll(fields);
+
+            RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
+            zset.add(deliverAt, msgId);
 
             LOG.debug(
                     "Delay message queued: msgId={}, level={}, deliverAt={}, topic={}",
@@ -412,10 +448,11 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                     deliverAt,
                     message.getTopic());
 
-            MessageId messageId = new MessageId(now + "-" + (msgId.hashCode() & 0x7fffffff));
-            message.setMessageId(messageId);
             return new SendResult(
-                    messageId, message.getTopic(), message.getTag(), message.getBornTimestamp());
+                    MessageId.sentinel(),
+                    message.getTopic(),
+                    message.getTag(),
+                    message.getBornTimestamp());
         } catch (RuntimeException ex) {
             throw new StreamMQBrokerException(
                     "sendDelayMessage failed for topic " + message.getTopic(), null, ex);

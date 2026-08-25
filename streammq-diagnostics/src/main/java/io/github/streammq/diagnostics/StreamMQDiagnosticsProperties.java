@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.diagnostics;
 
 import lombok.Getter;
@@ -52,8 +57,7 @@ public class StreamMQDiagnosticsProperties {
     private long backlogWarningThreshold = StreamMQDiagnosticsDefaults.BACKLOG_WARNING_THRESHOLD;
 
     /** 积压严重阈值，超过此值触发 CRITICAL 级别 */
-    private long backlogCriticalThreshold =
-            StreamMQDiagnosticsDefaults.BACKLOG_CRITICAL_THRESHOLD;
+    private long backlogCriticalThreshold = StreamMQDiagnosticsDefaults.BACKLOG_CRITICAL_THRESHOLD;
 
     /** DLQ 主题标识关键字（小写匹配） */
     private String dlqTopicMarker = StreamMQDiagnosticsDefaults.DLQ_TOPIC_MARKER;

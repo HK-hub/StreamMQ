@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.converter;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -8,6 +13,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.streammq.adapter.redisson.compression.GzipCompressionCodec;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.core.compression.CompressionCodec;
+import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.message.Message;
 import java.nio.charset.StandardCharsets;
@@ -18,7 +24,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link DefaultMessageConverter} 单元测试，覆盖 Stream Entry 字段映射、可选字段省略、 属性合并、往返一致性、非法字段解析与静态回填方法。
+ * {@link DefaultMessageConverter} 单元测试，覆盖 Stream Entry 字段映射、可选字段省略、属性合并、 往返一致性、非法字段解析与
+ * Topic/MessageId 派生方法。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -30,19 +37,44 @@ class DefaultMessageConverterTest {
     private final DefaultMessageConverter converter = new DefaultMessageConverter(serializer);
     private final ObjectMapper propsMapper = new ObjectMapper();
 
+    /** 构造测试消息（不可变工厂）。 */
+    private Message<String> msg(
+            String body,
+            String tag,
+            String keys,
+            String shardingKey,
+            long bornTs,
+            String bornHost,
+            int retryTimes,
+            String txId) {
+        return new Message<>(
+                "test-topic",
+                tag,
+                keys,
+                shardingKey,
+                null,
+                null,
+                body,
+                (DelayLevel) null,
+                null,
+                bornTs,
+                bornHost,
+                txId,
+                retryTimes);
+    }
+
+    /** 最小消息：仅 body + bornTs。 */
+    private Message<String> msg(String body, long bornTs) {
+        return msg(body, null, null, null, bornTs, null, 0, null);
+    }
+
     @Test
     @DisplayName(
             "toStreamFields 完整字段映射（body Base64、bodyType 类名、tag/keys/shardingKey/bornTs/bornHost）")
     void toStreamFieldsFullMapping() {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setTag("vip");
-        msg.setKeys("k1");
-        msg.setShardingKey("shard-1");
-        msg.setBornTimestamp(123456789L);
-        msg.setBornHost("host:8080");
+        Message<String> m = msg("hello", "vip", "k1", "shard-1", 123456789L, "host:8080", 0, null);
 
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields = converter.toStreamFields(m);
 
         assertThat(fields).containsEntry("bodyType", "java.lang.String");
         assertThat(fields).containsEntry("tag", "vip");
@@ -59,10 +91,7 @@ class DefaultMessageConverterTest {
     @Test
     @DisplayName("toStreamFields body 为 null 时不写入 body/bodyType")
     void toStreamFieldsNullBody() {
-        Message<String> msg = new Message<>();
-        msg.setBornTimestamp(1L);
-
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields = converter.toStreamFields(msg(null, 1L));
 
         assertThat(fields).doesNotContainKey("body");
         assertThat(fields).doesNotContainKey("bodyType");
@@ -72,11 +101,7 @@ class DefaultMessageConverterTest {
     @Test
     @DisplayName("toStreamFields 可选字段为 null 时不写入")
     void toStreamFieldsOptionalNull() {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setBornTimestamp(1L);
-
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields = converter.toStreamFields(msg("hello", 1L));
 
         assertThat(fields).doesNotContainKey("tag");
         assertThat(fields).doesNotContainKey("keys");
@@ -90,13 +115,10 @@ class DefaultMessageConverterTest {
     @Test
     @DisplayName("toStreamFields 包含 properties 与 userProperties 时合并为 JSON 字符串")
     void toStreamFieldsMergedProps() throws Exception {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setBornTimestamp(1L);
-        msg.putProperty("traceId", "t1");
-        msg.putUserProperty("u1", "v1");
+        Message<String> m =
+                msg("hello", 1L).addProperty("traceId", "t1").addUserProperty("u1", "v1");
 
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields = converter.toStreamFields(m);
 
         assertThat(fields).containsKey("props");
         Map<String, String> parsed =
@@ -108,36 +130,23 @@ class DefaultMessageConverterTest {
     @Test
     @DisplayName("toStreamFields 包含 retryTimes > 0 时写入")
     void toStreamFieldsRetryTimesPositive() {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setBornTimestamp(1L);
-        msg.setReconsumeTimes(3);
-
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields =
+                converter.toStreamFields(msg("hello", 1L).withReconsumeTimes(3));
         assertThat(fields).containsEntry("retryTimes", "3");
     }
 
     @Test
     @DisplayName("toStreamFields retryTimes == 0 时不写入")
     void toStreamFieldsRetryTimesZero() {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setBornTimestamp(1L);
-        msg.setReconsumeTimes(0);
-
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields = converter.toStreamFields(msg("hello", 1L));
         assertThat(fields).doesNotContainKey("retryTimes");
     }
 
     @Test
     @DisplayName("toStreamFields 包含 transactionId 时写入")
     void toStreamFieldsTransactionId() {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setBornTimestamp(1L);
-        msg.setTransactionId("tx-001");
-
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields =
+                converter.toStreamFields(msg("hello", 1L).withTransactionId("tx-001"));
         assertThat(fields).containsEntry("txId", "tx-001");
     }
 
@@ -152,21 +161,15 @@ class DefaultMessageConverterTest {
     @Test
     @DisplayName("fromStreamFields 往返：序列化后反序列化字段一致")
     void fromStreamFieldsRoundTrip() {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setTag("vip");
-        msg.setKeys("k1");
-        msg.setShardingKey("shard-1");
-        msg.setBornTimestamp(123456789L);
-        msg.setBornHost("host:8080");
-        msg.setReconsumeTimes(2);
-        msg.setTransactionId("tx-1");
-        msg.putProperty("traceId", "t1");
-        msg.putUserProperty("u1", "v1");
+        Message<String> source =
+                msg("hello", "vip", "k1", "shard-1", 123456789L, "host:8080", 2, "tx-1")
+                        .addProperty("traceId", "t1")
+                        .addUserProperty("u1", "v1");
 
-        Map<String, String> fields = converter.toStreamFields(msg);
-        Message<String> restored = converter.fromStreamFields(fields, String.class);
+        Map<String, String> fields = converter.toStreamFields(source);
+        Message<String> restored = converter.fromStreamFields(fields, String.class, "order-topic");
 
+        assertThat(restored.getTopic()).isEqualTo("order-topic");
         assertThat(restored.getBody()).isEqualTo("hello");
         assertThat(restored.getTag()).isEqualTo("vip");
         assertThat(restored.getKeys()).isEqualTo("k1");
@@ -190,16 +193,18 @@ class DefaultMessageConverterTest {
         fields.put("bodyType", String.class.getName());
         fields.put("bornTs", "999");
 
-        Message<String> msg = converter.fromStreamFields(fields, String.class);
+        Message<String> restored =
+                converter.fromStreamFields(fields, String.class, "fallback-topic");
 
-        assertThat(msg.getBody()).isEqualTo("hi");
-        assertThat(msg.getBornTimestamp()).isEqualTo(999L);
-        assertThat(msg.getTag()).isNull();
-        assertThat(msg.getKeys()).isNull();
-        assertThat(msg.getShardingKey()).isNull();
-        assertThat(msg.getBornHost()).isNull();
-        assertThat(msg.getTransactionId()).isNull();
-        assertThat(msg.getReconsumeTimes()).isZero();
+        assertThat(restored.getTopic()).isEqualTo("fallback-topic");
+        assertThat(restored.getBody()).isEqualTo("hi");
+        assertThat(restored.getBornTimestamp()).isEqualTo(999L);
+        assertThat(restored.getTag()).isNull();
+        assertThat(restored.getKeys()).isNull();
+        assertThat(restored.getShardingKey()).isNull();
+        assertThat(restored.getBornHost()).isNull();
+        assertThat(restored.getTransactionId()).isNull();
+        assertThat(restored.getReconsumeTimes()).isZero();
     }
 
     @Test
@@ -250,26 +255,52 @@ class DefaultMessageConverterTest {
     }
 
     @Test
+    @DisplayName("fromStreamFields 缺失 topic 且无 fallbackTopic 抛出 SerializationException")
+    void fromStreamFieldsMissingTopicWithoutFallback() {
+        Map<String, String> fields = new HashMap<>();
+        fields.put("body", "raw");
+        fields.put("bornTs", "1");
+
+        assertThatThrownBy(() -> converter.fromStreamFields(fields, String.class))
+                .isInstanceOf(SerializationException.class)
+                .hasMessageContaining("topic");
+    }
+
+    @Test
+    @DisplayName("fromStreamFields 缺失 topic 时使用 fallbackTopic 回填")
+    void fromStreamFieldsFallbackTopic() {
+        Map<String, String> fields = new HashMap<>();
+        fields.put("body", "raw");
+        fields.put("bornTs", "1");
+
+        Message<String> restored =
+                converter.fromStreamFields(fields, String.class, "fallback-topic");
+
+        assertThat(restored.getTopic()).isEqualTo("fallback-topic");
+        assertThat(restored.getBody()).isEqualTo("raw");
+    }
+
+    @Test
     @DisplayName("name 返回 default")
     void name() {
         assertThat(converter.name()).isEqualTo("default");
     }
 
     @Test
-    @DisplayName("applyTopic 为消息回填 topic")
+    @DisplayName("applyTopic 返回携带指定 topic 的派生实例")
     void applyTopic() {
-        Message<String> msg = new Message<>();
-        DefaultMessageConverter.applyTopic(msg, "topic-1");
-        assertThat(msg.getTopic()).isEqualTo("topic-1");
+        Message<String> derived = DefaultMessageConverter.applyTopic(msg("b", 1L), "topic-1");
+        assertThat(derived.getTopic()).isEqualTo("topic-1");
+        // 原实例不变
+        assertThat(msg("b", 1L).getTopic()).isEqualTo("test-topic");
     }
 
     @Test
-    @DisplayName("applyMessageId 为消息回填 MessageId")
+    @DisplayName("applyMessageId 返回携带 MessageId 的派生实例")
     void applyMessageId() {
-        Message<String> msg = new Message<>();
-        DefaultMessageConverter.applyMessageId(msg, "123-0");
-        assertThat(msg.getMessageId()).isNotNull();
-        assertThat(msg.getMessageId().getStreamEntryId()).isEqualTo("123-0");
+        Message<String> derived = DefaultMessageConverter.applyMessageId(msg("b", 1L), "123-0");
+        assertThat(derived.getMessageId()).isNotNull();
+        assertThat(derived.getMessageId().getStreamEntryId()).isEqualTo("123-0");
     }
 
     // ===================== 跨平台反序列化测试 =====================
@@ -305,9 +336,9 @@ class DefaultMessageConverterTest {
         fields.put("body", rawJson);
         fields.put("bornTs", "1");
 
-        Message<String> msg = converter.fromStreamFields(fields, String.class);
+        Message<String> restored = converter.fromStreamFields(fields, String.class, "t");
 
-        assertThat(msg.getBody()).isEqualTo(rawJson);
+        assertThat(restored.getBody()).isEqualTo(rawJson);
     }
 
     @Test
@@ -319,11 +350,11 @@ class DefaultMessageConverterTest {
         fields.put("body", rawJson);
         fields.put("bornTs", "1");
 
-        Message<UserDto> msg = converter.fromStreamFields(fields, UserDto.class);
+        Message<UserDto> restored = converter.fromStreamFields(fields, UserDto.class, "t");
 
-        assertThat(msg.getBody()).isNotNull();
-        assertThat(msg.getBody().getName()).isEqualTo("Bob");
-        assertThat(msg.getBody().getAge()).isEqualTo(25);
+        assertThat(restored.getBody()).isNotNull();
+        assertThat(restored.getBody().getName()).isEqualTo("Bob");
+        assertThat(restored.getBody().getAge()).isEqualTo(25);
     }
 
     @Test
@@ -337,9 +368,9 @@ class DefaultMessageConverterTest {
         fields.put("bodyType", String.class.getName());
         fields.put("bornTs", "1");
 
-        Message<String> msg = converter.fromStreamFields(fields, String.class);
+        Message<String> restored = converter.fromStreamFields(fields, String.class, "t");
 
-        assertThat(msg.getBody()).isEqualTo("hi");
+        assertThat(restored.getBody()).isEqualTo("hi");
     }
 
     // ===================== 压缩/解压测试 =====================
@@ -351,13 +382,11 @@ class DefaultMessageConverterTest {
         DefaultMessageConverter compressedConverter = new DefaultMessageConverter(serializer);
         compressedConverter.setCompressionCodec(codec);
 
-        Message<String> msg = new Message<>();
-        msg.setBody("hello compression world");
-        msg.setTag("vip");
-        msg.setBornTimestamp(123456789L);
+        Message<String> source =
+                msg("hello compression world", "vip", null, null, 123456789L, null, 0, null);
 
         // 序列化为 Stream Fields
-        Map<String, String> fields = compressedConverter.toStreamFields(msg);
+        Map<String, String> fields = compressedConverter.toStreamFields(source);
 
         // 手动压缩 body（模拟 Producer 的 applyCompression 逻辑）
         String bodyStr = fields.get(DefaultMessageConverter.FIELD_BODY);
@@ -368,7 +397,8 @@ class DefaultMessageConverterTest {
         fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
 
         // 反序列化（应自动解压）
-        Message<String> restored = compressedConverter.fromStreamFields(fields, String.class);
+        Message<String> restored =
+                compressedConverter.fromStreamFields(fields, String.class, "test-topic");
 
         assertThat(restored.getBody()).isEqualTo("hello compression world");
         assertThat(restored.getTag()).isEqualTo("vip");
@@ -378,11 +408,7 @@ class DefaultMessageConverterTest {
     @Test
     @DisplayName("compressed=true 但未配置 CompressionCodec 抛出 SerializationException")
     void compressedWithoutCodec() {
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.setBornTimestamp(1L);
-
-        Map<String, String> fields = converter.toStreamFields(msg);
+        Map<String, String> fields = converter.toStreamFields(msg("hello", 1L));
         // 标记为压缩但不实际压缩，验证未配置 codec 时的异常
         fields.put(DefaultMessageConverter.FIELD_COMPRESSED, "true");
 
@@ -398,13 +424,11 @@ class DefaultMessageConverterTest {
         DefaultMessageConverter compressedConverter = new DefaultMessageConverter(serializer);
         compressedConverter.setCompressionCodec(codec);
 
-        Message<String> msg = new Message<>();
-        msg.setBody("no compression here");
-        msg.setBornTimestamp(1L);
-
-        Map<String, String> fields = compressedConverter.toStreamFields(msg);
+        Map<String, String> fields =
+                compressedConverter.toStreamFields(msg("no compression here", 1L));
         // 不设置 compressed=true，即使配置了 codec 也不应解压
-        Message<String> restored = compressedConverter.fromStreamFields(fields, String.class);
+        Message<String> restored =
+                compressedConverter.fromStreamFields(fields, String.class, "test-topic");
 
         assertThat(restored.getBody()).isEqualTo("no compression here");
     }
@@ -428,9 +452,9 @@ class DefaultMessageConverterTest {
         fields.put("bornTs", "1");
         // 不设置 bodyType → 走跨平台路径
 
-        Message<String> msg = compressedConverter.fromStreamFields(fields, String.class);
+        Message<String> restored = compressedConverter.fromStreamFields(fields, String.class, "t");
 
-        assertThat(msg.getBody()).isEqualTo(rawBody);
+        assertThat(restored.getBody()).isEqualTo(rawBody);
     }
 
     @Test
@@ -452,11 +476,12 @@ class DefaultMessageConverterTest {
         fields.put("bornTs", "1");
         // 不设置 bodyType → 走跨平台路径
 
-        Message<UserDto> msg = compressedConverter.fromStreamFields(fields, UserDto.class);
+        Message<UserDto> restored =
+                compressedConverter.fromStreamFields(fields, UserDto.class, "t");
 
-        assertThat(msg.getBody()).isNotNull();
-        assertThat(msg.getBody().getName()).isEqualTo("Bob");
-        assertThat(msg.getBody().getAge()).isEqualTo(25);
+        assertThat(restored.getBody()).isNotNull();
+        assertThat(restored.getBody().getName()).isEqualTo("Bob");
+        assertThat(restored.getBody().getAge()).isEqualTo(25);
     }
 
     @Test

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.cloud.k8s.operator;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
@@ -67,8 +72,19 @@ public class StreamMQCluster extends CustomResource {
     @JsonIgnoreProperties(ignoreUnknown = true)
     @JsonInclude(JsonInclude.Include.NON_NULL)
     public static class Spec {
+        /** 消费者镜像（必填，无默认值：避免发布不可拉取的内置镜像名） */
+        private String image;
+
         /** 后端存储配置 */
         private Backend backend;
+
+        public String getImage() {
+            return image;
+        }
+
+        public void setImage(String image) {
+            this.image = image;
+        }
 
         /** 功能配置 */
         private Config config;
@@ -186,7 +202,40 @@ public class StreamMQCluster extends CustomResource {
             private String masterName;
 
             /** 连接密码（可选） */
+            /** 明文密码（已废弃，建议改用 passwordSecretRef） */
             private String password;
+
+            /** 密码 Secret 引用（推荐）：从 K8s Secret 注入，避免明文凭据暴露在 CR 中 */
+            private SecretKeySelector passwordSecretRef;
+
+            public static class SecretKeySelector {
+                private String name;
+                private String key;
+
+                public String getName() {
+                    return name;
+                }
+
+                public void setName(String name) {
+                    this.name = name;
+                }
+
+                public String getKey() {
+                    return key;
+                }
+
+                public void setKey(String key) {
+                    this.key = key;
+                }
+            }
+
+            public SecretKeySelector getPasswordSecretRef() {
+                return passwordSecretRef;
+            }
+
+            public void setPasswordSecretRef(SecretKeySelector ref) {
+                this.passwordSecretRef = ref;
+            }
 
             /** 连接池大小 */
             private Integer poolSize = StreamMQK8sDefaults.DEFAULT_POOL_SIZE;
@@ -617,8 +666,19 @@ public class StreamMQCluster extends CustomResource {
         /** 最后更新时间 */
         private String lastUpdateTime;
 
+        /** 附加说明信息（非终态原因等） */
+        private String message;
+
         /** 条件列表 */
         private List<Condition> conditions;
+
+        public String getMessage() {
+            return message;
+        }
+
+        public void setMessage(String message) {
+            this.message = message;
+        }
 
         /** 最后观察到的配置生成版本 */
         private Long observedGeneration;
@@ -679,6 +739,15 @@ public class StreamMQCluster extends CustomResource {
             private String status;
             private String reason;
             private String message;
+
+            public String getMessage() {
+                return message;
+            }
+
+            public void setMessage(String message) {
+                this.message = message;
+            }
+
             private String lastTransitionTime;
         }
     }

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.converter;
 
 import io.github.streammq.core.enums.DelayLevel;
@@ -196,19 +201,20 @@ public class CompactMessageConverter extends AbstractMessageConverter {
     @Override
     @SuppressWarnings("unchecked")
     protected <T> void decodeBody(
-            Map<String, String> fields, Class<T> targetType, Message<T> message, String bodyStr) {
+            Map<String, String> fields,
+            Class<T> targetType,
+            MessageDraft<T> draft,
+            String bodyStr) {
         String bodyTypeField = fields.get(FIELD_BODY_TYPE);
         if (StringUtils.isNotEmpty(bodyTypeField)) {
-            message.setBody(
-                    serializer.deserialize(Base64.getDecoder().decode(bodyStr), targetType));
+            draft.body = serializer.deserialize(Base64.getDecoder().decode(bodyStr), targetType);
             return;
         }
         if (targetType == String.class) {
-            message.setBody((T) bodyStr);
+            draft.body = (T) bodyStr;
             return;
         }
-        message.setBody(
-                serializer.deserialize(bodyStr.getBytes(StandardCharsets.UTF_8), targetType));
+        draft.body = serializer.deserialize(bodyStr.getBytes(StandardCharsets.UTF_8), targetType);
     }
 
     // ================================================================
@@ -238,13 +244,13 @@ public class CompactMessageConverter extends AbstractMessageConverter {
     /**
      * 从两个独立 JSON 字段分别还原系统属性和用户属性。
      *
-     * @param message 输出消息
+     * @param draft 装配草稿
      * @param fields Stream Entry 全部字段
      */
     @Override
-    protected <T> void decodeProperties(Message<T> message, Map<String, String> fields) {
-        readPropsJson(fields, FIELD_PROPS, message::setProperties);
-        readPropsJson(fields, FIELD_USER_PROPS, message::setUserProperties);
+    protected <T> void decodeProperties(MessageDraft<T> draft, Map<String, String> fields) {
+        readPropsJson(fields, FIELD_PROPS, draft.properties::putAll);
+        readPropsJson(fields, FIELD_USER_PROPS, draft.userProperties::putAll);
     }
 
     // ================================================================
@@ -270,15 +276,15 @@ public class CompactMessageConverter extends AbstractMessageConverter {
     /**
      * 读取延迟字段：将枚举名字符串还原为 {@link DelayLevel}，字符串解析为 long。
      *
-     * @param message 输出消息
+     * @param draft 装配草稿
      * @param fields Stream Entry 全部字段
      */
     @Override
-    protected <T> void decodeExtra(Message<T> message, Map<String, String> fields) {
+    protected <T> void decodeExtra(MessageDraft<T> draft, Map<String, String> fields) {
         String delayLevelStr = fields.get(FIELD_DELAY_LEVEL);
         if (StringUtils.isNotEmpty(delayLevelStr)) {
             try {
-                message.setDelayLevel(DelayLevel.valueOf(delayLevelStr));
+                draft.delayLevel = DelayLevel.valueOf(delayLevelStr);
             } catch (IllegalArgumentException ex) {
                 throw new SerializationException(
                         "Failed to parse delayLevel: " + delayLevelStr, ex);
@@ -287,12 +293,22 @@ public class CompactMessageConverter extends AbstractMessageConverter {
         String delayTimeMillisStr = fields.get(FIELD_DELAY_TIME_MILLIS);
         if (StringUtils.isNotEmpty(delayTimeMillisStr)) {
             try {
-                message.setDelayTimeMillis(Long.parseLong(delayTimeMillisStr));
+                draft.delayTimeMillis = Long.parseLong(delayTimeMillisStr);
             } catch (NumberFormatException ex) {
                 throw new SerializationException(
                         "Failed to parse delayTimeMillis: " + delayTimeMillisStr, ex);
             }
         }
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Compact 格式持久化重试次数（字段 {@code rt}），保证失败消息的重试计数跨投递轮次累积， 避免因计数恒为 0 导致的无限重试。
+     */
+    @Override
+    protected String fieldRetryTimes() {
+        return MessageFields.RETRY_TIMES;
     }
 
     /**
@@ -308,24 +324,26 @@ public class CompactMessageConverter extends AbstractMessageConverter {
     // ================================================================
 
     /**
-     * 为消费端还原的消息回填 topic 字段。
+     * 为消费端还原的消息派生携带指定 Topic 的不可变新实例。
      *
-     * @param message 消息载体
+     * @param message 原始消息
      * @param topic 主题名
      * @param <T> body 类型
+     * @return Topic 已设置的不可变新实例
      */
-    public static <T> void applyTopic(Message<T> message, String topic) {
-        message.setTopic(topic);
+    public static <T> Message<T> applyTopic(Message<T> message, String topic) {
+        return message.withTopic(topic);
     }
 
     /**
-     * 为消费端还原的消息回填 messageId 字段。
+     * 为消费端还原的消息派生携带 {@link MessageId} 的不可变新实例。
      *
-     * @param message 消息载体
+     * @param message 原始消息
      * @param streamEntryId Redis Stream Entry ID
      * @param <T> body 类型
+     * @return messageId 已设置的不可变新实例
      */
-    public static <T> void applyMessageId(Message<T> message, String streamEntryId) {
-        message.setMessageId(MessageId.fromStreamEntry(streamEntryId));
+    public static <T> Message<T> applyMessageId(Message<T> message, String streamEntryId) {
+        return message.withMessageId(MessageId.fromStreamEntry(streamEntryId));
     }
 }

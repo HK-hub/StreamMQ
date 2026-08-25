@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.cloud.k8s.operator;
 
 import io.fabric8.kubernetes.api.model.OwnerReference;
@@ -79,8 +84,7 @@ public class StreamMQClusterController
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     /** 调和间隔（秒） */
-    private long reconcileIntervalSeconds =
-            StreamMQK8sDefaults.DEFAULT_RECONCILE_INTERVAL_SECONDS;
+    private long reconcileIntervalSeconds = StreamMQK8sDefaults.DEFAULT_RECONCILE_INTERVAL_SECONDS;
 
     /**
      * 设置调和间隔（秒）。
@@ -198,19 +202,64 @@ public class StreamMQClusterController
             updateStatus(cluster, StreamMQK8sDefaults.PHASE_FAILED, "Spec is null");
             return;
         }
+        // 镜像必填校验：内置默认镜像名不可拉取，缺省时直接 Failed 并给出可操作提示
+        if (spec.getImage() == null || spec.getImage().isBlank()) {
+            updateStatus(
+                    cluster,
+                    StreamMQK8sDefaults.PHASE_FAILED,
+                    "spec.image is required (e.g. your-registry/streammq-consumer:1.0.0)");
+            return;
+        }
 
         int replicas =
                 spec.getReplicas() != null
                         ? spec.getReplicas()
                         : StreamMQK8sDefaults.DEFAULT_REPLICAS;
 
-        ensureDeployment(cluster, ns, name, replicas, spec);
+        try {
+            ensureDeployment(cluster, ns, name, replicas, spec);
+        } catch (Exception e) {
+            log.error("Failed to ensure Deployment for {}/{}: {}", ns, name, e.getMessage(), e);
+            updateStatus(cluster, StreamMQK8sDefaults.PHASE_FAILED, e.getMessage());
+            return;
+        }
 
         refreshConfigIfNeeded(cluster, spec);
 
-        updateStatus(cluster, StreamMQK8sDefaults.PHASE_RUNNING, null);
+        // phase 由 Deployment 实际就绪副本数推导（对齐 CRD enum），而非无条件宣称 Running
+        updateStatusWithReadiness(cluster, ns, name, replicas);
         clusterContexts.put(key, new ClusterContext(cluster, System.currentTimeMillis()));
     }
+
+    /** 读取 Deployment readyReplicas 推导 phase：Pending / NotReady / Ready。 */
+    private void updateStatusWithReadiness(
+            StreamMQCluster cluster, String ns, String name, int desiredReplicas) {
+        var deploy = kubernetesClient.apps().deployments().inNamespace(ns).withName(name).get();
+        String phase;
+        String message = null;
+        if (deploy == null || deploy.getStatus() == null) {
+            phase = StreamMQK8sDefaults.PHASE_PENDING;
+        } else {
+            Integer ready =
+                    deploy.getStatus().getReadyReplicas() != null
+                            ? deploy.getStatus().getReadyReplicas()
+                            : 0;
+            status_readyReplicas.set(ready);
+            if (ready >= desiredReplicas && desiredReplicas > 0) {
+                phase = StreamMQK8sDefaults.PHASE_READY;
+            } else if (ready > 0) {
+                phase = StreamMQK8sDefaults.PHASE_UPDATING;
+                message = "ready=" + ready + ", desired=" + desiredReplicas;
+            } else {
+                phase = StreamMQK8sDefaults.PHASE_NOT_READY;
+            }
+        }
+        updateStatus(cluster, phase, message);
+    }
+
+    /** 最近一次 reconcile 观测到的就绪副本数（写入 status.readyReplicas）。 */
+    private final java.util.concurrent.atomic.AtomicInteger status_readyReplicas =
+            new java.util.concurrent.atomic.AtomicInteger(0);
 
     @SuppressWarnings("deprecation")
     private void ensureDeployment(
@@ -303,9 +352,9 @@ public class StreamMQClusterController
                 .withNewSpec()
                 .addNewContainer()
                 .withName(StreamMQK8sDefaults.CONTAINER_NAME)
-                .withImage(StreamMQK8sDefaults.DEFAULT_IMAGE)
+                .withImage(spec.getImage())
                 .withImagePullPolicy(StreamMQK8sDefaults.PULL_POLICY_IF_NOT_PRESENT)
-                .withEnv(buildEnvVarList(envVars))
+                .withEnv(envVars)
                 .withPorts(buildPortList())
                 .withResources(buildResources(spec.getResources()))
                 .endContainer()
@@ -315,56 +364,81 @@ public class StreamMQClusterController
                 .build();
     }
 
-    private List<EnvVar> collectEnvVars(String name, String ns, StreamMQCluster.Spec spec) {
-        var vars = new ArrayList<EnvVar>();
-        vars.add(new EnvVar(StreamMQK8sDefaults.ENV_CLUSTER_NAME, name));
-        vars.add(new EnvVar(StreamMQK8sDefaults.ENV_NAMESPACE, ns));
+    private List<io.fabric8.kubernetes.api.model.EnvVar> collectEnvVars(
+            String name, String ns, StreamMQCluster.Spec spec) {
+        var vars = new ArrayList<io.fabric8.kubernetes.api.model.EnvVar>();
+        var b =
+                new io.fabric8.kubernetes.api.model.EnvVarBuilder()
+                        .withName(StreamMQK8sDefaults.ENV_CLUSTER_NAME)
+                        .withValue(name);
+        vars.add(b.build());
+        vars.add(
+                new io.fabric8.kubernetes.api.model.EnvVarBuilder()
+                        .withName(StreamMQK8sDefaults.ENV_NAMESPACE)
+                        .withValue(ns)
+                        .build());
 
         if (spec.getBackend() != null && spec.getBackend().getRedis() != null) {
             var redis = spec.getBackend().getRedis();
             vars.add(
-                    new EnvVar(
-                            StreamMQK8sDefaults.ENV_REDIS_ADDRESS,
-                            redis.getAddress() != null ? redis.getAddress() : ""));
+                    new io.fabric8.kubernetes.api.model.EnvVarBuilder()
+                            .withName(StreamMQK8sDefaults.ENV_REDIS_ADDRESS)
+                            .withValue(redis.getAddress() != null ? redis.getAddress() : "")
+                            .build());
             vars.add(
-                    new EnvVar(
-                            StreamMQK8sDefaults.ENV_REDIS_NAMESPACE,
-                            redis.getNamespace() != null ? redis.getNamespace() : ""));
-            if (redis.getPassword() != null) {
-                vars.add(new EnvVar(StreamMQK8sDefaults.ENV_REDIS_PASSWORD, redis.getPassword()));
+                    new io.fabric8.kubernetes.api.model.EnvVarBuilder()
+                            .withName(StreamMQK8sDefaults.ENV_REDIS_NAMESPACE)
+                            .withValue(redis.getNamespace() != null ? redis.getNamespace() : "")
+                            .build());
+            if (redis.getPasswordSecretRef() != null) {
+                // 推荐：从 Secret 注入密码，CR 与 Deployment 规格中不出现明文
+                var ref = redis.getPasswordSecretRef();
+                io.fabric8.kubernetes.api.model.EnvVarSource source =
+                        new io.fabric8.kubernetes.api.model.EnvVarSourceBuilder()
+                                .withNewSecretKeyRef()
+                                .withName(ref.getName())
+                                .withKey(ref.getKey())
+                                .endSecretKeyRef()
+                                .build();
+                vars.add(
+                        new io.fabric8.kubernetes.api.model.EnvVarBuilder()
+                                .withName(StreamMQK8sDefaults.ENV_REDIS_PASSWORD)
+                                .withValueFrom(source)
+                                .build());
+            } else if (redis.getPassword() != null) {
+                log.warn(
+                        "Redis inline password is deprecated for cluster {}/{};"
+                                + " use spec.backend.redis.passwordSecretRef",
+                        ns,
+                        name);
+                vars.add(
+                        new io.fabric8.kubernetes.api.model.EnvVarBuilder()
+                                .withName(StreamMQK8sDefaults.ENV_REDIS_PASSWORD)
+                                .withValue(redis.getPassword())
+                                .build());
             }
         }
 
         if (spec.getConfig() != null && spec.getConfig().getTracing() != null) {
             var tracing = spec.getConfig().getTracing();
             vars.add(
-                    new EnvVar(
-                            StreamMQK8sDefaults.ENV_TRACING_ENABLED,
-                            String.valueOf(tracing.getEnabled())));
+                    new io.fabric8.kubernetes.api.model.EnvVarBuilder()
+                            .withName(StreamMQK8sDefaults.ENV_TRACING_ENABLED)
+                            .withValue(String.valueOf(tracing.getEnabled()))
+                            .build());
             vars.add(
-                    new EnvVar(
-                            StreamMQK8sDefaults.ENV_TRACING_EXPORTER,
-                            tracing.getExporter() != null ? tracing.getExporter() : ""));
+                    new io.fabric8.kubernetes.api.model.EnvVarBuilder()
+                            .withName(StreamMQK8sDefaults.ENV_TRACING_EXPORTER)
+                            .withValue(tracing.getExporter() != null ? tracing.getExporter() : "")
+                            .build());
             vars.add(
-                    new EnvVar(
-                            StreamMQK8sDefaults.ENV_TRACING_ENDPOINT,
-                            tracing.getEndpoint() != null ? tracing.getEndpoint() : ""));
+                    new io.fabric8.kubernetes.api.model.EnvVarBuilder()
+                            .withName(StreamMQK8sDefaults.ENV_TRACING_ENDPOINT)
+                            .withValue(tracing.getEndpoint() != null ? tracing.getEndpoint() : "")
+                            .build());
         }
 
         return vars;
-    }
-
-    private record EnvVar(String name, String value) {}
-
-    private List<io.fabric8.kubernetes.api.model.EnvVar> buildEnvVarList(List<EnvVar> envVars) {
-        return envVars.stream()
-                .map(
-                        e ->
-                                new io.fabric8.kubernetes.api.model.EnvVarBuilder()
-                                        .withName(e.name())
-                                        .withValue(e.value())
-                                        .build())
-                .toList();
     }
 
     private List<io.fabric8.kubernetes.api.model.ContainerPort> buildPortList() {
@@ -482,27 +556,34 @@ public class StreamMQClusterController
 
     @SuppressWarnings("deprecation")
     private void updateStatus(StreamMQCluster cluster, String phase, String message) {
-        var status = cluster.getStatus();
-        if (status == null) {
-            status = new StreamMQCluster.Status();
-            cluster.setStatus(status);
-        }
+        // 不修改 informer 缓存的共享对象：构造仅含元数据的副本写入状态，
+        // 避免污染本地缓存导致后续 reconcile 基于脏数据决策
+        StreamMQCluster shell = new StreamMQCluster();
+        shell.setApiVersion(cluster.getApiVersion());
+        shell.setKind(cluster.getKind());
+        shell.setMetadata(cluster.getMetadata());
+
+        var status = new StreamMQCluster.Status();
         status.setPhase(phase);
         status.setLastUpdateTime(Instant.now().toString());
-
+        status.setReadyReplicas(status_readyReplicas.get());
         if (cluster.getSpec() != null) {
             status.setReplicas(
                     cluster.getSpec().getReplicas() != null
                             ? cluster.getSpec().getReplicas()
                             : StreamMQK8sDefaults.DEFAULT_REPLICAS);
         }
+        if (message != null) {
+            status.setMessage(message);
+        }
+        shell.setStatus(status);
 
         try {
             kubernetesClient
                     .resources(StreamMQCluster.class)
                     .inNamespace(cluster.getMetadata().getNamespace())
                     .withName(cluster.getMetadata().getName())
-                    .updateStatus(cluster);
+                    .updateStatus(shell);
         } catch (Exception e) {
             log.warn(
                     "Failed to update status for {}/{}: {}",

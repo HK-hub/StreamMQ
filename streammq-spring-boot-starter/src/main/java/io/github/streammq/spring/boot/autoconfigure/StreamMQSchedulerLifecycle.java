@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.core.scheduler.StreamMQScheduler;
@@ -25,8 +30,12 @@ public class StreamMQSchedulerLifecycle implements SmartLifecycle {
 
     private static final Logger LOG = LoggerFactory.getLogger(StreamMQSchedulerLifecycle.class);
 
-    /** 启动相位：高于 Listener 容器（{@code Integer.MAX_VALUE - 200}） */
-    public static final int PHASE = Integer.MAX_VALUE - 100;
+    /**
+     * 启动相位：低于 Listener 容器（{@code Integer.MAX_VALUE - 200}）。
+     *
+     * <p>Spring 按 phase 升序启动、降序停止：调度器先于容器启动（消费前 Retry/Delay/Tx 扫描就绪）， 容器先于调度器停止（停止期间扫描能力保持完整）。
+     */
+    public static final int PHASE = Integer.MAX_VALUE - 300;
 
     private final List<StreamMQScheduler> schedulers;
     private volatile boolean running = false;
@@ -65,9 +74,19 @@ public class StreamMQSchedulerLifecycle implements SmartLifecycle {
             running = true;
         } else if (failedCount >= totalCount) {
             LOG.error(
-                    "All {} StreamMQ scheduler(s) failed to start, not setting running=true",
+                    "All {} StreamMQ scheduler(s) failed to start, rolling back partial state",
                     totalCount);
-            // 全部失败时不设 running，后续 stop 不会执行（状态保持一致）
+            // 全部失败：回滚已部分初始化的调度器（其内部资源如 executor 需要释放），保持状态一致
+            for (StreamMQScheduler scheduler : schedulers) {
+                try {
+                    scheduler.stop();
+                } catch (RuntimeException stopEx) {
+                    LOG.debug(
+                            "Rollback stop failed for {}: {}",
+                            scheduler.getClass().getSimpleName(),
+                            stopEx.getMessage());
+                }
+            }
         } else {
             if (failedCount > 0) {
                 LOG.warn(

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.listener;
 
 import io.github.streammq.core.converter.MessageConverter;
@@ -117,5 +122,11 @@ public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
     @Override
     public boolean isClosed() {
         return closed;
+    }
+
+    /** 重新打开工厂（容器 restart 场景）：close 之后所有 listener 已关闭，重置内部状态即可继续创建新 listener。 */
+    public void reopen() {
+        closed = false;
+        LOG.info("RedissonStreamListenerFactory reopened");
     }
 }

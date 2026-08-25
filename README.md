@@ -11,7 +11,7 @@
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.x-green.svg)](https://spring.io/projects/spring-boot)
 [![Redisson](https://img.shields.io/badge/Redisson-3.34.x-red.svg)](https://redisson.org/)
 [![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/HK-hub/StreamMQ)
-[![Tests](https://img.shields.io/badge/tests-974%20passed-brightgreen.svg)](https://github.com/HK-hub/StreamMQ)
+[![CI](https://github.com/HK-hub/StreamMQ/actions/workflows/ci.yml/badge.svg)](https://github.com/HK-hub/StreamMQ/actions/workflows/ci.yml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/HK-hub/StreamMQ/pulls)
 [![Stars](https://img.shields.io/github/stars/HK-hub/StreamMQ?style=social)](https://github.com/HK-hub/StreamMQ)
 
@@ -81,7 +81,7 @@
 
 ### 生产就绪
 
-974 个测试用例全部通过（790 单元 + 184 集成，`mvn verify` 复现），覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理等全场景。集成测试在本地无 Redis 时自动跳过，不影响 `mvn test` / `mvn verify` 通过。
+744 个单元测试全绿（`mvn test` 即可复现）；另有 180+ 集成测试覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理等场景，在有 Redis 的环境（本地或 CI service 容器）执行 `mvn verify` 时运行，无 Redis 环境自动跳过。
 
 ---
 
@@ -612,7 +612,7 @@ streammq:
 | `rebalanceStrategy` | Class | RebalanceStrategy.class | 重平衡策略（默认全局） |
 | `consumerFilter` | Class[] | {} | 消费者专属过滤器 |
 
-> 完整配置参考请查看 [配置文档](docs/doc-site/configuration.md)。
+> 完整配置参考请查看本文件「[配置参考](#配置参考)」章节与 [架构设计文档](docs/02-architecture.md)。
 
 ---
 
@@ -747,15 +747,13 @@ template.syncSend(message);  // traceId 自动透传到消费者
 
 | 文档 | 说明 |
 |------|------|
-| [首页](docs/doc-site/index.md) | 项目首页 |
-| [快速开始](docs/doc-site/quickstart.md) | 5 分钟上手指南 |
-| [核心特性](docs/doc-site/features.md) | 完整特性文档 |
-| [核心概念](docs/doc-site/concepts.md) | 关键术语解释 |
-| [API 文档](docs/doc-site/api.md) | 完整 API 参考 |
-| [配置参考](docs/doc-site/configuration.md) | 全部配置项 |
-| [部署指南](docs/doc-site/deploy.md) | 生产环境部署 |
-| [FAQ](docs/doc-site/faq.md) | 常见问题解答 |
-| [贡献指南](docs/doc-site/contributing.md) | 参与贡献 |
+| 文档 | 说明 |
+|------|------|
+| [架构设计](docs/02-architecture.md) | 总体架构与模块划分 |
+| [功能设计](docs/03-functional-design.md) | 核心特性与功能说明 |
+| [详细设计](docs/04-detailed-design.md) | 关键实现细节（事务/延时/顺序消费等） |
+| [贡献指南](CONTRIBUTING.md) | 参与贡献 |
+| Javadoc | 随 Maven Central 发布的构件附带 sources/javadoc jar |
 
 ### 设计文档
 
@@ -789,7 +787,7 @@ template.syncSend(message);  // traceId 自动透传到消费者
 - [x] 12 个 SPI 扩展点
 - [x] Spring Boot 3 自动装配 + Actuator 集成
 - [x] Spring Cloud Stream Binder（实现 Spring Cloud Stream Binder SPI）
-- [x] Kubernetes Operator（CRD + Operator，弹性伸缩、配置热更新）
+- [x] Kubernetes 集成（实验性预览：CRD 控制器 / HPA / 配置热更新，默认关闭；需显式开启 `streammq.cloud.k8s.enabled=true`）
 - [x] 消息画像与拓扑图（可视化消息流转拓扑）
 - [x] 分布式追踪增强（OpenTelemetry 集成）
 
@@ -804,7 +802,7 @@ template.syncSend(message);  // traceId 自动透传到消费者
 
 ## 贡献指南
 
-欢迎参与 StreamMQ 开源建设！请阅读 [贡献指南](docs/doc-site/contributing.md) 了解详细信息。
+欢迎参与 StreamMQ 开源建设！请阅读 [贡献指南](CONTRIBUTING.md) 了解详细信息。
 
 ### 快速贡献
 

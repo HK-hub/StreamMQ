@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.diagnostics;
 
 import io.github.streammq.core.StreamMQConstants;
@@ -15,6 +20,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import lombok.Setter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,8 +62,7 @@ public class MessageProfileService {
     private static final String ATTR_CONSUMER_NAME = StreamMQConstants.TRACE_ATTR_CONSUMER_NAME;
 
     /** 追踪记录扩展属性键：重试次数 */
-    private static final String ATTR_RECONSUME_TIMES =
-            StreamMQConstants.TRACE_ATTR_RECONSUME_TIMES;
+    private static final String ATTR_RECONSUME_TIMES = StreamMQConstants.TRACE_ATTR_RECONSUME_TIMES;
 
     /** 追踪记录扩展属性键：错误信息 */
     private static final String ATTR_ERROR_MESSAGE = StreamMQConstants.TRACE_ATTR_ERROR_MESSAGE;
@@ -96,10 +101,12 @@ public class MessageProfileService {
     /**
      * 按主题与时间范围构建所有消息的画像。
      *
+     * <p>结果数量受 {@code maxProfileQuerySize} 上限保护（超出截断），防止大范围查询导致 OOM。
+     *
      * @param topic 主题
      * @param startMs 起始时间戳（毫秒，包含）
      * @param endMs 结束时间戳（毫秒，包含）
-     * @return 该时间范围内所有消息的画像列表，若无数据则返回空列表
+     * @return 该时间范围内消息画像列表（不超过上限），若无数据则返回空列表
      */
     public List<MessageProfile> getTopicProfiles(String topic, long startMs, long endMs) {
         if (StringUtils.isEmpty(topic)) {
@@ -109,16 +116,33 @@ public class MessageProfileService {
         if (CollectionUtils.isEmpty(records)) {
             return Collections.emptyList();
         }
+        int limit = maxProfileQuerySize > 0 ? maxProfileQuerySize : Integer.MAX_VALUE;
         Map<String, List<TraceRecord>> grouped = groupByMessageId(records);
-        List<MessageProfile> profiles = new ArrayList<>(grouped.size());
+        if (grouped.size() > limit) {
+            log.warn(
+                    "Topic profile query for [{}] matched {} messages, truncating to {}"
+                            + " (maxProfileQuerySize)",
+                    topic,
+                    grouped.size(),
+                    limit);
+        }
+        List<MessageProfile> profiles = new ArrayList<>(Math.min(grouped.size(), limit));
+        int produced = 0;
         for (Map.Entry<String, List<TraceRecord>> entry : grouped.entrySet()) {
+            if (produced >= limit) {
+                break;
+            }
             MessageProfile profile = buildProfile(entry.getValue());
             if (Objects.nonNull(profile)) {
                 profiles.add(profile);
+                produced++;
             }
         }
         return profiles;
     }
+
+    /** 单次画像查询上限（由配置注入；<=0 视为不限制）。 */
+    @Setter private int maxProfileQuerySize = StreamMQDiagnosticsDefaults.MAX_PROFILE_QUERY_SIZE;
 
     /**
      * 将追踪记录按消息 ID 分组，保持插入顺序。
@@ -306,8 +330,7 @@ public class MessageProfileService {
         }
         for (String topic : routePath) {
             if (StringUtils.isNotEmpty(topic)
-                    && topic.toLowerCase()
-                            .contains(StreamMQDiagnosticsDefaults.DLQ_TOPIC_MARKER)) {
+                    && topic.toLowerCase().contains(StreamMQDiagnosticsDefaults.DLQ_TOPIC_MARKER)) {
                 return true;
             }
         }

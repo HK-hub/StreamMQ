@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.cloud.k8s.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -6,6 +11,7 @@ import io.fabric8.kubernetes.client.KubernetesClient;
 import io.fabric8.kubernetes.client.informers.ResourceEventHandler;
 import io.fabric8.kubernetes.client.informers.SharedIndexInformer;
 import io.fabric8.kubernetes.client.informers.SharedInformerFactory;
+import io.github.streammq.cloud.k8s.NoopConfigRefresher;
 import io.github.streammq.cloud.k8s.StreamMQConfigRefresher;
 import io.github.streammq.core.listener.StreamMQListenerContainer;
 import java.util.ArrayList;
@@ -52,13 +58,33 @@ import org.springframework.beans.factory.annotation.Autowired;
  * @since 0.1.0
  */
 @Slf4j
-public class ConfigMapConfigRefresher implements StreamMQConfigRefresher, Runnable, AutoCloseable {
+public class ConfigMapConfigRefresher
+        implements StreamMQConfigRefresher,
+                Runnable,
+                org.springframework.context.SmartLifecycle,
+                AutoCloseable {
 
     @Autowired(required = false)
     private KubernetesClient kubernetesClient;
 
-    @Autowired(required = false)
-    private StreamMQConfigRefresher customRefresher;
+    /** 用户委托刷新器（由自动装配注入，缺省为 Noop） */
+    private final StreamMQConfigRefresher customRefresher;
+
+    /** watch 命名空间列表（可注入覆盖默认值） */
+    private List<String> watchNamespaces;
+
+    public ConfigMapConfigRefresher() {
+        this.customRefresher = new NoopConfigRefresher();
+    }
+
+    public ConfigMapConfigRefresher(StreamMQConfigRefresher delegate) {
+        this.customRefresher =
+                java.util.Objects.requireNonNullElseGet(delegate, NoopConfigRefresher::new);
+    }
+
+    public void setWatchNamespaces(List<String> namespaces) {
+        this.watchNamespaces = namespaces;
+    }
 
     private SharedInformerFactory informerFactory;
 
@@ -124,7 +150,7 @@ public class ConfigMapConfigRefresher implements StreamMQConfigRefresher, Runnab
             return;
         }
         if (watchConfigs.isEmpty()) {
-            addDefaultWatchConfig();
+            addDefaultWatchConfig(watchNamespaces);
         }
         log.info("Starting ConfigMapConfigRefresher with {} watch configs", watchConfigs.size());
 
@@ -150,10 +176,7 @@ public class ConfigMapConfigRefresher implements StreamMQConfigRefresher, Runnab
                         });
         syncFuture =
                 syncScheduler.scheduleAtFixedRate(
-                        this,
-                        SYNC_INTERVAL_SECONDS,
-                        SYNC_INTERVAL_SECONDS,
-                        TimeUnit.SECONDS);
+                        this, SYNC_INTERVAL_SECONDS, SYNC_INTERVAL_SECONDS, TimeUnit.SECONDS);
         log.info("ConfigMapConfigRefresher started");
     }
 
@@ -318,11 +341,13 @@ public class ConfigMapConfigRefresher implements StreamMQConfigRefresher, Runnab
                 long retryScanMs =
                         retryScanMsStr != null
                                 ? Long.parseLong(retryScanMsStr.trim())
-                                : io.github.streammq.core.StreamMQConstants.DEFAULT_PEL_CLAIM_SCAN_INTERVAL_MS;
+                                : io.github.streammq.core.StreamMQConstants
+                                        .DEFAULT_PEL_CLAIM_SCAN_INTERVAL_MS;
                 long delayScanMs =
                         delayScanMsStr != null
                                 ? Long.parseLong(delayScanMsStr.trim())
-                                : io.github.streammq.core.StreamMQConstants.DEFAULT_SCAN_INTERVAL_MS;
+                                : io.github.streammq.core.StreamMQConstants
+                                        .DEFAULT_SCAN_INTERVAL_MS;
                 refreshScanInterval(retryScanMs, delayScanMs);
                 changed = true;
             } catch (NumberFormatException e) {
@@ -407,7 +432,18 @@ public class ConfigMapConfigRefresher implements StreamMQConfigRefresher, Runnab
         stop();
     }
 
-    private void addDefaultWatchConfig() {
+    private void addDefaultWatchConfig(List<String> namespaces) {
+        if (namespaces != null && !namespaces.isEmpty()) {
+            for (String ns : namespaces) {
+                var cfg = new ConfigMapWatchConfig();
+                cfg.setNamespace(ns);
+                cfg.setName(DEFAULT_WATCH_CONFIG_MAP_NAME);
+                cfg.setRefreshIntervalMs(DEFAULT_WATCH_REFRESH_INTERVAL_MS);
+                cfg.setEnabled(true);
+                watchConfigs.add(cfg);
+            }
+            return;
+        }
         var defaultConfig = new ConfigMapWatchConfig();
         defaultConfig.setNamespace(DEFAULT_WATCH_NAMESPACE);
         defaultConfig.setName(DEFAULT_WATCH_CONFIG_MAP_NAME);
@@ -464,5 +500,22 @@ public class ConfigMapConfigRefresher implements StreamMQConfigRefresher, Runnab
         public void setEnabled(boolean enabled) {
             this.enabled = enabled;
         }
+    }
+
+    // ==================== SmartLifecycle ====================
+
+    @Override
+    public boolean isRunning() {
+        return running.get();
+    }
+
+    @Override
+    public int getPhase() {
+        return Integer.MAX_VALUE - 100;
+    }
+
+    @Override
+    public boolean isAutoStartup() {
+        return true;
     }
 }

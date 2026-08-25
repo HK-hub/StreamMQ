@@ -42,7 +42,7 @@
         </dependency>
 
         <!-- 以下依赖在本模块为 compile scope，因为 src/main/java 中的测试工具类（断言/ Mock / EmbeddedRedis）需要使用。
-             使用方请以 test scope 引入本模块（test 依赖不传递，因此不会把 JUnit/Testcontainers 等带入业务运行时）。 -->
+             使用方请以 test scope 引入本模块（注意：compile 依赖会传递；使用方必须以 test scope 引入本模块（同 spring-boot-starter-test 约定））。 -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

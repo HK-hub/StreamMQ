@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.diagnostics.model;
 
 import java.util.List;
@@ -23,4 +28,5 @@ public record DlqReport(
         List<FailureReason> topFailureReasons,
         List<TopicFailureCount> topFailedTopics,
         long oldestDlqMessageTimestamp,
-        String recommendation) {}
+        String recommendation,
+        String code) {}

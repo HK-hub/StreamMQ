@@ -1,15 +1,23 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
+import io.github.streammq.adapter.redisson.security.DenyAllAuthenticator;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.policy.ManagementAuthenticator;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.HealthIndicator;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
@@ -25,13 +33,19 @@ import org.springframework.context.annotation.Configuration;
  *   <li>Listener 容器运行状态
  * </ul>
  *
- * <p>禁用方式：{@code streammq.health.enabled=false}。
+ * <p>禁用方式：{@code streammq.enabled=false}（整体关闭）或 {@code streammq.health.enabled=false} （仅关闭健康检查）。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass({HealthIndicator.class, org.springframework.boot.actuate.health.Health.class})
+@ConditionalOnExpression(
+        "${"
+                + StreamMQSpringConstants.PROP_PREFIX
+                + "."
+                + StreamMQSpringConstants.PROP_NAME_ENABLED
+                + ":true}")
 @ConditionalOnProperty(
         prefix = StreamMQSpringConstants.PROP_PREFIX_HEALTH,
         name = StreamMQSpringConstants.PROP_NAME_ENABLED,
@@ -82,6 +96,10 @@ public class StreamMQHealthAutoConfiguration {
      *
      * <p>注入 {@link StreamMQHealthIndicator} 而非泛型 {@link HealthIndicator}， 避免当容器中存在多个 {@code
      * HealthIndicator} Bean 时触发 {@code NoUniqueBeanDefinitionException}。
+     *
+     * <p>{@link ManagementAuthenticator} 通过 {@link ObjectProvider} 防御性注入：当核心装配因 {@code
+     * streammq.enabled=false} 回退、容器中不存在鉴权器 Bean 时， 使用 {@link DenyAllAuthenticator} 兜底，避免启动期 {@code
+     * UnsatisfiedDependencyException}。
      */
     @Bean
     @ConditionalOnMissingBean(name = StreamMQSpringConstants.BEAN_ACTUATOR_ENDPOINT)
@@ -90,14 +108,14 @@ public class StreamMQHealthAutoConfiguration {
             StreamMQAdminEndpoint adminEndpoint,
             org.springframework.beans.factory.ObjectProvider<StreamMQHealthIndicator>
                     healthIndicatorProvider,
-            ManagementAuthenticator authenticator,
+            ObjectProvider<ManagementAuthenticator> authenticatorProvider,
             io.github.streammq.spring.boot.properties.StreamMQProperties properties) {
         LOG.debug("Creating StreamMQActuatorEndpoint");
+        ManagementAuthenticator authenticator =
+                authenticatorProvider.getIfAvailable(DenyAllAuthenticator::new);
         StreamMQActuatorEndpoint endpoint =
                 new StreamMQActuatorEndpoint(
-                        adminEndpoint,
-                        healthIndicatorProvider.getIfAvailable(),
-                        authenticator);
+                        adminEndpoint, healthIndicatorProvider.getIfAvailable(), authenticator);
         endpoint.setListPageSize(properties.getAdmin().getListPageSize());
         return endpoint;
     }
@@ -122,14 +140,16 @@ public class StreamMQHealthAutoConfiguration {
 
         @Override
         public Health health() {
-            Health.Builder builder = Health.up();
             try {
-                // Redis 连通性检查（通过 GET 命令验证真实连通性）
+                // Redis 连通性检查：GET 只读命令验证真实链路（兼容单机/集群/哨兵，且无弃用 API）
                 long start = System.currentTimeMillis();
                 long val = redisson.getAtomicLong(StreamMQConstants.HEALTH_CHECK_KEY).get();
                 long elapsed = System.currentTimeMillis() - start;
+                Health.Builder builder = isListenerContainerHealthy() ? Health.up() : Health.down();
                 builder.withDetail(StreamMQSpringConstants.HEALTH_DETAIL_PING_LATENCY, elapsed);
                 builder.withDetail(StreamMQSpringConstants.HEALTH_DETAIL_HEALTH_VALUE, val);
+                buildListenerContainerDetails(builder);
+                return builder.build();
             } catch (RuntimeException ex) {
                 return Health.down(ex)
                         .withDetail(
@@ -137,7 +157,14 @@ public class StreamMQHealthAutoConfiguration {
                                 "Redis ping failed: " + ex.getMessage())
                         .build();
             }
-            // Listener 容器状态
+        }
+
+        /** 容器已装配但未运行时视为不健康（与 Binder 健康指标行为对齐）。 */
+        private boolean isListenerContainerHealthy() {
+            return listenerContainer == null || listenerContainer.isRunning();
+        }
+
+        private void buildListenerContainerDetails(Health.Builder builder) {
             if (listenerContainer != null) {
                 builder.withDetail(
                         StreamMQSpringConstants.HEALTH_DETAIL_LC_STATE,
@@ -153,7 +180,6 @@ public class StreamMQHealthAutoConfiguration {
                         StreamMQSpringConstants.HEALTH_DETAIL_LC_STATE,
                         StreamMQSpringConstants.HEALTH_VALUE_NOT_CONFIGURED);
             }
-            return builder.build();
         }
     }
 }

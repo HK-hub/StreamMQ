@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.sample.quickstart;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -16,6 +21,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
@@ -47,6 +53,9 @@ import org.springframework.test.context.TestPropertySource;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 @TestPropertySource(properties = {"spring.redis.host=127.0.0.1", "spring.redis.port=6379"})
 @DisplayName("QuickStart 示例集成测试")
+@EnabledIf(
+        value = "io.github.streammq.core.util.RedisAvailability#localhostAvailable",
+        disabledReason = "Redis not available at localhost:6379")
 class QuickStartSampleIT {
 
     /** 测试消费者组，与生产消费者组隔离 */

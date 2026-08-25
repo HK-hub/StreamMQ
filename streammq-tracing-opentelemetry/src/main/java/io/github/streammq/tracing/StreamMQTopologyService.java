@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.tracing;
 
 import io.github.streammq.core.StreamMQConstants;
@@ -191,7 +196,8 @@ public class StreamMQTopologyService {
                                         ? metadata.consumerType().getSimpleName()
                                         : "Consumer");
                 nodes.add(
-                        new TopologyNode(name, NODE_TYPE_CONSUMER, topic, metadata.consumerGroup(), true));
+                        new TopologyNode(
+                                name, NODE_TYPE_CONSUMER, topic, metadata.consumerGroup(), true));
             }
         }
         return nodes;

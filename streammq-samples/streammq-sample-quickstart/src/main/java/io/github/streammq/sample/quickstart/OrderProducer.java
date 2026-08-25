@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.sample.quickstart;
 
 import io.github.streammq.core.message.BatchMessage;
@@ -44,7 +49,8 @@ public class OrderProducer {
 
     public SendResult createOrder(String orderId, String content) {
         log.info("Producing order message: orderId={}, content={}", orderId, content);
-        SendResult result = service.send(SampleConstants.TOPIC, content, SampleConstants.TAG_CREATED, orderId);
+        SendResult result =
+                service.send(SampleConstants.TOPIC, content, SampleConstants.TAG_CREATED, orderId);
         log.info(
                 "Order message sent successfully: orderId={}, msgId={}, status={}",
                 orderId,
@@ -79,7 +85,8 @@ public class OrderProducer {
     public CompletableFuture<SendResult> createOrderAsync(String orderId, String content) {
         log.info("Producing order message asynchronously: orderId={}", orderId);
         CompletableFuture<SendResult> future =
-                service.asyncSend(SampleConstants.TOPIC, content, SampleConstants.TAG_ASYNC, orderId);
+                service.asyncSend(
+                        SampleConstants.TOPIC, content, SampleConstants.TAG_ASYNC, orderId);
 
         future.thenAccept(
                         result ->
@@ -208,7 +215,9 @@ public class OrderProducer {
      */
     public List<SendResult> createOrdersBatchSimple(List<String> contents) {
         log.info("Producing batch order messages (simple API): count={}", contents.size());
-        List<SendResult> results = service.sendBatch(SampleConstants.TOPIC, SampleConstants.TAG_SIMPLE_BATCH, contents);
+        List<SendResult> results =
+                service.sendBatch(
+                        SampleConstants.TOPIC, SampleConstants.TAG_SIMPLE_BATCH, contents);
         log.info("Simple batch messages sent: count={}", results.size());
         return results;
     }
@@ -259,7 +268,9 @@ public class OrderProducer {
                 orderId);
 
         MessageMetadataBuilder metadata =
-                MessageMetadataBuilder.create().tag(SampleConstants.TAG_TIMEOUT_RETRY).keys(orderId);
+                MessageMetadataBuilder.create()
+                        .tag(SampleConstants.TAG_TIMEOUT_RETRY)
+                        .keys(orderId);
 
         SendResult result =
                 service.send(SampleConstants.TOPIC, content, metadata, timeoutMillis, retryTimes);

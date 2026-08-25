@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.tracing;
 
 import io.github.streammq.core.consumer.ConsumeContext;
@@ -63,6 +68,9 @@ public class StreamMQTracing {
     /** 生产者发送 Span 名称 */
     public static final String SPAN_PRODUCER_SEND = "streammq.producer.send";
 
+    /** Span 注册表 / 启动时间戳映射的容量上限（超出按插入序淘汰，防止泄漏） */
+    public static final int SPAN_REGISTRY_CAPACITY = 4_096;
+
     /** 消费者消费 Span 名称 */
     public static final String SPAN_CONSUMER_CONSUME = "streammq.consumer.consume";
 
@@ -108,10 +116,11 @@ public class StreamMQTracing {
     /** Tracer 实例 */
     private final Tracer tracer;
 
-    /** 当前线程的生产者 Span（用于 beforeSend/afterSend 配对） */
-    private final ThreadLocal<Span> currentProducerSpan = new ThreadLocal<>();
+    /** 生产者 Span 注册表：按消息引用配对，跨线程安全，容量有界防泄漏 */
+    private final BoundedSpanRegistry producerSpans =
+            new BoundedSpanRegistry(SPAN_REGISTRY_CAPACITY);
 
-    /** Span 启动纳秒时间戳，用于计算 duration 属性 */
+    /** Span 启动纳秒时间戳，用于计算 duration 属性（容量有界，超限按插入序淘汰） */
     private final Map<Span, Long> spanStartNanos =
             Collections.synchronizedMap(new IdentityHashMap<>());
 
@@ -129,20 +138,22 @@ public class StreamMQTracing {
     // ===================== 生产者 Span =====================
 
     /**
-     * 创建生产者 Span 并将 W3C TraceContext 注入消息属性。
+     * 创建生产者 Span，将 W3C TraceContext 注入消息属性，并按消息引用登记 Span。
      *
      * <p>在 {@code ProducerInterceptor.beforeSend} 中调用。创建 PRODUCER 类型的 Span （名称 {@value
      * #SPAN_PRODUCER_SEND}），设置 Topic / Tag / 消息 ID 等属性， 并将 W3C {@code traceparent} / {@code
-     * tracestate} 写入消息系统属性。
+     * tracestate} 写入派生消息的用户属性。
      *
-     * <p>Span 存储在 ThreadLocal 中，需在发送完成后通过 {@link #getCurrentProducerSpan()} 取出并调用 {@link
-     * #endSpan(Span, boolean)} 结束。
+     * <p><b>跨线程配对：</b>Span 以返回的派生消息实例为键存入有界注册表；发送完成后在 {@code afterSend} / {@code onException}
+     * 回调（可能运行于其他线程）中通过 {@link #endProducerSpan(Message, boolean, String)} 按同一消息引用结束。异步发送场景下
+     * ThreadLocal 配对会失效，因此不使用 ThreadLocal。
      *
      * @param message 待发送消息
+     * @return 携带追踪上下文的派生消息（注入失败时返回原消息）
      */
-    public void injectProducerSpan(Message<?> message) {
+    public Message<?> injectProducerSpan(Message<?> message) {
         if (Objects.isNull(message)) {
-            return;
+            return message;
         }
         try {
             Span span =
@@ -151,28 +162,38 @@ public class StreamMQTracing {
                             .startSpan();
             recordStart(span);
             setProducerAttributes(span, message);
-            injectTraceContext(span, message);
-            currentProducerSpan.set(span);
+            Message<?> enriched = injectTraceContext(span, message);
+            producerSpans.track(enriched, span);
+            return enriched;
         } catch (Exception ex) {
             log.warn("注入生产者 Span 失败，降级跳过追踪: {}", ex.getMessage());
+            return message;
         }
     }
 
     /**
-     * 返回当前线程未结束的生产者 Span（不移除）。
+     * 结束与指定消息配对的生产者 Span（按消息引用查找，跨线程安全）。
      *
-     * <p>在 {@code ProducerInterceptor.afterSend} / {@code onException} 中取出后， 调用 {@link
-     * #endSpan(Span, boolean)} 结束，并调用 {@link #clearCurrentProducerSpan()} 清理。
+     * <p>在 {@code ProducerInterceptor.afterSend} / {@code onException} 中调用。未找到配对 Span 时
+     * 静默跳过；无论成功与否都会从注册表移除条目，保证幂等且不泄漏。
      *
-     * @return 当前生产者 Span，不存在时返回 null
+     * @param message beforeSend 返回的派生消息引用
+     * @param success 是否发送成功
+     * @param errorMessage 失败时的错误描述，成功时可为 null
      */
-    public Span getCurrentProducerSpan() {
-        return currentProducerSpan.get();
+    public void endProducerSpan(Message<?> message, boolean success, String errorMessage) {
+        if (Objects.isNull(message)) {
+            return;
+        }
+        Span span = producerSpans.remove(message);
+        if (Objects.nonNull(span)) {
+            endSpan(span, success, errorMessage);
+        }
     }
 
-    /** 清除当前线程的生产者 Span。 */
-    public void clearCurrentProducerSpan() {
-        currentProducerSpan.remove();
+    /** 便捷重载：以默认错误信息结束与消息配对的生产者 Span。 */
+    public void endProducerSpan(Message<?> message, boolean success) {
+        endProducerSpan(message, success, null);
     }
 
     // ===================== 消费者 Span =====================
@@ -252,20 +273,20 @@ public class StreamMQTracing {
     // ===================== 上下文注入 / 提取 =====================
 
     /**
-     * 将 Span 的 W3C TraceContext 注入消息用户属性。
+     * 将 Span 的 W3C TraceContext 注入消息用户属性（返回派生的不可变实例）。
      *
-     * <p>使用 {@code putUserProperty} 而非 {@code putProperty}（系统属性），因为 {@link
-     * io.github.streammq.core.converter.MessageConverter} 在 Redis Stream 往返时
-     * 会将系统属性与用户属性合并存储，反序列化后统一写入 {@code userProperties}。 若注入到系统属性，消费端将无法从 {@code getProperties()}
-     * 读回。
+     * <p>使用 {@code addUserProperty} 而非系统属性，因为 {@link
+     * io.github.streammq.core.converter.MessageConverter} 在 Redis Stream 往返时 会将属性合并存储，反序列化后统一写入
+     * {@code userProperties}。
      *
      * @param span 生产者 Span
      * @param message 消息载体
+     * @return 注入追踪上下文后的派生消息
      */
-    private void injectTraceContext(Span span, Message<?> message) {
+    private Message<?> injectTraceContext(Span span, Message<?> message) {
         SpanContext ctx = span.getSpanContext();
         if (!ctx.isValid()) {
-            return;
+            return message;
         }
         String traceparent =
                 "00-"
@@ -274,11 +295,12 @@ public class StreamMQTracing {
                         + ctx.getSpanId()
                         + "-"
                         + ctx.getTraceFlags().asHex();
-        message.putUserProperty(TRACEPARENT_KEY, traceparent);
+        Message<?> enriched = message.addUserProperty(TRACEPARENT_KEY, traceparent);
         TraceState traceState = ctx.getTraceState();
         if (Objects.nonNull(traceState) && !traceState.isEmpty()) {
-            message.putUserProperty(TRACESTATE_KEY, serializeTraceState(traceState));
+            enriched = enriched.addUserProperty(TRACESTATE_KEY, serializeTraceState(traceState));
         }
+        return enriched;
     }
 
     /**
@@ -410,7 +432,16 @@ public class StreamMQTracing {
 
     /** 记录 Span 启动纳秒时间。 */
     private void recordStart(Span span) {
-        spanStartNanos.put(span, System.nanoTime());
+        synchronized (spanStartNanos) {
+            if (spanStartNanos.size() >= SPAN_REGISTRY_CAPACITY) {
+                var it = spanStartNanos.keySet().iterator();
+                if (it.hasNext()) {
+                    it.next();
+                    it.remove();
+                }
+            }
+            spanStartNanos.put(span, System.nanoTime());
+        }
     }
 
     /** 计算 Span 耗时并设置 duration 属性。 */

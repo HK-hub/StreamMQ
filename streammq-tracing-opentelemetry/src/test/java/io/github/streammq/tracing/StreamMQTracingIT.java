@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.tracing;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -35,6 +40,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -76,6 +82,9 @@ import org.springframework.test.context.DynamicPropertySource;
         })
 @DirtiesContext
 @DisplayName("StreamMQ Tracing 真实集成测试")
+@EnabledIf(
+        value = "io.github.streammq.core.util.RedisAvailability#localhostAvailable",
+        disabledReason = "Redis not available at localhost:6379")
 class StreamMQTracingIT {
 
     @DynamicPropertySource
@@ -146,23 +155,19 @@ class StreamMQTracingIT {
                             .body("span-body")
                             .build();
 
-            tracing.injectProducerSpan(message);
+            Message<?> enriched = tracing.injectProducerSpan(message);
 
-            Span span = tracing.getCurrentProducerSpan();
-            assertThat(span).isNotNull();
-            assertThat(span.getSpanContext().isValid()).isTrue();
-
-            String traceparent = message.getUserProperties().get(StreamMQTracing.TRACEPARENT_KEY);
+            String traceparent = enriched.getUserProperties().get(StreamMQTracing.TRACEPARENT_KEY);
             assertThat(traceparent).isNotNull().matches(TRACEPARENT_REGEX);
 
-            tracing.endSpan(span, true);
-            tracing.clearCurrentProducerSpan();
+            // 通过消息配对结束生产者 Span（注册表按派生消息引用查找）
+            tracing.endProducerSpan(enriched, true);
         }
 
         @Test
         @DisplayName("startConsumerSpan 应从 traceparent 提取远程父级上下文")
         void shouldStartConsumerSpanWithRemoteParent() {
-            Message<String> message =
+            Message<String> base =
                     MessageBuilder.<String>withTopic(TOPIC)
                             .tag("consumer-span")
                             .keys("consumer-key")
@@ -181,7 +186,8 @@ class StreamMQTracingIT {
                             + producerSpan.getSpanContext().getSpanId()
                             + "-"
                             + producerSpan.getSpanContext().getTraceFlags().asHex();
-            message.putUserProperty(StreamMQTracing.TRACEPARENT_KEY, traceparent);
+            Message<String> message =
+                    base.addUserProperty(StreamMQTracing.TRACEPARENT_KEY, traceparent);
 
             ConsumeContext context = createMockContext(CONSUMER_GROUP, "consumer-1", 0);
             Span consumerSpan = tracing.startConsumerSpan(message, context);

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.interceptor;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -30,15 +35,48 @@ class TraceContextConsumerInterceptorTest {
         MDC.clear();
     }
 
+    /** 构造仅含 body 的测试消息（不可变）。 */
+    private Message<String> sample(String body) {
+        return new Message<>(
+                "t", null, null, null, null, null, body, null, null, 0L, null, null, 0);
+    }
+
+    /** 构造携带 topic / messageId / traceId / 重试次数的测试消息（不可变）。 */
+    private Message<String> sampleWithTrace(
+            String topic, String messageId, String traceId, int reconsumeTimes) {
+        Message<String> msg =
+                new Message<>(
+                        topic != null ? topic : "t",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        "hello",
+                        null,
+                        null,
+                        0L,
+                        null,
+                        null,
+                        reconsumeTimes);
+        if (messageId != null) {
+            msg = msg.withMessageId(new MessageId(messageId));
+        }
+        if (traceId != null) {
+            msg = msg.addUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, traceId);
+        }
+        return msg;
+    }
+
     @Test
     @DisplayName("beforeConsume 将 traceId 从 userProperties 写入 MDC")
     void beforeConsumePutsTraceIdIntoMdc() {
         TraceContextConsumerInterceptor interceptor =
                 new TraceContextConsumerInterceptor(new NoopTraceCollector());
 
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
-        msg.putUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, "trace-abc");
+        Message<String> msg =
+                sample("hello")
+                        .addUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, "trace-abc");
 
         boolean result = interceptor.beforeConsume(msg, null);
 
@@ -53,8 +91,7 @@ class TraceContextConsumerInterceptorTest {
         TraceContextConsumerInterceptor interceptor =
                 new TraceContextConsumerInterceptor(new NoopTraceCollector());
 
-        Message<String> msg = new Message<>();
-        msg.setBody("hello");
+        Message<String> msg = sample("hello");
 
         interceptor.beforeConsume(msg, null);
 
@@ -79,12 +116,7 @@ class TraceContextConsumerInterceptorTest {
         TraceContextConsumerInterceptor interceptor =
                 new TraceContextConsumerInterceptor(collector);
 
-        Message<String> msg = new Message<>();
-        msg.setTopic("topic-1");
-        msg.setMessageId(new MessageId("1-0"));
-        msg.setBody("hello");
-        msg.putUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, "trace-1");
-        msg.setReconsumeTimes(2);
+        Message<String> msg = sampleWithTrace("topic-1", "1-0", "trace-1", 2);
 
         interceptor.beforeConsume(msg, null);
         assertThat(MDC.get(TraceContextConsumerInterceptor.MDC_TRACE_ID_KEY)).isEqualTo("trace-1");
@@ -114,10 +146,7 @@ class TraceContextConsumerInterceptorTest {
         TraceContextConsumerInterceptor interceptor =
                 new TraceContextConsumerInterceptor(collector);
 
-        Message<String> msg = new Message<>();
-        msg.setTopic("topic-1");
-        msg.setMessageId(new MessageId("1-0"));
-        msg.putUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, "trace-1");
+        Message<String> msg = sampleWithTrace("topic-1", "1-0", "trace-1", 0);
 
         interceptor.beforeConsume(msg, null);
         interceptor.afterConsume(msg, ConsumeAction.RECONSUME_LATER, null);
@@ -137,8 +166,7 @@ class TraceContextConsumerInterceptorTest {
         TraceContextConsumerInterceptor interceptor =
                 new TraceContextConsumerInterceptor(collector);
 
-        Message<String> msg = new Message<>();
-        msg.putUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, "trace-1");
+        Message<String> msg = sampleWithTrace(null, null, "trace-1", 0);
         interceptor.beforeConsume(msg, null);
         interceptor.afterConsume(msg, ConsumeAction.SUCCESS, null);
 
@@ -157,8 +185,7 @@ class TraceContextConsumerInterceptorTest {
         TraceContextConsumerInterceptor interceptor =
                 new TraceContextConsumerInterceptor(collector);
 
-        Message<String> msg = new Message<>();
-        msg.putUserProperty(TraceContextConsumerInterceptor.TRACE_ID_KEY, "trace-1");
+        Message<String> msg = sampleWithTrace(null, null, "trace-1", 0);
         interceptor.beforeConsume(msg, null);
         interceptor.afterConsume(msg, ConsumeAction.SUCCESS, null);
         assertThat(MDC.get(TraceContextConsumerInterceptor.MDC_TRACE_ID_KEY)).isNull();
@@ -172,8 +199,7 @@ class TraceContextConsumerInterceptorTest {
         TraceContextConsumerInterceptor interceptor =
                 new TraceContextConsumerInterceptor(collector);
 
-        Message<String> msg = new Message<>();
-        msg.setTopic("topic-1");
+        Message<String> msg = sampleWithTrace("topic-1", null, null, 0);
         interceptor.afterConsume(msg, ConsumeAction.SUCCESS, null);
 
         ArgumentCaptor<TraceCollector.ConsumeTraceContext> captor =

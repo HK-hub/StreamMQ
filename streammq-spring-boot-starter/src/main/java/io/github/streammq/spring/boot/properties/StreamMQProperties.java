@@ -1,22 +1,24 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.boot.properties;
 
 import io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy;
 import io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy;
 import io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
-import io.github.streammq.adapter.redisson.trace.NoopTraceCollector;
 import io.github.streammq.core.StreamMQConstants;
-import io.github.streammq.core.interceptor.TraceCollector;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
+import java.time.Duration;
 import lombok.Data;
 import lombok.ToString;
 import org.springframework.boot.context.properties.ConfigurationProperties;
-
-import java.time.Duration;
 
 /**
  * StreamMQ 配置属性，绑定前缀 {@code streammq}。
@@ -113,9 +115,6 @@ public class StreamMQProperties {
      */
     private String secretKey = "";
 
-    /** 线程名前缀 */
-    private String threadNamePrefix = StreamMQConstants.THREAD_PREFIX;
-
     /** 重平衡策略配置 */
     private Rebalance rebalance = new Rebalance();
 
@@ -124,9 +123,6 @@ public class StreamMQProperties {
 
     /** 追踪存储与查询配置（v1.0+） */
     private Trace trace = new Trace();
-
-    /** 事件配置 */
-    private Event event = new Event();
 
     /** 管理端点配置 */
     private Admin admin = new Admin();
@@ -188,8 +184,7 @@ public class StreamMQProperties {
          * 消费超时取消后的宽限期（毫秒）：等待业务线程真正终止， 用于缩小与重试副本的重叠窗口。 默认 {@link
          * StreamMQConstants#DEFAULT_TIMEOUT_CANCEL_GRACE_MS}。
          */
-        private long timeoutCancelGraceMillis =
-                StreamMQConstants.DEFAULT_TIMEOUT_CANCEL_GRACE_MS;
+        private long timeoutCancelGraceMillis = StreamMQConstants.DEFAULT_TIMEOUT_CANCEL_GRACE_MS;
     }
 
     /** 消费者组管理配置（心跳与实例存活判定）。 */
@@ -273,8 +268,7 @@ public class StreamMQProperties {
          * 转移失败后的回写退避间隔（毫秒）：避免 Redis 故障时以扫描间隔高频热循环重试， 默认 {@link
          * StreamMQConstants#DEFAULT_FAILURE_REQUEUE_BACKOFF_MS}。
          */
-        private long failureRequeueBackoffMs =
-                StreamMQConstants.DEFAULT_FAILURE_REQUEUE_BACKOFF_MS;
+        private long failureRequeueBackoffMs = StreamMQConstants.DEFAULT_FAILURE_REQUEUE_BACKOFF_MS;
     }
 
     /** 延时消息调度器配置。 */
@@ -294,8 +288,7 @@ public class StreamMQProperties {
          * 转移失败后的回写退避间隔（毫秒）：避免 Redis 故障时以扫描间隔高频热循环重试， 默认 {@link
          * StreamMQConstants#DEFAULT_FAILURE_REQUEUE_BACKOFF_MS}。
          */
-        private long failureRequeueBackoffMs =
-                StreamMQConstants.DEFAULT_FAILURE_REQUEUE_BACKOFF_MS;
+        private long failureRequeueBackoffMs = StreamMQConstants.DEFAULT_FAILURE_REQUEUE_BACKOFF_MS;
     }
 
     /** 事务消息配置。 */
@@ -337,12 +330,6 @@ public class StreamMQProperties {
     public static class Tracing {
         /** 是否启用追踪，对应 {@code streammq.tracing.enabled}（默认 false） */
         private boolean enabled = false;
-
-        /** 追踪收集器实现类，默认 {@link NoopTraceCollector} */
-        private Class<? extends TraceCollector> collector = NoopTraceCollector.class;
-
-        /** 追踪日志 Topic（仅 Slf4jTraceCollector 生效） */
-        private String traceTopic = "";
     }
 
     /**
@@ -355,12 +342,13 @@ public class StreamMQProperties {
         /** 是否启用追踪存储与查询服务 */
         private boolean enabled = false;
 
-        /** 追踪存储方式（{@link io.github.streammq.core.enums.TraceStorageType#REDIS} 启用 Redis Stream 存储，其他值禁用） */
+        /**
+         * 追踪存储方式（{@link io.github.streammq.core.enums.TraceStorageType#REDIS} 启用 Redis Stream
+         * 存储，其他值禁用）
+         */
         private String storage = io.github.streammq.core.enums.TraceStorageType.NONE.getCode();
 
-        /**
-         * 单日单次追踪查询最大读取条数，超出部分静默截断。 默认 {@link StreamMQConstants#DEFAULT_TRACE_MAX_READ_COUNT}。
-         */
+        /** 单日单次追踪查询最大读取条数，超出部分静默截断。 默认 {@link StreamMQConstants#DEFAULT_TRACE_MAX_READ_COUNT}。 */
         private int maxReadCount = StreamMQConstants.DEFAULT_TRACE_MAX_READ_COUNT;
     }
 
@@ -371,22 +359,7 @@ public class StreamMQProperties {
         private int listPageSize = StreamMQSpringConstants.DEFAULT_LIST_PAGE_SIZE;
 
         /** pending 列表单次最大拉取条数 */
-        private int maxPendingQuerySize =
-                StreamMQSpringConstants.MAX_PENDING_QUERY_SIZE;
-    }
-
-    /**
-     * 事件总线配置，控制各类领域事件的发布开关。
-     *
-     * <p>关闭不关心的事件可减少系统开销，避免每消息都触发异步发布。
-     */
-    @Data
-    public static class Event {
-        /** 消息发送事件开关（默认 false） */
-        private boolean sendEnabled = false;
-
-        /** 消息消费事件开关（默认 false） */
-        private boolean consumeEnabled = false;
+        private int maxPendingQuerySize = StreamMQSpringConstants.MAX_PENDING_QUERY_SIZE;
     }
 
     /**

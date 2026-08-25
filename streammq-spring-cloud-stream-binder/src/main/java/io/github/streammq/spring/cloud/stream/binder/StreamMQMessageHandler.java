@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.cloud.stream.binder;
 
 import io.github.streammq.core.message.MessageBuilder;
@@ -271,7 +276,10 @@ public class StreamMQMessageHandler implements MessageHandler {
      * @return true 表示为用户自定义头
      */
     private boolean isUserHeader(String headerName) {
-        return !MessageHeaders.ID.equals(headerName)
+        // 同时过滤 Spring Integration 内部头（integrationMessageHistory / ackIf / sequenceDetails 等），
+        // 避免框架编排元数据泄漏进 Redis userProperties
+        return !headerName.startsWith("integration")
+                && !MessageHeaders.ID.equals(headerName)
                 && !MessageHeaders.TIMESTAMP.equals(headerName)
                 && !MessageHeaders.CONTENT_TYPE.equals(headerName)
                 && !MessageHeaders.REPLY_CHANNEL.equals(headerName)

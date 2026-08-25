@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.test;
 
 import io.github.streammq.core.consumer.ConsumeContext;
@@ -28,14 +33,21 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
     private final List<Exception> exceptions = new ArrayList<>();
     private volatile CountDownLatch latch;
 
-    private ConsumeAction nextAction = ConsumeAction.SUCCESS;
+    private volatile ConsumeAction nextAction = ConsumeAction.SUCCESS;
     private volatile boolean shouldFail = false;
     private volatile int failAfterCount = Integer.MAX_VALUE;
 
     @Override
     public ConsumeAction onMessage(Message<T> message, ConsumeContext context) throws Exception {
-        synchronized (receivedMessages) {
+        // 入表与 countDown 必须原子：awaitMessages 在同一锁下建 latch 并补偿存量，
+        // 保证任一消息要么被补偿计数、要么触发新 latch，二者只取其一（消除竞态）
+        synchronized (this) {
             receivedMessages.add(message);
+
+            CountDownLatch current = latch;
+            if (current != null) {
+                current.countDown();
+            }
         }
 
         LOG.debug(
@@ -43,10 +55,6 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
                 message.getTopic(),
                 message.getKeys(),
                 message.getBody());
-
-        if (latch != null) {
-            latch.countDown();
-        }
 
         if (shouldFail && successCount.get() >= failAfterCount) {
             Exception ex = new RuntimeException("Intentional test failure");
@@ -116,11 +124,15 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
     }
 
     public void awaitMessages(int expectedCount, long timeoutMillis) throws InterruptedException {
-        this.latch = new CountDownLatch(expectedCount);
-        // 检查是否已经收到了足够的消息，补偿已收到的消息
-        int alreadyReceived = getReceivedCount();
-        for (int i = 0; i < Math.min(alreadyReceived, expectedCount); i++) {
-            latch.countDown();
+        // 与 onMessage 的 countDown 在同一把锁下完成"创建 latch + 补偿已收消息"，
+        // 消除并发到达的消息被重复计数导致 latch 提前归零的竞态
+        synchronized (this) {
+            CountDownLatch fresh = new CountDownLatch(expectedCount);
+            int alreadyReceived = receivedMessages.size();
+            for (int i = 0; i < Math.min(alreadyReceived, expectedCount); i++) {
+                fresh.countDown();
+            }
+            this.latch = fresh;
         }
         if (!latch.await(timeoutMillis, TimeUnit.MILLISECONDS)) {
             throw new AssertionError(

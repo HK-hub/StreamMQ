@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.container;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
@@ -7,6 +12,7 @@ import io.github.streammq.adapter.redisson.filter.SimpleSqlSelectorFilter;
 import io.github.streammq.adapter.redisson.filter.SimpleTagSelectorFilter;
 import io.github.streammq.adapter.redisson.handler.DefaultRetryAndDlqHandler;
 import io.github.streammq.adapter.redisson.interceptor.DefaultConsumerInterceptorChain;
+import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
 import io.github.streammq.adapter.redisson.lock.RedissonOrderlyShardLockManager;
 import io.github.streammq.adapter.redisson.manager.RedissonConsumerGroupManager;
 import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
@@ -109,6 +115,11 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 消费 future 注册 key 的重试后缀 */
     private static final String RETRY_FUTURE_SUFFIX = ":retry";
 
+    /** 注册键前缀/分隔符（与 DefaultListenerRegistration.key() 保持一致） */
+    private static final String DLQ_KEY_PREFIX = "dlq:";
+
+    private static final String REG_KEY_SEPARATOR = ":";
+
     /** 虚拟处理线程名前缀 */
     private static final String THREAD_PROCESS_PREFIX = StreamMQConstants.THREAD_PROCESS_PREFIX;
 
@@ -145,8 +156,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     private final ConcurrentMap<String, List<ConsumerFilter>> perConsumerFilters =
             new ConcurrentHashMap<>();
 
-    /** 消费线程池（虚拟线程） */
-    private final ExecutorService consumeExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    /** 消费线程池（虚拟线程）；stop 后不可复用，restart 时在 {@link #start()} 中重建 */
+    private volatile ExecutorService consumeExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     /** 内部队列（背压控制：拉取与处理解耦） */
     private final int inflightCapacity;
@@ -160,6 +171,19 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     /** 暂停标志 */
     private volatile boolean paused = false;
+
+    /**
+     * 本容器实例的稳定标识（主机名+PID 派生）：广播模式消费者组名使用它而非随机 UUID， 保证同机重启复用同一消费者组（配合 close 时的组销毁，避免组无限累积与历史重放）。
+     */
+    private final String instanceToken = buildInstanceToken();
+
+    private static String buildInstanceToken() {
+        String raw =
+                (System.getenv("HOSTNAME") != null ? System.getenv("HOSTNAME") : "host")
+                        + "-"
+                        + ProcessHandle.current().pid();
+        return Integer.toHexString(raw.hashCode());
+    }
 
     /** 消费超时取消后的宽限期（毫秒），可通过 {@link #setTimeoutCancelGraceMillis(long)} 覆盖 */
     private volatile long timeoutCancelGraceMillis = DEFAULT_TIMEOUT_CANCEL_GRACE_MILLIS;
@@ -554,9 +578,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             perConsumerFilters.put(reg.key(), filters);
         }
         LOG.debug("Rebuilt consumer filter cache for {} registrations", registrations.size());
-    }
-
-    // ===================== 注册方法 =====================
+    } // ===================== 注册方法 =====================
 
     @Override
     public <T> void registerConsumer(
@@ -602,6 +624,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         reg.resolveNamespace(defaultNamespace);
         resolvePerConsumerSpi(reg);
         registrations.put(reg.key(), reg);
+        wireRegistrationIfRunning(reg);
         LOG.info(
                 "Registered StreamMQ Consumer: topic={}, group={}, dlqMode={}, bodyType={}",
                 annotation.topic(),
@@ -662,6 +685,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         reg.resolveNamespace(defaultNamespace);
         resolvePerConsumerSpi(reg);
         registrations.put(reg.key(), reg);
+        wireRegistrationIfRunning(reg);
         LOG.info(
                 "Registered StreamMQ Orderly Consumer: topic={}, group={}, shardCount={},"
                         + " bodyType={}",
@@ -716,6 +740,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         reg.resolveNamespace(defaultNamespace);
         resolvePerConsumerSpi(reg);
         registrations.put(reg.key(), reg);
+        wireRegistrationIfRunning(reg);
         LOG.info(
                 "Registered StreamMQ DLQ Consumer: group={}, bodyType={}",
                 effectiveGroup,
@@ -924,47 +949,53 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      */
     public void registerPelClaimTargets(PelClaimScheduler scheduler) {
         Objects.requireNonNull(scheduler, "scheduler");
-        int count = 0;
+        int orderlyCount = 0;
+        int concurrentCount = 0;
         for (ListenerRegistration<?> reg : registrations.values()) {
-            if (reg.getType() == ListenerType.ORDERLY && !reg.isDlqMode()) {
+            if (reg.isDlqMode()) {
+                continue;
+            }
+            if (reg.getType() == ListenerType.ORDERLY) {
                 scheduler.registerTarget(
                         reg.getTopic(), reg.getGroup(), reg.getMaxReconsumeTimes());
-                count++;
+                orderlyCount++;
+            } else if (reg.getType() == ListenerType.AUTO_ACK
+                    && reg.getConsumeMode()
+                            != io.github.streammq.core.enums.ConsumeMode.BROADCASTING) {
+                // 并发消费组同样纳入 PEL 认领：覆盖实例崩溃后由其它实例接管遗留消息的场景
+                // （本实例自身的 PEL 由启动排空 drainOwnPending 处理）。广播模式每实例独立组，不适用。
+                scheduler.registerTarget(
+                        reg.getTopic(), reg.getGroup(), reg.getMaxReconsumeTimes());
+                concurrentCount++;
             }
         }
         LOG.info(
-                "Registered {} PelClaim targets ({} non-orderly skipped)",
-                count,
-                registrations.size() - count);
+                "Registered {} PelClaim targets ({} orderly, {} concurrent)",
+                orderlyCount + concurrentCount,
+                orderlyCount,
+                concurrentCount);
     }
 
     // ===================== 生命周期方法 =====================
 
     @Override
     public void start() {
+        if (state.get() == ContainerState.STOPPED
+                && !state.compareAndSet(ContainerState.STOPPED, ContainerState.INIT)) {
+            throw new IllegalStateException(
+                    "Container restart raced with another lifecycle change: " + state.get());
+        }
         if (!state.compareAndSet(ContainerState.INIT, ContainerState.STARTING)) {
             throw new IllegalStateException(
                     "Container already started or in invalid state: " + state.get());
         }
+        ensureRuntimeAlive();
         LOG.info("Starting ListenerContainer with {} registration(s)", registrations.size());
         state.set(ContainerState.RUNNING);
         // 注册所有消费者组的 ConsumerGroupManager
         for (ListenerRegistration<?> reg : registrations.values()) {
             if (!reg.isDlqMode()) {
-                String instanceId =
-                        reg.getGroup() + "-" + UUID.randomUUID().toString().substring(0, 8);
-                ConsumerGroupManager cgm =
-                        new RedissonConsumerGroupManager(
-                                redisson,
-                                reg.getNamespace(),
-                                reg.getGroup(),
-                                instanceId,
-                                resolveRebalanceStrategy(reg),
-                                heartbeatIntervalMs,
-                                instanceTimeoutMs);
-                cgm.register();
-                cgm.cleanupStaleGroups();
-                consumerGroupManagers.put(reg.key(), cgm);
+                createAndRegisterGroupManager(reg);
             }
         }
         doStartListeners();
@@ -972,6 +1003,34 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             registerPelClaimTargets(pelClaimScheduler);
         }
         LOG.info("ListenerContainer started, state=RUNNING");
+    }
+
+    /** 确保 executor 与 listener 工厂可用：容器 stop 后二者均不可复用，restart 前重建/重开。 */
+    private synchronized void ensureRuntimeAlive() {
+        if (consumeExecutor.isShutdown()) {
+            consumeExecutor = Executors.newVirtualThreadPerTaskExecutor();
+            LOG.info("Recreated consume executor for container restart");
+        }
+        if (consumerFactory instanceof RedissonStreamListenerFactory redissonFactory) {
+            redissonFactory.reopen();
+        }
+    }
+
+    /** 为单个注册创建并登记 ConsumerGroupManager（start 与动态注册共用）。 */
+    private void createAndRegisterGroupManager(ListenerRegistration<?> reg) {
+        String instanceId = reg.getGroup() + "-" + UUID.randomUUID().toString().substring(0, 8);
+        ConsumerGroupManager cgm =
+                new RedissonConsumerGroupManager(
+                        redisson,
+                        reg.getNamespace(),
+                        reg.getGroup(),
+                        instanceId,
+                        resolveRebalanceStrategy(reg),
+                        heartbeatIntervalMs,
+                        instanceTimeoutMs);
+        cgm.register();
+        cgm.cleanupStaleGroups();
+        consumerGroupManagers.put(reg.key(), cgm);
     }
 
     @Override
@@ -1039,16 +1098,100 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     private void doStartListeners() {
         for (ListenerRegistration<?> reg : registrations.values()) {
-            // 并发非 DLQ 消费者：双 listener（original + retry），对齐 RocketMQ 订阅 original + %RETRY%
-            if (reg.getType() == ListenerType.AUTO_ACK && !reg.isDlqMode()) {
-                Future<?> origFuture = consumeExecutor.submit(() -> consumeLoop(reg, false));
-                consumeFutures.put(reg.key(), origFuture);
-                Future<?> retryFuture = consumeExecutor.submit(() -> consumeLoop(reg, true));
-                consumeFutures.put(reg.key() + RETRY_FUTURE_SUFFIX, retryFuture);
-            } else {
-                // 顺序消费 / DLQ 消费者：单 listener
-                Future<?> future = consumeExecutor.submit(() -> consumeLoop(reg, false));
-                consumeFutures.put(reg.key(), future);
+            submitConsumeLoops(reg);
+        }
+    }
+
+    /** 为单个注册提交消费任务（并发非 DLQ 双 listener：original + retry；顺序/DLQ 单 listener）。 */
+    private void submitConsumeLoops(ListenerRegistration<?> reg) {
+        // 并发非 DLQ 消费者：双 listener（original + retry），对齐 RocketMQ 订阅 original + %RETRY%
+        if (reg.getType() == ListenerType.AUTO_ACK && !reg.isDlqMode()) {
+            Future<?> origFuture = consumeExecutor.submit(() -> consumeLoop(reg, false));
+            consumeFutures.put(reg.key(), origFuture);
+            Future<?> retryFuture = consumeExecutor.submit(() -> consumeLoop(reg, true));
+            consumeFutures.put(reg.key() + RETRY_FUTURE_SUFFIX, retryFuture);
+        } else {
+            // 顺序消费 / DLQ 消费者：单 listener
+            Future<?> future = consumeExecutor.submit(() -> consumeLoop(reg, false));
+            consumeFutures.put(reg.key(), future);
+        }
+    }
+
+    /** 启动前排空本消费者 PEL 的遗留消息：循环拉取直至清空或容器停止，逐条走正常处理路径 （重试/DLQ 策略照常生效）。 */
+    private void drainOwnPending(ListenerRegistration<?> reg, StreamMQListener listener) {
+        int drained = 0;
+        while (state.get() == ContainerState.RUNNING && !paused) {
+            List<Message<?>> pending = listener.drainPendingOnce(reg.getPullBatchSize());
+            if (pending.isEmpty()) {
+                if (drained > 0) {
+                    LOG.info(
+                            "PEL drain complete: topic={}, group={}, recovered={}",
+                            reg.getTopic(),
+                            reg.getGroup(),
+                            drained);
+                }
+                return;
+            }
+            for (Message<?> message : pending) {
+                if (state.get() != ContainerState.RUNNING) {
+                    return;
+                }
+                processMessage(message, reg, listener);
+                drained++;
+            }
+        }
+    }
+
+    @Override
+    public void unregister(String topic, String consumerGroup) {
+        StringUtils.requireValidTopic(topic);
+        StringUtils.requireValidGroup(consumerGroup);
+        boolean running = state.get() == ContainerState.RUNNING;
+        boolean removed = false;
+        for (String suffix : new String[] {"", DLQ_KEY_PREFIX}) {
+            String key = suffix + topic + REG_KEY_SEPARATOR + consumerGroup;
+            ListenerRegistration<?> reg = registrations.remove(key);
+            if (Objects.isNull(reg)) {
+                continue;
+            }
+            removed = true;
+            cancelRegistrationFutures(key);
+            perConsumerFilters.remove(key);
+            perConsumerConverters.remove(key);
+            ConsumerGroupManager cgm = consumerGroupManagers.remove(key);
+            if (Objects.nonNull(cgm)) {
+                try {
+                    cgm.unregister();
+                } catch (RuntimeException ex) {
+                    LOG.warn(
+                            "Failed to unregister ConsumerGroupManager on unregister"
+                                    + " (topic={}, group={}): {}",
+                            topic,
+                            consumerGroup,
+                            ex.getMessage());
+                }
+            }
+            LOG.info(
+                    "Unregistered StreamMQ listener: topic={}, group={}, wasRunning={}",
+                    topic,
+                    consumerGroup,
+                    running);
+        }
+        if (!removed) {
+            LOG.info(
+                    "Unregister ignored, no registration found: topic={}, group={}",
+                    topic,
+                    consumerGroup);
+        }
+    }
+
+    /** 取消单个注册的全部消费任务（含 retry 任务），等待中的拉取会因中断退出。 */
+    private void cancelRegistrationFutures(String key) {
+        Future<?> main = consumeFutures.remove(key);
+        Future<?> retry = consumeFutures.remove(key + RETRY_FUTURE_SUFFIX);
+        for (Future<?> f : new Future<?>[] {main, retry}) {
+            if (Objects.nonNull(f)) {
+                f.cancel(true);
             }
         }
     }
@@ -1082,17 +1225,18 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             inflightQueue = new LinkedBlockingQueue<>(inflightCapacity);
             // 启动独立的处理线程
             Thread.ofVirtual()
-                    .name(
-                            THREAD_PROCESS_PREFIX
-                                    + reg.getTopic()
-                                    + "-"
-                                    + reg.getGroup())
+                    .name(THREAD_PROCESS_PREFIX + reg.getTopic() + "-" + reg.getGroup())
                     .start(() -> processFromInflightQueue(reg, listener, inflightQueue));
         } else {
             inflightQueue = null;
         }
 
         try {
+            // 启动排空：恢复上次实例崩溃/停止时遗留在本消费者 PEL 中的消息（at-least-once 补齐）。
+            // 仅并发消费启用——顺序消费由 PelClaimScheduler 按 shard 语义处理，直接排空会破坏顺序。
+            if (reg.getType() == ListenerType.AUTO_ACK && !reg.isDlqMode()) {
+                drainOwnPending(reg, listener);
+            }
             while (state.get() == ContainerState.RUNNING) {
                 if (paused) {
                     sleepQuietly(PAUSED_SLEEP_MILLIS);
@@ -1174,8 +1318,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 ListenerConfig.builder()
                         .topic(reg.getTopic())
                         .consumerGroup(reg.getGroup())
-                        .consumerName(
-                                reg.getGroup() + "-" + UUID.randomUUID().toString().substring(0, 8))
+                        .consumerName(reg.getGroup() + "-" + instanceToken)
                         .namespace(reg.getNamespace())
                         .dlqMode(reg.isDlqMode())
                         .retryMode(retryMode)
@@ -1514,10 +1657,38 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     private void checkBeforeStart() {
         ContainerState current = state.get();
-        if (current != ContainerState.INIT) {
-            throw new IllegalStateException(
-                    "Cannot register listener after container started: " + current);
+        if (current == ContainerState.INIT) {
+            return;
         }
+        // 运行中动态注册：立即接线单个监听器（见 wireRegistrationIfRunning）
+        if (current == ContainerState.RUNNING) {
+            return;
+        }
+        // 完整 stop 后重新开放注册：回到 INIT，等待下一次 start()
+        if (current == ContainerState.STOPPED
+                && state.compareAndSet(ContainerState.STOPPED, ContainerState.INIT)) {
+            return;
+        }
+        throw new IllegalStateException(
+                "Cannot register listener in container state "
+                        + current
+                        + " (rebinding in"
+                        + " progress or container starting)");
+    }
+
+    /** 容器已运行时，为新注册项立即创建组管理器并提交消费任务（动态绑定场景，如 Spring Cloud Stream binder 的 rebind）。 */
+    private void wireRegistrationIfRunning(ListenerRegistration<?> reg) {
+        if (state.get() != ContainerState.RUNNING) {
+            return;
+        }
+        if (!reg.isDlqMode() && Objects.isNull(consumerGroupManagers.get(reg.key()))) {
+            createAndRegisterGroupManager(reg);
+        }
+        submitConsumeLoops(reg);
+        LOG.info(
+                "Dynamically wired registration while container running: topic={}, group={}",
+                reg.getTopic(),
+                reg.getGroup());
     }
 
     /**

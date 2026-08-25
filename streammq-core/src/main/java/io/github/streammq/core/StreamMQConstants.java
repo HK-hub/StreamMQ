@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.core;
 
 /** StreamMQ 全局常量定义。 集中管理跨模块共享的默认值、属性 key、Bean 名前缀、线程名前缀等常量。 */
@@ -233,24 +238,34 @@ public final class StreamMQConstants {
     // ==================== 追踪属性 Key（Trace 属性契约） ====================
     /** 追踪属性：traceId */
     public static final String TRACE_ATTR_TRACE_ID = "traceId";
+
     /** 追踪属性：errorMessage */
     public static final String TRACE_ATTR_ERROR_MESSAGE = "errorMessage";
+
     /** 追踪属性：regionId */
     public static final String TRACE_ATTR_REGION_ID = "regionId";
+
     /** 追踪属性：keys */
     public static final String TRACE_ATTR_KEYS = "keys";
+
     /** 追踪属性：tag */
     public static final String TRACE_ATTR_TAG = "tag";
+
     /** 追踪属性：consumerName */
     public static final String TRACE_ATTR_CONSUMER_NAME = "consumerName";
+
     /** 追踪属性：reconsumeTimes */
     public static final String TRACE_ATTR_RECONSUME_TIMES = "reconsumeTimes";
+
     /** 追踪属性：action */
     public static final String TRACE_ATTR_ACTION = "action";
+
     /** 追踪属性：delayLevel */
     public static final String TRACE_ATTR_DELAY_LEVEL = "delayLevel";
+
     /** 追踪属性：bodyType */
     public static final String TRACE_ATTR_BODY_TYPE = "bodyType";
+
     /** 追踪属性：bornHost */
     public static final String TRACE_ATTR_BORN_HOST = "bornHost";
 }

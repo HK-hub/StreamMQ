@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.retry;
 
 import io.github.streammq.core.StreamMQConstants;
@@ -27,8 +32,7 @@ public class FixedIntervalRetryPolicy implements RetryPolicy {
     public static final long DEFAULT_INTERVAL_MS = StreamMQConstants.DEFAULT_RETRY_INTERVAL_MS;
 
     /** 默认最大重试次数 */
-    public static final int DEFAULT_MAX_RETRIES =
-            StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
+    public static final int DEFAULT_MAX_RETRIES = StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
 
     private final long intervalMs;
     private final int maxRetries;

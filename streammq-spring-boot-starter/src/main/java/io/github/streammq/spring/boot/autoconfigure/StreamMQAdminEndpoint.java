@@ -1,12 +1,17 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.adapter.redisson.converter.MessageFields;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
-import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
+import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import java.util.*;
 import org.redisson.api.*;
 import org.redisson.api.stream.StreamAddArgs;
@@ -54,8 +59,7 @@ public class StreamMQAdminEndpoint {
     }
 
     /** pending 列表单次最大拉取条数，可通过 {@link #setMaxPendingQuerySize(int)} 覆盖 */
-    private volatile int maxPendingQuerySize =
-            StreamMQSpringConstants.MAX_PENDING_QUERY_SIZE;
+    private volatile int maxPendingQuerySize = StreamMQSpringConstants.MAX_PENDING_QUERY_SIZE;
 
     /**
      * 设置 pending 列表单次最大拉取条数。

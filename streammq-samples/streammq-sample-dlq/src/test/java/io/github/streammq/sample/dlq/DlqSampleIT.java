@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.sample.dlq;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -18,6 +23,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -55,6 +61,9 @@ import org.springframework.test.context.TestPropertySource;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 @TestPropertySource(properties = {"spring.redis.host=127.0.0.1", "spring.redis.port=6379"})
 @DisplayName("DLQ 示例集成测试")
+@EnabledIf(
+        value = "io.github.streammq.core.util.RedisAvailability#localhostAvailable",
+        disabledReason = "Redis not available at localhost:6379")
 class DlqSampleIT {
 
     private static final String TEST_CONSUMER_GROUP = "test-collector-group";
@@ -257,7 +266,9 @@ class DlqSampleIT {
      * <p>通过 {@link StreamMQDlqConsumer} 注解注册为 DLQ 消费者， 监听 {@value #TEST_FAIL_CONSUMER_GROUP}
      * 消费者组的死信队列， 收集死信消息供测试验证。
      */
-    @StreamMQDlqConsumer(consumerGroup = TEST_FAIL_CONSUMER_GROUP, namespace = SampleConstants.NAMESPACE)
+    @StreamMQDlqConsumer(
+            consumerGroup = TEST_FAIL_CONSUMER_GROUP,
+            namespace = SampleConstants.NAMESPACE)
     static class TestDlqConsumer extends AbstractDlqMessageConsumer<String> {
 
         final ConcurrentLinkedQueue<Message<String>> receivedDlqMessages =

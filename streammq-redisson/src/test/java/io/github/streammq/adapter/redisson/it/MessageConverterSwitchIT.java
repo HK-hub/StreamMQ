@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.it;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -71,35 +76,49 @@ class MessageConverterSwitchIT extends AbstractRedisIT {
 
         @Override
         @SuppressWarnings("unchecked")
-        public <T> Message<T> fromStreamFields(Map<String, String> fields, Class<T> targetType) {
+        public <T> Message<T> fromStreamFields(
+                Map<String, String> fields, Class<T> targetType, String fallbackTopic) {
             Objects.requireNonNull(fields, "fields");
             Objects.requireNonNull(targetType, "targetType");
-            Message<T> message = new Message<>();
 
             String bodyStr = fields.get(DefaultMessageConverter.FIELD_BODY);
-            if (bodyStr != null && !bodyStr.isEmpty()) {
-                // 直接将字符串作为 body 返回(仅支持 String 类型)
-                message.setBody((T) bodyStr);
-            }
+            String tag =
+                    fields.containsKey(DefaultMessageConverter.FIELD_TAG)
+                            ? fields.get(DefaultMessageConverter.FIELD_TAG)
+                            : null;
+            String keys =
+                    fields.containsKey(DefaultMessageConverter.FIELD_KEYS)
+                            ? fields.get(DefaultMessageConverter.FIELD_KEYS)
+                            : null;
+            String shardingKey =
+                    fields.containsKey(DefaultMessageConverter.FIELD_SHARDING_KEY)
+                            ? fields.get(DefaultMessageConverter.FIELD_SHARDING_KEY)
+                            : null;
+            String bornHost =
+                    fields.containsKey(DefaultMessageConverter.FIELD_BORN_HOST)
+                            ? fields.get(DefaultMessageConverter.FIELD_BORN_HOST)
+                            : null;
 
-            if (fields.containsKey(DefaultMessageConverter.FIELD_TAG)) {
-                message.setTag(fields.get(DefaultMessageConverter.FIELD_TAG));
+            long bornTs = 0L;
+            String bornTsStr = fields.get(DefaultMessageConverter.FIELD_BORN_TS);
+            if (bornTsStr != null && !bornTsStr.isEmpty()) {
+                bornTs = Long.parseLong(bornTsStr);
             }
-            if (fields.containsKey(DefaultMessageConverter.FIELD_KEYS)) {
-                message.setKeys(fields.get(DefaultMessageConverter.FIELD_KEYS));
-            }
-            if (fields.containsKey(DefaultMessageConverter.FIELD_SHARDING_KEY)) {
-                message.setShardingKey(fields.get(DefaultMessageConverter.FIELD_SHARDING_KEY));
-            }
-            if (fields.containsKey(DefaultMessageConverter.FIELD_BORN_HOST)) {
-                message.setBornHost(fields.get(DefaultMessageConverter.FIELD_BORN_HOST));
-            }
-
-            String bornTs = fields.get(DefaultMessageConverter.FIELD_BORN_TS);
-            if (bornTs != null && !bornTs.isEmpty()) {
-                message.setBornTimestamp(Long.parseLong(bornTs));
-            }
-            return message;
+            // 直接将字符串作为 body 返回（仅支持 String 类型）
+            return new Message<>(
+                    fallbackTopic,
+                    tag,
+                    keys,
+                    shardingKey,
+                    null,
+                    null,
+                    (T) bodyStr,
+                    null,
+                    null,
+                    bornTs,
+                    bornHost,
+                    null,
+                    0);
         }
 
         @Override

@@ -1,15 +1,24 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.cloud.stream.binder;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import io.github.streammq.core.util.RedisAvailability;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -33,7 +42,7 @@ import org.springframework.test.context.DynamicPropertySource;
  *   <li>多条消息批量发送与接收
  * </ul>
  *
- * <p>使用本地 Redis（127.0.0.1:6379），namespace {@code binder-ext-it}，database 9。
+ * <p>使用本地 Redis（127.0.0.1:6379），namespace {@code binder-ext-it}，database 10。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -46,7 +55,7 @@ import org.springframework.test.context.DynamicPropertySource;
             "streammq.namespace=binder-ext-it",
             "streammq.producer.group=binder-ext-it-producer",
             "redisson.singleServerConfig.address=redis://127.0.0.1:6379",
-            "redisson.singleServerConfig.database=9",
+            "redisson.singleServerConfig.database=10",
             "spring.cloud.stream.default-binder=streammq",
             "spring.cloud.stream.binders.streammq.type=streammq",
             "spring.cloud.stream.function.definition=receiveMsg",
@@ -58,7 +67,17 @@ import org.springframework.test.context.DynamicPropertySource;
         })
 @DirtiesContext
 @DisplayName("StreamMQ Binder 扩展集成测试")
+@EnabledIf(
+        value = "io.github.streammq.core.util.RedisAvailability#localhostAvailable",
+        disabledReason = "Redis not available at localhost:6379")
 class StreamMQBinderExtendedIT {
+    @BeforeAll
+    static void requireRedis() {
+        // 无本地 Redis 时跳过（上下文/用例依赖真实 Redis），保证 mvn verify 任意环境可复现
+        Assumptions.assumeTrue(
+                RedisAvailability.isAvailable("localhost", 6379),
+                "Redis not available at localhost:6379, skipping IT");
+    }
 
     @DynamicPropertySource
     static void redisPassword(DynamicPropertyRegistry registry) {

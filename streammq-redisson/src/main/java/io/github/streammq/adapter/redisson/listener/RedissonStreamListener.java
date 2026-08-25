@@ -1,9 +1,15 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.listener;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.enums.DlqReason;
 import io.github.streammq.core.exception.StreamMQBrokerException;
 import io.github.streammq.core.listener.StreamMQListener;
 import io.github.streammq.core.message.Message;
@@ -25,6 +31,7 @@ import lombok.NonNull;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.StreamMessageId;
+import org.redisson.api.stream.StreamAddArgs;
 import org.redisson.api.stream.StreamCreateGroupArgs;
 import org.redisson.api.stream.StreamReadGroupArgs;
 import org.slf4j.Logger;
@@ -91,6 +98,9 @@ public class RedissonStreamListener implements StreamMQListener {
 
     /** BUSYGROUP 错误标识，用于判断消费者组已存在 */
     private static final String BUSYGROUP_MARKER = "BUSYGROUP";
+
+    /** DLQ 转存字段：进入死信的原因编码（对齐 DlqReason 线上协议） */
+    private static final String FIELD_DLQ_REASON = "dlqReason";
 
     /** NOGROUP 错误标识，用于判断 Stream 或消费者组被删除的情况 */
     private static final String NOGROUP_MARKER = "NOGROUP";
@@ -206,6 +216,61 @@ public class RedissonStreamListener implements StreamMQListener {
         return doRead(batchSize, timeout);
     }
 
+    /**
+     * 排空本消费者 PEL 中已投递未确认的消息（XREADGROUP id=0 语义）。
+     *
+     * <p>实例崩溃/停止时，已投递到该消费者 PEL 但未 ACK 的消息会永久滞留； 本方法在消费循环启动前 将这些消息重新交付处理，补齐 at-least-once 恢复路径。
+     */
+    @Override
+    public List<Message<?>> drainPendingOnce(int maxMessages) {
+        ensureOpen();
+        validateBatchSize(maxMessages);
+        ensureGroup();
+        RStream<String, String> stream = getStream();
+        String effectiveGroup = getEffectiveGroup();
+        try {
+            // greaterThan(MIN) 即 XREADGROUP id=0：仅返回本消费者 PEL 中 ID 大于 0-0 的
+            // 已投递未确认条目（不含 '>' 的"从未投递"新消息）
+            Map<StreamMessageId, Map<String, String>> result =
+                    stream.readGroup(
+                            effectiveGroup,
+                            consumerName,
+                            StreamReadGroupArgs.greaterThan(StreamMessageId.MIN)
+                                    .count(maxMessages));
+            if (CollectionUtils.isEmpty(result)) {
+                return List.of();
+            }
+            LOG.info(
+                    "Draining {} pending entries from own PEL: topic={}, group={}, consumer={}",
+                    result.size(),
+                    topic,
+                    effectiveGroup,
+                    consumerName);
+            List<Message<?>> messages = new ArrayList<>(result.size());
+            List<MessageId> poisonIds = new ArrayList<>();
+            for (Map.Entry<StreamMessageId, Map<String, String>> entry : result.entrySet()) {
+                try {
+                    messages.add(toMessage(entry.getKey(), entry.getValue()));
+                } catch (RuntimeException conversionEx) {
+                    if (handlePoisonEntry(entry.getKey(), entry.getValue(), conversionEx)) {
+                        poisonIds.add(MessageId.fromStreamEntry(entry.getKey().toString()));
+                    }
+                }
+            }
+            if (!poisonIds.isEmpty()) {
+                ackBatch(poisonIds);
+            }
+            return messages;
+        } catch (RuntimeException ex) {
+            LOG.warn(
+                    "drainPendingOnce failed (will retry on next pull): topic={}, group={}: {}",
+                    topic,
+                    effectiveGroup,
+                    ex.getMessage());
+            return List.of();
+        }
+    }
+
     @Override
     public void ack(MessageId messageId) {
         ensureOpen();
@@ -242,6 +307,20 @@ public class RedissonStreamListener implements StreamMQListener {
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
+            // 广播模式清理：销毁本实例专属消费者组，防止每次重启累积一个新组
+            // （组名含实例标识，重启后若不清理将无限增长并各自重放全量历史）
+            if (broadcast && !dlqMode && !retryMode) {
+                try {
+                    getStream().removeGroup(getEffectiveGroup());
+                } catch (RuntimeException ex) {
+                    LOG.debug(
+                            "Broadcast group destroy failed (will be recreated on next start):"
+                                    + " topic={}, group={}: {}",
+                            topic,
+                            group,
+                            ex.getMessage());
+                }
+            }
             LOG.info(
                     "RedissonStreamListener closed: topic={}, group={}, consumer={}",
                     topic,
@@ -289,13 +368,24 @@ public class RedissonStreamListener implements StreamMQListener {
                 return List.of();
             }
             List<Message<?>> messages = new ArrayList<>(result.size());
+            List<MessageId> poisonIds = new ArrayList<>();
             for (Map.Entry<StreamMessageId, Map<String, String>> entry : result.entrySet()) {
                 LOG.debug(
                         "doRead processing entry: streamKey={}, msgId={}",
                         stream.getName(),
                         entry.getKey());
-                Message<?> message = toMessage(entry.getKey(), entry.getValue());
-                messages.add(message);
+                try {
+                    Message<?> message = toMessage(entry.getKey(), entry.getValue());
+                    messages.add(message);
+                } catch (RuntimeException conversionEx) {
+                    // 毒丸消息逐条隔离：仅该条进入 DLQ 后 ACK；转存失败则保留 PEL 等待重投
+                    if (handlePoisonEntry(entry.getKey(), entry.getValue(), conversionEx)) {
+                        poisonIds.add(MessageId.fromStreamEntry(entry.getKey().toString()));
+                    }
+                }
+            }
+            if (!poisonIds.isEmpty()) {
+                ackBatch(poisonIds);
             }
             return messages;
         } catch (RuntimeException ex) {
@@ -346,10 +436,54 @@ public class RedissonStreamListener implements StreamMQListener {
         if (Objects.isNull(bodyType)) {
             bodyType = String.class;
         }
-        Message<?> message = converter.fromStreamFields(fields, (Class) bodyType);
-        DefaultMessageConverter.applyTopic(message, topic);
-        DefaultMessageConverter.applyMessageId(message, streamId.toString());
+        Message<?> message =
+                converter
+                        .fromStreamFields(fields, (Class) bodyType, topic)
+                        .withMessageId(MessageId.fromStreamEntry(streamId.toString()));
         return message;
+    }
+
+    /**
+     * 毒丸消息处理：反序列化失败的单条消息转存 DLQ Stream（携带原始字段与原因标识）。
+     *
+     * <p>失败语义：DLQ 转存成功 → 返回 true，调用方将其 ACK 移出 PEL（消息不丢，运维可排查/重放）； 转存失败 → 返回 false 且不 ACK，消息保留在 PEL
+     * 等待下次投递（宁可重复隔离也不静默丢失）。
+     *
+     * @return true 表示已转存 DLQ（应 ACK）；false 表示转存失败（保留 PEL）
+     */
+    private boolean handlePoisonEntry(
+            StreamMessageId streamId, Map<String, String> fields, RuntimeException cause) {
+        String entryId = streamId.toString();
+        LOG.error(
+                "Poison message detected, routing to DLQ: topic={}, group={}, entryId={},"
+                        + " cause={}",
+                topic,
+                group,
+                entryId,
+                cause.getMessage());
+        try {
+            Map<String, String> dlqFields = new java.util.LinkedHashMap<>(fields);
+            dlqFields.put(FIELD_DLQ_REASON, DlqReason.DESERIALIZE.getCode());
+            dlqFields.put("dlqEntryId", entryId);
+            dlqFields.put(
+                    "dlqError",
+                    Objects.nonNull(cause.getMessage())
+                            ? cause.getMessage()
+                            : cause.getClass().getName());
+            String dlqKey = StreamMQKeys.dlqStream(namespace, group);
+            RStream<String, String> dlqStream = redisson.getStream(dlqKey);
+            dlqStream.add(StreamAddArgs.entries(dlqFields));
+            return true;
+        } catch (RuntimeException dlqEx) {
+            LOG.error(
+                    "Failed to route poison message to DLQ, keeping in PEL for redelivery:"
+                            + " topic={}, group={}, entryId={}",
+                    topic,
+                    group,
+                    entryId,
+                    dlqEx);
+            return false;
+        }
     }
 
     private Class<?> findClassBySimpleName(String simpleName) {

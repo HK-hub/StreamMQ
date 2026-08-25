@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.cloud.stream.binder;
 
 import io.github.streammq.core.annotation.StreamMQConsumer;
@@ -32,8 +37,11 @@ import org.springframework.util.Assert;
  *   <li>在 {@link #doStop()} 时由容器停止消费
  * </ol>
  *
- * <p>消费结果映射：本生产者始终返回 {@link ConsumeAction#SUCCESS}， 消费失败的重试由 Spring Cloud Stream
- * 的错误处理机制（errorChannel / DLQ）负责。
+ * <p>消费结果映射：发送成功返回 {@link ConsumeAction#SUCCESS}；转换或输出失败返回 {@link ConsumeAction#RECONSUME_LATER}，由
+ * StreamMQ broker 侧重试机制接管（重试耗尽进入 DLQ）。 注意：这与部分 Binder 的"始终 ACK、由 SCS errorChannel 处理失败"策略不同—— 本
+ * Binder 选择 broker 侧可靠性优先；{@code maxAttempts} 扩展属性实际映射为 broker 重试上限。
+ *
+ * <p><b>不支持的功能</b>：分区生产（{@code partitioned=true}）暂未实现，配置后启动即报错。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -142,6 +150,15 @@ public class StreamMQMessageProducer extends MessageProducerSupport
     @Override
     protected void doStart() {
         Assert.notNull(this.topic, "topic must not be null");
+        if (this.annotation != null) {
+            // 幂等启动：绑定已注册（如 actuator restart / rebind 场景），避免容器拒绝二次注册
+            log.info(
+                    "StreamMQMessageProducer already registered, skip re-register:"
+                            + " topic={}, group={}",
+                    topic,
+                    group);
+            return;
+        }
         this.annotation = buildAnnotation();
         listenerContainer.registerConsumer(this, annotation);
         log.info(
@@ -155,6 +172,19 @@ public class StreamMQMessageProducer extends MessageProducerSupport
 
     @Override
     protected void doStop() {
+        // 真正注销消费者：否则容器持有该绑定的消费任务，且重新 start 会因重复注册被拒绝
+        if (this.annotation != null) {
+            try {
+                listenerContainer.unregister(topic, group);
+            } catch (RuntimeException ex) {
+                log.warn(
+                        "unregister failed on stop: topic={}, group={}: {}",
+                        topic,
+                        group,
+                        ex.getMessage());
+            }
+            this.annotation = null;
+        }
         log.info("StreamMQMessageProducer 已停止: topic={}, group={}", topic, group);
     }
 
@@ -214,6 +244,16 @@ public class StreamMQMessageProducer extends MessageProducerSupport
                             return true;
                         case "annotationType":
                             return StreamMQConsumer.class;
+                        case "equals":
+                            return proxy == args[0];
+                        case "hashCode":
+                            return System.identityHashCode(proxy);
+                        case "toString":
+                            return "StreamMQConsumer proxy(topic="
+                                    + topic
+                                    + ", group="
+                                    + group
+                                    + ")";
                         default:
                             return method.getDefaultValue();
                     }

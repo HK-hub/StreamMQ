@@ -34,6 +34,17 @@
             <groupId>io.github.streammq</groupId>
             <artifactId>streammq-tracing-opentelemetry</artifactId>
         </dependency>
+        <!-- SDK 仅测试期用于构造真实 OpenTelemetry 实例（主库已将 SDK 降级为 provided） -->
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-trace</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>

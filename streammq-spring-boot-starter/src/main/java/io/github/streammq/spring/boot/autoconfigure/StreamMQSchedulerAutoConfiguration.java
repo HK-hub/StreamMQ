@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler;
@@ -27,7 +32,8 @@ import org.springframework.context.annotation.Configuration;
  * 调度器自动装配：注册 {@link RetryScheduler}、{@link DelayMessageScheduler}、 {@link TransactionScanner}，并通过统一
  * {@link SmartLifecycle} 管理启停顺序。
  *
- * <p>启动相位 {@code Integer.MAX_VALUE - 100}（高于 Listener 容器）， 确保调度器在 Listener 容器启动前已就绪。
+ * <p>启动相位 {@code Integer.MAX_VALUE - 300}（低于 Listener 容器的 {@code Integer.MAX_VALUE - 200}）， 确保调度器在
+ * Listener 容器启动前已就绪。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -45,7 +51,7 @@ public class StreamMQSchedulerAutoConfiguration {
             LoggerFactory.getLogger(StreamMQSchedulerAutoConfiguration.class);
 
     /** 启动相位：高于 Listener 容器，确保先启动 */
-    public static final int PHASE = Integer.MAX_VALUE - 100;
+    public static final int PHASE = StreamMQSchedulerLifecycle.PHASE;
 
     /**
      * 重试调度器：当 {@code streammq.retry.enabled=true}（默认）时注册。
@@ -113,8 +119,7 @@ public class StreamMQSchedulerAutoConfiguration {
         DelayMessageScheduler scheduler =
                 new DelayMessageScheduler(
                         redisson, properties.getNamespace(), interval.toMillis(), batchSize);
-        scheduler.setFailureRequeueBackoffMs(
-                properties.getDelay().getFailureRequeueBackoffMs());
+        scheduler.setFailureRequeueBackoffMs(properties.getDelay().getFailureRequeueBackoffMs());
         StreamMQMetrics metrics = metricsProvider.getIfAvailable();
         if (metrics != null) {
             scheduler.setMetrics(metrics);

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.sample.interceptor;
 
 import io.github.streammq.core.interceptor.ProducerInterceptor;
@@ -28,7 +33,7 @@ public class RateLimitProducerInterceptor implements ProducerInterceptor {
     private final AtomicLong lastResetTime = new AtomicLong(System.currentTimeMillis());
 
     @Override
-    public boolean beforeSend(Message<?> message) {
+    public Message<?> beforeSend(Message<?> message) {
         long now = System.currentTimeMillis();
         long elapsed = now - lastResetTime.get();
 
@@ -44,11 +49,11 @@ public class RateLimitProducerInterceptor implements ProducerInterceptor {
                     currentCount,
                     MAX_RATE_PER_SECOND,
                     message.getTopic());
-            return false;
+            return null;
         }
 
         log.debug("Rate limit check passed: current={}/{}", currentCount, MAX_RATE_PER_SECOND);
-        return true;
+        return message;
     }
 
     @Override

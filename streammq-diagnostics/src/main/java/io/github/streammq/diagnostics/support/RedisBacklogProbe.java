@@ -1,12 +1,16 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.diagnostics.support;
 
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
-import io.github.streammq.diagnostics.StreamMQDiagnosticsDefaults;
 import io.github.streammq.diagnostics.spi.BacklogProbe;
 import java.util.Objects;
+import org.redisson.api.PendingResult;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
-import org.redisson.api.StreamMessageId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -42,17 +46,14 @@ public class RedisBacklogProbe implements BacklogProbe {
             long streamSize = stream.size();
             long pendingCount = 0;
             try {
-                pendingCount =
-                        stream.listPending(
-                                        group,
-                                        StreamMessageId.MIN,
-                                        StreamMessageId.MAX,
-                                        StreamMQDiagnosticsDefaults.MAX_PENDING_QUERY_SIZE)
-                                .size();
+                // 使用 XPENDING 总数形式（getPendingInfo）：listPending 带 count 参数会
+                // 静默截断到上限，积压恰好超过上限时（最需要告警的场景）反而误报为上限值
+                PendingResult info = stream.getPendingInfo(group);
+                pendingCount = info != null && info.getTotal() > 0 ? info.getTotal() : 0;
             } catch (RuntimeException ex) {
                 // 消费者组不存在（NOGROUP）时 pending 视为 0
                 log.debug(
-                        "listPending failed for topic={}, group={}: {}",
+                        "getPendingInfo failed for topic={}, group={}: {}",
                         topic,
                         group,
                         ex.getMessage());

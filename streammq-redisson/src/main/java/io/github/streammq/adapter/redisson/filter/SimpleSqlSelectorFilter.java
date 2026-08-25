@@ -1,9 +1,15 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.filter;
 
 import io.github.streammq.adapter.redisson.filter.expression.Expression;
 import io.github.streammq.adapter.redisson.filter.expression.SelectorParser;
 import io.github.streammq.core.filter.SqlSelectorFilter;
 import io.github.streammq.core.message.Message;
+import io.github.streammq.core.util.StringUtils;
 import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -33,13 +39,26 @@ public class SimpleSqlSelectorFilter extends SqlSelectorFilter {
 
     private final Expression expression;
 
+    /**
+     * 构造过滤器并在订阅期完成表达式编译校验。
+     *
+     * <p><b>fail-fast 契约：</b>非通配符表达式若无法解析（语法错误、尾随垃圾等），构造期即抛出 {@link
+     * IllegalArgumentException}。此前实现为"解析失败则放行全部消息"——静默把过滤语义 反转为全量投递，属于高危默认行为。
+     *
+     * @throws IllegalArgumentException 表达式无法解析
+     */
     public SimpleSqlSelectorFilter(String selectorExpression) {
         super(selectorExpression);
-        this.expression = SelectorParser.build(selectorExpression);
-        if (Objects.isNull(expression) && !WILD_CARD.equals(selectorExpression)) {
-            LOG.warn(
-                    "Failed to parse SQL92 expression: {}, filter will accept all messages",
-                    selectorExpression);
+        // 空串/通配符均表示"不过滤"（accept-all）；仅对非空且非法的表达式 fail-fast
+        if (StringUtils.isEmpty(this.selectorExpression)
+                || WILD_CARD.equals(this.selectorExpression)) {
+            this.expression = null;
+        } else {
+            Expression parsed = SelectorParser.buildStrict(selectorExpression);
+            this.expression =
+                    java.util.Objects.requireNonNull(
+                            parsed,
+                            () -> "Invalid SQL92 selector expression: " + selectorExpression);
         }
     }
 

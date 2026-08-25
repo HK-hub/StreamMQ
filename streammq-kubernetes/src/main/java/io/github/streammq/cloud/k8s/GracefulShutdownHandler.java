@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.cloud.k8s;
 
 import io.github.streammq.core.StreamMQConstants;
@@ -101,9 +106,7 @@ public class GracefulShutdownHandler implements DisposableBean {
      */
     private void waitForInFlightMessages(StreamMQListenerContainer container) {
         long gracePeriod =
-                Math.min(
-                        properties.getGracefulShutdownTimeoutMs(),
-                        INFLIGHT_GRACE_CAP_MS);
+                Math.min(properties.getGracefulShutdownTimeoutMs(), INFLIGHT_GRACE_CAP_MS);
         long deadline = System.currentTimeMillis() + gracePeriod;
         while (System.currentTimeMillis() < deadline) {
             try {

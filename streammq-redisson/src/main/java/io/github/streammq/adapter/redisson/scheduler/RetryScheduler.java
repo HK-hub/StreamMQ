@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
@@ -106,7 +111,7 @@ public class RetryScheduler implements StreamMQScheduler {
     private final long scanIntervalMs;
     private final int batchSize;
     private final int streamMaxLen;
-    private final ScheduledExecutorService scanExecutor;
+    private volatile ScheduledExecutorService scanExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ConcurrentMap<String, RetryTarget> targets = new ConcurrentHashMap<>();
 
@@ -182,6 +187,7 @@ public class RetryScheduler implements StreamMQScheduler {
             LOG.warn("RetryScheduler already started");
             return;
         }
+        ensureScanExecutorAlive();
         scanFuture =
                 scanExecutor.scheduleAtFixedRate(
                         this::scanAllTargets, 0, scanIntervalMs, TimeUnit.MILLISECONDS);
@@ -190,6 +196,21 @@ public class RetryScheduler implements StreamMQScheduler {
                 scanIntervalMs,
                 batchSize,
                 targets.size());
+    }
+
+    /** restart 支持：stop 后 executor 已关闭，start 前按需重建。 */
+    private synchronized void ensureScanExecutorAlive() {
+        if (Objects.nonNull(scanExecutor) && !scanExecutor.isShutdown()) {
+            return;
+        }
+        scanExecutor =
+                new ScheduledThreadPoolExecutor(
+                        1,
+                        r -> {
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_RETRY_SCHEDULER);
+                            t.setDaemon(true);
+                            return t;
+                        });
     }
 
     /** 停止调度器（取消扫描任务但保留线程池，支持后续 restart）。 */
@@ -286,9 +307,7 @@ public class RetryScheduler implements StreamMQScheduler {
             if (isDlqRetry) {
                 // DLQ 重试 → XADD 回 DLQ Stream，保留 dlqRetryCount
                 fields.remove(StreamMQConstants.FIELD_DLQ_RETRY_COUNT);
-                fields.put(
-                        StreamMQConstants.FIELD_DLQ_RETRY_COUNT,
-                        Integer.toString(retryCount));
+                fields.put(StreamMQConstants.FIELD_DLQ_RETRY_COUNT, Integer.toString(retryCount));
                 RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
                 dlqStream.add(StreamAddArgs.entries(fields));
                 LOG.info(

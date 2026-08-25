@@ -29,14 +29,14 @@ First off, thank you for considering contributing to StreamMQ! It's people like 
 
 ```bash
 # 1. Fork the repository on GitHub
-#    https://github.com/streammq/streammq/fork
+#    https://github.com/HK-hub/StreamMQ/fork
 
 # 2. Clone your fork
 git clone https://github.com/<your-username>/streammq.git
 cd streammq
 
 # 3. Add upstream remote
-git remote add upstream https://github.com/streammq/streammq.git
+git remote add upstream https://github.com/HK-hub/StreamMQ.git
 
 # 4. Build the project
 mvn clean compile
@@ -48,7 +48,7 @@ mvn test
 docker run -d --name streammq-redis -p 6379:6379 redis:7.2
 
 # 7. Run integration tests
-mvn verify -Pintegration
+mvn verify   # 集成测试在检测到本地 Redis (localhost:6379) 时自动运行，否则跳过
 ```
 
 ### IDE Configuration
@@ -188,7 +188,7 @@ StreamMQ has a layered testing approach:
 | Test Type | Location | Command | Description |
 |-----------|----------|---------|-------------|
 | Unit tests | `src/test/java` | `mvn test` | Isolated tests per module |
-| Integration tests | `src/test/java` (IT suffix) | `mvn verify -Pintegration` | Redis-backed tests |
+| Integration tests | `src/test/java` (IT suffix) | `mvn verify   # 集成测试在检测到本地 Redis (localhost:6379) 时自动运行，否则跳过` | Redis-backed tests |
 | Testcontainers | Test utilities | Auto-configured | Redis container for IT |
 
 ### Writing Tests
@@ -256,7 +256,7 @@ class StreamMessageServiceIT {
 mvn test
 
 # Unit + integration tests (requires Redis)
-mvn verify -Pintegration
+mvn verify   # 集成测试在检测到本地 Redis (localhost:6379) 时自动运行，否则跳过
 
 # With coverage report
 mvn verify jacoco:report
@@ -441,8 +441,8 @@ When submitting a feature request, please use the [feature request template](.gi
 
 ## Getting Help
 
-- **GitHub Discussions**: Ask questions in [Discussions](https://github.com/streammq/streammq/discussions)
-- **Documentation**: Read the full docs in [docs/doc-site/](docs/doc-site/)
+- **GitHub Discussions**: Ask questions in [Discussions](https://github.com/HK-hub/StreamMQ/discussions)
+- **Documentation**: Read the design docs in [docs/](docs/) and the [README](README.md)
 - **Design docs**: Check [docs/](docs/) for architecture and design documents
 
 ## Code of Conduct

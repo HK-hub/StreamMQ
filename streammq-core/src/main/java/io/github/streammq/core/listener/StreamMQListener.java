@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.core.listener;
 
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
@@ -43,6 +48,18 @@ public interface StreamMQListener {
      * @return 消息列表，超时后可能为空
      */
     List<Message<?>> pullBlock(int batchSize, Duration timeout);
+
+    /**
+     * 排空当前消费者 PEL 中已投递未确认的消息（XREADGROUP id=0 语义），用于实例重启后的恢复。
+     *
+     * <p>崩溃/停止时已进入本消费者 PEL 但未处理完的消息，会在下次启动时通过本方法重新交付， 保证 at-least-once。默认空实现（不支持恢复语义的监听器）。
+     *
+     * @param maxMessages 单次最大恢复条数
+     * @return 待处理消息列表；为空表示 PEL 已清空
+     */
+    default List<Message<?>> drainPendingOnce(int maxMessages) {
+        return List.of();
+    }
 
     /**
      * 确认单条消息（从 PEL 中移除）。

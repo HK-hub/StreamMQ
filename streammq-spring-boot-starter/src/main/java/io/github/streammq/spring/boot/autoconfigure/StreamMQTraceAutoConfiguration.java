@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.interceptor.TraceContextConsumerInterceptor;
@@ -13,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.AutoConfigureBefore;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -31,13 +37,19 @@ import org.springframework.context.annotation.Configuration;
  * </ul>
  *
  * <p>本配置在 {@link StreamMQCoreAutoConfiguration} 之前加载， 确保 {@code RedisTraceCollector} 优先于 Noop/Slf4j
- * 收集器注册。
+ * 收集器注册。整体关闭方式：{@code streammq.enabled=false}。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
 @Configuration(proxyBeanMethods = false)
 @ConditionalOnClass({RedissonClient.class, StreamMQTraceService.class})
+@ConditionalOnExpression(
+        "${"
+                + StreamMQSpringConstants.PROP_PREFIX
+                + "."
+                + StreamMQSpringConstants.PROP_NAME_ENABLED
+                + ":true}")
 @ConditionalOnProperty(
         prefix = StreamMQSpringConstants.PROP_PREFIX_TRACE,
         name = StreamMQSpringConstants.PROP_NAME_ENABLED,

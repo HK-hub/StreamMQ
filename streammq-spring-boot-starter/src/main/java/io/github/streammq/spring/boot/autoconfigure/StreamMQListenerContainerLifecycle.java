@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.core.listener.StreamMQListenerContainer;
@@ -9,8 +14,8 @@ import org.springframework.context.SmartLifecycle;
  * 将 {@link StreamMQListenerContainer} 适配为 Spring {@link SmartLifecycle}， 让 Spring 容器统一管理 Listener
  * 的启动与停止。
  *
- * <p>启动相位 {@link #getPhase} 设为较低值（{@code Integer.MAX_VALUE - 200}）， 确保在调度器（{@code Integer.MAX_VALUE
- * - 100}）之后启动、之前停止。
+ * <p>启动相位 {@link #getPhase} 设为 {@code Integer.MAX_VALUE - 200}， 确保在调度器（{@code Integer.MAX_VALUE -
+ * 300}）之后启动、之前停止。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.sample.interceptor;
 
 import io.github.streammq.core.annotation.StreamMQConsumer;
@@ -16,9 +21,7 @@ import org.springframework.stereotype.Component;
  * @since 0.1.0
  */
 @Component
-@StreamMQConsumer(
-        topic = SampleConstants.TOPIC,
-        consumerGroup = SampleConstants.CONSUMER_GROUP)
+@StreamMQConsumer(topic = SampleConstants.TOPIC, consumerGroup = SampleConstants.CONSUMER_GROUP)
 public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> {
 
     private static final Logger log = LoggerFactory.getLogger(OrderConsumer.class);

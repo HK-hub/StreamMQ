@@ -1,9 +1,14 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.core.policy.ManagementAuthenticator;
-import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import io.github.streammq.core.util.StringUtils;
 import io.github.streammq.core.util.WebRequestAuthSupport;
+import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import java.util.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -103,17 +108,24 @@ public class StreamMQActuatorEndpoint {
     @ReadOperation
     public Object pending(
             @Selector String group, @Selector(match = Selector.Match.ALL_REMAINING) String[] path) {
-        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_PENDING_PREFIX + group);
+        WebEndpointResponse<?> denied =
+                checkPermission(StreamMQSpringConstants.RES_PENDING_PREFIX + group);
         if (denied != null) {
             return denied;
         }
         String topic = path.length > 0 ? path[0] : "";
+        if (topic.isEmpty()) {
+            // 空 topic 会下探到 Redis 产生难以理解的报错，这里直接给出明确 4xx 语义
+            throw new IllegalArgumentException(
+                    "topic is required: /streammq/{group}/pending/{topic}");
+        }
         return adminEndpoint.listPending(group, topic, listPageSize);
     }
 
     @ReadOperation
     public Object dlq(@Selector String group) {
-        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_DLQ_PREFIX + group);
+        WebEndpointResponse<?> denied =
+                checkPermission(StreamMQSpringConstants.RES_DLQ_PREFIX + group);
         if (denied != null) {
             return denied;
         }
@@ -122,7 +134,8 @@ public class StreamMQActuatorEndpoint {
 
     @WriteOperation
     public Object requeueDlq(@Selector String group, String messageId, String targetTopic) {
-        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_DLQ_PREFIX + group);
+        WebEndpointResponse<?> denied =
+                checkPermission(StreamMQSpringConstants.RES_DLQ_PREFIX + group);
         if (denied != null) {
             return denied;
         }
@@ -134,7 +147,8 @@ public class StreamMQActuatorEndpoint {
 
     @DeleteOperation
     public Object deleteDlq(@Selector String group, @Selector String messageId) {
-        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_DLQ_PREFIX + group);
+        WebEndpointResponse<?> denied =
+                checkPermission(StreamMQSpringConstants.RES_DLQ_PREFIX + group);
         if (denied != null) {
             return denied;
         }
@@ -152,7 +166,8 @@ public class StreamMQActuatorEndpoint {
 
     @ReadOperation
     public Object stats(@Selector String group, @Selector String topic) {
-        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_STATS_PREFIX + group);
+        WebEndpointResponse<?> denied =
+                checkPermission(StreamMQSpringConstants.RES_STATS_PREFIX + group);
         if (denied != null) {
             return denied;
         }
@@ -161,7 +176,8 @@ public class StreamMQActuatorEndpoint {
 
     @WriteOperation
     public Object ackPending(@Selector String group, @Selector String topic, String messageId) {
-        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_ACK_PREFIX + group);
+        WebEndpointResponse<?> denied =
+                checkPermission(StreamMQSpringConstants.RES_ACK_PREFIX + group);
         if (denied != null) {
             return denied;
         }
@@ -170,7 +186,8 @@ public class StreamMQActuatorEndpoint {
 
     @WriteOperation
     public Object triggerRebalance(@Selector String group) {
-        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_REBALANCE_PREFIX + group);
+        WebEndpointResponse<?> denied =
+                checkPermission(StreamMQSpringConstants.RES_REBALANCE_PREFIX + group);
         if (denied != null) {
             return denied;
         }
@@ -200,7 +217,8 @@ public class StreamMQActuatorEndpoint {
 
     @WriteOperation
     public Object updateGroupConfig(@Selector String group, Map<String, String> config) {
-        WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_CONFIG_PREFIX + group);
+        WebEndpointResponse<?> denied =
+                checkPermission(StreamMQSpringConstants.RES_CONFIG_PREFIX + group);
         if (denied != null) {
             return denied;
         }

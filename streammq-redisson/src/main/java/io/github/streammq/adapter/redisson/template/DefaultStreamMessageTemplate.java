@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.template;
 
 import io.github.streammq.adapter.redisson.filter.DefaultProducerFilterChain;
@@ -142,21 +147,22 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         // 注入 MDC 结构化日志上下文
         injectProducerMdc(message);
         try {
-            // 1. 拦截器 before
-            if (!applyInterceptorsBefore(message)) {
-                // 被拦截器中止
-                SendResult aborted =
-                        new SendResult(
-                                MessageId.sentinel(),
-                                message.getTopic(),
-                                message.getTag(),
-                                SendStatus.SEND_FAILED,
-                                message.getBornTimestamp(),
-                                null,
-                                "Aborted by interceptor");
-                applyInterceptorsAfter(message, aborted);
-                return aborted;
+            // 1. 拦截器 before（串联派生消息；中止时不回调 afterSend）
+            String abortTopic = message.getTopic();
+            String abortTag = message.getTag();
+            long abortBornTs = message.getBornTimestamp();
+            Message<T> intercepted = applyInterceptorsBefore(message);
+            if (Objects.isNull(intercepted)) {
+                return new SendResult(
+                        MessageId.sentinel(),
+                        abortTopic,
+                        abortTag,
+                        SendStatus.SEND_FAILED,
+                        abortBornTs,
+                        null,
+                        "Aborted by interceptor");
             }
+            message = intercepted;
 
             // 2. 生产者过滤器检查
             if (!producerFilterChain.accept(message)) {
@@ -175,6 +181,9 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
             }
 
             // 3. 委派 Producer 发送（含重试）
+            // 重试安全规则：仅对"确定未送达"的异常重试（序列化/客户端校验等发送前失败）。
+            // ProducerTimeoutException / StreamMQBrokerException 意味着 XADD 可能已落库，
+            // 重试会产生重复消息——直接抛出，由业务侧按 at-least-once 语义处理。
             StreamMessageProducer producer = resolveProducer(message.getTopic());
             long sendStart = System.nanoTime();
             StreamMQException lastError = null;
@@ -186,6 +195,11 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                     return result;
                 } catch (StreamMQException ex) {
                     lastError = ex;
+                    if (!isSafeToRetry(ex)) {
+                        notifyProducerException(message, ex, InvokeTiming.EXECUTING);
+                        recordSendMetrics(message.getTopic(), false, sendStart);
+                        throw ex;
+                    }
                     notifyProducerException(message, ex, InvokeTiming.EXECUTING);
                     LOG.warn(
                             "syncSend attempt {}/{} failed for topic {}: {}",
@@ -218,20 +232,22 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         // 注入 MDC 结构化日志上下文
         injectProducerMdc(message);
         try {
-            // 先执行 before 拦截器，被中止时返回 failedFuture
-            if (!applyInterceptorsBefore(message)) {
+            // 先执行 before 拦截器（串联派生消息），被中止时返回 failedFuture
+            Message<T> interceptedCf = applyInterceptorsBefore(message);
+            if (Objects.isNull(interceptedCf)) {
                 return CompletableFuture.failedFuture(
                         new StreamMQException("Aborted by interceptor"));
             }
-            StreamMessageProducer producer = resolveProducer(message.getTopic());
+            final Message<T> effective = interceptedCf;
+            StreamMessageProducer producer = resolveProducer(effective.getTopic());
             long sendStart = System.nanoTime();
-            return producer.asyncSend(message)
+            return producer.asyncSend(effective)
                     .whenComplete(
                             (result, ex) -> {
                                 if (Objects.isNull(ex)) {
-                                    applyInterceptorsAfter(message, result);
+                                    applyInterceptorsAfter(effective, result);
                                     recordSendMetrics(
-                                            message.getTopic(),
+                                            effective.getTopic(),
                                             Objects.nonNull(result) && result.isSuccess(),
                                             sendStart);
                                 } else {
@@ -240,8 +256,8 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                                                     ? (Exception) ex
                                                     : new StreamMQException(
                                                             "async send failed", ex);
-                                    notifyProducerException(message, e, InvokeTiming.EXECUTING);
-                                    recordSendMetrics(message.getTopic(), false, sendStart);
+                                    notifyProducerException(effective, e, InvokeTiming.EXECUTING);
+                                    recordSendMetrics(effective.getTopic(), false, sendStart);
                                 }
                             });
         } finally {
@@ -262,16 +278,18 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         // 注入 MDC 结构化日志上下文
         injectProducerMdc(message);
         try {
-            if (!applyInterceptorsBefore(message)) {
+            Message<T> interceptedCb = applyInterceptorsBefore(message);
+            if (Objects.isNull(interceptedCb)) {
                 callback.onException(new StreamMQException("Aborted by interceptor"));
                 return;
             }
-            StreamMessageProducer producer = resolveProducer(message.getTopic());
-            producer.asyncSend(message, timeoutMillis)
+            final Message<T> effective = interceptedCb;
+            StreamMessageProducer producer = resolveProducer(effective.getTopic());
+            producer.asyncSend(effective, timeoutMillis)
                     .whenComplete(
                             (result, ex) -> {
                                 if (Objects.isNull(ex)) {
-                                    applyInterceptorsAfter(message, result);
+                                    applyInterceptorsAfter(effective, result);
                                     callback.onSuccess(result);
                                 } else {
                                     Exception e =
@@ -279,7 +297,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                                                     ? (Exception) ex
                                                     : new StreamMQException(
                                                             "async send failed", ex);
-                                    notifyProducerException(message, e, InvokeTiming.EXECUTING);
+                                    notifyProducerException(effective, e, InvokeTiming.EXECUTING);
                                     callback.onException(
                                             ex instanceof RuntimeException re
                                                     ? re
@@ -336,7 +354,11 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         // 注入 MDC 结构化日志上下文
         injectProducerMdc(message);
         try {
-            applyInterceptorsBefore(message);
+            Message<T> interceptedOneway = applyInterceptorsBefore(message);
+            if (Objects.isNull(interceptedOneway)) {
+                return;
+            }
+            message = interceptedOneway;
             StreamMessageProducer producer = resolveProducer(message.getTopic());
             try {
                 producer.sendOneway(message);
@@ -357,19 +379,22 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
             throw new IllegalArgumentException("batch is empty");
         }
 
+        List<Message<T>> interceptedMessages = new ArrayList<>(batch.getMessages().size());
         for (Message<T> message : batch.getMessages()) {
-            if (!applyInterceptorsBefore(message)) {
+            Message<T> intercepted = applyInterceptorsBefore(message);
+            if (Objects.isNull(intercepted)) {
                 throw new StreamMQException(
                         "Batch send aborted by interceptor for topic: " + message.getTopic());
             }
+            interceptedMessages.add(intercepted);
         }
 
         StreamMessageProducer producer = resolveProducer(batch.getTopic());
         List<SendResult> results;
         try {
-            results = producer.syncSendBatch(batch.getMessages());
+            results = producer.syncSendBatch(interceptedMessages);
         } catch (RuntimeException ex) {
-            for (Message<T> msg : batch.getMessages()) {
+            for (Message<T> msg : interceptedMessages) {
                 notifyProducerException(msg, ex, InvokeTiming.EXECUTING);
             }
             throw ex;
@@ -378,7 +403,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         List<SendResult> finalResults = new ArrayList<>(results.size());
         for (int i = 0; i < results.size(); i++) {
             SendResult result = results.get(i);
-            applyInterceptorsAfter(batch.getMessages().get(i), result);
+            applyInterceptorsAfter(interceptedMessages.get(i), result);
             finalResults.add(result);
         }
         return finalResults;
@@ -398,11 +423,14 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
             retryTimes = 0;
         }
 
+        List<Message<T>> interceptedMessages = new ArrayList<>(batch.getMessages().size());
         for (Message<T> message : batch.getMessages()) {
-            if (!applyInterceptorsBefore(message)) {
+            Message<T> intercepted = applyInterceptorsBefore(message);
+            if (Objects.isNull(intercepted)) {
                 throw new StreamMQException(
                         "Batch send aborted by interceptor for topic: " + message.getTopic());
             }
+            interceptedMessages.add(intercepted);
         }
 
         StreamMessageProducer producer = resolveProducer(batch.getTopic());
@@ -410,17 +438,17 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         for (int attempt = 0; attempt <= retryTimes; attempt++) {
             try {
                 List<SendResult> results =
-                        producer.syncSendBatch(batch.getMessages(), timeoutMillis);
+                        producer.syncSendBatch(interceptedMessages, timeoutMillis);
                 List<SendResult> finalResults = new ArrayList<>(results.size());
                 for (int i = 0; i < results.size(); i++) {
                     SendResult result = results.get(i);
-                    applyInterceptorsAfter(batch.getMessages().get(i), result);
+                    applyInterceptorsAfter(interceptedMessages.get(i), result);
                     finalResults.add(result);
                 }
                 return finalResults;
             } catch (StreamMQException ex) {
                 lastError = ex;
-                for (Message<T> msg : batch.getMessages()) {
+                for (Message<T> msg : interceptedMessages) {
                     notifyProducerException(msg, ex, InvokeTiming.EXECUTING);
                 }
                 LOG.warn(
@@ -432,7 +460,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                         ex);
             }
         }
-        for (Message<T> msg : batch.getMessages()) {
+        for (Message<T> msg : interceptedMessages) {
             applyInterceptorsAfter(msg, buildFailedResult(msg, lastError));
         }
         throw Objects.nonNull(lastError)
@@ -451,67 +479,21 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         }
 
         String transactionId = UUID.randomUUID().toString();
-        message.setTransactionId(transactionId);
+        message = message.withTransactionId(transactionId);
 
-        // 完整半消息流程：使用 TransactionScanner（如果已注入）
-        // 否则回退到简化实现（直接发送 + 本地事务，无回查保护）
+        // 完整半消息流程依赖 TransactionScanner（回查调度器）。
         TransactionScanner scanner = this.transactionScanner;
-        if (Objects.nonNull(scanner)) {
-            return executeInTransactionWithScanner(message, callback, transactionId, scanner);
-        }
-
-        // === 简化实现（向后兼容，TransactionScanner 未注入时使用） ===
-        // 1. 先发送业务消息到目标 Stream
-        SendResult sendResult = syncSend(message);
-        if (!sendResult.isSuccess()) {
+        if (Objects.isNull(scanner)) {
+            // 快速失败：无扫描器时无法提供半消息/回查保证，绝不允许"先投递再回滚"的假事务——
+            // 那会导致 ROLLBACK 时消费者已经收到业务消息。
             throw new TransactionException(
-                    "Half message send failed: " + sendResult.getErrorMessage(),
+                    "Transactional send requires an active TransactionScanner"
+                            + " (transaction scheduler disabled?). Enable the transaction scheduler"
+                            + " or inject a TransactionScanner instance.",
                     transactionId,
                     transactionGroup);
         }
-
-        // 2. 执行本地事务
-        TransactionContext ctx =
-                new TransactionContext(
-                        transactionId,
-                        transactionGroup,
-                        defaultGroup,
-                        System.currentTimeMillis(),
-                        new ConcurrentHashMap<>());
-        LocalTransactionState state;
-        try {
-            state = callback.execute(message, ctx);
-        } catch (Exception ex) {
-            LOG.warn("Local transaction failed, txId={}: {}", transactionId, ex.getMessage(), ex);
-            throw new TransactionException(
-                    "Local transaction execute failed", transactionId, transactionGroup, ex);
-        }
-
-        // 3. 根据状态决定结果
-        switch (state) {
-            case COMMIT_MESSAGE:
-                LOG.debug("Transaction committed: txId={}", transactionId);
-                return sendResult;
-            case ROLLBACK_MESSAGE:
-                LOG.warn(
-                        "Transaction rolled back: txId={}, message may need manual cleanup",
-                        transactionId);
-                return new SendResult(
-                        sendResult.getMessageId(),
-                        sendResult.getTopic(),
-                        sendResult.getTag(),
-                        SendStatus.SEND_FAILED,
-                        sendResult.getBornTimestamp(),
-                        null,
-                        "Transaction rolled back");
-            case UNKNOW:
-                LOG.warn(
-                        "Transaction state UNKNOWN: txId={}, will be checked later", transactionId);
-                return sendResult;
-            default:
-                throw new TransactionException(
-                        "Unknown transaction state: " + state, transactionId, transactionGroup);
-        }
+        return executeInTransactionWithScanner(message, callback, transactionId, scanner);
     }
 
     /**
@@ -558,9 +540,8 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                     ex);
         }
 
-        // 2. 构造半消息发送结果
+        // 2. 构造半消息发送结果（真实半消息 Entry ID）
         MessageId msgId = MessageId.fromStreamMessageId(halfId);
-        message.setMessageId(msgId);
         SendResult halfResult =
                 new SendResult(
                         msgId, message.getTopic(), message.getTag(), message.getBornTimestamp());
@@ -715,20 +696,24 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     }
 
     /**
-     * 执行 before 拦截器链。
+     * 执行 before 拦截器链，串联各拦截器返回的派生消息。
      *
      * @param message 待发送消息
-     * @return true 全部通过，false 任一拦截器拒绝
+     * @param <T> body 类型
+     * @return 链路末端输出的消息实例；{@code null} 表示被任一拦截器中止
      */
-    private boolean applyInterceptorsBefore(Message<?> message) {
+    @SuppressWarnings("unchecked")
+    private <T> Message<T> applyInterceptorsBefore(Message<T> message) {
+        Message<?> current = message;
         for (ProducerInterceptor interceptor : interceptors) {
             try {
-                if (!interceptor.beforeSend(message)) {
+                current = interceptor.beforeSend(current);
+                if (Objects.isNull(current)) {
                     LOG.debug(
                             "Interceptor {} aborted send: topic={}",
                             interceptor.name(),
                             message.getTopic());
-                    return false;
+                    return null;
                 }
             } catch (RuntimeException ex) {
                 LOG.warn(
@@ -737,10 +722,10 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                         ex.getMessage(),
                         ex);
                 notifyProducerException(message, ex, InvokeTiming.BEFORE);
-                return false;
+                return null;
             }
         }
-        return true;
+        return (Message<T>) current;
     }
 
     /**
@@ -826,6 +811,19 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
      * @param error 异常
      * @return 失败 SendResult
      */
+    /**
+     * 判断该异常是否可以安全重试：仅限发送尚未开始（消息确定未落库）的失败。
+     *
+     * <p>可重试：{@link io.github.streammq.core.exception.SerializationException}（序列化失败，未触达
+     * Redis）、{@link io.github.streammq.core.exception.StreamMQClientException}（客户端校验/本地错误）。
+     * 不可重试：{@link ProducerTimeoutException} / {@link
+     * io.github.streammq.core.exception.StreamMQBrokerException} —— XADD 可能已成功，重试将产生重复消息。
+     */
+    private static boolean isSafeToRetry(StreamMQException ex) {
+        return ex instanceof io.github.streammq.core.exception.SerializationException
+                || ex instanceof io.github.streammq.core.exception.StreamMQClientException;
+    }
+
     private SendResult buildFailedResult(Message<?> message, StreamMQException error) {
         return new SendResult(
                 new MessageId(System.currentTimeMillis() + "-0"),

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.spring.boot.it;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -13,12 +18,16 @@ import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.template.StreamMessageTemplate;
+import io.github.streammq.core.util.RedisAvailability;
 import io.github.streammq.spring.boot.autoconfigure.StreamMQCoreAutoConfiguration;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.*;
+import org.junit.jupiter.api.Assumptions;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.condition.EnabledIf;
 import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RedissonClient;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -50,7 +59,17 @@ import org.springframework.test.context.ContextConfiguration;
 @ContextConfiguration(classes = {RedissonTestConfig.class, SpringBootEndToEndIT.E2EConfig.class})
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @DisplayName("Spring Boot 端到端集成测试")
+@EnabledIf(
+        value = "io.github.streammq.core.util.RedisAvailability#localhostAvailable",
+        disabledReason = "Redis not available at localhost:6379")
 class SpringBootEndToEndIT {
+    @BeforeAll
+    static void requireRedis() {
+        // 无本地 Redis 时跳过（上下文/用例依赖真实 Redis），保证 mvn verify 任意环境可复现
+        Assumptions.assumeTrue(
+                RedisAvailability.isAvailable("localhost", 6379),
+                "Redis not available at localhost:6379, skipping IT");
+    }
 
     /** 端到端测试 Topic */
     private static final String E2E_TOPIC = "e2e-topic";

@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.filter.expression;
 
 import java.util.Objects;
@@ -249,6 +254,39 @@ public class SelectorParser {
         while (pos < expression.length() && Character.isWhitespace(expression.charAt(pos))) {
             pos++;
         }
+    }
+
+    /**
+     * 构建表达式（严格模式）。
+     *
+     * <p>与 {@link #build(String)} 的宽松语义不同：任何解析失败（含尾随垃圾、括号不匹配、 未知语法）都抛出 {@link
+     * IllegalArgumentException}，供订阅期 fail-fast 校验使用， 避免"解析失败即放行全部"的静默反转。
+     *
+     * @param expression 表达式字符串
+     * @return 表达式节点；空串或通配符返回 null
+     * @throws IllegalArgumentException 表达式非法
+     */
+    public static Expression buildStrict(String expression) {
+        if (Objects.isNull(expression) || expression.trim().isEmpty()) {
+            return null;
+        }
+        SelectorParser parser = new SelectorParser(expression);
+        Expression result;
+        try {
+            result = parser.parse();
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid SQL92 expression: " + expression, e);
+        }
+        if (result == null) {
+            throw new IllegalArgumentException("Invalid SQL92 expression: " + expression);
+        }
+        parser.skipWhitespace();
+        if (parser.pos < parser.expression.length()) {
+            throw new IllegalArgumentException(
+                    "Unexpected trailing content in SQL92 expression: "
+                            + expression.substring(parser.pos));
+        }
+        return result;
     }
 
     /**

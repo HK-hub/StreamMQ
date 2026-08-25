@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.diagnostics;
 
 import io.github.streammq.core.StreamMQConstants;
@@ -7,6 +12,9 @@ import io.github.streammq.core.trace.TraceRecord;
 import io.github.streammq.core.trace.TraceType;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
+import io.github.streammq.diagnostics.DiagnosticsCodes.BacklogCodes;
+import io.github.streammq.diagnostics.DiagnosticsCodes.DlqCodes;
+import io.github.streammq.diagnostics.DiagnosticsCodes.SlowConsumeCodes;
 import io.github.streammq.diagnostics.model.BacklogReport;
 import io.github.streammq.diagnostics.model.DlqReport;
 import io.github.streammq.diagnostics.model.FailureReason;
@@ -135,15 +143,19 @@ public class StreamMQDiagnosticsService {
         long p99ConsumeTime = calculateP99(durations);
 
         int consumerCount = countConsumers(topic, group);
-        int threadPoolActive = Math.min(consumerCount, Math.max(1, consumeRecords.size()));
-        int threadPoolMax = Math.max(consumerCount, 1);
-
+        // 不再伪造线程池活跃度：真实 executor 指标未接入前，报告消费实例数这一可观测事实
+        String code;
         String bottleneck =
-                analyzeBottleneck(
-                        avgConsumeTime, consumeRate, produceRate, threadPoolActive, threadPoolMax);
+                analyzeBottleneck(avgConsumeTime, consumeRate, produceRate, consumerCount);
+        if (bottleneck == null) {
+            bottleneck = "no trace data";
+            code = SlowConsumeCodes.NO_TRACE_DATA;
+        } else {
+            code = classifySlowConsume(avgConsumeTime, consumeRate, produceRate);
+        }
         String recommendation =
                 buildSlowConsumeRecommendation(
-                        avgConsumeTime, consumeRate, produceRate, threadPoolMax);
+                        avgConsumeTime, consumeRate, produceRate, consumerCount);
 
         return new SlowConsumeReport(
                 topic,
@@ -153,10 +165,11 @@ public class StreamMQDiagnosticsService {
                 avgConsumeTime,
                 maxConsumeTime,
                 p99ConsumeTime,
-                threadPoolActive,
-                threadPoolMax,
+                consumerCount,
+                consumerCount,
                 bottleneck,
-                recommendation);
+                recommendation,
+                code);
     }
 
     /**
@@ -216,7 +229,8 @@ public class StreamMQDiagnosticsService {
                 produceRate,
                 consumeRate,
                 recommendation,
-                severity);
+                severity,
+                mapSeverityToBacklogCode(severity));
     }
 
     /**
@@ -241,6 +255,26 @@ public class StreamMQDiagnosticsService {
                     ex.getMessage());
             return null;
         }
+    }
+
+    private String mapSeverityToBacklogCode(Severity severity) {
+        if (severity == Severity.CRITICAL) {
+            return DiagnosticsCodes.BACKLOG_CRITICAL;
+        }
+        if (severity == Severity.WARNING) {
+            return DiagnosticsCodes.BACKLOG_WARNING;
+        }
+        return DiagnosticsCodes.BACKLOG_NORMAL;
+    }
+
+    private String classifyDlqCount(long totalDlqCount) {
+        if (totalDlqCount > properties.getBacklogCriticalThreshold()) {
+            return DiagnosticsCodes.DLQ_CRITICAL;
+        }
+        if (totalDlqCount > properties.getBacklogWarningThreshold()) {
+            return DiagnosticsCodes.DLQ_WARNING;
+        }
+        return DiagnosticsCodes.DLQ_NORMAL;
     }
 
     /**
@@ -284,7 +318,8 @@ public class StreamMQDiagnosticsService {
                 topFailureReasons,
                 topFailedTopics,
                 oldestTimestamp,
-                recommendation);
+                recommendation,
+                classifyDlqCount(totalDlqCount));
     }
 
     /**
@@ -377,8 +412,9 @@ public class StreamMQDiagnosticsService {
                 0L,
                 0,
                 Math.max(consumerCount, 1),
-                "无追踪数据，无法分析瓶颈",
-                "建议检查追踪服务是否正常启用");
+                "No trace data available for bottleneck analysis",
+                "Verify that message tracing is enabled and the trace service is healthy",
+                SlowConsumeCodes.NO_TRACE_DATA);
     }
 
     /**
@@ -390,7 +426,16 @@ public class StreamMQDiagnosticsService {
      */
     private BacklogReport buildEmptyBacklogReport(String topic, String group) {
         return new BacklogReport(
-                topic, group, 0L, 0.0, -1L, 0.0, 0.0, "无追踪数据，建议检查追踪服务是否正常启用", Severity.INFO);
+                topic,
+                group,
+                0L,
+                0.0,
+                -1L,
+                0.0,
+                0.0,
+                "No trace data; verify tracing is enabled",
+                Severity.INFO,
+                BacklogCodes.NO_TRACE_DATA);
     }
 
     /**
@@ -406,7 +451,8 @@ public class StreamMQDiagnosticsService {
                 Collections.emptyList(),
                 Collections.emptyList(),
                 0L,
-                "无追踪数据，建议检查追踪服务是否正常启用");
+                "No trace data; verify tracing is enabled",
+                DlqCodes.NO_TRACE_DATA);
     }
 
     /**
@@ -488,8 +534,7 @@ public class StreamMQDiagnosticsService {
         }
         List<Long> sorted = new ArrayList<>(durations);
         sorted.sort(Long::compare);
-        int index =
-                (int) Math.ceil(sorted.size() * StreamMQDiagnosticsDefaults.P99_PERCENTILE) - 1;
+        int index = (int) Math.ceil(sorted.size() * StreamMQDiagnosticsDefaults.P99_PERCENTILE) - 1;
         return sorted.get(Math.max(0, index));
     }
 
@@ -529,26 +574,35 @@ public class StreamMQDiagnosticsService {
      * @param threadPoolMax 线程池最大数
      * @return 瓶颈描述
      */
-    private String analyzeBottleneck(
-            double avgConsumeTime,
-            double consumeRate,
-            double produceRate,
-            int threadPoolActive,
-            int threadPoolMax) {
+    private String classifySlowConsume(
+            double avgConsumeTime, double consumeRate, double produceRate) {
         if (avgConsumeTime > properties.getSlowConsumeThresholdMs()) {
-            return "消费耗时过长（平均 " + String.format("%.2f", avgConsumeTime) + "ms），可能存在慢逻辑或外部依赖瓶颈";
+            return SlowConsumeCodes.SLOW_CONSUME;
         }
         if (consumeRate < produceRate) {
-            return "消费速率（"
-                    + String.format("%.2f", consumeRate)
-                    + " msg/s）低于生产速率（"
-                    + String.format("%.2f", produceRate)
-                    + " msg/s），积压持续增长";
+            return SlowConsumeCodes.CONSUME_RATE_BEHIND;
         }
-        if (threadPoolActive >= threadPoolMax) {
-            return "线程池已满载（活跃 " + threadPoolActive + "/" + threadPoolMax + "），可能存在并发瓶颈";
+        return SlowConsumeCodes.HEALTHY;
+    }
+
+    /**
+     * Bottleneck analysis (locale-neutral code + English message). Fabricated thread-pool
+     * utilization has been removed: real executor metrics are not wired yet.
+     */
+    private String analyzeBottleneck(
+            double avgConsumeTime, double consumeRate, double produceRate, int consumerCount) {
+        if (avgConsumeTime > properties.getSlowConsumeThresholdMs()) {
+            return String.format(
+                    "Average consume time %.2fms exceeds threshold (%dms); slow logic or"
+                            + " downstream dependency suspected",
+                    avgConsumeTime, properties.getSlowConsumeThresholdMs());
         }
-        return "消费性能正常";
+        if (consumeRate < produceRate) {
+            return String.format(
+                    "Consume rate %.2f msg/s is below produce rate %.2f msg/s; backlog growing",
+                    consumeRate, produceRate);
+        }
+        return "Consume performance normal";
     }
 
     /**
@@ -573,18 +627,20 @@ public class StreamMQDiagnosticsService {
      * @return 优化建议
      */
     private String buildSlowConsumeRecommendation(
-            double avgConsumeTime, double consumeRate, double produceRate, int threadPoolMax) {
+            double avgConsumeTime, double consumeRate, double produceRate, int consumerCount) {
         if (avgConsumeTime > properties.getSlowConsumeThresholdMs()) {
-            return "建议优化消费逻辑，排查外部依赖超时，并考虑增加消费线程数到 "
-                    + Math.max(threadPoolMax * 2, RECOMMENDED_MAX_THREADS);
+            return "Optimize consume logic and check downstream dependency timeouts; consider"
+                    + " increasing consumer threads or instances (current instances="
+                    + consumerCount
+                    + ", recommended max threads per instance="
+                    + RECOMMENDED_MAX_THREADS
+                    + ")";
         }
         if (consumeRate < produceRate) {
-            if (threadPoolMax < StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX) {
-                return "建议增加消费线程数到 " + RECOMMENDED_MAX_THREADS;
-            }
-            return "建议增加消费者实例数以提升并发消费能力";
+            return "Scale out consumers: add instances first, then raise"
+                    + " streammq.consumer.consume-thread-max if CPU allows";
         }
-        return "消费速率正常，无需调整";
+        return "Consume rate is healthy; no action needed";
     }
 
     /**
@@ -635,19 +691,20 @@ public class StreamMQDiagnosticsService {
             Severity severity, double consumeRate, double produceRate) {
         switch (severity) {
             case INFO:
-                return "积压在正常范围内，无需处理";
+                return "Backlog within normal range; no action needed";
             case WARNING:
                 if (consumeRate < produceRate) {
-                    return "积压较多且持续增长，建议增加消费者实例数";
+                    return "Backlog is high and growing; add consumer instances";
                 }
-                return "积压较多但正在消化，建议持续关注";
+                return "Backlog is elevated but draining; keep monitoring";
             case CRITICAL:
                 if (consumeRate < produceRate) {
-                    return "积压严重且持续增长，建议立即扩容消费者实例数并检查消费逻辑";
+                    return "CRITICAL: backlog severe and growing; scale out consumers immediately"
+                            + " and inspect consume logic";
                 }
-                return "积压严重但正在消化，建议持续监控清积压进度";
+                return "Backlog severe but draining; keep monitoring drain progress";
             default:
-                return "建议持续关注积压状况";
+                return "Keep monitoring backlog status";
         }
     }
 
@@ -724,7 +781,7 @@ public class StreamMQDiagnosticsService {
         for (TraceRecord record : failedRecords) {
             String reason = extractErrorMessage(record);
             if (StringUtils.isEmpty(reason)) {
-                reason = "未知错误";
+                reason = "unknown error";
             }
             reasonCounts.merge(reason, 1L, Long::sum);
         }
@@ -752,7 +809,8 @@ public class StreamMQDiagnosticsService {
         }
         Map<String, long[]> topicStats = new HashMap<>();
         for (TraceRecord record : failedRecords) {
-            String topic = StringUtils.isNotEmpty(record.topic()) ? record.topic() : "未知主题";
+            String topic =
+                    StringUtils.isNotEmpty(record.topic()) ? record.topic() : "unknown topic";
             long[] stats = topicStats.computeIfAbsent(topic, k -> new long[] {0L, 0L});
             stats[0]++;
             if (record.timestamp() > stats[1]) {
@@ -801,21 +859,25 @@ public class StreamMQDiagnosticsService {
     private String buildDlqRecommendation(
             long totalDlqCount, List<FailureReason> topFailureReasons) {
         if (totalDlqCount <= 0) {
-            return "无死信消息，消费状况正常";
+            return "No dead messages; consume pipeline healthy";
         }
         if (totalDlqCount > properties.getBacklogCriticalThreshold()) {
             if (CollectionUtils.isNotEmpty(topFailureReasons)) {
-                return "死信消息过多（"
+                return "Too many dead messages ("
                         + totalDlqCount
-                        + " 条），建议立即排查首要失败原因："
+                        + "); inspect top failure cause immediately: "
                         + topFailureReasons.get(0).reason();
             }
-            return "死信消息过多（" + totalDlqCount + " 条），建议立即排查消费失败原因";
+            return "Too many dead messages ("
+                    + totalDlqCount
+                    + "); investigate consume failures now";
         }
         if (totalDlqCount > properties.getBacklogWarningThreshold()) {
-            return "死信消息较多（" + totalDlqCount + " 条），建议定期排查失败原因并优化消费逻辑";
+            return "Elevated dead-message count ("
+                    + totalDlqCount
+                    + "); review failure causes periodically and improve consume logic";
         }
-        return "死信消息数量在可控范围内，建议持续关注";
+        return "Dead-message count within acceptable range; keep monitoring";
     }
 
     /**

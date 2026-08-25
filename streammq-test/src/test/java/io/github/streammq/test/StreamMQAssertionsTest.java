@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.test;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -147,8 +152,11 @@ class StreamMQAssertionsTest {
 
     @Test
     void assertThatMessage_hasMessageId() {
-        Message<String> message = MessageBuilder.<String>withTopic("topic").body("test").build();
-        message.setMessageId(new MessageId("123-0"));
+        Message<String> message =
+                MessageBuilder.<String>withTopic("topic")
+                        .body("test")
+                        .build()
+                        .withMessageId(new MessageId("123-0"));
         StreamMQAssertions.assertThat(message).hasMessageId();
     }
 
@@ -184,8 +192,11 @@ class StreamMQAssertionsTest {
 
     @Test
     void assertThatMessage_isTransactionMessage() {
-        Message<String> message = MessageBuilder.<String>withTopic("topic").body("test").build();
-        message.setTransactionId("tx-123");
+        Message<String> message =
+                MessageBuilder.<String>withTopic("topic")
+                        .body("test")
+                        .transactionId("tx-123")
+                        .build();
         StreamMQAssertions.assertThat(message).isTransactionMessage();
     }
 

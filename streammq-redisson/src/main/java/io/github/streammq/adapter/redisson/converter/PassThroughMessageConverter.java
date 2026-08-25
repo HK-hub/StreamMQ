@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 package io.github.streammq.adapter.redisson.converter;
 
 import io.github.streammq.core.message.Message;
@@ -164,8 +169,11 @@ public class PassThroughMessageConverter extends AbstractMessageConverter {
     @Override
     @SuppressWarnings("unchecked")
     protected <T> void decodeBody(
-            Map<String, String> fields, Class<T> targetType, Message<T> message, String bodyStr) {
-        message.setBody((T) bodyStr);
+            Map<String, String> fields,
+            Class<T> targetType,
+            MessageDraft<T> draft,
+            String bodyStr) {
+        draft.body = (T) bodyStr;
     }
 
     // ================================================================
@@ -184,14 +192,14 @@ public class PassThroughMessageConverter extends AbstractMessageConverter {
     }
 
     /**
-     * 从单个 JSON 字段反序列化属性并写入 userProperties。
+     * 从单个 JSON 字段反序列化属性并写入草稿用户属性。
      *
-     * @param message 输出消息
+     * @param draft 装配草稿
      * @param fields Stream Entry 全部字段
      */
     @Override
-    protected <T> void decodeProperties(Message<T> message, Map<String, String> fields) {
-        readPropsJson(fields, FIELD_PROPS, message::setUserProperties);
+    protected <T> void decodeProperties(MessageDraft<T> draft, Map<String, String> fields) {
+        readPropsJson(fields, FIELD_PROPS, draft.userProperties::putAll);
     }
 
     /**
@@ -207,24 +215,26 @@ public class PassThroughMessageConverter extends AbstractMessageConverter {
     // ================================================================
 
     /**
-     * 为消费端还原的消息回填 topic 字段。
+     * 为消费端还原的消息派生携带指定 Topic 的不可变新实例。
      *
-     * @param message 消息载体
+     * @param message 原始消息
      * @param topic 主题名
      * @param <T> body 类型
+     * @return Topic 已设置的不可变新实例
      */
-    public static <T> void applyTopic(Message<T> message, String topic) {
-        message.setTopic(topic);
+    public static <T> Message<T> applyTopic(Message<T> message, String topic) {
+        return message.withTopic(topic);
     }
 
     /**
-     * 为消费端还原的消息回填 messageId 字段。
+     * 为消费端还原的消息派生携带 {@link MessageId} 的不可变新实例。
      *
-     * @param message 消息载体
+     * @param message 原始消息
      * @param streamEntryId Redis Stream Entry ID
      * @param <T> body 类型
+     * @return messageId 已设置的不可变新实例
      */
-    public static <T> void applyMessageId(Message<T> message, String streamEntryId) {
-        message.setMessageId(MessageId.fromStreamEntry(streamEntryId));
+    public static <T> Message<T> applyMessageId(Message<T> message, String streamEntryId) {
+        return message.withMessageId(MessageId.fromStreamEntry(streamEntryId));
     }
 }
