@@ -24,7 +24,6 @@ import io.github.streammq.core.consumer.*;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.enums.ConsumeMode;
-import io.github.streammq.core.enums.InvokeTiming;
 import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.exception.StreamMQBrokerException;
 import io.github.streammq.core.filter.ConsumerFilter;
@@ -54,27 +53,26 @@ import org.slf4j.LoggerFactory;
 /**
  * {@link StreamMQListenerContainer} 默认实现，编排 Listener 的生命周期与消费循环。
  *
- * <p>核心职责（单一职责：消费循环编排）：
+ * <p>容器保留的职责（编排层）：
  *
  * <ul>
  *   <li>注册并发 / 顺序 / DLQ Listener（统一通过 {@link StreamMQConsumer} 注解驱动）
  *   <li>管理容器生命周期（start / stop / pause / resume）
- *   <li>为每个 Listener 启动虚拟线程消费循环
- *   <li>按注解 per-consumer 实例化 {@link RetryPolicy} / {@link MessageConverter} / {@link
- *       DlqFailureStrategy} / {@link MessageSerializer} / {@link RebalanceStrategy} 并创建
- *       per-consumer {@link RetryAndDlqHandler}，实现高度可配置
+ *   <li>为每个 Listener 启动虚拟线程读循环（含并发循环数与背压队列编排）
  * </ul>
  *
- * <p>消费结果统一由 {@code onMessage} 返回值（{@link ConsumeAction}）表达， 不再支持手动 ACK/nack/defer 调用，避免双模式冲突。
- *
- * <p>以下职责已委托给独立的策略类（组合模式）：
+ * <p>以下职责已委托给独立的协作类（组合模式，红队审查 F-02-12 God class 拆分）：
  *
  * <ul>
- *   <li>{@link ConsumerInterceptorChain} - 拦截器链管理与执行
- *   <li>{@link RetryAndDlqHandler} - ACK / 重试 / DLQ 路由（per-consumer 实例）
- *   <li>{@link OrderlyShardLockManager} - 顺序消费分片锁管理
- *   <li>{@link ConsumerMdcTrace} - MDC 结构化日志上下文
+ *   <li>{@link RegistrationStore} - 注册表与 per-consumer 策略缓存（状态载体）
+ *   <li>{@link MessageProcessor} - 单条消息消费管线（过滤器/拦截器检查、三类消费分发、超时控制、指标）
+ *   <li>{@link ConsumerInterceptorChain} / {@link RetryAndDlqHandler} / {@link
+ *       OrderlyShardLockManager} / {@link ConsumerMdcTrace} - 拦截器链、ACK/重试/DLQ 路由、 分片锁、MDC 日志上下文
+ *   <li>{@link io.github.streammq.core.listener.ListenerConfig#from} - 底层监听器工厂 SPI 的派生视图（唯一注册模型见
+ *       {@link io.github.streammq.core.listener.ListenerRegistration}）
  * </ul>
+ *
+ * <p>消费结果统一由 {@code onMessage} 返回值（{@link ConsumeAction}）表达。
  *
  * <p>线程安全：注册方法与生命周期方法均线程安全；消费循环在独立虚拟线程执行。
  *
@@ -146,19 +144,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 全局消费者过滤器链 */
     private final ConsumerFilterChain consumerFilterChain = new DefaultConsumerFilterChain();
 
-    /** Listener 注册表 */
-    private final ConcurrentMap<String, ListenerRegistration<?>> registrations =
-            new ConcurrentHashMap<>();
-
-    /** per-consumer ACK/重试/DLQ 路由处理器（按注解实例化的策略组合） */
-    private final ConcurrentMap<String, RetryAndDlqHandler> perConsumerHandlers =
-            new ConcurrentHashMap<>();
-
-    /** per-consumer 消息转换器（传给 Listener 工厂用于解码） */
-
-    /** per-consumer 过滤器链缓存（key: reg.key()，value: 预构建的过滤器列表） */
-    private final ConcurrentMap<String, List<ConsumerFilter>> perConsumerFilters =
-            new ConcurrentHashMap<>();
+    /** 注册存储：注册表 + per-consumer 策略缓存（拆分出的状态载体） */
+    private final RegistrationStore store = new RegistrationStore();
 
     /** 消费线程池（虚拟线程）；stop 后不可复用，restart 时在 {@link #start()} 中重建 */
     private volatile ExecutorService consumeExecutor = Executors.newVirtualThreadPerTaskExecutor();
@@ -223,6 +210,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      */
     public void setMetrics(StreamMQMetrics metrics) {
         this.metrics = metrics;
+        messageProcessor.setMetrics(metrics);
     }
 
     /**
@@ -241,7 +229,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         if (sharedRetryDlqHandler instanceof DefaultRetryAndDlqHandler drh) {
             drh.setMetrics(metrics);
         }
-        for (RetryAndDlqHandler handler : perConsumerHandlers.values()) {
+        for (RetryAndDlqHandler handler : store.handlers()) {
             if (handler instanceof DefaultRetryAndDlqHandler drh) {
                 drh.setMetrics(metrics);
             }
@@ -254,9 +242,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 策略类：顺序消费分片锁 */
     private final OrderlyShardLockManager shardLockManager;
 
-    /** 策略类：消费者组管理器（per-group 实例，管理心跳与重平衡） */
-    private final ConcurrentMap<String, ConsumerGroupManager> consumerGroupManagers =
-            new ConcurrentHashMap<>();
+    /** 策略类：单条消息消费管线（过滤器/拦截器检查、三类消费分发、超时控制、指标） */
+    private final MessageProcessor messageProcessor;
 
     /** 是否启用 per-consumer 策略实例化（高级构造器注入自定义 handler 时关闭） */
     private final boolean perConsumerEnabled;
@@ -484,6 +471,14 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         dlqFailureStrategy,
                         dlqConfig);
         this.perConsumerEnabled = true;
+        this.messageProcessor =
+                new MessageProcessor(
+                        chain,
+                        this.shardLockManager,
+                        store,
+                        this.sharedRetryDlqHandler,
+                        true,
+                        () -> consumeExecutor);
     }
 
     /**
@@ -528,6 +523,14 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         this.shardLockManager = Objects.requireNonNull(shardLockManager, "shardLockManager");
         this.perConsumerEnabled = false;
         this.inflightCapacity = StreamMQConstants.DEFAULT_INFLIGHT_CAPACITY;
+        this.messageProcessor =
+                new MessageProcessor(
+                        interceptorChain,
+                        this.shardLockManager,
+                        store,
+                        this.sharedRetryDlqHandler,
+                        false,
+                        () -> consumeExecutor);
     }
 
     /**
@@ -584,11 +587,11 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     /** 重建所有已注册 listener 的消费者过滤器缓存。 当全局过滤器变更时调用，确保缓存的过滤器链包含最新的全局过滤器。 */
     private void rebuildConsumerFilterCache() {
-        for (ListenerRegistration<?> reg : registrations.values()) {
+        for (ListenerRegistration<?> reg : store.registrations()) {
             List<ConsumerFilter> filters = buildConsumerFilters(reg);
-            perConsumerFilters.put(reg.key(), filters);
+            store.putFilters(reg.key(), filters);
         }
-        LOG.debug("Rebuilt consumer filter cache for {} registrations", registrations.size());
+        LOG.debug("Rebuilt consumer filter cache for {} registrations", store.registrationCount());
     } // ===================== 注册方法 =====================
 
     @Override
@@ -637,7 +640,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         .build();
         reg.resolveNamespace(defaultNamespace);
         resolvePerConsumerSpi(reg);
-        registrations.put(reg.key(), reg);
+        store.putRegistration(reg);
         wireRegistrationIfRunning(reg);
         LOG.info(
                 "Registered StreamMQ Consumer: topic={}, group={}, dlqMode={}, bodyType={}",
@@ -699,7 +702,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         .build();
         reg.resolveNamespace(defaultNamespace);
         resolvePerConsumerSpi(reg);
-        registrations.put(reg.key(), reg);
+        store.putRegistration(reg);
         wireRegistrationIfRunning(reg);
         LOG.info(
                 "Registered StreamMQ Orderly Consumer: topic={}, group={}, shardCount={},"
@@ -755,7 +758,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         .build();
         reg.resolveNamespace(defaultNamespace);
         resolvePerConsumerSpi(reg);
-        registrations.put(reg.key(), reg);
+        store.putRegistration(reg);
         wireRegistrationIfRunning(reg);
         LOG.info(
                 "Registered StreamMQ DLQ Consumer: group={}, bodyType={}",
@@ -801,7 +804,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         if (Objects.nonNull(this.metrics) && handler instanceof DefaultRetryAndDlqHandler drh) {
             drh.setMetrics(this.metrics);
         }
-        perConsumerHandlers.put(reg.key(), handler);
+        store.putHandler(reg.key(), handler);
 
         // 5. per-consumer 重平衡策略（实例化校验，运行期 Rebalance 模块启用后使用）
         Class<? extends RebalanceStrategy> rebalanceClass = reg.getRebalanceStrategy();
@@ -820,7 +823,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
         // 6. per-consumer 过滤器链（预构建并缓存，避免每次消息处理时重复创建）
         List<ConsumerFilter> filters = buildConsumerFilters(reg);
-        perConsumerFilters.put(reg.key(), filters);
+        store.putFilters(reg.key(), filters);
 
         LOG.debug(
                 "Resolved per-consumer SPI: key={}, retryPolicy={}, converter={},"
@@ -893,8 +896,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     @Override
     public Collection<ConsumerMetadata> getConsumers() {
-        List<ConsumerMetadata> list = new ArrayList<>(registrations.size());
-        for (ListenerRegistration<?> reg : registrations.values()) {
+        List<ConsumerMetadata> list = new ArrayList<>(store.registrationCount());
+        for (ListenerRegistration<?> reg : store.registrations()) {
             list.add(
                     new ConsumerMetadata(
                             reg.getTopic(),
@@ -917,10 +920,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      * @return true 表示已执行重平衡；false 表示未找到对应 ORDERLY 消费者或无可执行
      */
     public boolean rebalanceGroup(String group) {
-        for (Map.Entry<String, ListenerRegistration<?>> entry : registrations.entrySet()) {
-            ListenerRegistration<?> reg = entry.getValue();
+        for (ListenerRegistration<?> reg : store.snapshotRegistrations()) {
             if (reg.getType() == ListenerType.ORDERLY && reg.getGroup().equals(group)) {
-                ConsumerGroupManager cgm = consumerGroupManagers.get(entry.getKey());
+                ConsumerGroupManager cgm = store.groupManager(reg.key());
                 if (cgm != null && reg.getShardCount() > 0) {
                     cgm.rebalance(reg.getShardCount());
                     LOG.info(
@@ -946,7 +948,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     public void registerRetryTargets(RetryScheduler scheduler) {
         Objects.requireNonNull(scheduler, "scheduler");
         int count = 0;
-        for (ListenerRegistration<?> reg : registrations.values()) {
+        for (ListenerRegistration<?> reg : store.registrations()) {
             if (!reg.isDlqMode()) {
                 scheduler.registerRetryTarget(
                         reg.getTopic(), reg.getGroup(), reg.getMaxReconsumeTimes());
@@ -958,7 +960,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         LOG.info(
                 "Registered {} retry targets to RetryScheduler ({} listeners total)",
                 count,
-                registrations.size());
+                store.registrationCount());
     }
 
     /**
@@ -972,7 +974,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         Objects.requireNonNull(scheduler, "scheduler");
         int orderlyCount = 0;
         int concurrentCount = 0;
-        for (ListenerRegistration<?> reg : registrations.values()) {
+        for (ListenerRegistration<?> reg : store.registrations()) {
             if (reg.isDlqMode()) {
                 continue;
             }
@@ -1015,13 +1017,13 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                     "Container already started or in invalid state: " + state.get());
         }
         ensureRuntimeAlive();
-        LOG.info("Starting ListenerContainer with {} registration(s)", registrations.size());
+        LOG.info("Starting ListenerContainer with {} registration(s)", store.registrationCount());
         // start 语义为全新启动：复位 pause 状态，避免"pause 后 stop 再 start"
         // 重启进静默暂停、消费循环空转的诡异现象
         paused = false;
         state.set(ContainerState.RUNNING);
         // 注册所有消费者组的 ConsumerGroupManager
-        for (ListenerRegistration<?> reg : registrations.values()) {
+        for (ListenerRegistration<?> reg : store.registrations()) {
             if (!reg.isDlqMode()) {
                 createAndRegisterGroupManager(reg);
             }
@@ -1058,7 +1060,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         instanceTimeoutMs);
         cgm.register();
         cgm.cleanupStaleGroups();
-        consumerGroupManagers.put(reg.key(), cgm);
+        store.putGroupManager(reg.key(), cgm);
     }
 
     @Override
@@ -1080,14 +1082,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         }
         consumeFutures.clear();
         // 注销所有消费者组管理器
-        for (ConsumerGroupManager cgm : consumerGroupManagers.values()) {
-            try {
-                cgm.unregister();
-            } catch (RuntimeException ex) {
-                LOG.warn("Failed to unregister ConsumerGroupManager: {}", ex.getMessage());
-            }
-        }
-        consumerGroupManagers.clear();
+        store.clearGroupManagers();
         consumerFactory.close();
         consumeExecutor.shutdown();
         try {
@@ -1132,7 +1127,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     // ===================== 内部编排方法 =====================
 
     private void doStartListeners() {
-        for (ListenerRegistration<?> reg : registrations.values()) {
+        for (ListenerRegistration<?> reg : store.registrations()) {
             submitConsumeLoops(reg);
         }
     }
@@ -1237,7 +1232,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 if (state.get() != ContainerState.RUNNING) {
                     return;
                 }
-                processMessage(message, reg, listener);
+                messageProcessor.processMessage(message, reg, listener);
                 drained++;
             }
         }
@@ -1251,26 +1246,14 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         boolean removed = false;
         for (String suffix : new String[] {"", DLQ_KEY_PREFIX}) {
             String key = suffix + topic + REG_KEY_SEPARATOR + consumerGroup;
-            ListenerRegistration<?> reg = registrations.remove(key);
+            ListenerRegistration<?> reg = store.removeRegistration(key);
             if (Objects.isNull(reg)) {
                 continue;
             }
             removed = true;
             cancelRegistrationFutures(key);
-            perConsumerFilters.remove(key);
-            ConsumerGroupManager cgm = consumerGroupManagers.remove(key);
-            if (Objects.nonNull(cgm)) {
-                try {
-                    cgm.unregister();
-                } catch (RuntimeException ex) {
-                    LOG.warn(
-                            "Failed to unregister ConsumerGroupManager on unregister"
-                                    + " (topic={}, group={}): {}",
-                            topic,
-                            consumerGroup,
-                            ex.getMessage());
-                }
-            }
+            store.removeFilters(key);
+            store.removeAndUnregisterGroupManager(key);
             LOG.info(
                     "Unregistered StreamMQ listener: topic={}, group={}, wasRunning={}",
                     topic,
@@ -1379,7 +1362,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                             // 背压：队列满时阻塞等待
                             inflightQueue.put(message);
                         } else {
-                            processMessage(message, reg, listener);
+                            messageProcessor.processMessage(message, reg, listener);
                         }
                     }
                 } catch (InterruptedException e) {
@@ -1423,7 +1406,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 if (Objects.isNull(message)) {
                     continue;
                 }
-                processMessage(message, reg, listener);
+                messageProcessor.processMessage(message, reg, listener);
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -1434,339 +1417,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         // 0.1.0 起注册模型是唯一持有者：声明式配置由 ListenerConfig.from(reg) 单点派生，
         // 不再在容器内重复罗列字段（消除双模型漂移）
         return consumerFactory.createListener(ListenerConfig.from(reg, retryMode));
-    }
-
-    /** 处理单条消息：支持消费超时取消，以 {@code onMessage} 返回值为路由标准。 */
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private void processMessage(
-            Message<?> message, ListenerRegistration reg, StreamMQListener listener) {
-        ConsumeContext ctx =
-                new DefaultConsumeContextConsume(
-                        message, reg, reg.getGroup() + "-" + instanceToken);
-        ConsumerMdcTrace.inject(message, reg);
-        ConsumeAction finalAction = ConsumeAction.RECONSUME_LATER;
-        RetryAndDlqHandler handler =
-                perConsumerEnabled ? perConsumerHandlers.get(reg.key()) : sharedRetryDlqHandler;
-        long consumeTimeoutMs = reg.getConsumeTimeoutMillis();
-        long consumeStart = System.nanoTime();
-        boolean recordedByTimeout = false;
-        LOG.debug(
-                "processMessage: topic={}, group={}, dlqMode={}, type={}, messageId={}",
-                reg.getTopic(),
-                reg.getGroup(),
-                reg.isDlqMode(),
-                reg.getType(),
-                message.getMessageId());
-        try {
-            // 消费者过滤器检查（全局 + per-consumer + selectorExpression）
-            if (!acceptMessage(message, reg)) {
-                LOG.debug(
-                        "Message filtered: topic={}, tag={}, group={}",
-                        message.getTopic(),
-                        message.getTag(),
-                        reg.getGroup());
-                finalAction = ConsumeAction.SUCCESS;
-                handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
-                return;
-            }
-
-            if (!interceptorChain.applyBefore(message, ctx)) {
-                LOG.debug(
-                        "Message rejected by interceptor: topic={}, group={}",
-                        message.getTopic(),
-                        reg.getGroup());
-                finalAction = ConsumeAction.SUCCESS;
-                handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
-                return;
-            }
-            // 消费超时控制：使用 Future.get(timeout) 包裹 onMessage 调用
-            if (consumeTimeoutMs > 0 && reg.getType() != ListenerType.ORDERLY && !reg.isDlqMode()) {
-                processWithTimeout(message, reg, listener, ctx, handler, consumeStart);
-                recordedByTimeout = true;
-                return;
-            }
-            try {
-                if (reg.isDlqMode()) {
-                    LOG.debug(
-                            "Processing DLQ message: topic={}, group={}, messageId={},"
-                                    + " consumerType={}",
-                            reg.getTopic(),
-                            reg.getGroup(),
-                            message.getMessageId(),
-                            reg.getConsumer().getClass().getSimpleName());
-                    ConsumeAction dlqAction = processDlqMessage(message, reg, ctx);
-                    LOG.debug(
-                            "DLQ message processed: topic={}, group={}, messageId={}, action={}",
-                            reg.getTopic(),
-                            reg.getGroup(),
-                            message.getMessageId(),
-                            dlqAction);
-                    handler.handleAction(dlqAction, message, reg, listener, null);
-                    finalAction = dlqAction;
-                } else if (reg.getType() == ListenerType.ORDERLY) {
-                    StreamMessageOrderlyConsumer orderly =
-                            (StreamMessageOrderlyConsumer) reg.getConsumer();
-                    ConsumeAction orderlyAction =
-                            consumeOrderlyWithRetry(
-                                    message,
-                                    reg,
-                                    (ConsumeOrderlyContext) ctx,
-                                    orderly,
-                                    listener,
-                                    handler);
-                    finalAction = orderlyAction;
-                } else {
-                    StreamMessageConcurrentlyConsumer consumer =
-                            (StreamMessageConcurrentlyConsumer) reg.getConsumer();
-                    LOG.debug(
-                            "Calling onMessage: topic={}, group={}, messageId={}, consumerClass={}",
-                            reg.getTopic(),
-                            reg.getGroup(),
-                            message.getMessageId(),
-                            consumer.getClass().getSimpleName());
-                    ConsumeAction action = consumer.onMessage(message, ctx);
-                    LOG.debug(
-                            "onMessage returned: topic={}, group={}, messageId={}, action={}",
-                            reg.getTopic(),
-                            reg.getGroup(),
-                            message.getMessageId(),
-                            action);
-                    if (Objects.isNull(action)) {
-                        action = ConsumeAction.RECONSUME_LATER;
-                    }
-                    handler.handleAction(action, message, reg, listener, null);
-                    finalAction = action;
-                }
-            } catch (Exception ex) {
-                LOG.warn(
-                        "Listener onMessage threw exception (topic={}, group={}, messageId={}): {}",
-                        reg.getTopic(),
-                        reg.getGroup(),
-                        message.getMessageId(),
-                        ex.getMessage(),
-                        ex);
-                interceptorChain.notifyException(message, ex, InvokeTiming.EXECUTING, ctx);
-                finalAction = ConsumeAction.RECONSUME_LATER;
-                handler.handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener, ex);
-            }
-        } finally {
-            // 超时路径的 applyAfter/指标已由 processWithTimeout 内部负责（携带真实 action），
-            // 此处再执行会导致拦截器 after 钩子被调用两次、且第二次硬编码 RECONSUME_LATER
-            // （即使业务实际返回 SUCCESS），污染追踪/审计类拦截器的数据。
-            if (!recordedByTimeout) {
-                interceptorChain.applyAfter(message, finalAction, ctx);
-            }
-            ConsumerMdcTrace.clear();
-            if (!recordedByTimeout) {
-                recordConsumeMetrics(reg, consumeStart, finalAction.isSuccess());
-            }
-        }
-    }
-
-    /** 使用 Future.get(timeout) 包裹 onMessage 调用，超时后取消并进入重试。 */
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private void processWithTimeout(
-            Message<?> message,
-            ListenerRegistration reg,
-            StreamMQListener listener,
-            ConsumeContext ctx,
-            RetryAndDlqHandler handler,
-            long consumeStart) {
-        LOG.debug(
-                "processWithTimeout called: topic={}, group={}, messageId={}, timeoutMs={}",
-                reg.getTopic(),
-                reg.getGroup(),
-                message.getMessageId(),
-                reg.getConsumeTimeoutMillis());
-        AtomicReference<Thread> taskThread = new AtomicReference<>();
-        Future<ConsumeAction> future =
-                consumeExecutor.submit(
-                        () -> {
-                            taskThread.set(Thread.currentThread());
-                            if (reg.isDlqMode()) {
-                                return processDlqMessage(message, reg, ctx);
-                            }
-                            StreamMessageConcurrentlyConsumer consumer =
-                                    (StreamMessageConcurrentlyConsumer) reg.getConsumer();
-                            LOG.debug(
-                                    "processWithTimeout executing onMessage: topic={}, group={},"
-                                            + " consumerClass={}",
-                                    reg.getTopic(),
-                                    reg.getGroup(),
-                                    consumer.getClass().getSimpleName());
-                            ConsumeAction action = consumer.onMessage(message, ctx);
-                            LOG.debug("processWithTimeout onMessage returned: action={}", action);
-                            return action;
-                        });
-        ConsumeAction action = ConsumeAction.RECONSUME_LATER;
-        try {
-            action = future.get(reg.getConsumeTimeoutMillis(), TimeUnit.MILLISECONDS);
-            LOG.debug(
-                    "processWithTimeout completed: topic={}, group={}, action={}",
-                    reg.getTopic(),
-                    reg.getGroup(),
-                    action);
-            if (Objects.isNull(action)) {
-                action = ConsumeAction.RECONSUME_LATER;
-            }
-            handler.handleAction(action, message, reg, listener, null);
-        } catch (TimeoutException e) {
-            future.cancel(true);
-            // 等待业务线程真正终止（上限为宽限期）：cancel 只是中断信号，业务代码可能仍在执行。
-            // 等待后再 ACK + 调度重试，可显著缩小「原消费与重试副本并发执行」的窗口。
-            // 若业务忽略中断，宽限期后仍继续（框架语义：超时重试与原消费可能并发，由业务幂等兜底）。
-            Thread t = taskThread.get();
-            if (t != null && t != Thread.currentThread()) {
-                try {
-                    t.join(timeoutCancelGraceMillis);
-                } catch (InterruptedException ie) {
-                    Thread.currentThread().interrupt();
-                }
-            }
-            LOG.warn(
-                    "Consume timeout ({}ms) for message, cancelling and retrying: topic={},"
-                            + " group={}, messageId={}",
-                    reg.getConsumeTimeoutMillis(),
-                    reg.getTopic(),
-                    reg.getGroup(),
-                    message.getMessageId());
-            handler.handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener, e);
-        } catch (ExecutionException | InterruptedException e) {
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-            LOG.warn(
-                    "processWithTimeout exception: topic={}, group={}, error={}",
-                    reg.getTopic(),
-                    reg.getGroup(),
-                    e.getMessage());
-            handler.handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener, e);
-        } finally {
-            // 确保拦截器链 after 钩子始终执行，用于追踪上报等
-            interceptorChain.applyAfter(message, action, ctx);
-            recordConsumeMetrics(reg, consumeStart, action.isSuccess());
-        }
-    }
-
-    /**
-     * 处理 DLQ 消息，支持两种消费者类型：
-     *
-     * <ul>
-     *   <li>{@link DlqMessageConsumer} - 专门的 DLQ 消费者接口
-     *   <li>{@link StreamMessageConcurrentlyConsumer} - 普通并发消费者
-     * </ul>
-     *
-     * @param message 消息
-     * @param reg 注册信息
-     * @param ctx 消费上下文
-     * @return 消费动作
-     */
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private ConsumeAction processDlqMessage(
-            Message<?> message, ListenerRegistration reg, ConsumeContext ctx) throws Exception {
-        Object consumer = reg.getConsumer();
-        if (consumer instanceof DlqMessageConsumer dlqConsumer) {
-            dlqConsumer.onDlqMessage(message, ctx);
-            return ConsumeAction.SUCCESS;
-        } else if (consumer instanceof StreamMessageConcurrentlyConsumer concurrentConsumer) {
-            ConsumeAction action = concurrentConsumer.onMessage(message, ctx);
-            return Objects.isNull(action) ? ConsumeAction.RECONSUME_LATER : action;
-        } else {
-            LOG.warn(
-                    "Unknown DLQ consumer type: {}, defaulting to SUCCESS",
-                    consumer.getClass().getSimpleName());
-            return ConsumeAction.SUCCESS;
-        }
-    }
-
-    /**
-     * 顺序消费：失败时在当前线程内重试（最多 {@code maxReconsumeTimes} 次）， 每次失败后按 {@code
-     * suspendCurrentQueueTimeMillis} 挂起，保证<b>同一分片不越过失败消息继续消费</b>（严格有序）。
-     *
-     * <p>重试耗尽后直接路由到 DLQ 并 ACK，避免消息留在 PEL 由 {@link PelClaimScheduler} 以新 ID 重投导致乱序。
-     *
-     * <p>崩溃恢复仍由 {@link PelClaimScheduler} 负责：消费者实例崩溃后，PEL 中空闲超阈值的消息会被重新投递。
-     *
-     * @param message 消息
-     * @param reg 注册信息
-     * @param ctx 顺序消费上下文
-     * @param orderly 顺序消费者
-     * @param listener 监听器
-     * @param handler ACK/重试/DLQ 处理器
-     * @return 消费动作
-     */
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private ConsumeAction consumeOrderlyWithRetry(
-            Message<?> message,
-            ListenerRegistration reg,
-            ConsumeOrderlyContext ctx,
-            StreamMessageOrderlyConsumer orderly,
-            StreamMQListener listener,
-            RetryAndDlqHandler handler)
-            throws Exception {
-        int maxRetries = Math.max(0, reg.getMaxReconsumeTimes());
-        long suspendMillis = Math.max(0, reg.getSuspendCurrentQueueTimeMillis());
-        ConsumeAction action = shardLockManager.consumeWithShardLock(message, reg, ctx, orderly);
-        int attempt = 0;
-        while (!action.isSuccess() && attempt < maxRetries) {
-            attempt++;
-            LOG.debug(
-                    "Orderly consume failed (attempt {}/{}), suspending shard for {}ms: topic={},"
-                            + " group={}, messageId={}",
-                    attempt,
-                    maxRetries,
-                    suspendMillis,
-                    reg.getTopic(),
-                    reg.getGroup(),
-                    message.getMessageId());
-            sleepQuietly(suspendMillis);
-            action = shardLockManager.consumeWithShardLock(message, reg, ctx, orderly);
-        }
-        if (action.isSuccess()) {
-            handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
-            return ConsumeAction.SUCCESS;
-        }
-        LOG.warn(
-                "Orderly consume exhausted retries (max={}), routing to DLQ: topic={}, group={},"
-                        + " messageId={}",
-                maxRetries,
-                reg.getTopic(),
-                reg.getGroup(),
-                message.getMessageId());
-        if (handler.routeToDlq(
-                message, reg, message.getMessageId(), RetryScheduler.DLQ_REASON_MAX_RETRY)) {
-            listener.ack(message.getMessageId());
-        } else {
-            LOG.error(
-                    "DLQ routing failed, message kept in PEL (topic={}, group={}, messageId={})",
-                    reg.getTopic(),
-                    reg.getGroup(),
-                    message.getMessageId());
-        }
-        return ConsumeAction.RECONSUME_LATER;
-    }
-
-    /**
-     * 记录消费指标（null 安全，指标异常不影响业务主流程）。
-     *
-     * @param reg Listener 注册信息
-     * @param startNanos 消费起始时间（{@link System#nanoTime()}）
-     * @param success 是否消费成功
-     */
-    private void recordConsumeMetrics(
-            ListenerRegistration<?> reg, long startNanos, boolean success) {
-        if (Objects.nonNull(metrics)) {
-            try {
-                metrics.recordConsume(
-                        reg.getTopic(),
-                        reg.getGroup(),
-                        success,
-                        Duration.ofNanos(System.nanoTime() - startNanos));
-            } catch (Exception ignored) {
-                // 指标收集失败不得影响业务主流程
-                LOG.debug("Metrics collection failed", ignored);
-            }
-        }
     }
 
     private void checkBeforeStart() {
@@ -1795,7 +1445,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         if (state.get() != ContainerState.RUNNING) {
             return;
         }
-        if (!reg.isDlqMode() && Objects.isNull(consumerGroupManagers.get(reg.key()))) {
+        if (!reg.isDlqMode() && Objects.isNull(store.groupManager(reg.key()))) {
             createAndRegisterGroupManager(reg);
         }
         submitConsumeLoops(reg);
@@ -1890,33 +1540,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                     e.getMessage());
             return null;
         }
-    }
-
-    /**
-     * 判断消息是否应该被消费：使用预缓存的过滤器链。
-     *
-     * @param message 消息
-     * @param reg 注册信息
-     * @return true 表示消息通过所有过滤器，应该被消费
-     */
-    private boolean acceptMessage(Message<?> message, ListenerRegistration<?> reg) {
-        List<ConsumerFilter> filters = perConsumerFilters.get(reg.key());
-        if (CollectionUtils.isEmpty(filters)) {
-            return true;
-        }
-
-        for (ConsumerFilter filter : filters) {
-            if (!filter.accept(message)) {
-                LOG.debug(
-                        "Message rejected by filter: {} (topic={}, tag={})",
-                        filter.name(),
-                        message.getTopic(),
-                        message.getTag());
-                return false;
-            }
-        }
-
-        return true;
     }
 
     private static void sleepQuietly(long millis) {

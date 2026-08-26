@@ -104,6 +104,22 @@ public final class SendOptions implements Serializable {
     }
 
     @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof SendOptions that)) {
+            return false;
+        }
+        return timeoutMillis == that.timeoutMillis && retryTimes == that.retryTimes;
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(timeoutMillis, retryTimes);
+    }
+
+    @Override
     public String toString() {
         return "SendOptions{timeoutMillis=" + timeoutMillis + ", retryTimes=" + retryTimes + '}';
     }

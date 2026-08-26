@@ -20,7 +20,6 @@ import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.message.*;
 import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.producer.ProducerConfig;
-import io.github.streammq.core.producer.SendCallback;
 import io.github.streammq.core.producer.StreamMessageProducer;
 import io.github.streammq.core.producer.StreamMessageProducerFactory;
 import io.github.streammq.core.template.StreamMessageTemplate;
@@ -139,8 +138,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     @Override
     public <T> SendResult syncSend(Message<T> message, SendOptions options) {
         Objects.requireNonNull(message, "message");
-        SendOptions effective =
-                Objects.nonNull(options) ? options : SendOptions.defaults();
+        SendOptions effective = Objects.nonNull(options) ? options : SendOptions.defaults();
         return doSyncSend(
                 message, effective.effectiveTimeoutMillis(), effective.effectiveRetryTimes());
     }
@@ -148,10 +146,9 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     /**
      * 同步发送核心实现（含拦截器链、过滤器、重试与指标）。
      *
-     * <p><b>重试安全规则：</b>仅对"确定未送达"的异常重试（序列化/客户端校验等发送前失败）。
-     * {@link io.github.streammq.core.exception.ProducerTimeoutException} /
-     * StreamMQBrokerException 意味着 XADD 可能已落库，重试会产生重复消息——直接抛出，
-     * 由业务侧按 at-least-once 语义处理。
+     * <p><b>重试安全规则：</b>仅对"确定未送达"的异常重试（序列化/客户端校验等发送前失败）。 {@link
+     * io.github.streammq.core.exception.ProducerTimeoutException} / StreamMQBrokerException 意味着
+     * XADD 可能已落库，重试会产生重复消息——直接抛出， 由业务侧按 at-least-once 语义处理。
      */
     private <T> SendResult doSyncSend(Message<T> message, long timeoutMillis, int retryTimes) {
         if (timeoutMillis <= 0) {
@@ -248,8 +245,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         Objects.requireNonNull(message, "message");
         // 在专用虚拟线程执行器中按 SendOptions 语义执行（含拦截器/重试/指标），
         // 保证调用方非阻塞；不使用 ForkJoinPool.commonPool 以免饿死其它框架组件
-        return CompletableFuture.supplyAsync(
-                () -> syncSend(message, options), asyncSendExecutor);
+        return CompletableFuture.supplyAsync(() -> syncSend(message, options), asyncSendExecutor);
     }
 
     @Override
@@ -282,8 +278,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         if (batch.isEmpty()) {
             throw new IllegalArgumentException("batch is empty");
         }
-        SendOptions effective =
-                Objects.nonNull(options) ? options : SendOptions.defaults();
+        SendOptions effective = Objects.nonNull(options) ? options : SendOptions.defaults();
         long timeoutMillis = effective.effectiveTimeoutMillis();
         int retryTimes = Math.max(0, effective.effectiveRetryTimes());
 

@@ -90,7 +90,6 @@ public interface ListenerRegistration<T> {
     /** 注册唯一键（DLQ 模式带 {@code dlq:} 前缀）。 */
     String key();
 
-
     /**
      * 并发消费循环数下限（原线程池语义，现为读循环数）：仅 CONCURRENT 集群消费生效。
      *

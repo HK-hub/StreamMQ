@@ -242,9 +242,8 @@ public class ListenerConfig {
     /**
      * 从注册模型派生监听器配置（单点映射，消除双模型字段漂移）。
      *
-     * <p>0.1.0 起 {@link ListenerRegistration} 是唯一的注册持有模型；本类降级为底层
-     * {@link StreamMQListenerFactory} SPI 的派生视图——所有声明式字段一律从注册读取，
-     * 不再允许旁路构造导致两份模型各自漂移。
+     * <p>0.1.0 起 {@link ListenerRegistration} 是唯一的注册持有模型；本类降级为底层 {@link StreamMQListenerFactory}
+     * SPI 的派生视图——所有声明式字段一律从注册读取， 不再允许旁路构造导致两份模型各自漂移。
      *
      * @param reg 注册模型
      * @param retryMode 是否为 retry Stream 监听（同一注册的 original/retry 双监听复用此方法）
@@ -264,8 +263,9 @@ public class ListenerConfig {
                 .dlqMode(reg.isDlqMode())
                 .retryMode(retryMode)
                 .targetBodyType(reg.getTargetBodyType())
-                .broadcast(reg.getConsumeMode()
-                        == io.github.streammq.core.enums.ConsumeMode.BROADCASTING)
+                .broadcast(
+                        reg.getConsumeMode()
+                                == io.github.streammq.core.enums.ConsumeMode.BROADCASTING)
                 .maxReconsumeTimes(reg.getMaxReconsumeTimes())
                 .consumeTimeoutMillis(reg.getConsumeTimeoutMillis())
                 .consumeThreadMin(reg.getConsumeThreadMin())

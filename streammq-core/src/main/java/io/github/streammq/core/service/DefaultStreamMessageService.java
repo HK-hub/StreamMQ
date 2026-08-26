@@ -7,7 +7,6 @@ package io.github.streammq.core.service;
 
 import io.github.streammq.core.message.BatchMessage;
 import io.github.streammq.core.message.Message;
-import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.message.MessageMetadataBuilder;
 import io.github.streammq.core.message.SendOptions;
 import io.github.streammq.core.message.SendResult;
@@ -20,8 +19,8 @@ import java.util.concurrent.CompletableFuture;
 /**
  * {@link StreamMessageService} 默认实现：对 {@link StreamMessageTemplate} 的薄封装。
  *
- * <p>职责仅剩两件事：① 将 Topic+Metadata 形态装配为 {@link Message}；② 透传 Message
- * 形态与事务调用。0.1.0 起 API 已收敛，此前的 601 行重载转发层不再存在。
+ * <p>职责仅剩两件事：① 将 Topic+Metadata 形态装配为 {@link Message}；② 透传 Message 形态与事务调用。0.1.0 起 API 已收敛，此前的 601
+ * 行重载转发层不再存在。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -60,13 +59,15 @@ public class DefaultStreamMessageService implements StreamMessageService {
 
     @Override
     public <T> SendResult send(String topic, T body, MessageMetadataBuilder metadata) {
-        return template.syncSend(StreamMessageService.assemble(topic, body, metadata), toOptions(metadata));
+        return template.syncSend(
+                StreamMessageService.assemble(topic, body, metadata), toOptions(metadata));
     }
 
     @Override
     public <T> CompletableFuture<SendResult> asyncSend(
             String topic, T body, MessageMetadataBuilder metadata) {
-        return template.asyncSend(StreamMessageService.assemble(topic, body, metadata), toOptions(metadata));
+        return template.asyncSend(
+                StreamMessageService.assemble(topic, body, metadata), toOptions(metadata));
     }
 
     // ===================== 批量 =====================
@@ -79,7 +80,8 @@ public class DefaultStreamMessageService implements StreamMessageService {
     // ===================== 事务透传 =====================
 
     @Override
-    public <T> SendResult executeInTransaction(Message<T> message, TransactionCallback<T> callback) {
+    public <T> SendResult executeInTransaction(
+            Message<T> message, TransactionCallback<T> callback) {
         return template.executeInTransaction(message, callback);
     }
 

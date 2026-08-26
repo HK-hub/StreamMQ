@@ -188,9 +188,7 @@ public class OrderProducer {
         service.sendOneway(
                 SampleConstants.TOPIC,
                 content,
-                MessageMetadataBuilder.create()
-                        .tag(SampleConstants.TAG_ONEWAY)
-                        .keys(orderId));
+                MessageMetadataBuilder.create().tag(SampleConstants.TAG_ONEWAY).keys(orderId));
         log.info("Oneway message sent (no response): orderId={}", orderId);
     }
 

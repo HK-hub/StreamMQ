@@ -158,6 +158,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - ConsumerFilterResolver 出厂默认实现 `ReflectiveConsumerFilterResolver` 落地（消除零实现 SPI）
 - CONTRIBUTING 默认值表修正（DenyAll/Noop/LogAndDrop/ConsistentHash）、@ExtendWith 示例更正、模块树补全
 
+#### 结构重构（第二轮，行为等价）
+
+- **DefaultStreamMQListenerContainer God class 拆分（1929 → ~1560 行）**：新增三个协作类——
+  `RegistrationStore`（注册表与 per-consumer 策略缓存的唯一状态载体）、
+  `MessageProcessor`（单条消息消费管线：过滤器/拦截器检查、DLQ/顺序/并发三类分发、
+  超时取消与宽限期、指标记录）、`ContainerSupport`（共享小工具）；
+  容器保留生命周期与读循环编排职责，类文档同步更新协作图
+- **发送 API 收敛到 SendOptions**：Template/Service 每个模式仅保留规范形，
+  删除 timeout/retry/callback 伸缩重载；六个 service 子接口合并为单一门面
+  （601 行转发层 → 130 行）；topic 形态统一 MessageMetadataBuilder（内联超时重试）；
+  `SendOptions` 补 defaults()/of()/equals/hashCode
+- **ListenerConfig/ListenerRegistration 双建模合并**：Registration 成为唯一持有模型
+  （吸收 consumerName/retryMode/converterInstance），ListenerConfig 降级为
+  `from(reg, retryMode)` 单点派生视图；冗余 broadcast 标志删除；
+  per-consumer 校验集中到注册构造器；容器 createConsumerFor 一行派生
+- **parent↔BOM 版本属性 CI 守卫**：新增 guard job 校验两份 POM 共同声明的依赖版本一致、
+  BOM streammq 版本与根 `<version>` 一致
+
 ## [0.1.0]
 
 ### Planned (V2.0, 规划中，尚未实现)

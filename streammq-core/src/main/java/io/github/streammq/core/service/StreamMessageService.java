@@ -20,21 +20,19 @@ import java.util.concurrent.CompletableFuture;
  * 业务友好的消息发送门面，封装 {@link io.github.streammq.core.template.StreamMessageTemplate}。
  *
  * <p><b>API 收敛（0.1.0）：</b>此前的六个子接口（Basic / Async / Oneway / Batch / Delay /
- * TransactionMessageService）与数十个 topic/body/tag/keys/timeout 伸缩重载已合并删除，
- * 统一收敛为以下三种正交维度：
+ * TransactionMessageService）与数十个 topic/body/tag/keys/timeout 伸缩重载已合并删除， 统一收敛为以下三种正交维度：
  *
  * <ol>
- *   <li><b>发送模式</b>：{@code send}（同步）/ {@code asyncSend}（异步，Future 与回调两种接收方式）/
- *       {@code sendOneway}（单向）/ {@code sendBatch}（批量）
+ *   <li><b>发送模式</b>：{@code send}（同步）/ {@code asyncSend}（异步，Future 与回调两种接收方式）/ {@code
+ *       sendOneway}（单向）/ {@code sendBatch}（批量）
  *   <li><b>载体形态</b>：完整 {@link Message} 或 {@code (topic, body[, MessageMetadataBuilder])}
- *   <li><b>参数</b>：超时与重试统一由 {@link SendOptions}（Message 形态）或
- *       {@link MessageMetadataBuilder#timeoutMillis(long)}（Topic 形态）表达
+ *   <li><b>参数</b>：超时与重试统一由 {@link SendOptions}（Message 形态）或 {@link
+ *       MessageMetadataBuilder#timeoutMillis(long)}（Topic 形态）表达
  * </ol>
  *
  * <p>延时、属性、Tag、Keys 等消息元数据一律通过 {@link MessageMetadataBuilder} 表达。
  *
- * <p>遵循「依赖接口而非实现」原则，业务代码应注入本接口；Spring 环境默认注册
- * {@link DefaultStreamMessageService}。
+ * <p>遵循「依赖接口而非实现」原则，业务代码应注入本接口；Spring 环境默认注册 {@link DefaultStreamMessageService}。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -156,7 +154,8 @@ public interface StreamMessageService extends TransactionExecutor {
                                         ex instanceof RuntimeException re
                                                 ? re
                                                 : new io.github.streammq.core.exception
-                                                        .StreamMQException("async send failed", ex));
+                                                        .StreamMQException(
+                                                        "async send failed", ex));
                             }
                         });
     }
@@ -187,8 +186,7 @@ public interface StreamMessageService extends TransactionExecutor {
      * @param <T> body 类型
      * @return 装配后的不可变消息
      */
-    static <T> Message<T> assemble(
-            String topic, T body, MessageMetadataBuilder metadata) {
+    static <T> Message<T> assemble(String topic, T body, MessageMetadataBuilder metadata) {
         java.util.Objects.requireNonNull(topic, "topic");
         io.github.streammq.core.message.MessageBuilder<T> builder =
                 io.github.streammq.core.message.MessageBuilder.<T>withTopic(topic).body(body);

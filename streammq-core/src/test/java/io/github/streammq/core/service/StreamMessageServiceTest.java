@@ -31,8 +31,7 @@ import org.mockito.ArgumentCaptor;
 /**
  * {@link DefaultStreamMessageService} 单元测试（0.1.0 收敛后的门面）。
  *
- * <p>验证 Topic+Metadata 形态到 Message 的装配正确性，以及 Message 形态/批量/事务对
- * {@code StreamMessageTemplate} 的透传。
+ * <p>验证 Topic+Metadata 形态到 Message 的装配正确性，以及 Message 形态/批量/事务对 {@code StreamMessageTemplate} 的透传。
  */
 @DisplayName("DefaultStreamMessageService 收敛门面测试")
 @SuppressWarnings("unchecked")
@@ -116,10 +115,8 @@ class StreamMessageServiceTest {
         @Test
         @DisplayName("asyncSend(topic, body, metadata) 透传模板")
         void asyncSendTopicForm() {
-            CompletableFuture<SendResult> future =
-                    CompletableFuture.completedFuture(ok());
-            when(template.asyncSend(any(Message.class), any(SendOptions.class)))
-                    .thenReturn(future);
+            CompletableFuture<SendResult> future = CompletableFuture.completedFuture(ok());
+            when(template.asyncSend(any(Message.class), any(SendOptions.class))).thenReturn(future);
 
             assertThat(service.asyncSend("t", "b").join()).isNotNull();
 
@@ -157,8 +154,7 @@ class StreamMessageServiceTest {
         @DisplayName("oneway / batch / 事务均透传模板")
         void passthroughs() {
             Message<String> msg = MessageBuilder.<String>withTopic("t").body("b").build();
-            BatchMessage<String> batch =
-                    BatchMessage.<String>withTopic("t").add(msg).build();
+            BatchMessage<String> batch = BatchMessage.<String>withTopic("t").add(msg).build();
             List<SendResult> results = List.of(ok());
             when(template.syncSendBatch(any(), any())).thenReturn(results);
 

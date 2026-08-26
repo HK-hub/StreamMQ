@@ -24,9 +24,9 @@ import lombok.Setter;
 /**
  * {@link ListenerRegistration} 默认实现（0.1.0 起为唯一注册模型）。
  *
- * <p>声明式字段与运行时字段统一在此建模；此前与之并行的 {@link ListenerConfig}
- * 已降级为派生视图——由 {@link ListenerConfig#from(ListenerRegistration)} 单点映射，
- * 供底层 {@link StreamMQListenerFactory} SPI 消费，二者不再各自维护可漂移的字段副本。
+ * <p>声明式字段与运行时字段统一在此建模；此前与之并行的 {@link ListenerConfig} 已降级为派生视图——由 {@link
+ * ListenerConfig#from(ListenerRegistration)} 单点映射， 供底层 {@link StreamMQListenerFactory} SPI
+ * 消费，二者不再各自维护可漂移的字段副本。
  *
  * @param <T> body 类型
  * @author StreamMQ Contributors
@@ -64,8 +64,10 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
     private final boolean dlqMode;
     private final Class<?> targetBodyType;
     private final Class<? extends DlqFailureStrategy> dlqFailureStrategy;
+
     @SuppressWarnings("unchecked")
     private final Class<? extends ConsumerFilter>[] consumerFilter;
+
     private final SelectorType selectorType;
 
     /** 底层 Redis 消费者名（null 时由适配层自动生成）。 */
@@ -79,6 +81,7 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
 
     /** 并发消费循环数下限与上限。 */
     private final int consumeThreadMin;
+
     private final int consumeThreadMax;
 
     @Setter private String namespace;

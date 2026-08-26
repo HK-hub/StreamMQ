@@ -22,17 +22,15 @@ import java.util.concurrent.CompletableFuture;
 /**
  * StreamMQ 消息模板（核心生产者 API），对齐 RocketMQ {@code RocketMQTemplate} 体验。
  *
- * <p><b>API 收敛（0.1.0）：</b>每个发送模式只保留一个以 {@link SendOptions}
- * 为参数的规范形；此前的伸缩重载（timeout-only / timeout+retry / callback+timeout /
- * batch+timeout+retry）已全部移除，统一由 {@link SendOptions} 表达。零参便捷形式以
+ * <p><b>API 收敛（0.1.0）：</b>每个发送模式只保留一个以 {@link SendOptions} 为参数的规范形；此前的伸缩重载（timeout-only /
+ * timeout+retry / callback+timeout / batch+timeout+retry）已全部移除，统一由 {@link SendOptions} 表达。零参便捷形式以
  * {@code default} 方法提供，不增加实现方负担。
  *
  * <p>核心发送语义：
  *
  * <ul>
  *   <li>{@link #syncSend(Message, SendOptions)} - 同步发送，等待 Redis 返回
- *   <li>{@link #asyncSend(Message, SendOptions)} - 异步发送，返回 {@link CompletableFuture}；
- *       回调形式为派生默认方法
+ *   <li>{@link #asyncSend(Message, SendOptions)} - 异步发送，返回 {@link CompletableFuture}； 回调形式为派生默认方法
  *   <li>{@link #sendOneway(Message)} - 单向发送，不等待响应，性能最高
  *   <li>{@link #syncSendBatch(BatchMessage, SendOptions)} - 批量发送，基于 RBatch Pipeline
  *   <li>{@link #executeInTransaction} - 事务消息，半消息 + 本地事务（继承自 {@link TransactionExecutor}）
@@ -41,8 +39,8 @@ import java.util.concurrent.CompletableFuture;
  * <p><b>可靠性保证模型：</b>
  *
  * <ul>
- *   <li>{@code syncSend}：等待 Redis XADD 命令返回，确认消息已写入 Stream。 持久化级别取决于 Redis AOF 配置（{@code appendfsync
- *       everysec} 默认每秒刷盘）
+ *   <li>{@code syncSend}：等待 Redis XADD 命令返回，确认消息已写入 Stream。 持久化级别取决于 Redis AOF 配置（{@code
+ *       appendfsync everysec} 默认每秒刷盘）
  *   <li>{@code asyncSend}：通过 {@link CompletableFuture} 异步获取 XADD 结果，语义与 syncSend 相同
  *   <li>{@code sendOneway}：Fire-and-forget，不等待 Redis 响应，不保证消息一定写入
  *   <li>{@code syncSendBatch}：基于 Pipeline 批量发送，Pipeline 本身失败会抛异常，单条失败独立标识
@@ -52,7 +50,8 @@ import java.util.concurrent.CompletableFuture;
  * <p><b>泛型设计</b>：泛型参数 {@code <T>} 声明在方法级别而非类级别。一个 Template 单例 可发送不同 body 类型的消息。
  *
  * @author StreamMQ Contributors
- * @since 0.1.0 */
+ * @since 0.1.0
+ */
 public interface StreamMessageTemplate extends TransactionExecutor {
 
     /** 默认发送超时（毫秒） */
@@ -99,10 +98,9 @@ public interface StreamMessageTemplate extends TransactionExecutor {
     }
 
     /**
-     * 异步发送（回调通知）。由 {@link #asyncSend(Message, SendOptions)} 派生的默认方法，
-     * 回调在完成线程上触发；{@code onSuccess} 收到与 Future 相同的 {@link SendResult}，
-     * 异常被包装为 {@link io.github.streammq.core.exception.StreamMQException} 后交给
-     * {@code onException}。
+     * 异步发送（回调通知）。由 {@link #asyncSend(Message, SendOptions)} 派生的默认方法， 回调在完成线程上触发；{@code onSuccess}
+     * 收到与 Future 相同的 {@link SendResult}， 异常被包装为 {@link
+     * io.github.streammq.core.exception.StreamMQException} 后交给 {@code onException}。
      *
      * @param message 消息
      * @param options 发送选项，null 时按默认值处理
@@ -120,14 +118,15 @@ public interface StreamMessageTemplate extends TransactionExecutor {
                                         ex instanceof RuntimeException re
                                                 ? re
                                                 : new io.github.streammq.core.exception
-                                                        .StreamMQException("async send failed", ex));
+                                                        .StreamMQException(
+                                                        "async send failed", ex));
                             }
                         });
     }
 
     /**
-     * 异步发送（回调通知，默认参数）。由 {@link #asyncSend(Message, SendOptions, SendCallback)}
-     * 派生的便捷默认方法，对齐 RocketMQ {@code asyncSend(msg, callback)} 习惯。
+     * 异步发送（回调通知，默认参数）。由 {@link #asyncSend(Message, SendOptions, SendCallback)} 派生的便捷默认方法，对齐
+     * RocketMQ {@code asyncSend(msg, callback)} 习惯。
      *
      * @param message 消息
      * @param callback 回调
@@ -146,9 +145,8 @@ public interface StreamMessageTemplate extends TransactionExecutor {
     <T> void sendOneway(Message<T> message);
 
     /**
-     * 批量发送（规范形）：Pipeline 一次性投递，结果与输入顺序一一对应并携带真实 Entry ID；
-     * Pipeline 本身异常时抛出 {@link io.github.streammq.core.exception.StreamMQException}。
-     * 重试语义为 at-least-once（可能重复投递，消费端需幂等）。
+     * 批量发送（规范形）：Pipeline 一次性投递，结果与输入顺序一一对应并携带真实 Entry ID； Pipeline 本身异常时抛出 {@link
+     * io.github.streammq.core.exception.StreamMQException}。 重试语义为 at-least-once（可能重复投递，消费端需幂等）。
      *
      * @param batch 批量消息
      * @param options 发送选项（超时、整体重试次数），null 时按默认值处理
