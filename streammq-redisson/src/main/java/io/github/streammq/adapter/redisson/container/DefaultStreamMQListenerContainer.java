@@ -155,8 +155,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             new ConcurrentHashMap<>();
 
     /** per-consumer 消息转换器（传给 Listener 工厂用于解码） */
-    private final ConcurrentMap<String, MessageConverter> perConsumerConverters =
-            new ConcurrentHashMap<>();
 
     /** per-consumer 过滤器链缓存（key: reg.key()，value: 预构建的过滤器列表） */
     private final ConcurrentMap<String, List<ConsumerFilter>> perConsumerFilters =
@@ -633,6 +631,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         .consumerFilter(annotation.consumerFilter())
                         .selectorType(annotation.selectorType())
                         .namespace(annotation.namespace())
+                        .consumerName(annotation.consumerGroup() + "-" + instanceToken)
                         .consumeThreadMin(annotation.consumeThreadMin())
                         .consumeThreadMax(annotation.consumeThreadMax())
                         .build();
@@ -696,6 +695,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         .consumerFilter(annotation.consumerFilter())
                         .selectorType(annotation.selectorType())
                         .namespace(annotation.namespace())
+                        .consumerName(annotation.consumerGroup() + "-" + instanceToken)
                         .build();
         reg.resolveNamespace(defaultNamespace);
         resolvePerConsumerSpi(reg);
@@ -751,6 +751,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         .consumerFilter(new Class[0])
                         .selectorType(SelectorType.TAG)
                         .namespace(annotation.namespace())
+                        .consumerName(effectiveGroup + "-" + instanceToken)
                         .build();
         reg.resolveNamespace(defaultNamespace);
         resolvePerConsumerSpi(reg);
@@ -765,7 +766,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /**
      * 按注解 per-consumer 实例化 {@link RetryPolicy} / {@link DlqFailureStrategy} / {@link
      * MessageConverter} / {@link MessageSerializer}，并创建 per-consumer {@link
-     * DefaultRetryAndDlqHandler}，缓存到 {@link #perConsumerHandlers} 与 {@link #perConsumerConverters}。
+     * DefaultRetryAndDlqHandler}，缓存到 {@link #perConsumerHandlers}，转换器实例直接回填注册模型。
      *
      * <p>注解以 SPI 接口本身（如 {@code RetryPolicy.class}）作为"使用全局"的 marker； marker
      * 时回退到容器全局实例，否则以无参构造器实例化自定义实现。
@@ -777,9 +778,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         if (!perConsumerEnabled) {
             return;
         }
-        // 1. per-consumer 消息转换器（含 per-consumer 序列化器）
+        // 1. per-consumer 消息转换器（含 per-consumer 序列化器）——直接回填到注册模型
         MessageConverter converter = resolveConverter(reg);
-        perConsumerConverters.put(reg.key(), converter);
+        reg.setConverterInstance(converter);
 
         // 2. per-consumer 重试策略
         RetryPolicy policy =
@@ -1257,7 +1258,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             removed = true;
             cancelRegistrationFutures(key);
             perConsumerFilters.remove(key);
-            perConsumerConverters.remove(key);
             ConsumerGroupManager cgm = consumerGroupManagers.remove(key);
             if (Objects.nonNull(cgm)) {
                 try {
@@ -1431,20 +1431,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     }
 
     private StreamMQListener createConsumerFor(ListenerRegistration<?> reg, boolean retryMode) {
-        boolean broadcast = reg.getConsumeMode() == ConsumeMode.BROADCASTING;
-        ListenerConfig config =
-                ListenerConfig.builder()
-                        .topic(reg.getTopic())
-                        .consumerGroup(reg.getGroup())
-                        .consumerName(reg.getGroup() + "-" + instanceToken)
-                        .namespace(reg.getNamespace())
-                        .dlqMode(reg.isDlqMode())
-                        .retryMode(retryMode)
-                        .broadcast(broadcast)
-                        .targetBodyType(reg.getTargetBodyType())
-                        .converter(perConsumerEnabled ? perConsumerConverters.get(reg.key()) : null)
-                        .build();
-        return consumerFactory.createListener(config);
+        // 0.1.0 起注册模型是唯一持有者：声明式配置由 ListenerConfig.from(reg) 单点派生，
+        // 不再在容器内重复罗列字段（消除双模型漂移）
+        return consumerFactory.createListener(ListenerConfig.from(reg, retryMode));
     }
 
     /** 处理单条消息：支持消费超时取消，以 {@code onMessage} 返回值为路由标准。 */

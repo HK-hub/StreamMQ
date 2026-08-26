@@ -82,6 +82,15 @@ public interface ListenerRegistration<T> {
 
     String getNamespace();
 
+    void setNamespace(String namespace);
+
+    /** 命名空间解析：为空时回填默认命名空间。 */
+    void resolveNamespace(String defaultNs);
+
+    /** 注册唯一键（DLQ 模式带 {@code dlq:} 前缀）。 */
+    String key();
+
+
     /**
      * 并发消费循环数下限（原线程池语义，现为读循环数）：仅 CONCURRENT 集群消费生效。
      *
@@ -92,218 +101,36 @@ public interface ListenerRegistration<T> {
     /** 并发消费循环数上限（夹取上界）。 */
     int getConsumeThreadMax();
 
-    void setNamespace(String namespace);
-
-    void resolveNamespace(String defaultNs);
-
-    String key();
-
-    class Builder<T> {
-        private ListenerType type;
-        private StreamMessageConsumer<T> consumer;
-        private String topic;
-        private String group;
-        private ConsumeMode consumeMode;
-        private int maxReconsumeTimes;
-        private int shardCount;
-        private long consumeTimeoutMillis;
-        private List<Lock> shardLocks;
-        private int pullBatchSize;
-        private long pullBlockTimeoutMillis;
-        private long pullIntervalMillis;
-        private String selectorExpression;
-        private Class<? extends MessageSerializer> serializer;
-        private Class<? extends RetryPolicy> retryPolicy;
-        private Class<? extends MessageConverter> messageConverter;
-        private Class<? extends RebalanceStrategy> rebalanceStrategy;
-        private long suspendCurrentQueueTimeMillis;
-        private int streamMaxLen;
-        private boolean enableMsgTrace;
-        private boolean dlqMode;
-        private Class<?> targetBodyType;
-        private Class<? extends DlqFailureStrategy> dlqFailureStrategy;
-        private Class<? extends ConsumerFilter>[] consumerFilter;
-        private SelectorType selectorType;
-        private String namespace;
-        private int consumeThreadMin = 1;
-        private int consumeThreadMax =
-                io.github.streammq.core.StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX;
-
-        public Builder<T> consumeThreadMin(int consumeThreadMin) {
-            this.consumeThreadMin = consumeThreadMin;
-            return this;
-        }
-
-        public Builder<T> consumeThreadMax(int consumeThreadMax) {
-            this.consumeThreadMax = consumeThreadMax;
-            return this;
-        }
-
-        public Builder<T> type(ListenerType type) {
-            this.type = type;
-            return this;
-        }
-
-        public Builder<T> consumer(StreamMessageConsumer<T> consumer) {
-            this.consumer = consumer;
-            return this;
-        }
-
-        public Builder<T> topic(String topic) {
-            this.topic = topic;
-            return this;
-        }
-
-        public Builder<T> group(String group) {
-            this.group = group;
-            return this;
-        }
-
-        public Builder<T> consumeMode(ConsumeMode consumeMode) {
-            this.consumeMode = consumeMode;
-            return this;
-        }
-
-        public Builder<T> maxReconsumeTimes(int maxReconsumeTimes) {
-            this.maxReconsumeTimes = maxReconsumeTimes;
-            return this;
-        }
-
-        public Builder<T> shardCount(int shardCount) {
-            this.shardCount = shardCount;
-            return this;
-        }
-
-        public Builder<T> consumeTimeoutMillis(long consumeTimeoutMillis) {
-            this.consumeTimeoutMillis = consumeTimeoutMillis;
-            return this;
-        }
-
-        public Builder<T> shardLocks(List<Lock> shardLocks) {
-            this.shardLocks = shardLocks;
-            return this;
-        }
-
-        public Builder<T> pullBatchSize(int pullBatchSize) {
-            this.pullBatchSize = pullBatchSize;
-            return this;
-        }
-
-        public Builder<T> pullBlockTimeoutMillis(long pullBlockTimeoutMillis) {
-            this.pullBlockTimeoutMillis = pullBlockTimeoutMillis;
-            return this;
-        }
-
-        public Builder<T> pullIntervalMillis(long pullIntervalMillis) {
-            this.pullIntervalMillis = pullIntervalMillis;
-            return this;
-        }
-
-        public Builder<T> selectorExpression(String selectorExpression) {
-            this.selectorExpression = selectorExpression;
-            return this;
-        }
-
-        public Builder<T> serializer(Class<? extends MessageSerializer> serializer) {
-            this.serializer = serializer;
-            return this;
-        }
-
-        public Builder<T> retryPolicy(Class<? extends RetryPolicy> retryPolicy) {
-            this.retryPolicy = retryPolicy;
-            return this;
-        }
-
-        public Builder<T> messageConverter(Class<? extends MessageConverter> messageConverter) {
-            this.messageConverter = messageConverter;
-            return this;
-        }
-
-        public Builder<T> rebalanceStrategy(Class<? extends RebalanceStrategy> rebalanceStrategy) {
-            this.rebalanceStrategy = rebalanceStrategy;
-            return this;
-        }
-
-        public Builder<T> suspendCurrentQueueTimeMillis(long suspendCurrentQueueTimeMillis) {
-            this.suspendCurrentQueueTimeMillis = suspendCurrentQueueTimeMillis;
-            return this;
-        }
-
-        public Builder<T> streamMaxLen(int streamMaxLen) {
-            this.streamMaxLen = streamMaxLen;
-            return this;
-        }
-
-        public Builder<T> enableMsgTrace(boolean enableMsgTrace) {
-            this.enableMsgTrace = enableMsgTrace;
-            return this;
-        }
-
-        public Builder<T> dlqMode(boolean dlqMode) {
-            this.dlqMode = dlqMode;
-            return this;
-        }
-
-        public Builder<T> targetBodyType(Class<?> targetBodyType) {
-            this.targetBodyType = targetBodyType;
-            return this;
-        }
-
-        public Builder<T> dlqFailureStrategy(
-                Class<? extends DlqFailureStrategy> dlqFailureStrategy) {
-            this.dlqFailureStrategy = dlqFailureStrategy;
-            return this;
-        }
-
-        public Builder<T> consumerFilter(Class<? extends ConsumerFilter>[] consumerFilter) {
-            this.consumerFilter = consumerFilter;
-            return this;
-        }
-
-        public Builder<T> selectorType(SelectorType selectorType) {
-            this.selectorType = selectorType;
-            return this;
-        }
-
-        public Builder<T> namespace(String namespace) {
-            this.namespace = namespace;
-            return this;
-        }
-
-        public ListenerRegistration<T> build() {
-            return new DefaultListenerRegistration<>(
-                    type,
-                    consumer,
-                    topic,
-                    group,
-                    consumeMode,
-                    maxReconsumeTimes,
-                    shardCount,
-                    consumeTimeoutMillis,
-                    shardLocks,
-                    pullBatchSize,
-                    pullBlockTimeoutMillis,
-                    pullIntervalMillis,
-                    selectorExpression,
-                    serializer,
-                    retryPolicy,
-                    messageConverter,
-                    rebalanceStrategy,
-                    suspendCurrentQueueTimeMillis,
-                    streamMaxLen,
-                    enableMsgTrace,
-                    dlqMode,
-                    targetBodyType,
-                    dlqFailureStrategy,
-                    consumerFilter,
-                    selectorType,
-                    namespace,
-                    consumeThreadMin,
-                    consumeThreadMax);
-        }
+    /**
+     * 底层 Redis 消费者名；null 表示由适配层自动生成（group + 实例后缀）。
+     *
+     * @return 消费者名，可为 null
+     */
+    default String getConsumerName() {
+        return null;
     }
 
-    static <T> Builder<T> builder() {
-        return new Builder<>();
+    /**
+     * 是否为 retry Stream 监听（对齐 RocketMQ %RETRY%{group}%）。
+     *
+     * @return true 表示 retry 监听
+     */
+    default boolean isRetryMode() {
+        return false;
+    }
+
+    /**
+     * per-consumer 已解析转换器实例；null 表示使用全局转换器。
+     *
+     * @return 转换器实例，可为 null
+     */
+    MessageConverter getConverterInstance();
+
+    /** 由容器在 per-consumer SPI 解析后回填转换器实例。 */
+    void setConverterInstance(MessageConverter converter);
+
+    /** 唯一构造入口：委托 {@link DefaultListenerRegistration.Builder}（字段校验集中于此）。 */
+    static <T> DefaultListenerRegistration.Builder<T> builder() {
+        return new DefaultListenerRegistration.Builder<>();
     }
 }
