@@ -1,5 +1,10 @@
 # StreamMQ 架构设计文档
 
+> **⚠️ 历史设计稿声明**：本文档为实现前的设计稿，其中的类名、模块名、配置键与部分机制
+> 描述已随实现演进过时（如 `StreamMqTemplate` → `StreamMessageTemplate`、`@StreamMqListener`
+> → `@StreamMQConsumer`、SPI 默认值、Redis Key 布局等）。**当前权威参考是 README 与代码
+> Javadoc**，请勿将本文档中的 API/配置细节作为集成依据。
+
 > 配套 PRD：[01-PRD.md](./01-PRD.md)
 > 本文档定义 StreamMQ 的整体架构、模块划分、关键组件设计、数据流、部署形态、扩展点。
 

@@ -10,8 +10,38 @@ permissions:
   contents: write
 
 jobs:
+  test:
+    name: Test (gate before publish)
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      # 发布门禁：单测 + 集成测试 + Spotless/JaCoCo 全部通过才允许进入 deploy job。
+      # 此前发布通道直接 deploy -DskipTests，完全绕过质量门禁，属高危流程缺陷。
+      - name: Run full verify (unit + integration)
+        run: mvn clean verify -B
+
   publish:
     name: Publish to Maven Central
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
@@ -41,6 +71,7 @@ jobs:
       - name: Sync BOM version property
         run: mvn versions:set-property -Dproperty=streammq.version -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false
 
+      # 测试已在 test job 通过（needs: test 门禁），此处跳过仅为避免重复执行
       - name: Build and deploy to Maven Central
         run: mvn clean deploy -DskipTests -Pgpg
         env:
@@ -55,9 +86,18 @@ jobs:
           tag_name: ${{ github.ref }}
           generate_release_notes: true
           files: |
+            streammq-bom/target/streammq-bom-${{ steps.version.outputs.version }}.pom
             streammq-core/target/streammq-core-${{ steps.version.outputs.version }}.jar
             streammq-core/target/streammq-core-${{ steps.version.outputs.version }}-sources.jar
             streammq-core/target/streammq-core-${{ steps.version.outputs.version }}-javadoc.jar
             streammq-redisson/target/streammq-redisson-${{ steps.version.outputs.version }}.jar
+            streammq-redisson/target/streammq-redisson-${{ steps.version.outputs.version }}-sources.jar
+            streammq-redisson/target/streammq-redisson-${{ steps.version.outputs.version }}-javadoc.jar
             streammq-spring-boot-starter/target/streammq-spring-boot-starter-${{ steps.version.outputs.version }}.jar
-            streammq-bom/target/streammq-bom-${{ steps.version.outputs.version }}.pom
+            streammq-spring-boot-starter/target/streammq-spring-boot-starter-${{ steps.version.outputs.version }}-sources.jar
+            streammq-spring-boot-starter/target/streammq-spring-boot-starter-${{ steps.version.outputs.version }}-javadoc.jar
+            streammq-tracing-opentelemetry/target/streammq-tracing-opentelemetry-${{ steps.version.outputs.version }}.jar
+            streammq-diagnostics/target/streammq-diagnostics-${{ steps.version.outputs.version }}.jar
+            streammq-kubernetes/target/streammq-kubernetes-${{ steps.version.outputs.version }}.jar
+            streammq-spring-cloud-stream-binder/target/streammq-spring-cloud-stream-binder-${{ steps.version.outputs.version }}.jar
+            streammq-test/target/streammq-test-${{ steps.version.outputs.version }}.jar

@@ -1,5 +1,10 @@
 # StreamMQ 详细设计文档
 
+> **⚠️ 历史设计稿声明**：本文档为实现前的设计稿，其中的类名、模块名、配置键与部分机制
+> 描述已随实现演进过时（如 `StreamMqTemplate` → `StreamMessageTemplate`、`@StreamMqListener`
+> → `@StreamMQConsumer`、SPI 默认值、Redis Key 布局等）。**当前权威参考是 README 与代码
+> Javadoc**，请勿将本文档中的 API/配置细节作为集成依据。
+
 > 配套 PRD：[01-PRD.md](./01-PRD.md)　架构：[02-architecture.md](./02-architecture.md)　功能设计：[03-functional-design.md](./03-functional-design.md)
 > 本文档定义 StreamMQ 内部实现细节：内部类、算法伪代码、线程模型、Redis Key 操作、状态机、异常降级。外部 API 以 03-functional-design.md 为准，本文档不修改对外契约。
 
