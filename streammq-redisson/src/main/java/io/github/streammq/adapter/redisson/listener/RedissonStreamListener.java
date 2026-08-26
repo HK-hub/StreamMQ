@@ -58,13 +58,19 @@ import org.slf4j.LoggerFactory;
  * @since 0.1.0
  */
 @Getter
-@EqualsAndHashCode(of = {"namespace", "topic", "group", "consumerName", "dlqMode"})
+@EqualsAndHashCode(
+        of = {"namespace", "topic", "group", "consumerName", "dlqMode", "retryMode", "broadcast"})
 public class RedissonStreamListener implements StreamMQListener {
 
     private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamListener.class);
 
-    /** Class.forName 缓存，避免每条消息重复类加载查找（正结果缓存，负结果不缓存） */
-    private static final ConcurrentMap<String, Class<?>> CLASS_CACHE = new ConcurrentHashMap<>();
+    /**
+     * Class.forName 缓存，避免每条消息重复类加载查找（正结果缓存，负结果不缓存）。
+     *
+     * <p><b>实例级而非静态：</b>若以 simpleName 为键做成 JVM 级静态缓存，两个不同监听器 （不同 topic /
+     * 不同目标类型）会发生跨实例缓存污染——先解析到的类被错误地提供给 另一个监听器，造成反序列化类型混淆。实例级缓存将作用域限制在单个监听器内。
+     */
+    private final ConcurrentMap<String, Class<?>> classCache = new ConcurrentHashMap<>();
 
     private final @NonNull RedissonClient redisson;
     private final String namespace;
@@ -307,20 +313,14 @@ public class RedissonStreamListener implements StreamMQListener {
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
-            // 广播模式清理：销毁本实例专属消费者组，防止每次重启累积一个新组
-            // （组名含实例标识，重启后若不清理将无限增长并各自重放全量历史）
-            if (broadcast && !dlqMode && !retryMode) {
-                try {
-                    getStream().removeGroup(getEffectiveGroup());
-                } catch (RuntimeException ex) {
-                    LOG.debug(
-                            "Broadcast group destroy failed (will be recreated on next start):"
-                                    + " topic={}, group={}: {}",
-                            topic,
-                            group,
-                            ex.getMessage());
-                }
-            }
+            // 广播模式：不再销毁消费者组。此前 close() 直接 removeGroup 会带来两个严重问题：
+            //   1. 组的 PEL 一并丢弃 —— 优雅停机时在途消息永久丢失；
+            //   2. 重启后 ensureGroup 以 id(0-0) 重建组 —— 全量历史重放。
+            // 现在改为"心跳 + 僵尸组回收"模型：
+            //   - 运行中的广播监听器每次拉取成功都会刷新注册表心跳（见 doRead）；
+            //   - close()/崩溃后心跳停止，{@link #sweepStaleBroadcastGroups} 在心跳超过
+            //     BROADCAST_GROUP_STALE_TTL_MS 后才 XGROUP DESTROY 该僵尸组，
+            //     正常重启的实例因组仍存在而继续从上次消费位点恢复，既不重放也不丢 PEL。
             LOG.info(
                     "RedissonStreamListener closed: topic={}, group={}, consumer={}",
                     topic,
@@ -365,6 +365,7 @@ public class RedissonStreamListener implements StreamMQListener {
                     stream.getName(),
                     result != null ? result.size() : 0);
             if (CollectionUtils.isEmpty(result)) {
+                heartbeatBroadcastRegistry();
                 return List.of();
             }
             List<Message<?>> messages = new ArrayList<>(result.size());
@@ -387,13 +388,20 @@ public class RedissonStreamListener implements StreamMQListener {
             if (!poisonIds.isEmpty()) {
                 ackBatch(poisonIds);
             }
+            heartbeatBroadcastRegistry();
             return messages;
         } catch (RuntimeException ex) {
             String msg = ex.getMessage();
-            if (Objects.nonNull(msg) && msg.contains(NOGROUP_MARKER)) {
+            boolean noGroup = Objects.nonNull(msg) && msg.contains(NOGROUP_MARKER);
+            // Stream Key 在 group 创建后被删除（外部清理/运维误删/裁剪）时，RESP2 对不存在的
+            // key 返回空数组，Redisson 解析为 EmptyList 并在内部强转 Map 时抛 ClassCastException，
+            // 其消息不含 NOGROUP 标记——若不识别会退化为每轮拉取都失败的死循环。
+            boolean missingStream = ex instanceof ClassCastException;
+            if (noGroup || missingStream) {
                 LOG.warn(
-                        "NOGROUP detected, resetting groupCreated flag to trigger re-creation: "
-                                + "streamKey={}, effectiveGroup={}, error={}",
+                        "Group/stream missing ({}), resetting groupCreated flag to trigger"
+                                + " re-creation: streamKey={}, effectiveGroup={}, error={}",
+                        noGroup ? "NOGROUP" : "missing-stream",
                         stream.getName(),
                         effectiveGroup,
                         msg);
@@ -487,7 +495,7 @@ public class RedissonStreamListener implements StreamMQListener {
     }
 
     private Class<?> findClassBySimpleName(String simpleName) {
-        Class<?> cached = CLASS_CACHE.get(simpleName);
+        Class<?> cached = classCache.get(simpleName);
         if (Objects.nonNull(cached)) {
             return cached;
         }
@@ -497,7 +505,7 @@ public class RedissonStreamListener implements StreamMQListener {
                 classLoader = getClass().getClassLoader();
             }
             Class<?> clazz = Class.forName(simpleName, false, classLoader);
-            CLASS_CACHE.put(simpleName, clazz);
+            classCache.put(simpleName, clazz);
             return clazz;
         } catch (ClassNotFoundException e) {
             LOG.debug(
@@ -505,6 +513,88 @@ public class RedissonStreamListener implements StreamMQListener {
                     simpleName);
             return null;
         }
+    }
+
+    // ===================== 广播组心跳与僵尸组回收 =====================
+
+    /** 广播组心跳过期 TTL（毫秒）：超过该时长无心跳的广播组视为僵尸组，由回收任务销毁 */
+    public static final long BROADCAST_GROUP_STALE_TTL_MS = 10L * 60 * 1000;
+
+    /**
+     * 刷新本广播监听器在注册表中的心跳（ZSet score = 当前时间）。
+     *
+     * <p>仅 broadcast 且非 dlq/retry 模式时写入；失败静默（最坏情况是组被回收后由 ensureGroup 重建，语义等同旧版 close-destroy
+     * 路径，不会更糟）。
+     */
+    private void heartbeatBroadcastRegistry() {
+        if (!broadcast || dlqMode || retryMode) {
+            return;
+        }
+        try {
+            redisson.getScoredSortedSet(StreamMQKeys.broadcastRegistry(namespace))
+                    .add(System.currentTimeMillis(), registryMember());
+        } catch (RuntimeException ex) {
+            LOG.debug("Broadcast heartbeat failed: {}", ex.getMessage());
+        }
+    }
+
+    private String registryMember() {
+        return topic + "|" + getEffectiveGroup();
+    }
+
+    /**
+     * 回收僵尸广播消费者组：心跳超过 {@link #BROADCAST_GROUP_STALE_TTL_MS} 的广播组， 其所属实例已确认死亡（崩溃或长时间停止），XGROUP
+     * DESTROY 释放其占用的 PEL 与元数据。
+     *
+     * <p>由 {@code PelClaimScheduler} 周期性调用（低频）。安全性论证：
+     *
+     * <ul>
+     *   <li>活实例每次拉取都刷新心跳，绝不会被误回收（除非暂停超过 TTL——文档已注明）；
+     *   <li>被回收组的 PEL 属于已死实例；广播语义下其它实例持有各自独立副本，不造成业务丢失；
+     *   <li>回收后若实例"复活"，ensureGroup 会重建组并从 0-0 开始——与旧版行为一致的最坏情况。
+     * </ul>
+     *
+     * @param redisson Redisson 客户端
+     * @param namespace 命名空间
+     * @return 本次回收的组数量
+     */
+    public static int sweepStaleBroadcastGroups(RedissonClient redisson, String namespace) {
+        org.redisson.api.RScoredSortedSet<String> registry =
+                redisson.<String>getScoredSortedSet(StreamMQKeys.broadcastRegistry(namespace));
+        long cutoff = System.currentTimeMillis() - BROADCAST_GROUP_STALE_TTL_MS;
+        java.util.Collection<String> staleMembers =
+                registry.valueRange(0, true, cutoff, true, 0, 100);
+        int removed = 0;
+        for (String member : staleMembers) {
+            int sepIdx = member.indexOf('|');
+            if (sepIdx <= 0) {
+                registry.remove(member);
+                continue;
+            }
+            String topic = member.substring(0, sepIdx);
+            String effectiveGroup = member.substring(sepIdx + 1);
+            try {
+                RStream<String, String> stream =
+                        redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
+                stream.removeGroup(effectiveGroup);
+                registry.remove(member);
+                removed++;
+                LOG.info("Swept stale broadcast group: topic={}, group={}", topic, effectiveGroup);
+            } catch (RuntimeException ex) {
+                // NOGROUP 等情况说明组已不存在，注册表条目一并清理；其他错误保留条目下轮重试
+                String msg = ex.getMessage();
+                if (Objects.nonNull(msg) && msg.contains("NOGROUP")) {
+                    registry.remove(member);
+                } else {
+                    LOG.debug(
+                            "Sweep stale broadcast group failed: topic={}, group={}: {}",
+                            topic,
+                            effectiveGroup,
+                            ex.getMessage());
+                }
+            }
+        }
+        return removed;
     }
 
     private void ensureGroup() {

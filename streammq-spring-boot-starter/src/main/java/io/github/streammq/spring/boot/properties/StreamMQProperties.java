@@ -181,6 +181,12 @@ public class StreamMQProperties {
         private int maxBatchSizeLimit = StreamMQConstants.MAX_BATCH_SIZE_LIMIT;
 
         /**
+         * 背压队列容量：{@code >0} 启用拉取/处理解耦（队列满时拉取阻塞），{@code 0} 禁用。 默认 0（禁用，与 DEFAULT_INFLIGHT_CAPACITY
+         * 一致）。
+         */
+        private int inflightCapacity = StreamMQConstants.DEFAULT_INFLIGHT_CAPACITY;
+
+        /**
          * 消费超时取消后的宽限期（毫秒）：等待业务线程真正终止， 用于缩小与重试副本的重叠窗口。 默认 {@link
          * StreamMQConstants#DEFAULT_TIMEOUT_CANCEL_GRACE_MS}。
          */
@@ -355,6 +361,9 @@ public class StreamMQProperties {
     /** 管理端点配置（Actuator 运维接口）。 */
     @Data
     public static class Admin {
+        /** 管理端点开关：与 streammq.health.enabled 解耦，false 时仅关闭管理/运维 REST 端点（健康检查不受影响） */
+        private boolean enabled = true;
+
         /** 管理端点列表默认页大小 */
         private int listPageSize = StreamMQSpringConstants.DEFAULT_LIST_PAGE_SIZE;
 

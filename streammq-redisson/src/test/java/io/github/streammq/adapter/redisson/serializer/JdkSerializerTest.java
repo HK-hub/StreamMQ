@@ -112,12 +112,14 @@ class JdkSerializerTest {
     }
 
     @Test
-    @DisplayName("deserialize 类型不匹配抛出 SerializationException")
+    @DisplayName("deserialize 目标类型不在白名单时被过滤器拒绝（安全优先于事后类型检查）")
     void deserializeTypeMismatch() {
         byte[] bytes = serializer.serialize(new MyData("Bob", 25), MyData.class);
+        // String 不携带 MyData 白名单项：readObject 阶段即被 JEP 290 过滤器拦截，
+        // 而非旧实现的反序列化后类型不匹配检查
         assertThatThrownBy(() -> serializer.deserialize(bytes, String.class))
                 .isInstanceOf(SerializationException.class)
-                .hasMessageContaining("type mismatch");
+                .hasMessageContaining("JDK deserialize failed");
     }
 
     @Test
@@ -133,5 +135,38 @@ class JdkSerializerTest {
     @DisplayName("name 返回 jdk")
     void name() {
         assertThat(serializer.name()).isEqualTo("jdk");
+    }
+
+    /** 白名单外的测试用 POJO */
+    public static class ForeignData implements Serializable {
+        private static final long serialVersionUID = 1L;
+    }
+
+    @Test
+    @DisplayName("默认过滤器拒绝白名单外的类（反序列化前拦截）")
+    void filterRejectsNonWhitelistedClass() {
+        JdkSerializer<ForeignData> foreign = new JdkSerializer<>();
+        byte[] bytes = foreign.serialize(new ForeignData(), ForeignData.class);
+        assertThatThrownBy(() -> serializer.deserialize(bytes, MyData.class))
+                .isInstanceOf(SerializationException.class);
+    }
+
+    @Test
+    @DisplayName("addAllowedClasses 放行指定类")
+    void addAllowedClassesPermitsExplicitClass() {
+        JdkSerializer<MyData> widened = new JdkSerializer<>();
+        widened.addAllowedClasses(java.util.List.of(ForeignData.class.getName()));
+        byte[] bytes =
+                new JdkSerializer<ForeignData>().serialize(new ForeignData(), ForeignData.class);
+        ForeignData restored = widened.deserialize(bytes, ForeignData.class);
+        assertThat(restored).isNotNull();
+    }
+
+    @Test
+    @DisplayName("unrestricted() 关闭过滤（仅供可信环境迁移）")
+    void unrestrictedDisablesFiltering() {
+        JdkSerializer<ForeignData> open = JdkSerializer.unrestricted();
+        byte[] bytes = open.serialize(new ForeignData(), ForeignData.class);
+        assertThat(open.deserialize(bytes, ForeignData.class)).isNotNull();
     }
 }

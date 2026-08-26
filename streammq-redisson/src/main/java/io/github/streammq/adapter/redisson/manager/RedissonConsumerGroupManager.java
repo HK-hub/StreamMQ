@@ -155,6 +155,29 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
     }
 
     /**
+     * 获取 Redis 服务器当前时间（毫秒）。
+     *
+     * <p>心跳写入与超时判定必须使用同一时钟源：若使用各客户端本地时钟，跨主机时钟偏差 （NTP 失步可达数十秒）会扭曲 instanceTimeoutMs（默认
+     * 20s）的判定——快钟实例被误判 存活，慢钟实例被误踢出组触发无谓 rebalance。Redis TIME 为 O(1) 命令，开销可接受； 调用失败时降级为本地时钟（与旧行为一致）。
+     */
+    private long redisNowMs() {
+        try {
+            java.util.List<Long> time =
+                    redisson.getScript(StringCodec.INSTANCE)
+                            .eval(
+                                    org.redisson.api.RScript.Mode.READ_ONLY,
+                                    "local t = redis.call('TIME');return tonumber(t[1]) * 1000 +"
+                                            + " math.floor(tonumber(t[2]) / 1000);",
+                                    org.redisson.api.RScript.ReturnType.MULTI,
+                                    java.util.Collections.emptyList());
+            return time.get(0);
+        } catch (RuntimeException ex) {
+            LOG.debug("Redis TIME failed, falling back to local clock: {}", ex.getMessage());
+            return System.currentTimeMillis();
+        }
+    }
+
+    /**
      * 注册当前实例到消费者组。
      *
      * <ol>
@@ -173,8 +196,9 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
                     instanceId);
             return;
         }
-        // 1. 写入 instances Hash（时间戳以字符串存储，配合 StringCodec 保证跨 codec 兼容）
-        instances().put(instanceId, String.valueOf(System.currentTimeMillis()));
+        // 1. 写入 instances Hash（时间戳以字符串存储，配合 StringCodec 保证跨 codec 兼容；
+        //    时间取 Redis 服务器时钟，避免跨主机时钟偏差扭曲超时判定）
+        instances().put(instanceId, String.valueOf(redisNowMs()));
         LOG.info("Consumer instance registered: group={}, instanceId={}", group, instanceId);
 
         // 2. 初始化 Rebalance 互斥信号量（1 个许可；仅 rebalance() 临界区内 acquire/release，
@@ -250,7 +274,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
             return;
         }
         try {
-            instances().put(instanceId, String.valueOf(System.currentTimeMillis()));
+            instances().put(instanceId, String.valueOf(redisNowMs()));
             heartbeatFailCount = 0;
             LOG.debug("Heartbeat OK: group={}, instanceId={}", group, instanceId);
         } catch (RedisException ex) {
@@ -284,7 +308,8 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
         if (CollectionUtils.isEmpty(all)) {
             return List.of();
         }
-        long now = System.currentTimeMillis();
+        // 以 Redis 服务器时钟为基准判定超时（与心跳写入同一时钟源，见 redisNowMs）
+        long now = redisNowMs();
         // 清理超时实例（惰性清理）
         List<String> toRemove = new ArrayList<>();
         List<String> active = new ArrayList<>();
@@ -364,9 +389,16 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
                             .computeIfAbsent(entry.getValue(), k -> new ArrayList<>())
                             .add(entry.getKey());
                 }
-                // 写入 assignment Hash
+                // 写入 assignment Hash；同时移除已离场实例的残留分配行，
+                // 否则 Hash 随实例更替无限增长，且管理端点会展示幽灵实例的分片
                 String assignmentKey = StreamMQKeys.consumerGroupAssignment(namespace, group);
                 RMap<String, String> assignMap = redisson.getMap(assignmentKey);
+                java.util.Set<String> activeSet = new HashSet<>(activeInstances);
+                for (String known : assignMap.keySet()) {
+                    if (!activeSet.contains(known)) {
+                        assignMap.remove(known);
+                    }
+                }
                 for (Map.Entry<String, List<Integer>> entry : assignment.entrySet()) {
                     String shardsCsv =
                             String.join(

@@ -228,8 +228,9 @@ class StreamMessageTemplateTest {
 #### Integration Test Example
 
 ```java
-@ExtendWith(StreamMQTestBase.class)
-class StreamMessageServiceIT {
+// 集成测试继承 StreamMQTestBase（无 Redis 时通过 Assumptions 自动跳过），
+// 或使用 @EnabledIf("io.github.streammq.core.util.RedisAvailability#localhostAvailable")
+class StreamMessageServiceIT extends StreamMQTestBase {
 
     @Test
     void should_consume_message_when_sent_by_producer() {
@@ -277,6 +278,7 @@ streammq-parent (POM)
 ├── streammq-tracing-opentelemetry  # OpenTelemetry tracing integration
 ├── streammq-spring-cloud-stream-binder  # Spring Cloud Stream Binder
 ├── streammq-test             # Test utilities (EmbeddedRedis, assertions, mocks)
+├── streammq-benchmark        # JMH benchmarks (not published to Maven Central)
 └── streammq-samples          # Sample projects (quickstart, transaction, delay, etc.)
 ```
 
@@ -304,9 +306,8 @@ streammq-parent
 | Module | Key Class | Purpose |
 |--------|-----------|---------|
 | core | `StreamMessageTemplate` | Unified send entry point |
-| core | `StreamMessageConsumer` | Concurrent consumer interface |
-| core | `StreamMessageOrderlyConsumer` | Orderly consumer interface |
-| core | `StreamMessageConcurrentlyConsumer` | Annotation-driven concurrent consumer |
+| core | `StreamMessageConcurrentlyConsumer` | Concurrent consumer interface (annotation-driven) |
+| core | `StreamMessageOrderlyConsumer` | Orderly consumer interface (sharding + distributed lock) |
 | core | `MessageSerializer` | SPI: serialize/deserialize |
 | core | `ConsumerFilter` | SPI: message filtering |
 | core | `ProducerInterceptor` / `ConsumerInterceptor` | SPI: interceptors |
@@ -394,11 +395,11 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 | `MessageSerializer` | `JacksonJsonSerializer` |
 | `MessageConverter` | `DefaultMessageConverter` |
 | `RetryPolicy` | `FixedArrayRetryPolicy` |
-| `RebalanceStrategy` | `AverageRebalanceStrategy` |
+| `RebalanceStrategy` | `ConsistentHashRebalanceStrategy`（配置默认）/ `AverageRebalanceStrategy`（API 默认） |
 | `CompressionCodec` | `GzipCompressionCodec` |
-| `TraceCollector` | `Slf4jTraceCollector` |
-| `ManagementAuthenticator` | `AllowAllAuthenticator` |
-| `DlqFailureStrategy` | `AbstractDlqFailureStrategy` |
+| `TraceCollector` | `NoopTraceCollector`（`streammq.tracing.enabled=true` 时为 `Slf4jTraceCollector`） |
+| `ManagementAuthenticator` | `DenyAllAuthenticator`（fail-closed，需显式注册鉴权 Bean 开放） |
+| `DlqFailureStrategy` | `LogAndDropDlqFailureStrategy` |
 
 ## Pull Request Process
 

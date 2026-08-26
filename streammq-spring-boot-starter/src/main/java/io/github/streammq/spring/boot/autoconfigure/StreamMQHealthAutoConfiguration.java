@@ -76,6 +76,11 @@ public class StreamMQHealthAutoConfiguration {
     /** 管理端点的后端逻辑 Bean（供 StreamMQActuatorEndpoint 使用）。 */
     @Bean
     @ConditionalOnMissingBean(name = StreamMQSpringConstants.BEAN_ADMIN_ENDPOINT)
+    @ConditionalOnProperty(
+            prefix = "streammq.admin",
+            name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+            havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
+            matchIfMissing = true)
     public StreamMQAdminEndpoint streamMQAdminEndpoint(
             RedissonClient redisson,
             org.springframework.beans.factory.ObjectProvider<DefaultStreamMQListenerContainer>
@@ -104,6 +109,11 @@ public class StreamMQHealthAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(name = StreamMQSpringConstants.BEAN_ACTUATOR_ENDPOINT)
     @ConditionalOnClass(org.springframework.boot.actuate.endpoint.annotation.Endpoint.class)
+    @ConditionalOnProperty(
+            prefix = "streammq.admin",
+            name = StreamMQSpringConstants.PROP_NAME_ENABLED,
+            havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
+            matchIfMissing = true)
     public StreamMQActuatorEndpoint streamMQActuatorEndpoint(
             StreamMQAdminEndpoint adminEndpoint,
             org.springframework.beans.factory.ObjectProvider<StreamMQHealthIndicator>

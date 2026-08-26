@@ -71,8 +71,19 @@ class TracingSampleIT {
         await().atMost(15, TimeUnit.SECONDS)
                 .untilAsserted(
                         () -> {
-                            assertThat(testCollector.receivedMessages).hasSize(1);
-                            String traceparent = testCollector.lastTraceparent.get();
+                            // DemoRunner 会在上下文启动时发送 trace-demo-001 演示事件，
+                            // 断言必须针对本测试自己的 EVT-001 消息，而非队列总量
+                            Message<String> target =
+                                    testCollector.receivedMessages.stream()
+                                            .filter(m -> "EVT-001".equals(m.getKeys()))
+                                            .findFirst()
+                                            .orElse(null);
+                            assertThat(target).isNotNull();
+                            String traceparent =
+                                    target.getUserProperties()
+                                            .get(
+                                                    io.github.streammq.tracing.StreamMQTracing
+                                                            .TRACEPARENT_KEY);
                             assertThat(traceparent).isNotNull().matches(TRACEPARENT_REGEX);
                         });
     }

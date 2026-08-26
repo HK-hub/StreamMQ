@@ -78,7 +78,8 @@ import org.springframework.test.context.DynamicPropertySource;
             "streammq.tracing.otel.enabled=true",
             "streammq.trace.enabled=true",
             "streammq.trace.storage=redis",
-            "redisson.singleServerConfig.address=redis://127.0.0.1:6379"
+            "redisson.singleServerConfig.address=redis://127.0.0.1:6379",
+            "spring.main.allow-bean-definition-overriding=true"
         })
 @DirtiesContext
 @DisplayName("StreamMQ Tracing 真实集成测试")

@@ -12,7 +12,6 @@ import io.github.streammq.core.enums.DlqReason;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
-import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,6 +22,7 @@ import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.redisson.api.PendingEntry;
+import org.redisson.api.RLock;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.StreamMessageId;
@@ -132,15 +132,32 @@ public class PelClaimScheduler implements StreamMQScheduler {
      * @param maxReconsumeTimes 最大重试次数
      */
     public void registerTarget(String topic, String group, int maxReconsumeTimes) {
+        registerTarget(topic, group, maxReconsumeTimes, false, 0);
+    }
+
+    /**
+     * 注册一个 PEL 认领目标（完整参数）。
+     *
+     * @param topic 主题
+     * @param group 消费者组名
+     * @param maxReconsumeTimes 最大重试次数
+     * @param orderly 是否为顺序消费目标（顺序目标认领前需检查分片锁活性）
+     * @param shardCount 顺序消费分片数（orderly=false 时忽略）
+     */
+    public void registerTarget(
+            String topic, String group, int maxReconsumeTimes, boolean orderly, int shardCount) {
         Objects.requireNonNull(topic, "topic");
         Objects.requireNonNull(group, "group");
         String key = topic + ":" + group;
-        targets.put(key, new PelClaimTarget(topic, group, maxReconsumeTimes));
+        targets.put(key, new PelClaimTarget(topic, group, maxReconsumeTimes, orderly, shardCount));
         LOG.info(
-                "Registered PelClaim target: topic={}, group={}, maxReconsumeTimes={}",
+                "Registered PelClaim target: topic={}, group={}, maxReconsumeTimes={},"
+                        + " orderly={}, shardCount={}",
                 topic,
                 group,
-                maxReconsumeTimes);
+                maxReconsumeTimes,
+                orderly,
+                shardCount);
     }
 
     @Override
@@ -216,17 +233,79 @@ public class PelClaimScheduler implements StreamMQScheduler {
                         ex);
             }
         }
+        // 低频搭车任务：回收心跳超时的僵尸广播消费者组（见 RedissonStreamListener#sweepStaleBroadcastGroups）
+        if (Math.floorMod(scanCounter.incrementAndGet(), BROADCAST_SWEEP_EVERY_N_SCANS) == 0) {
+            try {
+                int swept =
+                        io.github.streammq.adapter.redisson.listener.RedissonStreamListener
+                                .sweepStaleBroadcastGroups(redisson, namespace);
+                if (swept > 0) {
+                    LOG.info("Swept {} stale broadcast group(s)", swept);
+                }
+            } catch (RuntimeException ex) {
+                LOG.debug("Sweep stale broadcast groups failed: {}", ex.getMessage());
+            }
+        }
     }
 
-    /** 扫描指定目标的 PEL，对空闲超阈值的消息执行 XAUTOCLAIM 或 DLQ 路由。 */
+    /** 广播僵尸组回收频率：每 N 轮扫描执行一次 */
+    private static final int BROADCAST_SWEEP_EVERY_N_SCANS = 60;
+
+    private final java.util.concurrent.atomic.AtomicLong scanCounter =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * 扫描指定目标的 PEL，对空闲超阈值的消息执行重投或 DLQ 路由。
+     *
+     * <p><b>多实例互斥：</b>整个目标扫描持分布式锁（tryLock，不等待）， 同一时刻仅一个实例对同一 topic:group 执行「XADD 副本 + ACK」，
+     * 消除滚动发布期间 N 实例并发扫描造成的 ×N 重复投递。
+     *
+     * <p><b>活消费者保护：</b>
+     *
+     * <ul>
+     *   <li>阈值 {@code minIdleMs} 默认 60s，为消费超时（30s）+ 取消宽限期的约 2 倍， 正常慢处理不会被误判；
+     *   <li>ORDERLY 目标额外检查消息所属分片的分布式锁是否仍被持有——看门狗续期中的分片锁 代表该消息正被某个实例合法处理（顺序消费无超时包装），此时绝不认领。
+     * </ul>
+     */
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void scanPel(PelClaimTarget target) {
+        String lockKey = StreamMQKeys.pelClaimLock(namespace, target.topic, target.group);
+        RLock scanLock = redisson.getLock(lockKey);
+        // 不等待：其它实例正在扫该目标时直接跳过本轮；leaseTime 兜底防止持有者崩溃后死锁
+        boolean locked;
+        try {
+            locked =
+                    scanLock.tryLock(
+                            0,
+                            StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS * 1000L,
+                            TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            return;
+        }
+        if (!locked) {
+            LOG.debug(
+                    "PelClaim scan skipped, another instance holds the scan lock:"
+                            + " topic={}, group={}",
+                    target.topic,
+                    target.group);
+            return;
+        }
+        try {
+            doScanPel(target);
+        } finally {
+            if (scanLock.isHeldByCurrentThread()) {
+                scanLock.unlock();
+            }
+        }
+    }
+
+    private void doScanPel(PelClaimTarget target) {
         String streamKey = StreamMQKeys.topicStream(namespace, target.topic);
         RStream<String, String> stream = redisson.getStream(streamKey);
         String dlqStreamKey = StreamMQKeys.dlqStream(namespace, target.group);
 
         // 读取 PEL 中的 pending 消息
-        List<StreamMessageId> pendingIds;
         try {
             // listPending 返回 PendingEntry 列表，包含 messageId 和 idleTime
             var pending =
@@ -245,6 +324,16 @@ public class PelClaimScheduler implements StreamMQScheduler {
                     // 读取消息内容判断 retryTimes
                     var readResult = stream.range(id, id);
                     if (CollectionUtils.isEmpty(readResult)) {
+                        // 条目已被 MAXLEN 裁剪：内容永久不可恢复，无法重投也无法进 DLQ。
+                        // ACK 移除 PEL 引用避免积压永生，WARN 提示运维关注裁剪配置。
+                        stream.ack(target.group, id);
+                        LOG.warn(
+                                "Pending entry trimmed from stream (MAXLEN), ACK to unblock"
+                                        + " PEL: topic={}, group={}, id={}, consumer={}",
+                                target.topic,
+                                target.group,
+                                id,
+                                entry.getConsumerName());
                         continue;
                     }
                     Map<String, String> fields =
@@ -270,6 +359,17 @@ public class PelClaimScheduler implements StreamMQScheduler {
                                 id,
                                 retryTimes);
                     } else {
+                        // ORDERLY 活消费者保护：消息所属分片的看门狗锁仍在续期 ⇒ 该消息正被
+                        // 某实例合法消费中（顺序消费无超时取消），跳过认领，避免重复副作用与乱序。
+                        if (target.orderly && isShardLockHeld(target, fields)) {
+                            LOG.debug(
+                                    "Skip claiming orderly pending, shard lock held by live"
+                                            + " consumer: topic={}, group={}, id={}",
+                                    target.topic,
+                                    target.group,
+                                    id);
+                            continue;
+                        }
                         // 重新投递：容器消费者使用 XREADGROUP >（neverDelivered）读取，
                         // XAUTOCLAIM 到固定消费者名（pelclaim-consumer）的消息永远不会被读取（永久卡在 PEL）。
                         // 因此改为：XADD 新 entry（递增 retryTimes，保留 originalMessageId）+ ACK 旧 entry，
@@ -308,6 +408,29 @@ public class PelClaimScheduler implements StreamMQScheduler {
         }
     }
 
+    /** 判断消息所属分片的分布式锁是否仍被持有（持有 = 有实例正在处理该分片的消息）。 */
+    private boolean isShardLockHeld(PelClaimTarget target, Map<String, String> fields) {
+        if (target.shardCount <= 0) {
+            return false;
+        }
+        String shardingKey = fields.get(DefaultMessageConverter.FIELD_SHARDING_KEY);
+        if (StringUtils.isEmpty(shardingKey)) {
+            shardingKey = "";
+        }
+        int shardIndex = (shardingKey.hashCode() & 0x7fffffff) % target.shardCount;
+        try {
+            RLock shardLock =
+                    redisson.getLock(
+                            StreamMQKeys.shardLock(
+                                    namespace, target.topic, target.group, shardIndex));
+            return shardLock.isLocked();
+        } catch (RuntimeException ex) {
+            // 锁状态查询失败时保守处理：视为被持有，宁可延迟认领也不重复投递
+            LOG.debug("Shard lock state check failed, assuming held: {}", ex.getMessage());
+            return true;
+        }
+    }
+
     private int parseRetryTimes(Map<String, String> fields) {
         String retryTimesStr = fields.get(DefaultMessageConverter.FIELD_RETRY_TIMES);
         if (StringUtils.isNotEmpty(retryTimesStr)) {
@@ -328,11 +451,20 @@ public class PelClaimScheduler implements StreamMQScheduler {
         final String topic;
         final String group;
         final int maxReconsumeTimes;
+        final boolean orderly;
+        final int shardCount;
 
-        PelClaimTarget(String topic, String group, int maxReconsumeTimes) {
+        PelClaimTarget(
+                String topic,
+                String group,
+                int maxReconsumeTimes,
+                boolean orderly,
+                int shardCount) {
             this.topic = topic;
             this.group = group;
             this.maxReconsumeTimes = maxReconsumeTimes;
+            this.orderly = orderly;
+            this.shardCount = shardCount;
         }
     }
 }

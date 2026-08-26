@@ -19,6 +19,8 @@ import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 顺序消费分片锁管理器默认实现（策略类，基于 Redisson）。
@@ -34,7 +36,34 @@ import org.redisson.api.RedissonClient;
 @RequiredArgsConstructor
 public class RedissonOrderlyShardLockManager implements OrderlyShardLockManager {
 
+    private static final Logger LOG =
+            LoggerFactory.getLogger(RedissonOrderlyShardLockManager.class);
+
+    /** 分片锁获取默认等待上限（毫秒）：超时未获得则转 RECONSUME_LATER */
+    public static final long DEFAULT_ACQUIRE_TIMEOUT_MS =
+            io.github.streammq.core.StreamMQConstants.DEFAULT_ORDERLY_LOCK_ACQUIRE_TIMEOUT_MS;
+
     @NonNull private final RedissonClient redisson;
+
+    /**
+     * 分片锁获取等待上限（毫秒）。
+     *
+     * <p>旧实现使用无限期 {@code lock.lock()}：持有者线程挂死时 watchdog 持续续期， 其它实例在该 shard
+     * 上的消费线程将永久阻塞并不断累积，最终耗尽线程资源。 有界等待下，超时方转 {@link ConsumeAction#RECONSUME_LATER} 稍后重投， 最坏停摆时间被限制为
+     * acquireTimeout + watchdog TTL。
+     */
+    private volatile long acquireTimeoutMs = DEFAULT_ACQUIRE_TIMEOUT_MS;
+
+    /**
+     * 设置分片锁获取等待上限（毫秒）。
+     *
+     * @param millis 等待上限，必须 &gt; 0
+     */
+    public void setAcquireTimeoutMs(long millis) {
+        if (millis > 0) {
+            this.acquireTimeoutMs = millis;
+        }
+    }
 
     /**
      * 为顺序消费 Consumer 创建 shard 级分布式锁数组。
@@ -90,10 +119,26 @@ public class RedissonOrderlyShardLockManager implements OrderlyShardLockManager 
         }
         int shardIndex = (shardingKey.hashCode() & 0x7fffffff) % reg.getShardCount();
         RLock lock = (RLock) reg.getShardLocks().get(shardIndex);
+        boolean locked;
         try {
-            // 使用看门狗（无限期租约，自动续期）：避免业务处理超过固定租约后锁被其他实例抢占导致顺序性被破坏。
-            // 看门狗默认 30s，线程存活期间自动续期；线程退出或 JVM 崩溃后锁自动释放。
-            lock.lock();
+            // 有界等待 + 看门狗租约：等待超过上限即放弃本条消息（RECONSUME_LATER 重投），
+            // 避免持有者挂死时本实例线程无限阻塞；获得锁后由 watchdog 自动续期保证顺序性。
+            locked = lock.tryLock(acquireTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            return ConsumeAction.RECONSUME_LATER;
+        }
+        if (!locked) {
+            LOG.warn(
+                    "Shard lock acquire timed out ({}ms), deferring message: topic={}, group={},"
+                            + " shard={}",
+                    acquireTimeoutMs,
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    shardIndex);
+            return ConsumeAction.RECONSUME_LATER;
+        }
+        try {
             return orderly.onMessage(message, ctx);
         } finally {
             if (lock.isHeldByCurrentThread()) {

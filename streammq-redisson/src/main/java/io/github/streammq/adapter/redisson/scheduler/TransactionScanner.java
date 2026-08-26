@@ -20,13 +20,19 @@ import io.github.streammq.core.transaction.TransactionChecker;
 import io.github.streammq.core.transaction.TransactionContext;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
+import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import lombok.Setter;
 import org.redisson.api.*;
 import org.redisson.api.stream.StreamAddArgs;
@@ -120,8 +126,22 @@ public class TransactionScanner implements StreamMQScheduler {
     /** 事务执行权锁默认 TTL（毫秒）：持有者崩溃后其它实例可在 TTL 过期后接管 */
     public static final long DEFAULT_TX_LOCK_TTL_MS = 30_000L;
 
+    /** 终态字段默认保留期（毫秒）：超过后由维护任务从 txstate Hash 清除，防止 Hash 无限增长 */
+    public static final long DEFAULT_TX_STATE_RETENTION_MS = 7L * 24 * 60 * 60 * 1000;
+
+    /** 孤儿半消息默认保留期（毫秒）：half Stream 中无状态引用且超龄的条目由维护任务清除 */
+    public static final long DEFAULT_ORPHAN_HALF_RETENTION_MS = 24L * 60 * 60 * 1000;
+
+    /** 维护扫描运行间隔（每 N 轮回查扫描执行一次终态/孤儿清理） */
+    private static final int MAINTENANCE_EVERY_N_SCANS = 10;
+
     /** 本实例的锁持有者标识（进程级唯一） */
     private final String lockHolderId = java.util.UUID.randomUUID().toString();
+
+    /** Lua 脚本：仅当锁仍归本实例持有时删除（原子 compare-and-delete，避免误删接管者的锁） */
+    private static final String LUA_RELEASE_LOCK =
+            "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]);"
+                    + " else return 0; end;";
 
     /** 默认扫描间隔 60s */
     public static final long DEFAULT_CHECK_INTERVAL_MS =
@@ -159,6 +179,18 @@ public class TransactionScanner implements StreamMQScheduler {
 
     /** 指标收集器（可选注入，用于记录事务指标，null 时为 no-op） */
     @Setter private volatile StreamMQMetrics metrics;
+
+    /** 事务执行权锁 TTL（毫秒），可通过 setter 覆盖 */
+    @Setter private volatile long txLockTtlMs = DEFAULT_TX_LOCK_TTL_MS;
+
+    /** 终态字段保留期（毫秒），超过后由维护任务清理 */
+    @Setter private volatile long txStateRetentionMs = DEFAULT_TX_STATE_RETENTION_MS;
+
+    /** 孤儿半消息保留期（毫秒），超过且无状态引用的 half 条目由维护任务清理 */
+    @Setter private volatile long orphanHalfRetentionMs = DEFAULT_ORPHAN_HALF_RETENTION_MS;
+
+    /** 维护扫描轮次计数器 */
+    private final AtomicLong maintenanceCounter = new AtomicLong();
 
     /**
      * 构造调度器，使用默认参数。
@@ -246,6 +278,7 @@ public class TransactionScanner implements StreamMQScheduler {
         Objects.requireNonNull(txGroup, "txGroup");
         Objects.requireNonNull(targetTopic, "targetTopic");
         Objects.requireNonNull(fields, "fields");
+        io.github.streammq.core.util.StringUtils.requireValidTopic(targetTopic);
 
         // 写入顺序（崩溃安全性分析，顺序不可调整）：
         //  1. 先原子写入 txstate(PREPARE) + 回查 ZSet —— 若在此步后崩溃，回查发现半消息缺失，
@@ -432,8 +465,20 @@ public class TransactionScanner implements StreamMQScheduler {
                 /* 终态已由原子批写入 */
             }
             case HALF_MISSING -> {
-                // 半消息不存在：直接按已提交终态终止，避免状态卡在 COMMITTING
-                stateMap.put(txId, STATE_COMMIT);
+                // 半消息不存在：不能武断记为 COMMIT（可能什么都没投递，静默丢失），
+                // 也不能永久卡死。降级为 UNKNOWN 走有界回查：若为暂时性读取异常则下轮恢复；
+                // 连续失败超过 maxCheckTimes 后由 force-rollback 安全终结（此时必然未发布——
+                // 发布与状态置位在同一原子 MULTI/EXEC 中，状态非 COMMIT 即未投递）。
+                LOG.error(
+                        "Half message missing at commit time (never published by this"
+                                + " instance; publish+COMMIT are atomic), degrading to bounded"
+                                + " recheck: txId={}, txGroup={}, halfId={}",
+                        txId,
+                        txGroup,
+                        halfIdStr);
+                degradeToUnknown(stateHashKey, stateMap, txId, txGroup);
+                releaseTransactionLock(txGroup, txId);
+                return;
             }
             case LOCK_BUSY -> {
                 // 其它实例持有执行权：保持 COMMITTING 与回查条目，等待其完成或 TTL 过期后接管
@@ -445,6 +490,7 @@ public class TransactionScanner implements StreamMQScheduler {
         // 终态收尾
         releaseTransactionLock(txGroup, txId);
         removeCheckEntry(txId, txGroup);
+        markTerminalDone(stateMap, txId);
         cleanupTerminalState(stateMap, txId);
 
         recordTransactionCommitMetrics(txGroup);
@@ -484,6 +530,15 @@ public class TransactionScanner implements StreamMQScheduler {
             return;
         }
 
+        // 执行权锁与 COMMIT 路径对称：防止回滚的 XDEL 与另一实例的转投 XADD 竞态
+        // （否则可能出现"用户要求回滚却已被发布"或半消息在读取后被删导致的幽灵终态）。
+        // LOCK_BUSY 时保持 ROLLBACKING 并重新调度，等待持有者完成或锁 TTL 过期后接管。
+        if (!tryAcquireTransactionLock(txGroup, txId)) {
+            LOG.debug("Rollback skipped, another instance holds the tx lock: txId={}", txId);
+            rescheduleCheck(txId, txGroup);
+            return;
+        }
+
         String halfIdStr = stateMap.get(txId + FIELD_HALF_ID_SUFFIX);
         boolean halfRemoved = true;
         if (Objects.nonNull(halfIdStr)) {
@@ -516,6 +571,7 @@ public class TransactionScanner implements StreamMQScheduler {
                         halfIdStr);
             } else {
                 incrementCheckCount(txId, txGroup);
+                releaseTransactionLock(txGroup, txId);
                 rescheduleCheck(txId, txGroup);
                 return;
             }
@@ -524,6 +580,7 @@ public class TransactionScanner implements StreamMQScheduler {
         stateMap.put(txId, STATE_ROLLBACK);
         releaseTransactionLock(txGroup, txId);
         removeCheckEntry(txId, txGroup);
+        markTerminalDone(stateMap, txId);
         cleanupTerminalState(stateMap, txId);
 
         recordTransactionRollbackMetrics(txGroup);
@@ -559,6 +616,29 @@ public class TransactionScanner implements StreamMQScheduler {
                 scanTimeoutHalf(txGroup);
             } catch (RuntimeException ex) {
                 LOG.warn("scanTimeoutHalf failed for txGroup={}: {}", txGroup, ex.getMessage(), ex);
+            }
+        }
+        // 周期性维护：清理超龄终态字段与孤儿半消息，防止 txstate Hash / half Stream 无限增长
+        if (maintenanceCounter.incrementAndGet() % MAINTENANCE_EVERY_N_SCANS == 0) {
+            for (String txGroup : checkerRegistry.keySet()) {
+                try {
+                    sweepExpiredTerminalStates(txGroup);
+                } catch (RuntimeException ex) {
+                    LOG.debug(
+                            "sweepExpiredTerminalStates failed: txGroup={}: {}",
+                            txGroup,
+                            ex.getMessage(),
+                            ex);
+                }
+                try {
+                    sweepOrphanHalves(txGroup);
+                } catch (RuntimeException ex) {
+                    LOG.debug(
+                            "sweepOrphanHalves failed: txGroup={}: {}",
+                            txGroup,
+                            ex.getMessage(),
+                            ex);
+                }
             }
         }
     }
@@ -746,21 +826,33 @@ public class TransactionScanner implements StreamMQScheduler {
     /**
      * 获取事务执行权锁（SETNX + TTL）。
      *
+     * <p>TTL 是崩溃安全的关键：持有者在临界区（读取半消息 → 原子批量转投）内宕机时， 锁随 TTL 自动过期，其它实例可在后续回查中接管，事务不会永久卡死。 临界区本身只包含一次
+     * Redis 往返 + 一次原子 MULTI/EXEC，默认 30s TTL 远大于正常执行时间。
+     *
      * @return true 获取成功；false 其它实例持有中
      */
     private boolean tryAcquireTransactionLock(String txGroup, String txId) {
         RBucket<String> lockBucket =
                 redisson.getBucket(StreamMQKeys.transactionLock(namespace, txGroup, txId));
-        return Boolean.TRUE.equals(lockBucket.setIfAbsent(lockHolderId));
+        return Boolean.TRUE.equals(
+                lockBucket.setIfAbsent(lockHolderId, Duration.ofMillis(txLockTtlMs)));
     }
 
-    /** 释放事务执行权锁（仅持有者本人可删除，避免误释放他人接管后的锁）。 */
+    /**
+     * 释放事务执行权锁：原子 compare-and-delete，仅当锁仍归本实例持有时才删除。
+     *
+     * <p>若本实例处理超时导致锁已被其它实例接管（或已过期被抢），不得删除他人的锁—— 否则会允许第三个实例同时进入发布临界区造成重复投递。
+     */
     private void releaseTransactionLock(String txGroup, String txId) {
         try {
-            RBucket<String> lockBucket =
-                    redisson.getBucket(StreamMQKeys.transactionLock(namespace, txGroup, txId));
-            lockBucket.compareAndSet(lockHolderId, "");
-            lockBucket.delete();
+            RScript script = redisson.getScript(StringCodec.INSTANCE);
+            script.eval(
+                    RScript.Mode.READ_WRITE,
+                    LUA_RELEASE_LOCK,
+                    RScript.ReturnType.INTEGER,
+                    Collections.singletonList(
+                            StreamMQKeys.transactionLock(namespace, txGroup, txId)),
+                    lockHolderId);
         } catch (RuntimeException ex) {
             LOG.debug("Release transaction lock failed (TTL will expire): txId={}", txId, ex);
         }
@@ -878,6 +970,113 @@ public class TransactionScanner implements StreamMQScheduler {
     private void cleanupTerminalState(RMap<String, String> stateMap, String txId) {
         stateMap.remove(txId + FIELD_TARGET_SUFFIX);
         stateMap.remove(txId + FIELD_HALF_ID_SUFFIX);
+    }
+
+    /** 写入终态时间戳（供保留期维护任务判定清理时机）。 */
+    private void markTerminalDone(RMap<String, String> stateMap, String txId) {
+        try {
+            stateMap.put(
+                    txId + StreamMQConstants.TX_FIELD_DONE_SUFFIX,
+                    Long.toString(System.currentTimeMillis()));
+        } catch (RuntimeException ex) {
+            LOG.debug(
+                    "Mark terminal done failed (retention sweep will miss this entry): txId={}",
+                    txId,
+                    ex);
+        }
+    }
+
+    /**
+     * 维护任务：清除超过保留期的终态字段（{txId} 与 {txId}.done），防止 txstate Hash 随事务量线性增长。
+     *
+     * <p>HSCAN 游标遍历，单次最多处理 {@link #DEFAULT_BATCH_SIZE} 条终态，避免大 Hash 上的长阻塞。
+     */
+    private void sweepExpiredTerminalStates(String txGroup) {
+        String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
+        RMap<String, String> stateMap = redisson.getMap(stateHashKey);
+        long cutoff = System.currentTimeMillis() - txStateRetentionMs;
+        int removed = 0;
+        // keySet 会整表读取；txstate 经保留期清理后规模有界，且本任务低频执行，可接受
+        Set<String> fields = stateMap.keySet();
+        java.util.List<String> doneFields = new java.util.ArrayList<>();
+        for (String field : fields) {
+            if (Objects.nonNull(field) && field.endsWith(StreamMQConstants.TX_FIELD_DONE_SUFFIX)) {
+                doneFields.add(field);
+            }
+            if (doneFields.size() >= batchSize * 4) {
+                break;
+            }
+        }
+        for (String doneField : doneFields) {
+            String txId =
+                    doneField.substring(
+                            0,
+                            doneField.length() - StreamMQConstants.TX_FIELD_DONE_SUFFIX.length());
+            String doneStr = stateMap.get(doneField);
+            if (StringUtils.isEmpty(doneStr)) {
+                continue;
+            }
+            try {
+                if (Long.parseLong(doneStr) < cutoff) {
+                    stateMap.remove(txId);
+                    stateMap.remove(doneField);
+                    removed++;
+                }
+            } catch (NumberFormatException ignored) {
+                // 非 timestamps 视为脏数据直接清掉
+                stateMap.remove(txId);
+                stateMap.remove(doneField);
+                removed++;
+            }
+        }
+        if (removed > 0) {
+            LOG.info("Swept {} expired terminal txstate entries: txGroup={}", removed, txGroup);
+        }
+    }
+
+    /**
+     * 维护任务：清除 half Stream 中超过保留期且不再被任何状态引用的孤儿半消息。
+     *
+     * <p>孤儿来源：{@link #registerHalfMessage} 在 XADD 成功后、补写 halfId 前崩溃等窗口。 判定方式：收集 txstate 中全部 .halfId
+     * 引用（上限 10000），XRANGE 半消息流， 删除「entry 时间戳早于保留期 且 ID 不在引用集内」的条目。
+     */
+    private void sweepOrphanHalves(String txGroup) {
+        String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
+        RMap<String, String> stateMap = redisson.getMap(stateHashKey);
+        Set<String> referenced = new HashSet<>();
+        int scanned = 0;
+        for (String field : stateMap.keySet()) {
+            if (Objects.nonNull(field)
+                    && field.endsWith(StreamMQConstants.TX_FIELD_HALF_ID_SUFFIX)) {
+                String v = stateMap.get(field);
+                if (StringUtils.isNotEmpty(v)) {
+                    referenced.add(v);
+                }
+            }
+            if (++scanned >= 10_000) {
+                break;
+            }
+        }
+        String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
+        RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
+        long cutoffAgeMs = System.currentTimeMillis() - orphanHalfRetentionMs;
+        Map<StreamMessageId, Map<String, String>> all =
+                halfStream.range(10_000, StreamMessageId.MIN, StreamMessageId.MAX);
+        List<StreamMessageId> orphans = new ArrayList<>();
+        for (StreamMessageId id : all.keySet()) {
+            if (!referenced.contains(id.toString()) && id.getId0() < cutoffAgeMs) {
+                orphans.add(id);
+            }
+        }
+        if (!orphans.isEmpty()) {
+            StreamMessageId[] ids = orphans.toArray(new StreamMessageId[0]);
+            halfStream.remove(ids);
+            LOG.warn(
+                    "Removed {} orphan half messages (no state reference, past retention):"
+                            + " txGroup={}",
+                    orphans.size(),
+                    txGroup);
+        }
     }
 
     /** 获取 txId 的回查次数。 */

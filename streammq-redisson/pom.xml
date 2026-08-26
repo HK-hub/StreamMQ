@@ -53,19 +53,24 @@
         </dependency>
 
         <!-- 可选序列化：Apache Fury -->
+        <!-- 可选序列化：Apache Fury（optional：仅使用 FurySerializer 的用户需显式引入，
+             避免向所有下游传递 fury-core + guava 等依赖） -->
         <dependency>
             <groupId>org.apache.fury</groupId>
             <artifactId>fury-core</artifactId>
+            <optional>true</optional>
         </dependency>
 
-        <!-- 可选序列化：Protostuff -->
+        <!-- 可选序列化：Protostuff（optional，理由同上） -->
         <dependency>
             <groupId>io.protostuff</groupId>
             <artifactId>protostuff-core</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.protostuff</groupId>
             <artifactId>protostuff-runtime</artifactId>
+            <optional>true</optional>
         </dependency>
 
         <!-- 测试 -->

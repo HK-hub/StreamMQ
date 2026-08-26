@@ -78,7 +78,8 @@ public final class StreamMQConstants {
     public static final int DEFAULT_RETRY_STREAM_MAX_LEN = 0;
 
     /** 默认 PEL 认领空闲阈值（毫秒） */
-    public static final long DEFAULT_PEL_CLAIM_MIN_IDLE_MS = 30_000L;
+    /** PEL 认领最小空闲阈值默认值：必须显著大于消费超时（30s）+ 超时取消宽限期， 否则调度器会把仍在正常处理中的消息判定为"孤儿"并复制重投，造成重复消费与顺序破坏。 */
+    public static final long DEFAULT_PEL_CLAIM_MIN_IDLE_MS = 60_000L;
 
     /** 默认 PEL 认领扫描间隔（毫秒） */
     public static final long DEFAULT_PEL_CLAIM_SCAN_INTERVAL_MS = 5_000L;
@@ -158,6 +159,18 @@ public final class StreamMQConstants {
     /** DLQ 消息重试计数字段名（Stream Entry fields） */
     public static final String FIELD_DLQ_RETRY_COUNT = "__dlqRetryCount";
 
+    /** DEFER 调度标记字段名（payload Hash）：标记本轮调度来自业务 DEFER 而非消费失败重试 */
+    public static final String FIELD_DEFERRED = "__deferred";
+
+    /** 转移任务执行权锁默认 TTL（毫秒）：持有者崩溃后其它实例可在 TTL 过期后接管 */
+    public static final long DEFAULT_TRANSFER_CLAIM_TTL_MS = 30_000L;
+
+    /** 顺序消费分片锁默认获取等待上限（毫秒）：超时未获得则转 RECONSUME_LATER，防止挂死的持有者造成分片永久停摆 */
+    public static final long DEFAULT_ORDERLY_LOCK_ACQUIRE_TIMEOUT_MS = 5_000L;
+
+    /** 内部保留属性前缀：解码时捕获到用户属性、编码时随 props JSON 往返的 SDK 元数据均以此开头 */
+    public static final String RESERVED_PROPERTY_PREFIX = "__";
+
     /** DLQ 重试目标 topic 哨兵值（RetryScheduler 检测到此值时 XADD 到 dlqStream 而非 retryStream） */
     public static final String DLQ_RETRY_TARGET_TOPIC_SENTINEL = "__dlq__";
 
@@ -212,6 +225,9 @@ public final class StreamMQConstants {
 
     /** 事务状态 Hash 中半消息 Stream Entry ID 字段后缀 */
     public static final String TX_FIELD_HALF_ID_SUFFIX = ".halfId";
+
+    /** 事务状态 Hash 中终态时间戳字段后缀（值 = 终态写入时的 epoch 毫秒，供保留期清理扫描） */
+    public static final String TX_FIELD_DONE_SUFFIX = ".done";
 
     // ==================== 消息字段 / 协议常量 ====================
     /** Stream Entry 字段：原始消息 ID（DLQ / 重试场景） */

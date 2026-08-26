@@ -62,20 +62,49 @@ public class CompareExpression implements Expression {
         return switch (compareType) {
             case EQUAL -> propertyValue.equals(constantValue);
             case NOT_EQUAL -> !propertyValue.equals(constantValue);
-            case GREATER_THAN -> compareNumeric(propertyValue, constantValue) > 0;
-            case GREATER_EQUAL -> compareNumeric(propertyValue, constantValue) >= 0;
-            case LESS_THAN -> compareNumeric(propertyValue, constantValue) < 0;
-            case LESS_EQUAL -> compareNumeric(propertyValue, constantValue) <= 0;
+            case GREATER_THAN -> {
+                Integer cmp = compareNumeric(propertyValue, constantValue);
+                yield cmp != null && cmp > 0;
+            }
+            case GREATER_EQUAL -> {
+                Integer cmp = compareNumeric(propertyValue, constantValue);
+                yield cmp != null && cmp >= 0;
+            }
+            case LESS_THAN -> {
+                Integer cmp = compareNumeric(propertyValue, constantValue);
+                yield cmp != null && cmp < 0;
+            }
+            case LESS_EQUAL -> {
+                Integer cmp = compareNumeric(propertyValue, constantValue);
+                yield cmp != null && cmp <= 0;
+            }
         };
     }
 
-    private int compareNumeric(String propertyValue, String constantValue) {
+    /**
+     * 数值比较：优先按 long 精确比较（覆盖 64 位 ID 场景），任一侧非整数时回退 double； 双侧含 NaN/Infinity 时视为不可比较，返回
+     * null（不匹配任何区间比较）。
+     *
+     * @return 比较结果负/零/正；null 表示不可比较
+     */
+    private Integer compareNumeric(String propertyValue, String constantValue) {
         try {
-            double p = Double.parseDouble(propertyValue);
-            double c = constant.getDoubleValue();
-            return Double.compare(p, c);
+            return Long.compare(
+                    Long.parseLong(propertyValue.trim()), Long.parseLong(constantValue.trim()));
+        } catch (NumberFormatException ignored) {
+            // 至少一侧不是纯整数，回退浮点比较
+        }
+        double p;
+        double c;
+        try {
+            p = Double.parseDouble(propertyValue);
+            c = constant.getDoubleValue();
         } catch (NumberFormatException e) {
             return propertyValue.compareTo(constantValue);
         }
+        if (Double.isNaN(p) || Double.isNaN(c) || Double.isInfinite(p) || Double.isInfinite(c)) {
+            return null;
+        }
+        return Double.compare(p, c);
     }
 }

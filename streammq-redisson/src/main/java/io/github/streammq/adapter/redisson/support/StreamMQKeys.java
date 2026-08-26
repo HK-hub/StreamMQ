@@ -82,6 +82,23 @@ public final class StreamMQKeys {
     /** 顺序消费分片锁类型段 */
     public static final String TYPE_SHARDLOCK = "shardlock";
 
+    /** PEL 认领互斥锁 Key 段 */
+    public static final String TYPE_PELCLAIM_LOCK = "pelclaim-lock";
+
+    /** 广播组注册表 Key 段 */
+    public static final String TYPE_BROADCAST = "broadcast";
+
+    /** 广播组注册表后缀段 */
+    public static final String SEG_REGISTRY = "-registry";
+
+    /**
+     * 广播组注册表 Key：{@code
+     * streammq:{ns}:broadcast-registry}（ZSet，member={topic}|{effectiveGroup}，score=最后心跳毫秒）
+     */
+    public static String broadcastRegistry(String namespace) {
+        return prefix(namespace) + SEP + TYPE_BROADCAST + SEG_REGISTRY;
+    }
+
     /** 事务锁类型段 */
     public static final String TYPE_TXLOCK = "txlock";
 
@@ -106,6 +123,9 @@ public final class StreamMQKeys {
 
     /** 重试转移后缀 */
     public static final String SEG_TRANSFER = "transfer";
+
+    /** 执行权 claim 后缀 */
+    public static final String SEG_CLAIM = "claim";
 
     /** 锁后缀 */
     public static final String SEG_LOCK = "lock";
@@ -281,6 +301,32 @@ public final class StreamMQKeys {
     }
 
     /**
+     * 转移执行权 claim Key：{@code streammq:{ns}:transfer:claim:{kind}:{scope}:{msgId}}。
+     *
+     * <p>Retry/Delay 调度器在「读取 payload → 原子批转投」临界区前通过 SETNX+TTL 获取， 用于多实例互斥；持有者崩溃后 claim 随 TTL
+     * 过期，其它实例可接管，消息不丢失。
+     *
+     * @param namespace 命名空间
+     * @param kind 转移类型（如 {@code retry} / {@code delay}）
+     * @param scope 作用域标识（如 {@code topic_group} 或延时 level）
+     * @param msgId 消息 ID
+     * @return claim Key
+     */
+    public static String transferClaim(String namespace, String kind, String scope, String msgId) {
+        return prefix(namespace)
+                + SEP
+                + SEG_TRANSFER
+                + SEP
+                + SEG_CLAIM
+                + SEP
+                + requireNonEmpty(kind, "kind")
+                + SEP
+                + requireNonEmpty(scope, "scope")
+                + SEP
+                + requireNonEmpty(msgId, "msgId");
+    }
+
+    /**
      * 延时级别 ZSet Key：{@code streammq:{ns}:delay:{level}}。
      *
      * @param namespace 命名空间
@@ -321,20 +367,31 @@ public final class StreamMQKeys {
     }
 
     /**
-     * 重试消息 payload Hash Key：{@code streammq:{ns}:retry:payload:{msgId}}。
+     * 重试消息 payload Hash Key：{@code streammq:{ns}:retry:payload:{topic}:{group}:{msgId}}。
      *
      * <p>与延时消息 payload 分离，避免两种调度在同一 Key 空间中混淆或潜在冲突。
      *
+     * <p>键中必须包含 topic 与 group：Redis Stream Entry ID 仅在单个 Stream 内唯一， 不同 Topic 的 Stream 可能产生形如
+     * {@code 1730000000000-0} 的相同 ID 字符串；若仅以 msgId 作键， 多 Topic 并发重试时会互相覆盖/误读 payload，造成跨 Topic
+     * 消息错投。
+     *
      * @param namespace 命名空间
+     * @param topic 消息所属 Topic
+     * @param group 消费者组
      * @param msgId 消息 ID
      * @return Hash Key
      */
-    public static String retryPayloadHash(String namespace, String msgId) {
+    public static String retryPayloadHash(
+            String namespace, String topic, String group, String msgId) {
         return prefix(namespace)
                 + SEP
                 + TYPE_RETRY
                 + SEP
                 + SEG_PAYLOAD
+                + SEP
+                + requireNonEmpty(topic, "topic")
+                + SEP
+                + requireNonEmpty(group, "group")
                 + SEP
                 + requireNonEmpty(msgId, "msgId");
     }
@@ -395,6 +452,17 @@ public final class StreamMQKeys {
                 + requireNonEmpty(group, "group")
                 + SEP
                 + shardId;
+    }
+
+    /** PEL 认领互斥锁 Key：{@code streammq:{ns}:pelclaim-lock:{topic}:{group}}。 */
+    public static String pelClaimLock(String namespace, String topic, String group) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_PELCLAIM_LOCK
+                + SEP
+                + requireNonEmpty(topic, "topic")
+                + SEP
+                + requireNonEmpty(group, "group");
     }
 
     /** 消费位点 String Key：{@code streammq:{ns}:meta:offset:{group}:{topic}}。 */

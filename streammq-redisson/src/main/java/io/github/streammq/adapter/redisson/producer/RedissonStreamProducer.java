@@ -55,6 +55,13 @@ import org.slf4j.LoggerFactory;
 @Getter
 public class RedissonStreamProducer implements StreamMessageProducer {
 
+    /**
+     * 延时 payload Hash 的保留时长（毫秒）：超期自动过期。
+     *
+     * <p>正常流程中 payload 在转投成功后即被 DEL；TTL 仅用于兜底清理异常场景下 （如调度器 ZREM 后崩溃）残留的孤儿 payload，防止 Redis 中无限累积。
+     */
+    static final long DELAY_PAYLOAD_TTL_MS = 7L * 24 * 60 * 60 * 1000;
+
     private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamProducer.class);
 
     private final @NonNull RedissonClient redisson;
@@ -145,7 +152,10 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         ensureOpen();
         Objects.requireNonNull(message, "message");
         long start = System.currentTimeMillis();
-
+        // 发送侧命名校验：消费侧在容器注册时已校验，此处对齐以拦截直接构造 Message 绕过
+        // MessageBuilder 校验的场景（非法字符会破坏 Key 结构 / Redis Cluster hash slot 均衡）
+        String topic =
+                io.github.streammq.core.util.StringUtils.requireValidTopic(message.getTopic());
         if (message.isDelayMessage()) {
             return sendDelayMessage(message);
         }
@@ -161,13 +171,13 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                             + " bytes exceeds max "
                             + maxMessageSize
                             + " bytes for topic "
-                            + message.getTopic(),
+                            + topic,
                     null,
                     null);
         }
 
         applyCompression(fields);
-        String streamKey = StreamMQKeys.topicStream(namespace, message.getTopic());
+        String streamKey = StreamMQKeys.topicStream(namespace, topic);
 
         try {
             StreamMessageId streamId = appendStream(streamKey, fields, timeoutMillis);
@@ -176,21 +186,19 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                 LOG.warn(
                         "syncSend completed but exceeded timeout budget: topic={}, elapsed={}ms,"
                                 + " limit={}ms — message WAS delivered (id={})",
-                        message.getTopic(),
+                        topic,
                         elapsed,
                         timeoutMillis,
                         streamId);
             }
             MessageId messageId = MessageId.fromStreamMessageId(streamId);
-            return new SendResult(
-                    messageId, message.getTopic(), message.getTag(), message.getBornTimestamp());
+            return new SendResult(messageId, topic, message.getTag(), message.getBornTimestamp());
         } catch (ProducerTimeoutException ex) {
             throw ex;
         } catch (StreamMQException ex) {
             throw ex;
         } catch (RuntimeException ex) {
-            throw new StreamMQBrokerException(
-                    "syncSend failed for topic " + message.getTopic(), null, ex);
+            throw new StreamMQBrokerException("syncSend failed for topic " + topic, null, ex);
         }
     }
 
@@ -393,9 +401,12 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             fields.put(FIELD_DELIVER_AT, Long.toString(deliverAt));
 
             try {
-                // 先写 payload，再写调度条目（顺序不可颠倒）
+                // 先写 payload（带 TTL），再写调度条目（顺序不可颠倒）。
+                // TTL 为孤儿保护：正常流程转投成功即 DEL；若实例在 ZREM 后崩溃等异常导致
+                // payload 成为无调度引用的孤儿，TTL 到期后自动清理，不会无限累积。
                 RMap<String, String> payloadMap = redisson.getMap(payloadHashKey);
                 payloadMap.putAll(fields);
+                payloadMap.expire(java.time.Duration.ofMillis(DELAY_PAYLOAD_TTL_MS));
 
                 RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
                 zset.add(deliverAt, msgId);
@@ -434,9 +445,10 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         fields.put(FIELD_DELIVER_AT, Long.toString(deliverAt));
 
         try {
-            // 先写 payload，再写调度条目（顺序不可颠倒）
+            // 先写 payload（带 TTL，孤儿保护见 custom 分支注释），再写调度条目（顺序不可颠倒）
             RMap<String, String> payloadMap = redisson.getMap(payloadHashKey);
             payloadMap.putAll(fields);
+            payloadMap.expire(java.time.Duration.ofMillis(DELAY_PAYLOAD_TTL_MS));
 
             RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
             zset.add(deliverAt, msgId);
@@ -475,7 +487,16 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         if (StringUtils.isEmpty(bodyField)) {
             return;
         }
-        byte[] bodyBytes = Base64.getDecoder().decode(bodyField);
+        byte[] bodyBytes;
+        try {
+            bodyBytes = Base64.getDecoder().decode(bodyField);
+        } catch (IllegalArgumentException ex) {
+            // 非 Base64 body（如 PassThroughMessageConverter 的原文透传）：压缩不可用。
+            // 此前直接抛异常导致该组合下所有超阈值消息发送失败；现在跳过压缩并提示，
+            // 保持发送路径可用（消费端 compressed 标记缺失，不会尝试解压）。
+            LOG.warn("Body is not Base64-encoded (converter may be PassThrough), skip compression");
+            return;
+        }
         if (bodyBytes.length <= compressThreshold) {
             return;
         }

@@ -40,9 +40,11 @@ public final class StringUtils {
     }
 
     /**
-     * 校验 StreamMQ 命名（topic / consumerGroup / tag 等）：非 null、非空、不含 {@code ':'}、{@code '*'} 或空白字符。
+     * 校验 StreamMQ 命名（topic / consumerGroup / tag 等）：非 null、非空、不含 {@code ':'}、{@code '*'}、{@code
+     * '{'}、{@code '}'} 或空白字符。
      *
-     * <p>Redis Stream Key 使用 {@code :} 作为命名空间分隔符、{@code *} 作为通配符，非法字符会破坏 Key 结构或被错误路由。
+     * <p>Redis Stream Key 使用 {@code :} 作为命名空间分隔符、{@code *} 作为通配符，非法字符会破坏 Key 结构或被错误路由； {@code '{}'}
+     * 是 Redis Cluster Hash Tag 定界符，会导致整个 Key 家族被强制路由到同一 slot，形成热点。
      *
      * @param name 待校验的名称
      * @param field 字段名（用于异常信息，如 {@code "topic"}）
@@ -57,9 +59,9 @@ public final class StringUtils {
         }
         for (int i = 0; i < trimmed.length(); i++) {
             char c = trimmed.charAt(i);
-            if (c == ':' || c == '*' || Character.isWhitespace(c)) {
+            if (c == ':' || c == '*' || c == '{' || c == '}' || Character.isWhitespace(c)) {
                 throw new IllegalArgumentException(
-                        field + " must not contain ':', '*' or whitespace: " + name);
+                        field + " must not contain ':', '*', '{', '}' or whitespace: " + name);
             }
         }
         return trimmed;

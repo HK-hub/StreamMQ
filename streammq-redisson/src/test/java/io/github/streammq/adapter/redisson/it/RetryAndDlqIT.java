@@ -67,6 +67,11 @@ class RetryAndDlqIT extends AbstractRedisIT {
         }
     }
 
+    /** 供其它 IT 复用的注解构造入口。 */
+    static StreamMQConsumer annotationOf(String topic, String group, int maxReconsumeTimes) {
+        return mkAnnotation(topic, group, maxReconsumeTimes);
+    }
+
     /** 通过动态代理构造 {@link StreamMQConsumer} 注解实例。 */
     @SuppressWarnings("unchecked")
     private static StreamMQConsumer mkAnnotation(
@@ -434,10 +439,10 @@ class RetryAndDlqIT extends AbstractRedisIT {
                                 return zset.size() == 1;
                             });
 
-            // 读取 payload Hash,验证元数据
+            // 读取 payload Hash,验证元数据（键含 topic+group，防止跨 Topic 碰撞）
             RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
             String msgId = zset.iterator().next();
-            String payloadKey = StreamMQKeys.retryPayloadHash(namespace, msgId);
+            String payloadKey = StreamMQKeys.retryPayloadHash(namespace, topic, group, msgId);
             RMap<String, String> payload = redisson.getMap(payloadKey);
             assertThat(payload).containsKey(RetryScheduler.FIELD_RETRY_COUNT);
             assertThat(payload).containsEntry(RetryScheduler.FIELD_TARGET_TOPIC, topic);

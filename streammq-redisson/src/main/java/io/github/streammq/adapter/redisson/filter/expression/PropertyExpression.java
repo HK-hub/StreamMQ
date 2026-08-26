@@ -27,17 +27,22 @@ public class PropertyExpression implements Expression {
 
     @Override
     public boolean evaluate(Message<?> message) {
-        String value = message.getProperties().get(propertyName);
-        return StringUtils.isNotEmpty(value);
+        return StringUtils.isNotEmpty(getValue(message));
     }
 
     /**
      * 获取属性值。
      *
+     * <p>查找顺序：系统属性 → 用户属性。SQL92 过滤的典型场景是按业务侧 {@code withUserProperty} 写入的属性过滤，因此用户属性必须参与匹配。
+     *
      * @param message 消息
      * @return 属性值，可为 null
      */
     public String getValue(Message<?> message) {
-        return message.getProperties().get(propertyName);
+        String value = message.getProperties().get(propertyName);
+        if (StringUtils.isNotEmpty(value)) {
+            return value;
+        }
+        return message.getUserProperties().get(propertyName);
     }
 }

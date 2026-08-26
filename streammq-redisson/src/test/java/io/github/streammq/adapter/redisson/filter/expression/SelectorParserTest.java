@@ -6,6 +6,7 @@
 package io.github.streammq.adapter.redisson.filter.expression;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
@@ -206,13 +207,31 @@ class SelectorParserTest {
 
     @Test
     void testMalformedExpression() {
-        Expression expr = SelectorParser.build("a = ");
-        assertThat(expr).isNull();
+        // 0.1.0 起 build() 为 fail-closed：解析失败抛出 IllegalArgumentException，
+        // 不再返回 null（null 会被下游解释为放行全部，形成静默过滤反转）
+        assertThatThrownBy(() -> SelectorParser.build("a = "))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SelectorParser.build("= 'b'"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SelectorParser.build("a >"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> SelectorParser.buildStrict("(a = 1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unbalanced");
+    }
 
-        expr = SelectorParser.build("= 'b'");
-        assertThat(expr).isNull();
-
-        expr = SelectorParser.build("a >");
-        assertThat(expr).isNull();
+    @Test
+    void testDeepNestingRejectedWithoutStackOverflow() {
+        StringBuilder deep = new StringBuilder();
+        for (int i = 0; i < 10_000; i++) {
+            deep.append('(');
+        }
+        deep.append("a = 1");
+        for (int i = 0; i < 10_000; i++) {
+            deep.append(')');
+        }
+        // 超深嵌套必须以受控异常失败（深度上限），而不是 StackOverflowError 逃逸
+        assertThatThrownBy(() -> SelectorParser.build(deep.toString()))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

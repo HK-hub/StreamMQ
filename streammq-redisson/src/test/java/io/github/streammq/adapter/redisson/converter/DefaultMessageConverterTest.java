@@ -169,7 +169,9 @@ class DefaultMessageConverterTest {
         Map<String, String> fields = converter.toStreamFields(source);
         Message<String> restored = converter.fromStreamFields(fields, String.class, "order-topic");
 
-        assertThat(restored.getTopic()).isEqualTo("order-topic");
+        // 0.1.0 起 Default 转换器携带 originTopic 字段：重试/DLQ 场景可溯源原始 Topic，
+        // 解码优先取 Entry 内的 originTopic，fallback 仅在字段缺失时生效
+        assertThat(restored.getTopic()).isEqualTo("test-topic");
         assertThat(restored.getBody()).isEqualTo("hello");
         assertThat(restored.getTag()).isEqualTo("vip");
         assertThat(restored.getKeys()).isEqualTo("k1");

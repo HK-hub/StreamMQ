@@ -81,7 +81,7 @@
 
 ### 生产就绪
 
-744 个单元测试全绿（`mvn test` 即可复现）；另有 180+ 集成测试覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理等场景，在有 Redis 的环境（本地或 CI service 容器）执行 `mvn verify` 时运行，无 Redis 环境自动跳过。
+788 个单元测试全绿（`mvn test` 即可复现）；另有 192 个集成测试覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理、PEL 认领、广播消费等场景，在有 Redis 的环境（本地或 CI service 容器）执行 `mvn verify` 时运行，无 Redis 环境自动跳过。
 
 ---
 
@@ -198,17 +198,19 @@
 
 > **结论**: 异步发送性能约为同步的 **4~5 倍**，推荐高吞吐场景使用 `asyncSend`。
 
-### 消息消费性能 (Throughput, ops/s)
+### 消息消费性能
 
-测试消费者组从 Redis Stream 拉取并处理消息的吞吐量（批量 100 条）。
+> ⚠️ **方法学修正（v0.1.0 发布前）**：此前本节引用的 "Stream 消费吞吐 ~269,760 ops/s" 来自一个
+> 不 ACK、不做字段转换、且预热数据耗尽后实际测量空 XREADGROUP 网络往返的基准实现，该数字
+> 不能代表真实消费能力，已从本文档移除。`StreamConsumerBenchmark#consumeThroughput` 已重写为
+> 「XREADGROUP 拉取 → 反序列化转换 → 业务回调 → XACK」的完整端到端路径并配合持续灌数，
+> 新基线数据将在 CI 基准任务中重新生成后回填。请以修正后的基准代码自行测量为准。
 
-| 消费模式 | 1KB 负载 (ops/s) | 10KB 负载 (ops/s) | 说明 |
-|----------|-------------------|-------------------|------|
-| **Stream 消费吞吐** | **269,760** | **285,272** | 直接 Redis Stream 读取 + 回调 |
-| 消息创建+消费 | 14,408,510 | 14,386,861 | 纯内存消息构建+回调（无网络） |
-| 序列化 RoundTrip | 228,011 | 20,601 | Jackson 序列化/反序列化回环 |
-
-> **结论**: Redis Stream 消费性能受网络和序列化双重影响。消息创建+消费的高吞吐（1440 万 ops/s）展示了纯消息处理能力；实际 Stream 消费（~27 万 ops/s）是真实网络场景下的可靠指标。
+| 消费模式 | 说明 |
+|----------|------|
+| `consumeThroughput` | 完整消费路径：网络拉取 + 字段解码 + 回调 + ACK（含持续灌数） |
+| `serializationRoundTrip` | Jackson 序列化/反序列化回环（纯内存） |
+| `messageCreateAndConsume` | 纯内存消息构建 + 回调（无网络，仅衡量对象模型开销） |
 
 ### 性能优化建议
 
@@ -216,7 +218,7 @@
 2. **发送策略**: 高吞吐场景使用 `asyncSend`，可提升 4~5 倍性能
 3. **负载大小**: 10KB 大消息建议启用 GZIP 压缩（`MessageCompressor` SPI）
 4. **连接池**: 默认 16 连接可满足多数场景，高并发可调至 32~64
-5. **批量消费**: 使用 `consumeBatchSize` 参数批量拉取，减少网络往返
+5. **批量消费**: 使用 `pullBatchSize`（注解）或 `streammq.consumer.batch-size`（全局配置）批量拉取，减少网络往返
 
 ---
 
@@ -432,8 +434,10 @@ Message<String> msg2 = MessageBuilder.<String>withTopic("delay-topic")
 
 > 实现：单 Stream + 分片分布式锁。消费失败时在当前线程内按 `maxReconsumeTimes` 重试，每次失败按
 > `suspendCurrentQueueTimeMillis`（默认 1000ms）挂起，不越过失败消息继续消费（严格有序）；重试耗尽后直接进入 DLQ。
-> 消费者实例崩溃后的消息由 PEL 认领调度器恢复重投。
-> 分片并发控制由分布式锁保证；`RebalanceStrategy` 提供分片分配元数据（assignment Hash + REBALANCE 通知，供管理端点观测），
+> 消费者实例崩溃后的消息由 PEL 认领调度器恢复重投（空闲阈值默认 60s，且会检查分片锁活性——
+> 正在处理中的消息不会被认领）。
+> 分片并发控制由分布式锁保证（获取等待上限默认 5s，超时转 RECONSUME_LATER 防止持有者挂死导致分片停摆）；
+> `RebalanceStrategy` 提供分片分配元数据（assignment Hash + REBALANCE 通知，供管理端点观测），
 > 手动重平衡见 `/actuator/streammq/rebalance/{group}`。
 
 ```java
@@ -464,11 +468,10 @@ Message<String> message = MessageBuilder.<String>withTopic("order-topic")
 `BatchMessage` 批量投递，充分利用 Redis Pipeline 提升吞吐。
 
 ```java
-BatchMessage<String> batch = BatchMessage.<String>builder()
-        .topic("order-topic")
-        .addMessage(msg1)
-        .addMessage(msg2)
-        .addMessage(msg3)
+BatchMessage<String> batch = BatchMessage.<String>withTopic("order-topic")
+        .add(msg1)
+        .add(msg2)
+        .add(msg3)
         .build();
 
 List<SendResult> results = template.syncSendBatch(batch);
@@ -561,10 +564,11 @@ streammq:
     retry-times: 2                    # 同步发送重试次数
     compress-threshold: 0             # 0=不压缩，>0 时超过阈值自动压缩
 
-  # 消费者配置（单消费者当前串行处理，无线程池配置）
+  # 消费者配置（并发度由虚拟线程按需调度，无需线程池配置）
   consumer:
     batch-size: 32                    # 单次拉取批量大小
     pull-interval: 0                  # 拉取间隔（毫秒）
+    inflight-capacity: 0              # 背压队列容量（0=禁用；>0 时拉取与处理解耦，队列满则拉取阻塞）
 
   # 重试配置
   retry:
@@ -580,6 +584,10 @@ streammq:
     max-dlq-retry-attempts: 3         # DLQ 消费失败最大重试次数
     # failure-strategy: io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy  # 可选：DLQ 失败策略
 
+  # 管理端点开关（与 health.enabled 解耦；false 时仅关闭管理 REST 端点，健康检查不受影响）
+  admin:
+    enabled: true
+
   # 可观测性配置（指标开关由 streammq.enabled 控制）
   tracing:
     enabled: false
@@ -593,8 +601,8 @@ streammq:
 | `consumerGroup` | String | - | 消费组（必填） |
 | `messageModel` | MessageModel | CONCURRENT | 消费模型：CONCURRENT / ORDERLY |
 | `consumeMode` | ConsumeMode | CLUSTERING | 消费模式：CLUSTERING / BROADCASTING |
-| `consumeThreadMin` | int | 1 | 最小消费线程数 |
-| `consumeThreadMax` | int | 64 | 最大消费线程数 |
+| `consumeThreadMin` | int | 1 | **并发消费循环数**（仅 CONCURRENT 集群消费生效；每循环独立 XREADGROUP 拉取，共享 consumer name 原子分配互不相交） |
+| `consumeThreadMax` | int | 64 | 并发消费循环数上限（夹取上界） |
 | `maxReconsumeTimes` | int | 16 | 最大重试次数 |
 | `consumeTimeout` | long | 30000 | 消费超时（毫秒） |
 | `pullBatchSize` | int | 32 | 单次拉取批量 |
@@ -699,27 +707,36 @@ public class CustomMessageSerializer implements MessageSerializer {
 
 ### 管理 REST API
 
+所有操作均注册在 `/actuator/streammq` 之下，按 HTTP 方法 + 路径段分发：
+
 | 端点 | 方法 | 说明 |
 |------|------|------|
 | `/actuator/streammq` | GET | 总览（状态、消费组、Topic） |
 | `/actuator/streammq/groups` | GET | 消费组列表 |
+| `/actuator/streammq/topics` | GET | Topic 列表 |
 | `/actuator/streammq/pending/{group}/{topic}` | GET | Pending 消息 |
 | `/actuator/streammq/dlq/{group}` | GET | DLQ 消息 |
-| `/actuator/streammq/dlq/{group}/requeue?messageId&targetTopic` | POST | DLQ 重新入队 |
+| `/actuator/streammq/dlq/{group}?messageId&targetTopic` | POST | DLQ 重新入队 |
 | `/actuator/streammq/dlq/{group}/{messageId}` | DELETE | 删除 DLQ 消息 |
-| `/actuator/streammq/topics` | GET | Topic 列表 |
 | `/actuator/streammq/stats/{group}/{topic}` | GET | 运行时统计 |
 | `/actuator/streammq/ack/{group}/{topic}?messageId` | POST | 手动 ACK |
 | `/actuator/streammq/rebalance/{group}` | POST | 触发重平衡 |
-| `/actuator/streammq/topics?topic` | POST | 创建 Topic |
+| `/actuator/streammq/topics?topic=` | POST | 创建 Topic |
 | `/actuator/streammq/topics/{topic}` | DELETE | 删除 Topic |
 | `/actuator/streammq/config/{group}` | POST | 更新消费组配置 |
 
-> 所有操作均需通过 `ManagementAuthenticator` 鉴权；默认 `DenyAllAuthenticator` 拒绝所有访问（返回 401），需注册 `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` Bean 后开放。
+> 所有操作均需通过 `ManagementAuthenticator` 鉴权；默认 `DenyAllAuthenticator` 拒绝所有访问（返回 401），需注册 `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` Bean 后开放。管理端点可通过 `streammq.admin.enabled=false` 单独关闭。
 
 ### 链路追踪
 
-通过 `TraceCollector` SPI 采集链路上下文，支持 traceId 透传。
+StreamMQ 提供两条互补的追踪路径，按需选择：
+
+| 路径 | 机制 | 适用场景 |
+|------|------|----------|
+| `TraceCollector` SPI | 生产/消费上下文采集（Redis 存储 / Slf4j 日志 / Noop），支持 traceId 透传 | 轻量审计、消息级流转画像（配合诊断模块拓扑图） |
+| `streammq-tracing-opentelemetry` | 标准 OTel `ProducerInterceptor` / `ConsumerInterceptor`，导出标准 Span | 已有 OpenTelemetry 栈（Collector/Jaeger/Tempo）的链路观测 |
+
+两条路径独立生效、互不依赖；同一应用可同时启用（OTel Span 用于分布式追踪，TraceCollector 用于消息画像）。
 
 ```java
 MDC.put("traceId", "t-001");
@@ -747,13 +764,14 @@ template.syncSend(message);  // traceId 自动透传到消费者
 
 | 文档 | 说明 |
 |------|------|
-| 文档 | 说明 |
-|------|------|
-| [架构设计](docs/02-architecture.md) | 总体架构与模块划分 |
-| [功能设计](docs/03-functional-design.md) | 核心特性与功能说明 |
-| [详细设计](docs/04-detailed-design.md) | 关键实现细节（事务/延时/顺序消费等） |
+| [架构设计](docs/02-architecture.md) | 总体架构与模块划分（历史设计稿，以代码为准） |
+| [功能设计](docs/03-functional-design.md) | 核心特性与功能说明（历史设计稿，以代码为准） |
+| [详细设计](docs/04-detailed-design.md) | 关键实现细节（历史设计稿，以代码为准） |
 | [贡献指南](CONTRIBUTING.md) | 参与贡献 |
 | Javadoc | 随 Maven Central 发布的构件附带 sources/javadoc jar |
+
+> ⚠️ docs/02 ~ 04 为实现前的历史设计稿，其中的类名、配置键与部分机制描述已随实现演进过时；
+> 当前权威参考是本 README 与代码 Javadoc。
 
 ### 设计文档
 
@@ -901,6 +919,19 @@ redisson:
     # 使用认证
     password: ${REDIS_PASSWORD:}
 ```
+
+### 反序列化安全
+
+`FurySerializer` 与 `JdkSerializer` 默认均为**安全优先（secure-by-default）**：
+
+- `FurySerializer` 默认强制类注册白名单（`requireClassRegistration=true`），首次使用前需注册业务消息体类型；若 Redis 实例完全可信，可显式关闭白名单换取任意 POJO 开箱即用：
+  ```java
+  MessageSerializer<?> serializer = new FurySerializer(false); // 仅限完全可信的 Redis
+  ```
+- `JdkSerializer` 内置 JEP 290 类名白名单过滤器（目标类型 + JDK 基础类型），反序列化前拦截未知类；
+  第三方业务类型通过 `addAllowedClasses(...)` 显式放行。切勿使用 `JdkSerializer.unrestricted()`。
+
+若 Redis 实例可能被不可信方写入（共享实例、多租户场景），请保持默认白名单模式以收窄反序列化攻击面。完整安全策略见 [SECURITY.md](SECURITY.md)。
 
 ### 安全策略
 

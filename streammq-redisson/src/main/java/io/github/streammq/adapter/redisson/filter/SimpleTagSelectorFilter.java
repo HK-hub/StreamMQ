@@ -17,9 +17,12 @@ import java.util.Set;
  *
  * <ul>
  *   <li>"tag1" - 精确匹配
- *   <li>"tag1 || tag2" - 或匹配（tag1 或 tag2）
- *   <li>"tag1 && tag2" - 与匹配（tag1 且 tag2）
+ *   <li>"tag1 || tag2" - 或匹配（消息 tag 为其中任一）
+ *   <li>"*" 或空 - 匹配全部
  * </ul>
+ *
+ * <p>一条消息只携带一个 tag，因此 {@code &&}（要求同时等于多个 tag）在语义上不可满足： 构造时遇到多标签 {@code &&} 表达式将直接抛出 {@link
+ * IllegalArgumentException}（fail-fast）， 避免静默配置出一个永远不匹配的过滤器。
  *
  * <p>表达式在构造时解析一次，缓存解析结果。
  *
@@ -29,26 +32,27 @@ import java.util.Set;
 public class SimpleTagSelectorFilter extends TagSelectorFilter {
 
     private final Set<String> orTags;
-    private final Set<String> andTags;
     private final String singleTag;
 
     public SimpleTagSelectorFilter(String selectorExpression) {
         super(selectorExpression);
         Set<String> orSet = new HashSet<>();
-        Set<String> andSet = new HashSet<>();
         String single = null;
 
         String expr = Objects.isNull(selectorExpression) ? "" : selectorExpression.trim();
         if (!WILD_CARD.equals(expr) && !expr.isEmpty()) {
+            if (expr.contains("&&")) {
+                throw new IllegalArgumentException(
+                        "Tag selector '&&' is unsatisfiable: a message carries exactly one tag,"
+                                + " so it can never equal multiple tags. Use '||' for any-of"
+                                + " matching, or a SQL92 selector on user properties for"
+                                + " conjunctive conditions: "
+                                + expr);
+            }
             if (expr.contains("||")) {
                 String[] parts = expr.split("\\|\\|");
                 for (String part : parts) {
                     orSet.add(part.trim());
-                }
-            } else if (expr.contains("&&")) {
-                String[] parts = expr.split("&&");
-                for (String part : parts) {
-                    andSet.add(part.trim());
                 }
             } else {
                 single = expr;
@@ -56,7 +60,6 @@ public class SimpleTagSelectorFilter extends TagSelectorFilter {
         }
 
         this.orTags = orSet.isEmpty() ? null : orSet;
-        this.andTags = andSet.isEmpty() ? null : andSet;
         this.singleTag = single;
     }
 
@@ -70,10 +73,6 @@ public class SimpleTagSelectorFilter extends TagSelectorFilter {
 
         if (Objects.nonNull(orTags)) {
             return orTags.contains(trimmedTag);
-        }
-
-        if (Objects.nonNull(andTags)) {
-            return andTags.size() == 1 && andTags.contains(trimmedTag);
         }
 
         return false;

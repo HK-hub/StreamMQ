@@ -37,6 +37,23 @@
     <build>
         <finalName>${project.artifactId}</finalName>
         <plugins>
+            <!-- 可执行 fat jar：支持 java -jar 直接运行本示例。
+                 使用 exec 分类器同时保留普通 jar，避免 repackage 替换后 failsafe 测试类路径丢失应用类 -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <version>${spring-boot.version}</version>
+                <configuration>
+                    <classifier>exec</classifier>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>repackage</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>

@@ -12,9 +12,12 @@ import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
+import java.time.Duration;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -23,10 +26,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.Setter;
 import org.redisson.api.BatchOptions;
 import org.redisson.api.RBatch;
+import org.redisson.api.RBucket;
 import org.redisson.api.RMap;
 import org.redisson.api.RScoredSortedSet;
+import org.redisson.api.RScript;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.stream.StreamAddArgs;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -41,13 +47,13 @@ import org.slf4j.LoggerFactory;
  *       deliverAt
  * </ul>
  *
- * <p>转投流程（Java 端原子操作，非 Lua）：
+ * <p>转投流程（执行权 claim + 原子批，无丢失窗口）：
  *
  * <ol>
  *   <li>{@code ZRANGEBYSCORE 0 now LIMIT 0 batchSize} 获取到期 msgId
- *   <li>对每个 msgId：{@code ZREM}（返回 1 表示成功获取，避免多实例重复处理）
- *   <li>从 payload Hash 读取字段，{@code XADD} 到目标 Stream
- *   <li>{@code DEL} payload Hash
+ *   <li>对每个 msgId：SETNX 执行权 claim（TTL 兜底，持有者崩溃后可接管）
+ *   <li>原子批（REDIS_WRITE_ATOMIC）：XADD 目标 Stream + DEL payload Hash + ZREM 调度条目 ——要么全部生效、要么全部不生效；批失败时
+ *       entry 留在 ZSet 等待下轮重试
  * </ol>
  *
  * <p>线程安全：所有字段均为 final 或线程安全类型。
@@ -55,7 +61,7 @@ import org.slf4j.LoggerFactory;
  * <p>清理机制：
  *
  * <ul>
- *   <li>正常流程：每次转投成功后 ZREM 移除 ZSet entry，DEL 删除 payload Hash
+ *   <li>正常流程：原子批成功后 ZREM 移除 ZSet entry，DEL 删除 payload Hash
  *   <li>安全兜底：{@link #cleanupOrphanedEntries()} 可清理无对应 payload 的孤立 entry（防止异常堆积）
  * </ul>
  *
@@ -107,6 +113,48 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     private final String namespace;
     private final long scanIntervalMs;
     private final int batchSize;
+
+    /** Lua：仅当转移执行权 claim 仍归本实例持有时删除（原子 compare-and-delete）。 */
+    private static final String LUA_RELEASE_CLAIM =
+            "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]);"
+                    + " else return 0; end;";
+
+    /** 转移执行权 claim 默认 TTL（毫秒） */
+    static final long DEFAULT_TRANSFER_CLAIM_TTL_MS =
+            StreamMQConstants.DEFAULT_TRANSFER_CLAIM_TTL_MS;
+
+    /** 本实例的 claim 持有者标识（进程级唯一） */
+    private final String instanceId = UUID.randomUUID().toString();
+
+    /** claim TTL（毫秒），可通过 {@link #setTransferClaimTtlMs(long)} 覆盖 */
+    private volatile long transferClaimTtlMs = DEFAULT_TRANSFER_CLAIM_TTL_MS;
+
+    /**
+     * 设置转移执行权 claim TTL（毫秒）。
+     *
+     * @param millis TTL，必须 &gt; 0
+     */
+    public void setTransferClaimTtlMs(long millis) {
+        if (millis > 0) {
+            this.transferClaimTtlMs = millis;
+        }
+    }
+
+    /** 释放转移执行权 claim：原子 compare-and-delete，避免误删接管者的 claim。 */
+    private void releaseClaim(String claimKey) {
+        try {
+            redisson.getScript(StringCodec.INSTANCE)
+                    .eval(
+                            RScript.Mode.READ_WRITE,
+                            LUA_RELEASE_CLAIM,
+                            RScript.ReturnType.INTEGER,
+                            Collections.singletonList(claimKey),
+                            instanceId);
+        } catch (RuntimeException ex) {
+            LOG.debug("Release transfer claim failed (TTL will expire): {}", ex.getMessage());
+        }
+    }
+
     private volatile ScheduledExecutorService scanExecutor;
     private final AtomicBoolean running = new AtomicBoolean(false);
 
@@ -215,6 +263,9 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     /**
      * 扫描指定级别的到期消息并转投。
      *
+     * <p>到期 msgId 通过 per-msgId 执行权 claim（SETNX+TTL）互斥；XADD 目标流、DEL payload、ZREM
+     * 调度条目在同一原子批内提交，消除旧实现「ZREM 成功后进程崩溃导致消息永久丢失」的窗口。
+     *
      * @param level 延时级别
      */
     void scanExpired(DelayLevel level) {
@@ -222,223 +273,123 @@ public class DelayMessageScheduler implements StreamMQScheduler {
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
         long now = System.currentTimeMillis();
 
-        // 获取到期 entry（score <= now），限制 batchSize
         Collection<String> expired = zset.valueRange(0, true, now, true, 0, batchSize - 1);
-        if (expired.isEmpty()) {
-            return;
-        }
-
-        int transferred = 0;
-        RBatch batch = null;
-        java.util.List<String> batchMsgIds = new java.util.ArrayList<>();
         for (String msgId : expired) {
-            // ZREM 原子移除，返回 true 表示当前实例成功获取
-            boolean acquired = zset.remove(msgId);
-            if (!acquired) {
-                continue;
-            }
-            try {
-                String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
-                RMap<String, String> payloadMap = redisson.getMap(payloadKey);
-                Map<String, String> fields = payloadMap.readAllMap();
-                if (CollectionUtils.isEmpty(fields)) {
-                    LOG.warn(
-                            "Delay payload not found for msgId={}, may have been processed", msgId);
-                    continue;
-                }
-
-                String targetTopic = fields.get(FIELD_TARGET_TOPIC);
-                if (StringUtils.isEmpty(targetTopic)) {
-                    LOG.warn("Delay message has no targetTopic, skip: msgId={}", msgId);
-                    continue;
-                }
-
-                // 移除调度元数据字段，只保留 Stream Entry 字段
-                fields.remove(FIELD_TARGET_TOPIC);
-                fields.remove(FIELD_DELIVER_AT);
-
-                if (Objects.isNull(batch)) {
-                    batch =
-                            redisson.createBatch(
-                                    BatchOptions.defaults()
-                                            .executionMode(
-                                                    BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
-                }
-                String targetStreamKey = StreamMQKeys.topicStream(namespace, targetTopic);
-                StreamAddArgs<String, String> args = StreamAddArgs.entries(fields);
-                batch.<String, String>getStream(targetStreamKey).addAsync(args);
-                batch.<String, String>getMap(payloadKey).deleteAsync();
-                batchMsgIds.add(msgId);
-                transferred++;
-
-                recordDelayMetrics(level.name());
-
-                // 批量达到阈值时执行；失败则整批回补 ZSet（ZREM 已生效，不回补即丢失）
-                if (transferred >= batchSize) {
-                    if (!executeBatch(batch)) {
-                        requeueBatchOnFailure(zset, batchMsgIds);
-                    }
-                    batch = null;
-                    batchMsgIds = new java.util.ArrayList<>();
-                    transferred = 0;
-                }
-            } catch (RuntimeException ex) {
-                LOG.error(
-                        "Failed to transfer delay message msgId={}: {}",
-                        msgId,
-                        ex.getMessage(),
-                        ex);
-                // 处理失败时将 msgId 写回 ZSet（带退避延迟），
-                // 避免消息因 ZREM 后处理失败而永久丢失，同时防止 Redis 故障时高频热循环
-                try {
-                    zset.add(System.currentTimeMillis() + failureRequeueBackoffMs, msgId);
-                    LOG.warn(
-                            "Re-added msgId={} to delay ZSet (backoff {}ms)",
-                            msgId,
-                            failureRequeueBackoffMs);
-                } catch (RuntimeException reAddEx) {
-                    LOG.error(
-                            "CRITICAL: Failed to re-add msgId={} to delay ZSet, message may be"
-                                    + " lost: {}",
-                            msgId,
-                            reAddEx.getMessage(),
-                            reAddEx);
-                }
-            }
-        }
-        if (Objects.nonNull(batch)) {
-            if (!executeBatch(batch)) {
-                requeueBatchOnFailure(zset, batchMsgIds);
-            }
+            transferExpired(
+                    zset,
+                    msgId,
+                    level.name(),
+                    StreamMQKeys.transferClaim(namespace, "delay", level.name(), msgId));
+            recordDelayMetrics(level.name());
         }
     }
 
-    /** 扫描自定义延时 ZSet 的到期消息并转投（v1.0+ 任意延时支持）。 */
+    /** 扫描自定义延时 ZSet 的到期消息并转投（任意延时支持）。 */
     void scanExpiredCustom() {
         String zsetKey = StreamMQKeys.delayCustomZSet(namespace);
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
         long now = System.currentTimeMillis();
 
         Collection<String> expired = zset.valueRange(0, true, now, true, 0, batchSize - 1);
-        if (expired.isEmpty()) {
+        for (String msgId : expired) {
+            transferExpired(
+                    zset,
+                    msgId,
+                    DELAY_CUSTOM_LEVEL,
+                    StreamMQKeys.transferClaim(namespace, "delay", DELAY_CUSTOM_LEVEL, msgId));
+            recordDelayMetrics(DELAY_CUSTOM_LEVEL);
+        }
+    }
+
+    /**
+     * 单条到期延时消息的互斥转投：claim 保护下执行「XADD + DEL payload + ZREM」原子批。
+     *
+     * <p>批失败时整体不生效，entry 仍在 ZSet；写入退避 score 防止热循环。 批成功则消息已投递且调度状态一致清理——任何时刻崩溃都不丢消息。
+     */
+    private void transferExpired(
+            RScoredSortedSet<String> zset, String msgId, String label, String claimKey) {
+        try {
+            RBucket<String> claim = redisson.getBucket(claimKey);
+            if (!Boolean.TRUE.equals(
+                    claim.setIfAbsent(instanceId, Duration.ofMillis(transferClaimTtlMs)))) {
+                return;
+            }
+            try {
+                doTransferExpired(zset, msgId, label);
+            } finally {
+                releaseClaim(claimKey);
+            }
+        } catch (RuntimeException ex) {
+            LOG.error(
+                    "Failed to transfer delay[{}] message msgId={}: {}",
+                    label,
+                    msgId,
+                    ex.getMessage(),
+                    ex);
+            requeueWithBackoff(zset, msgId, label);
+        }
+    }
+
+    private void doTransferExpired(RScoredSortedSet<String> zset, String msgId, String label) {
+        String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
+        RMap<String, String> payloadMap = redisson.getMap(payloadKey);
+        Map<String, String> fields = payloadMap.readAllMap();
+        if (CollectionUtils.isEmpty(fields)) {
+            LOG.warn(
+                    "Delay[{}] payload not found for msgId={}, removing stale schedule entry",
+                    label,
+                    msgId);
+            zset.remove(msgId);
             return;
         }
 
-        int transferred = 0;
-        RBatch batch = null;
-        java.util.List<String> batchMsgIds = new java.util.ArrayList<>();
-        for (String msgId : expired) {
-            boolean acquired = zset.remove(msgId);
-            if (!acquired) {
-                continue;
-            }
-            try {
-                String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
-                RMap<String, String> payloadMap = redisson.getMap(payloadKey);
-                Map<String, String> fields = payloadMap.readAllMap();
-                if (CollectionUtils.isEmpty(fields)) {
-                    LOG.warn(
-                            "Delay payload not found for msgId={}, may have been processed", msgId);
-                    continue;
-                }
-
-                String targetTopic = fields.get(FIELD_TARGET_TOPIC);
-                if (StringUtils.isEmpty(targetTopic)) {
-                    LOG.warn("Delay message has no targetTopic, skip: msgId={}", msgId);
-                    continue;
-                }
-
-                fields.remove(FIELD_TARGET_TOPIC);
-                fields.remove(FIELD_DELIVER_AT);
-
-                if (Objects.isNull(batch)) {
-                    batch =
-                            redisson.createBatch(
-                                    BatchOptions.defaults()
-                                            .executionMode(
-                                                    BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
-                }
-                String targetStreamKey = StreamMQKeys.topicStream(namespace, targetTopic);
-                StreamAddArgs<String, String> args = StreamAddArgs.entries(fields);
-                batch.<String, String>getStream(targetStreamKey).addAsync(args);
-                batch.<String, String>getMap(payloadKey).deleteAsync();
-                batchMsgIds.add(msgId);
-                transferred++;
-
-                recordDelayMetrics(DELAY_CUSTOM_LEVEL);
-
-                if (transferred >= batchSize) {
-                    executeBatch(batch);
-                    batch = null;
-                    transferred = 0;
-                }
-            } catch (RuntimeException ex) {
-                LOG.error(
-                        "Failed to transfer custom delay message msgId={}: {}",
-                        msgId,
-                        ex.getMessage(),
-                        ex);
-                try {
-                    zset.add(System.currentTimeMillis() + failureRequeueBackoffMs, msgId);
-                    LOG.warn(
-                            "Re-added msgId={} to custom delay ZSet (backoff {}ms)",
-                            msgId,
-                            failureRequeueBackoffMs);
-                } catch (RuntimeException reAddEx) {
-                    LOG.error(
-                            "CRITICAL: Failed to re-add msgId={} to custom delay ZSet, message may"
-                                    + " be lost: {}",
-                            msgId,
-                            reAddEx.getMessage(),
-                            reAddEx);
-                }
-            }
+        String targetTopic = fields.get(FIELD_TARGET_TOPIC);
+        if (StringUtils.isEmpty(targetTopic)) {
+            LOG.warn("Delay[{}] message has no targetTopic, skip: msgId={}", label, msgId);
+            zset.remove(msgId);
+            return;
         }
-        if (Objects.nonNull(batch)) {
-            if (!executeBatch(batch)) {
-                requeueBatchOnFailure(zset, batchMsgIds);
-            }
+
+        // 移除调度元数据字段，只保留 Stream Entry 字段
+        fields.remove(FIELD_TARGET_TOPIC);
+        fields.remove(FIELD_DELIVER_AT);
+
+        // 原子批：XADD 目标流 + DEL payload + ZREM 同生同死
+        String targetStreamKey = StreamMQKeys.topicStream(namespace, targetTopic);
+        RBatch batch =
+                redisson.createBatch(
+                        BatchOptions.defaults()
+                                .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
+        batch.<String, String>getStream(targetStreamKey).addAsync(StreamAddArgs.entries(fields));
+        batch.<String, String>getMap(payloadKey).deleteAsync();
+        batch.<String>getScoredSortedSet(zset.getName()).removeAsync(msgId);
+        batch.execute();
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug(
+                    "Delay[{}] message transferred: msgId={}, targetTopic={}",
+                    label,
+                    msgId,
+                    targetTopic);
         }
     }
 
-    /**
-     * 执行批量转投。
-     *
-     * @return true 批量成功；false 执行失败（调用方必须把本批 msgId 写回 ZSet，否则消息因 ZREM 已生效而丢失）
-     */
-    private boolean executeBatch(RBatch batch) {
+    /** 转移失败后的退避回写：仅调整 score 推迟下一轮处理（entry 本身仍在 ZSet 中）。 */
+    private void requeueWithBackoff(RScoredSortedSet<String> zset, String msgId, String label) {
         try {
-            batch.execute();
-            return true;
-        } catch (RuntimeException ex) {
-            LOG.error("Delay batch execute failed: {}", ex.getMessage(), ex);
-            return false;
-        }
-    }
-
-    /**
-     * 批量执行失败后的补偿：将本批已 ZREM 的 msgId 重新写回延时 ZSet（score = now + backoff）， 等待下一轮扫描重试。写回失败仅能记录
-     * ERROR（此时消息已不可达，需人工介入）。
-     */
-    private void requeueBatchOnFailure(
-            RScoredSortedSet<String> zset, java.util.List<String> msgIds) {
-        for (String msgId : msgIds) {
-            try {
-                zset.add(System.currentTimeMillis() + failureRequeueBackoffMs, msgId);
-            } catch (RuntimeException reAddEx) {
-                LOG.error(
-                        "CRITICAL: Failed to re-add msgId={} to delay ZSet after batch failure,"
-                                + " message unreachable until manual repair: {}",
-                        msgId,
-                        reAddEx.getMessage(),
-                        reAddEx);
-            }
-        }
-        if (!msgIds.isEmpty()) {
+            zset.add(System.currentTimeMillis() + failureRequeueBackoffMs, msgId);
             LOG.warn(
-                    "Requeued {} delay message(s) after batch failure (backoff {}ms)",
-                    msgIds.size(),
+                    "Re-added delay[{}] msgId={} (backoff {}ms)",
+                    label,
+                    msgId,
                     failureRequeueBackoffMs);
+        } catch (RuntimeException reAddEx) {
+            LOG.error(
+                    "CRITICAL: Failed to back off delay[{}] msgId={} in ZSet: {}",
+                    label,
+                    msgId,
+                    reAddEx.getMessage(),
+                    reAddEx);
         }
     }
 
@@ -469,7 +420,8 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     }
 
     /**
-     * 清理所有延时 ZSet 中的孤立 entry（无对应 payload Hash 的条目）。
+     * 清理所有延时 ZSet 中的孤立 entry（无对应 payload Hash 的条目）， 以及反向孤儿：无任何 ZSet 引用的 payload Hash（带 TTL
+     * 兜底，此处主动清理）。
      *
      * <p>正常使用中，ZSet entry 在转投成功后会被 ZREM 移除。但在以下异常场景下可能残留：
      *
@@ -479,7 +431,8 @@ public class DelayMessageScheduler implements StreamMQScheduler {
      *   <li>代码 Bug 导致 payload Hash 被提前删除
      * </ul>
      *
-     * <p>此方法扫描所有延时级别和自定义延时 ZSet，移除没有对应 payload Hash 的 entry。 建议在系统空闲期定期调用（如每天凌晨）。
+     * <p>此方法扫描所有延时级别和自定义延时 ZSet，移除没有对应 payload Hash 的 entry； 同时反向扫描无调度引用的 payload Hash（孤儿方向），
+     * 建议在系统空闲期定期调用（如每天凌晨）。payload 自身另有 TTL 兜底（见生产端写入）。
      */
     public void cleanupOrphanedEntries() {
         int totalCleaned = 0;
@@ -493,6 +446,63 @@ public class DelayMessageScheduler implements StreamMQScheduler {
         if (totalCleaned > 0) {
             LOG.info("Cleaned up {} orphaned delay ZSet entries", totalCleaned);
         }
+        totalCleaned += cleanupOrphanedPayloads();
+        if (totalCleaned > 0) {
+            LOG.info("Cleaned up {} orphaned delay entries in total", totalCleaned);
+        }
+    }
+
+    /**
+     * 反向孤儿清理：删除不再被任何延时 ZSet 引用的 payload Hash。
+     *
+     * <p>扫描 {@code streammq:{ns}:delay:payload:*}（上限 {@value #MAX_ORPHAN_PAYLOAD_SCAN} 个）， 对 msgId
+     * 不在任何 ZSet 中的 payload 执行 DEL。正常转投流程已 DEL payload； 此处仅兜底「ZREM 后崩溃」等窗口产生的孤儿。生产端 TTL 提供最终兜底。
+     *
+     * @return 清理的 payload 数量
+     */
+    private static final int MAX_ORPHAN_PAYLOAD_SCAN = 1000;
+
+    private int cleanupOrphanedPayloads() {
+        String pattern = StreamMQKeys.delayPayloadHash(namespace, "*");
+        java.util.Set<String> referencedMsgIds = new java.util.HashSet<>();
+        for (DelayLevel level : DelayLevel.values()) {
+            referencedMsgIds.addAll(
+                    redisson.<String>getScoredSortedSet(
+                                    StreamMQKeys.delayZSet(namespace, level.name()))
+                            .readAll());
+        }
+        referencedMsgIds.addAll(
+                redisson.<String>getScoredSortedSet(StreamMQKeys.delayCustomZSet(namespace))
+                        .readAll());
+
+        int cleaned = 0;
+        Iterable<String> keys =
+                redisson.getKeys().getKeysByPattern(pattern, MAX_ORPHAN_PAYLOAD_SCAN);
+        for (String key : keys) {
+            // 从 key 中提取 msgId（最后一段）
+            int idx = key.lastIndexOf(StreamMQKeys.SEP);
+            if (idx < 0) {
+                continue;
+            }
+            String msgId = key.substring(idx + StreamMQKeys.SEP.length());
+            if (referencedMsgIds.contains(msgId)) {
+                continue;
+            }
+            try {
+                if (redisson.getMap(key).delete()) {
+                    cleaned++;
+                }
+            } catch (RuntimeException ex) {
+                LOG.debug("Failed to delete orphan delay payload {}: {}", key, ex.getMessage());
+            }
+            if (cleaned >= MAX_ORPHAN_PAYLOAD_SCAN) {
+                break;
+            }
+        }
+        if (cleaned > 0) {
+            LOG.warn("Cleaned {} orphan delay payload hash(es) (no scheduling reference)", cleaned);
+        }
+        return cleaned;
     }
 
     /**

@@ -164,7 +164,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         try {
             Map<String, String> fields = messageConverter.toStreamFields(message);
             LOG.info("handleDlqFailureWithStrategy: fields.size={}", fields.size());
-            int dlqRetryCount = parseDlqRetryCount(fields);
+            int dlqRetryCount = resolveDlqRetryCount(message, fields);
             String dlqReason =
                     fields.getOrDefault(
                             RetryScheduler.FIELD_DLQ_REASON, DlqReason.UNKNOWN.getCode());
@@ -231,19 +231,17 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                 }
             }
         } catch (RuntimeException ex) {
+            // 安全兜底：策略/序列化等内部异常时不得丢弃死信（死信是最后一副本）。
+            // 不 ACK，消息保留在 PEL 中——PelClaimScheduler 会在 idle 超时后重新调度处理，
+            // 与 SECONDARY_DLQ 写入失败分支保持一致的"宁可滞留、不可丢失"语义。
             LOG.error(
-                    "DLQ failure strategy error, falling back to drop (topic={}, group={},"
+                    "DLQ failure strategy error, keeping message in PEL (topic={}, group={},"
                             + " messageId={}): {}",
                     reg.getTopic(),
                     reg.getGroup(),
                     messageId,
                     ex.getMessage(),
                     ex);
-            try {
-                listener.ack(messageId);
-            } catch (RuntimeException ackEx) {
-                LOG.warn("Fallback ACK failed: {}", ackEx.getMessage());
-            }
         }
     }
 
@@ -258,7 +256,13 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             Duration delay) {
         long nextRetryAt = System.currentTimeMillis() + delay.toMillis();
         String msgIdStr = messageId.getStreamEntryId();
-        String payloadKey = StreamMQKeys.retryPayloadHash(reg.getNamespace(), msgIdStr);
+        // DLQ 流按 group 命名（与业务 topic 无关），重试调度条目必须统一挂到 {group}:{group}
+        // 维度——此前使用 reg.getTopic()（生产路径下为 group，但自定义注册时可能是业务 topic），
+        // 会写入一个没有任何 RetryScheduler 扫描目标覆盖的 ZSet，重试永不发生。
+        String scopeTopic = reg.getGroup();
+        String payloadKey =
+                StreamMQKeys.retryPayloadHash(
+                        reg.getNamespace(), scopeTopic, reg.getGroup(), msgIdStr);
         int newDlqRetryCount = dlqRetryCount + 1;
         Map<String, String> payload = new HashMap<>(fields.size() + 3);
         payload.putAll(fields);
@@ -269,8 +273,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
 
         // 原子写入：payload Hash（带 TTL）+ 调度 ZSet 必须同生同死——拆成两条命令时，
         // 第二条失败会导致消息既不在 PEL 也不再调度，造成静默丢失
-        String retryKey =
-                StreamMQKeys.retryZSet(reg.getNamespace(), reg.getTopic(), reg.getGroup());
+        String retryKey = StreamMQKeys.retryZSet(reg.getNamespace(), scopeTopic, reg.getGroup());
         RBatch batch =
                 redisson.createBatch(
                         BatchOptions.defaults()
@@ -339,8 +342,25 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         }
     }
 
-    private int parseDlqRetryCount(Map<String, String> fields) {
-        String v = fields.get(StreamMQConstants.FIELD_DLQ_RETRY_COUNT);
+    /**
+     * 解析 DLQ 重试计数。
+     *
+     * <p>查找顺序：消息保留属性（{@code __} 前缀，由解码器从 Entry 字段/props JSON 捕获，可随 decode → encode 往返存活）→ 原始 Entry
+     * 顶层字段（仅本进程刚写入时存在）。 此前只查顶层字段且经 converter 重编码后丢失，导致计数恒为 0、DLQ 重试上限与二级 DLQ 策略失效。
+     *
+     * @param message 当前 DLQ 消息
+     * @param fields 由当前消息重新编码的 Entry 字段
+     * @return 已重试次数（无记录时为 0）
+     */
+    private int resolveDlqRetryCount(Message<?> message, Map<String, String> fields) {
+        String fromProps =
+                Objects.isNull(message.getUserProperties())
+                        ? null
+                        : message.getUserProperties().get(StreamMQConstants.FIELD_DLQ_RETRY_COUNT);
+        String v =
+                StringUtils.isNotEmpty(fromProps)
+                        ? fromProps
+                        : fields.get(StreamMQConstants.FIELD_DLQ_RETRY_COUNT);
         if (StringUtils.isNotEmpty(v)) {
             try {
                 return Integer.parseInt(v);
@@ -426,6 +446,10 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         try {
             int retryCount = message.getReconsumeTimes();
             Map<String, String> fields = messageConverter.toStreamFields(message);
+            // 标记 DEFER 调度：RetryScheduler 转投时不递增 retryTimes、不做 MAX_RETRY 判定，
+            // 避免"业务合法延迟重试"侵占失败重试预算、被误标为 MAX_RETRY 进入 DLQ。
+            // DEFER 不设上限，节奏由业务自行控制（文档已声明）。
+            fields.put(StreamMQConstants.FIELD_DEFERRED, Boolean.TRUE.toString());
             scheduleRetry(message, reg, listener, messageId, fields, retryCount, delay);
         } catch (RuntimeException ex) {
             LOG.error(
@@ -448,7 +472,9 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             Duration delay) {
         long nextRetryAt = System.currentTimeMillis() + delay.toMillis();
         String msgIdStr = messageId.getStreamEntryId();
-        String payloadKey = StreamMQKeys.retryPayloadHash(reg.getNamespace(), msgIdStr);
+        String payloadKey =
+                StreamMQKeys.retryPayloadHash(
+                        reg.getNamespace(), reg.getTopic(), reg.getGroup(), msgIdStr);
         Map<String, String> payload = new HashMap<>(fields.size() + 2);
         payload.putAll(fields);
         payload.put(RetryScheduler.FIELD_RETRY_COUNT, Integer.toString(retryCount));

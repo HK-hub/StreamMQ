@@ -10,6 +10,7 @@ import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import java.util.Map;
+import java.util.Objects;
 import lombok.RequiredArgsConstructor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,11 +33,16 @@ public class DefaultConsumeContextConsume implements ConsumeOrderlyContext {
 
     private static final Logger LOG = LoggerFactory.getLogger(DefaultConsumeContextConsume.class);
 
-    /** 默认消费者实例名后缀 */
-    private static final String DEFAULT_CONSUMER_NAME_SUFFIX = "-consumer";
-
     private final Message<?> message;
     private final ListenerRegistration<?> registration;
+
+    /** 本消息实际使用的 Redis 消费者名（容器注入，与 XREADGROUP 使用的名称一致） */
+    private final String actualConsumerName;
+
+    /** 兼容构造器：未提供实际消费者名时按容器命名规则推导 */
+    public DefaultConsumeContextConsume(Message<?> message, ListenerRegistration<?> registration) {
+        this(message, registration, null);
+    }
 
     @Override
     public String topic() {
@@ -50,7 +56,12 @@ public class DefaultConsumeContextConsume implements ConsumeOrderlyContext {
 
     @Override
     public String consumerName() {
-        return registration.getGroup() + DEFAULT_CONSUMER_NAME_SUFFIX;
+        // 返回真实参与消费者组协议的名称（XREADGROUP 使用的 consumerName），
+        // 而非虚构的 "{group}-consumer"——业务基于此名称做运维排查时必须与 Redis 中一致
+        if (actualConsumerName != null) {
+            return actualConsumerName;
+        }
+        return registration.getGroup() + "-" + instanceTokenOrPlaceholder();
     }
 
     @Override
@@ -85,7 +96,17 @@ public class DefaultConsumeContextConsume implements ConsumeOrderlyContext {
 
     @Override
     public int shardId() {
-        return 0;
+        // 与 RedissonOrderlyShardLockManager 的分片路由保持同一公式：
+        // (shardingKey.hashCode() & 0x7fffffff) % shardCount；非顺序消费（shardCount<=0）返回 0
+        int shardCount = registration.getShardCount();
+        if (shardCount <= 0) {
+            return 0;
+        }
+        String shardingKey = message.getShardingKey();
+        if (Objects.isNull(shardingKey)) {
+            shardingKey = "";
+        }
+        return (shardingKey.hashCode() & 0x7fffffff) % shardCount;
     }
 
     @Override
@@ -95,6 +116,13 @@ public class DefaultConsumeContextConsume implements ConsumeOrderlyContext {
 
     @Override
     public long backlog() {
+        // 真实堆积量需每次调用 XPENDING，逐消息调用代价过高；当前实现固定返回 0，
+        // 堆积监控请使用管理端点 /actuator/streammq/{group}/pending/{topic} 或诊断模块。
         return 0;
+    }
+
+    /** 实例标识占位：容器未注入时的降级值（与容器命名规则一致的提示性后缀）。 */
+    private String instanceTokenOrPlaceholder() {
+        return "unknown-instance";
     }
 }

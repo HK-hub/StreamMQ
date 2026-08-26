@@ -329,8 +329,9 @@ class CoreIntegrationTest extends StreamMQTestBase {
                     stream.range(1, StreamMessageId.MIN, StreamMessageId.MAX);
             Map<String, String> fields = range.values().iterator().next();
 
-            Message<String> received = converter.fromStreamFields(fields, String.class);
-            DefaultMessageConverter.applyTopic(received, topic);
+            // 条目字段按设计不携带 topic（topic 由 Redis Key 承载），
+            // 必须通过 fallbackTopic 参数回填，否则 MessageDraft 抛 SerializationException
+            Message<String> received = converter.fromStreamFields(fields, String.class, topic);
             DefaultMessageConverter.applyMessageId(
                     received, range.keySet().iterator().next().toString());
 

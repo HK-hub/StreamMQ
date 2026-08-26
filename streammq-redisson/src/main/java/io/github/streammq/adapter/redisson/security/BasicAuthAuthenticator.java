@@ -6,6 +6,9 @@
 package io.github.streammq.adapter.redisson.security;
 
 import io.github.streammq.core.policy.ManagementAuthenticator;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.Objects;
 
 /**
@@ -39,9 +42,10 @@ public class BasicAuthAuthenticator implements ManagementAuthenticator {
         if (Objects.isNull(username) || Objects.isNull(password)) {
             return false;
         }
-        // 使用恒定时间比较以缓解时序攻击
-        return constantTimeEquals(this.username, username)
-                && constantTimeEquals(new String(this.password), password);
+        // 对 SHA-256 摘要做常量时间比较：即使长度不同，比较的输入也是等长摘要，
+        // 不泄露用户名/密码的真实长度
+        return MessageDigest.isEqual(sha256(this.username), sha256(username))
+                && MessageDigest.isEqual(sha256(new String(this.password)), sha256(password));
     }
 
     @Override
@@ -49,24 +53,13 @@ public class BasicAuthAuthenticator implements ManagementAuthenticator {
         return "basic-auth";
     }
 
-    /**
-     * 恒定时间字符串比较，缓解时序攻击。
-     *
-     * @param a 字符串 a
-     * @param b 字符串 b
-     * @return true 如果相等
-     */
-    private static boolean constantTimeEquals(String a, String b) {
-        if (Objects.isNull(a) || Objects.isNull(b)) {
-            return false;
+    private static byte[] sha256(String value) {
+        try {
+            return MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8));
+        } catch (NoSuchAlgorithmException ex) {
+            // JVM 必须支持 SHA-256（JCA 标准算法），此处仅为受检异常兜底
+            throw new IllegalStateException("SHA-256 unavailable", ex);
         }
-        if (a.length() != b.length()) {
-            return false;
-        }
-        int result = 0;
-        for (int i = 0; i < a.length(); i++) {
-            result |= a.charAt(i) ^ b.charAt(i);
-        }
-        return result == 0;
     }
 }

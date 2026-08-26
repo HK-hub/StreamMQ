@@ -61,6 +61,9 @@ public class CloudK8sAutoConfiguration {
             name = "operator.enabled",
             havingValue = "true",
             matchIfMissing = true)
+    @ConditionalOnClass(
+            io.fabric8.kubernetes.client.KubernetesClient
+                    .class) // 模块依赖为 provided：classpath 缺失 fabric8 时优雅跳过而非 NoClassDefFoundError
     static class OperatorConfiguration {
 
         @Bean

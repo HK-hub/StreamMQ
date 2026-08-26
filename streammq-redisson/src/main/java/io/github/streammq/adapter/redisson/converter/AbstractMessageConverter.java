@@ -320,6 +320,8 @@ public abstract class AbstractMessageConverter implements MessageConverter {
         fields.put(fieldBornTs(), Long.toString(message.getBornTimestamp()));
         putField(fields, fieldBornHost(), message.getBornHost());
         putField(fields, fieldTxId(), message.getTransactionId());
+        // 原始 Topic：随消息体进入重试 Stream / DLQ Stream 后仍可溯源（消费侧回填 draft.topic）
+        putField(fields, fieldOriginTopic(), message.getTopic());
 
         if (message.getReconsumeTimes() > 0 && fieldRetryTimes() != null) {
             fields.put(fieldRetryTimes(), Integer.toString(message.getReconsumeTimes()));
@@ -379,6 +381,8 @@ public abstract class AbstractMessageConverter implements MessageConverter {
         getField(fields, fieldShardingKey(), value -> draft.shardingKey = value);
         getField(fields, fieldBornHost(), value -> draft.bornHost = value);
         getField(fields, fieldTxId(), value -> draft.transactionId = value);
+        // 原始 Topic（重试/DLQ 场景溯源）：优先于 fallbackTopic
+        getField(fields, fieldOriginTopic(), value -> draft.topic = value);
 
         decodeProperties(draft, fields);
 
@@ -404,7 +408,33 @@ public abstract class AbstractMessageConverter implements MessageConverter {
         }
 
         decodeExtra(draft, fields);
+        captureReservedFields(draft, fields);
         return draft.toMessage(fallbackTopic);
+    }
+
+    /**
+     * 捕获 Stream Entry 中的 SDK 内部保留字段（{@code __} 前缀，如 {@code __dlqRetryCount}） 到用户属性，使其在 decode →
+     * encode 往返中不丢失。
+     *
+     * <p>背景：DLQ 重试计数等调度元数据以顶层 Entry 字段写入，若解码时丢弃、失败处理时重新编码， 计数将永远为 0，导致 DLQ 重试上限与二级 DLQ
+     * 策略失效（无限重试）。捕获后这些字段随 props JSON 往返持久化。
+     *
+     * @param draft 装配草稿（保留字段并入 {@code draft.userProperties}）
+     * @param fields Stream Entry 全部字段
+     * @param <T> body 泛型类型
+     */
+    private static <T> void captureReservedFields(
+            MessageDraft<T> draft, Map<String, String> fields) {
+        for (Map.Entry<String, String> entry : fields.entrySet()) {
+            String name = entry.getKey();
+            if (Objects.nonNull(name)
+                    && name.startsWith(
+                            io.github.streammq.core.StreamMQConstants.RESERVED_PROPERTY_PREFIX)
+                    && Objects.nonNull(entry.getValue())) {
+                // 顶层 Entry 字段是权威载体（调度器写入的最新值），覆盖 props JSON 中可能存在的陈旧副本
+                draft.userProperties.put(name, entry.getValue());
+            }
+        }
     }
 
     // ================================================================
@@ -447,6 +477,8 @@ public abstract class AbstractMessageConverter implements MessageConverter {
      *
      * <p>Default 和 PassThrough Converter 共用此方法。 两个 Map 均可能为空，合并后若为空则不做任何写入。
      *
+     * <p><b>键冲突规则：</b>系统属性优先（后写入覆盖）——SDK 内部元数据（如 trace 上下文）不可被业务同名用户属性静默篡改。
+     *
      * @param fields 目标 Map
      * @param fieldName JSON 字段名（如 {@code "props"}）
      * @param sysProps 系统属性 Map（可空，不可变视图）
@@ -459,8 +491,8 @@ public abstract class AbstractMessageConverter implements MessageConverter {
             Map<String, String> sysProps,
             Map<String, String> userProps) {
         Map<String, String> merged = new HashMap<>(sysProps.size() + userProps.size());
-        merged.putAll(sysProps);
         merged.putAll(userProps);
+        merged.putAll(sysProps);
         if (merged.isEmpty()) {
             return;
         }

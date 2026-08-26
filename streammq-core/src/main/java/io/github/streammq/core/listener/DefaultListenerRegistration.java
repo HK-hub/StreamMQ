@@ -55,6 +55,10 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
     private final Class<? extends ConsumerFilter>[] consumerFilter;
     private final SelectorType selectorType;
 
+    private final int consumeThreadMin;
+
+    private final int consumeThreadMax;
+
     @Setter private String namespace;
 
     public DefaultListenerRegistration(
@@ -83,7 +87,9 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
             Class<? extends DlqFailureStrategy> dlqFailureStrategy,
             Class<? extends ConsumerFilter>[] consumerFilter,
             SelectorType selectorType,
-            String namespace) {
+            String namespace,
+            int consumeThreadMin,
+            int consumeThreadMax) {
         this.type = type;
         this.consumer = consumer;
         this.topic = topic;
@@ -110,6 +116,8 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         this.consumerFilter = consumerFilter;
         this.selectorType = selectorType;
         this.namespace = namespace;
+        this.consumeThreadMin = Math.max(1, consumeThreadMin);
+        this.consumeThreadMax = Math.max(this.consumeThreadMin, consumeThreadMax);
     }
 
     @Override

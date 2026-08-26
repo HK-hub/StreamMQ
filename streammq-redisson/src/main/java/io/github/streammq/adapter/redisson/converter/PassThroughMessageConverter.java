@@ -5,6 +5,7 @@
  */
 package io.github.streammq.adapter.redisson.converter;
 
+import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import java.util.*;
@@ -15,7 +16,7 @@ import java.util.*;
  * <p>与 {@link DefaultMessageConverter}（序列化 + Base64 + 压缩）相比，本实现的特点：
  *
  * <ul>
- *   <li>Body 写入时调用 {@code toString()}，读取时直接作为 String 赋值
+ *   <li>Body 支持 String/CharSequence（原样存取）与 {@code byte[]}（Base64 存取）；其它类型 fail-fast
  *   <li>不依赖 {@link io.github.streammq.core.serializer.MessageSerializer}，无序列化开销
  *   <li>适用于 body 已经是可读字符串的场景（如 JSON 文本）
  *   <li>系统属性与用户属性合并存储为单个 {@code props} JSON 字段（与 Default 一致）
@@ -139,7 +140,11 @@ public class PassThroughMessageConverter extends AbstractMessageConverter {
     // ================================================================
 
     /**
-     * 将消息体通过 {@code toString()} 转换为字符串写入字段。
+     * 将消息体转换为字符串写入字段。
+     *
+     * <p>支持类型：{@link String} / {@link CharSequence}（原样写入）、{@code byte[]}（Base64
+     * 编码写入，解码时还原）。其它类型直接抛出 {@link io.github.streammq.core.exception.SerializationException} ——
+     * 此前实现回退到 {@code toString()}，会把 {@code byte[]} 写成 {@code "[B@1f2a3b4c"} 之类的地址串，造成无报错的静默数据损毁。
      *
      * <p>同时写入 {@code bodyType} 字段以记录原始类型全限定名。 body 为 null 时不做任何写入。
      *
@@ -152,18 +157,32 @@ public class PassThroughMessageConverter extends AbstractMessageConverter {
         if (Objects.isNull(body)) {
             return;
         }
-        fields.put(FIELD_BODY, body.toString());
-        fields.put(FIELD_BODY_TYPE, body.getClass().getName());
+        if (body instanceof byte[] bytes) {
+            fields.put(FIELD_BODY, Base64.getEncoder().encodeToString(bytes));
+            fields.put(FIELD_BODY_TYPE, byte[].class.getName());
+            return;
+        }
+        if (body instanceof CharSequence chars) {
+            fields.put(FIELD_BODY, chars.toString());
+            fields.put(FIELD_BODY_TYPE, body.getClass().getName());
+            return;
+        }
+        throw new SerializationException(
+                "PassThroughMessageConverter only supports String/CharSequence/byte[] bodies,"
+                        + " got "
+                        + body.getClass().getName()
+                        + ". Use DefaultMessageConverter or CompactMessageConverter for POJOs.");
     }
 
     /**
-     * 从字段中读取字符串并直接赋值为 body。
+     * 从字段中读取字符串并赋值为 body。
      *
-     * <p>不经过反序列化，不做类型校验。调用方需确保目标类型与 body 字符串兼容。 {@code bodyType} 字段存在时仅作记录，不影响解码逻辑。
+     * <p>编码端为 {@code byte[]}（{@code bodyType} 为 {@code [B}）时 Base64 还原为字节数组； 其余情况直接作为 String
+     * 赋值，不做进一步反序列化。声明其它目标类型的监听器将在消费侧 收到 String（与直通语义一致）。
      *
      * @param fields Stream Entry 全部字段
-     * @param targetType 目标 body 类型（仅作签名，实际不做类型转换）
-     * @param message 输出消息
+     * @param targetType 目标 body 类型
+     * @param draft 输出草稿
      * @param bodyStr body 字段原始字符串值
      */
     @Override
@@ -173,6 +192,11 @@ public class PassThroughMessageConverter extends AbstractMessageConverter {
             Class<T> targetType,
             MessageDraft<T> draft,
             String bodyStr) {
+        String bodyType = fields.get(FIELD_BODY_TYPE);
+        if (byte[].class.getName().equals(bodyType)) {
+            draft.body = (T) Base64.getDecoder().decode(bodyStr);
+            return;
+        }
         draft.body = (T) bodyStr;
     }
 

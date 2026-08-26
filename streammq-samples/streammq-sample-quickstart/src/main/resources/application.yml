@@ -7,6 +7,15 @@ streammq:
   namespace: quickstart
   producer:
     group: quickstart-producer-group
+  admin:
+    enabled: true
+
+# 本地体验：开放管理端点与全部 Actuator（生产环境请收紧）
+management:
+  endpoints:
+    web:
+      exposure:
+        include: "*"
 
 # Redisson 配置（示例用单机），生产环境请使用集群配置
 redisson:

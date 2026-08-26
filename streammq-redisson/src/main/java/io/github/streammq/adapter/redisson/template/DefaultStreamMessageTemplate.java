@@ -84,6 +84,16 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     @Setter private volatile StreamMQEventBus eventBus;
 
     /**
+     * 异步发送专用执行器（虚拟线程，daemon）。
+     *
+     * <p>不使用 {@code ForkJoinPool.commonPool()}：异步发送在线程内执行阻塞式 XADD（超时×重试 最长可达数秒），占用 commonPool 会饿死
+     * JVM 内其它依赖 commonPool 的框架组件。 虚拟线程按需创建、阻塞代价低，且为 daemon 不阻碍 JVM 退出。
+     */
+    private final java.util.concurrent.ExecutorService asyncSendExecutor =
+            java.util.concurrent.Executors.newThreadPerTaskExecutor(
+                    Thread.ofVirtual().name("streammq-async-send-", 0).factory());
+
+    /**
      * 构造 Template。
      *
      * @param producerFactory 生产者工厂
@@ -321,10 +331,11 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     public <T> CompletableFuture<SendResult> asyncSend(Message<T> message, SendOptions options) {
         Objects.requireNonNull(options, "options");
         Objects.requireNonNull(message, "message");
-        // 在独立线程中按 SendOptions 的超时/重试语义执行，保证调用方非阻塞。
+        // 在专用执行器中按 SendOptions 的超时/重试语义执行，保证调用方非阻塞。
         long timeoutMillis = options.effectiveTimeoutMillis();
         int retryTimes = options.effectiveRetryTimes();
-        return CompletableFuture.supplyAsync(() -> syncSend(message, timeoutMillis, retryTimes));
+        return CompletableFuture.supplyAsync(
+                () -> syncSend(message, timeoutMillis, retryTimes), asyncSendExecutor);
     }
 
     @Override
@@ -334,7 +345,8 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         Objects.requireNonNull(callback, "callback");
         long timeoutMillis = options.effectiveTimeoutMillis();
         int retryTimes = options.effectiveRetryTimes();
-        CompletableFuture.supplyAsync(() -> syncSend(message, timeoutMillis, retryTimes))
+        CompletableFuture.supplyAsync(
+                        () -> syncSend(message, timeoutMillis, retryTimes), asyncSendExecutor)
                 .whenComplete(
                         (result, ex) -> {
                             if (Objects.isNull(ex)) {
@@ -600,6 +612,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                 }
                 return halfResult;
             case ROLLBACK_MESSAGE:
+                String rollbackFailure = null;
                 try {
                     scanner.markRollback(transactionId, transactionGroup);
                     LOG.info(
@@ -607,9 +620,13 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                             transactionId,
                             transactionGroup);
                 } catch (RuntimeException ex) {
-                    LOG.warn(
-                            "Failed to rollback transaction: txId={}: {}",
+                    rollbackFailure = ex.getMessage();
+                    LOG.error(
+                            "Failed to rollback transaction, half message remains and"
+                                    + " TransactionScanner will force-rollback after bounded"
+                                    + " rechecks: txId={}, txGroup={}: {}",
                             transactionId,
+                            transactionGroup,
                             ex.getMessage(),
                             ex);
                 }
@@ -620,7 +637,9 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                         SendStatus.SEND_FAILED,
                         message.getBornTimestamp(),
                         null,
-                        "Transaction rolled back");
+                        Objects.nonNull(rollbackFailure)
+                                ? "Rollback failed (scanner will reconcile): " + rollbackFailure
+                                : "Transaction rolled back");
             case UNKNOW:
                 // 保留半消息，等待 TransactionScanner 周期回查
                 LOG.info(

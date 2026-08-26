@@ -6,6 +6,7 @@
 package io.github.streammq.adapter.redisson.serializer;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.util.Objects;
 import org.junit.jupiter.api.DisplayName;
@@ -77,10 +78,11 @@ class FurySerializerTest {
         }
     }
 
-    private final FurySerializer<MyData> serializer = new FurySerializer<>();
+    /** 默认实例（0.1.0 起 secure-by-default：强制类注册白名单） */
+    private final FurySerializer<MyData> serializer = new FurySerializer<>(false);
 
     @Test
-    @DisplayName("POJO 序列化/反序列化往返（String/int/long 字段）")
+    @DisplayName("POJO 序列化/反序列化往返（String/int/long 字段，关闭类注册校验）")
     void roundTrip() {
         MyData data = new MyData("Alice", 30, 1719800000L);
         byte[] bytes = serializer.serialize(data, MyData.class);
@@ -90,6 +92,16 @@ class FurySerializerTest {
         assertThat(result.getName()).isEqualTo("Alice");
         assertThat(result.getAge()).isEqualTo(30);
         assertThat(result.getTimestamp()).isEqualTo(1719800000L);
+    }
+
+    @Test
+    @DisplayName("默认构造强制类注册：未注册类序列化被拒绝（secure-by-default）")
+    void defaultRejectsUnregisteredClass() {
+        FurySerializer<MyData> secure = new FurySerializer<>();
+        MyData data = new MyData("Alice", 30, 1719800000L);
+        assertThatThrownBy(() -> secure.serialize(data, MyData.class))
+                .isInstanceOf(Exception.class)
+                .hasMessageContaining("not registered");
     }
 
     @Test

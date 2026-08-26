@@ -82,6 +82,16 @@ public interface ListenerRegistration<T> {
 
     String getNamespace();
 
+    /**
+     * 并发消费循环数下限（原线程池语义，现为读循环数）：仅 CONCURRENT 集群消费生效。
+     *
+     * @return 并发数（&gt;= 1）
+     */
+    int getConsumeThreadMin();
+
+    /** 并发消费循环数上限（夹取上界）。 */
+    int getConsumeThreadMax();
+
     void setNamespace(String namespace);
 
     void resolveNamespace(String defaultNs);
@@ -115,6 +125,19 @@ public interface ListenerRegistration<T> {
         private Class<? extends ConsumerFilter>[] consumerFilter;
         private SelectorType selectorType;
         private String namespace;
+        private int consumeThreadMin = 1;
+        private int consumeThreadMax =
+                io.github.streammq.core.StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX;
+
+        public Builder<T> consumeThreadMin(int consumeThreadMin) {
+            this.consumeThreadMin = consumeThreadMin;
+            return this;
+        }
+
+        public Builder<T> consumeThreadMax(int consumeThreadMax) {
+            this.consumeThreadMax = consumeThreadMax;
+            return this;
+        }
 
         public Builder<T> type(ListenerType type) {
             this.type = type;
@@ -274,7 +297,9 @@ public interface ListenerRegistration<T> {
                     dlqFailureStrategy,
                     consumerFilter,
                     selectorType,
-                    namespace);
+                    namespace,
+                    consumeThreadMin,
+                    consumeThreadMax);
         }
     }
 

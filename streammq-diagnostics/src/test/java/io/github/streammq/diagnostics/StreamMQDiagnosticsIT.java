@@ -482,7 +482,8 @@ class StreamMQDiagnosticsIT {
                     diagnosticsService.diagnoseSlowConsume(
                             "non-existent-topic", "non-existent-group");
             assertThat(report).isNotNull();
-            assertThat(report.bottleneck()).contains("无追踪数据");
+            // 报告文案为 locale-neutral 英文（对齐 CHANGELOG：message 改为英文 + code 字段）
+            assertThat(report.bottleneck()).contains("No trace data available");
         }
     }
 

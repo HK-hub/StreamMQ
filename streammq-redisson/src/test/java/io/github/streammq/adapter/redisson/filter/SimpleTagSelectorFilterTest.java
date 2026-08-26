@@ -6,6 +6,7 @@
 package io.github.streammq.adapter.redisson.filter;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
@@ -44,16 +45,12 @@ class SimpleTagSelectorFilterTest {
     }
 
     @Test
-    void testAndExpression() {
-        SimpleTagSelectorFilter filter = new SimpleTagSelectorFilter("tag1 && tag2");
-
-        Message<String> message =
-                MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag1").build();
-        assertThat(filter.accept(message)).isFalse();
-
-        message =
-                MessageBuilder.<String>withPayload("test").topic("test-topic").tag("tag2").build();
-        assertThat(filter.accept(message)).isFalse();
+    void testAndExpressionRejected() {
+        // 一条消息只携带一个 tag，"tag1 && tag2" 在语义上永假——0.1.0 起 fail-fast 拒绝，
+        // 而不是静默生成一个永远不匹配的过滤器
+        assertThatThrownBy(() -> new SimpleTagSelectorFilter("tag1 && tag2"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("unsatisfiable");
     }
 
     @Test

@@ -105,6 +105,7 @@ public class StreamMQListenerContainerAutoConfiguration {
                 properties.getConsumer().getPollTimeout().toMillis());
         container.setDefaultPullIntervalMillis(properties.getConsumer().getPullInterval());
         container.setMaxBatchSizeLimit(properties.getConsumer().getMaxBatchSizeLimit());
+        container.setInflightCapacity(properties.getConsumer().getInflightCapacity());
         container.setDefaultVirtualNodes(properties.getRebalance().getVirtualNodes());
         // 消费超时取消宽限期与消费者组心跳/实例超时（streammq.consumer.* / streammq.group.*）
         container.setTimeoutCancelGraceMillis(

@@ -284,7 +284,11 @@ public class StreamMQListenerRegistrar
                     new Candidate(beanName, bean, targetClass, resolved));
         }
         for (Candidate candidate : candidates.values()) {
-            StreamMQConsumer resolved = (StreamMQConsumer) candidate.annotation();
+            // collectDlqOccupiedKeys 预填充的候选携带的是 @StreamMQDlqConsumer 注解实例，
+            // 不能在此强转为 @StreamMQConsumer（DLQ 消费者由 registerDlqListeners 专门注册）
+            if (!(candidate.annotation() instanceof StreamMQConsumer resolved)) {
+                continue;
+            }
             boolean isOrderly = resolved.messageModel() == MessageModel.ORDERLY;
             if (isOrderly && candidate.bean() instanceof StreamMessageOrderlyConsumer listener) {
                 listenerContainer.registerOrderlyConsumer(listener, resolved);

@@ -22,7 +22,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Configuration;
 
 /**
  * StreamMQ OpenTelemetry 追踪自动装配。
@@ -48,7 +47,7 @@ import org.springframework.context.annotation.Configuration;
  * @since 0.1.0
  */
 @Slf4j
-@Configuration(proxyBeanMethods = false)
+@org.springframework.boot.autoconfigure.AutoConfiguration
 @ConditionalOnClass(StreamMessageTemplate.class)
 @ConditionalOnProperty(
         prefix = StreamMQTracingProperties.PROP_PREFIX,
@@ -74,14 +73,16 @@ public class StreamMQTracingAutoConfiguration {
      */
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean
-    public OpenTelemetrySdk streamMQOpenTelemetry(StreamMQTracingProperties properties) {
+    public OpenTelemetry streamMQOpenTelemetry(StreamMQTracingProperties properties) {
         String otlpEndpoint = properties.getOtlpEndpoint();
         if (otlpEndpoint == null || otlpEndpoint.isBlank()) {
             log.info(
                     "StreamMQ OpenTelemetry 追踪已启用，未配置 otlp-endpoint，使用 no-op 默认实例"
                             + "（不会导出任何数据）；serviceName={}",
                     properties.getServiceName());
-            return (OpenTelemetrySdk) OpenTelemetry.noop();
+            // OpenTelemetry.noop() 返回 DefaultOpenTelemetry，并非 OpenTelemetrySdk 的实例；
+            // 此前的强转在运行期必然抛 ClassCastException，导致无端点场景上下文启动失败
+            return OpenTelemetry.noop();
         }
         // 真实 SDK + OTLP 导出
         // service.name 使用原生 AttributeKey，避免依赖 -alpha 语义约定构件

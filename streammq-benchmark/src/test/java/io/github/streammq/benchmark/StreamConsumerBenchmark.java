@@ -24,7 +24,6 @@ import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
-import org.openjdk.jmh.runner.options.TimeValue;
 import org.redisson.Redisson;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
@@ -55,6 +54,13 @@ public class StreamConsumerBenchmark {
     private RedissonClient redisson;
     private StreamMessageTemplate template;
     private ContainerizedRedisServer redisServer;
+
+    /** 持续灌数线程：保证消费基准始终有真实消息可读（避免测量空 XREADGROUP RTT） */
+    private volatile Thread feeder;
+
+    private volatile boolean feeding = true;
+
+    private DefaultMessageConverter converter;
 
     @Param({"1024", "10240"})
     private int payloadSize;
@@ -94,6 +100,7 @@ public class StreamConsumerBenchmark {
 
         DefaultMessageConverter converter =
                 new DefaultMessageConverter(new JacksonJsonSerializer<>());
+        this.converter = converter;
         RedissonStreamProducerFactory producerFactory =
                 new RedissonStreamProducerFactory(redisson, converter);
         template =
@@ -124,10 +131,37 @@ public class StreamConsumerBenchmark {
             template.syncSend(msg);
         }
         LOG.info("Pre-sent {} messages to topic {}", PRE_SEND_COUNT, TOPIC);
+
+        // 启动持续灌数线程：消费速度通常高于单线程同步灌数，因此用独立虚拟线程
+        // 不间断补货，保证基准测量的是"真实消费路径"而非空读往返
+        feeder =
+                Thread.ofVirtual()
+                        .name("benchmark-feeder")
+                        .start(
+                                () -> {
+                                    int i = PRE_SEND_COUNT;
+                                    while (feeding) {
+                                        try {
+                                            Message<String> msg =
+                                                    MessageBuilder.<String>withTopic(TOPIC)
+                                                            .tag("consumer-test")
+                                                            .keys("key-" + (i++))
+                                                            .body(payload)
+                                                            .build();
+                                            template.syncSend(msg);
+                                        } catch (RuntimeException ex) {
+                                            LOG.warn("Feeder send failed: {}", ex.getMessage());
+                                        }
+                                    }
+                                });
     }
 
     @TearDown(Level.Trial)
     public void teardown() {
+        feeding = false;
+        if (feeder != null) {
+            feeder.interrupt();
+        }
         if (redisson != null) {
             redisson.getKeys().flushdb();
             redisson.shutdown();
@@ -137,29 +171,38 @@ public class StreamConsumerBenchmark {
         }
     }
 
+    /**
+     * 真实端到端消费路径：XREADGROUP 拉取 → converter 反序列化转换 → 业务回调 → XACK。
+     *
+     * <p>每次调用处理 {@value #BATCH_SIZE} 条完整消息（含网络与 ACK），修复了旧实现不 ACK、 不做字段转换、预热数据耗尽后测量空读 RTT 的方法学缺陷。
+     */
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
+    @SuppressWarnings("unchecked")
     public void consumeThroughput() throws Exception {
         RStream<String, String> stream = redisson.getStream(TOPIC);
 
-        var messages =
-                stream.readGroup(
-                        CONSUMER_GROUP,
-                        CONSUMER_NAME,
-                        StreamReadGroupArgs.neverDelivered().count(BATCH_SIZE));
+        StreamMessageConcurrentlyConsumer<String> consumer = (msg, ctx) -> ConsumeAction.SUCCESS;
 
-        if (messages != null && !messages.isEmpty()) {
-            StreamMessageConcurrentlyConsumer<String> consumer =
-                    (msg, ctx) -> ConsumeAction.SUCCESS;
-
-            for (var entry : messages.entrySet()) {
-                Message<String> msg =
-                        MessageBuilder.<String>withTopic(TOPIC)
-                                .tag("consumer-test")
-                                .body(payload)
-                                .build();
-                consumer.onMessage(msg, createContext(TOPIC, CONSUMER_GROUP));
+        int processed = 0;
+        while (processed < BATCH_SIZE) {
+            var messages =
+                    stream.readGroup(
+                            CONSUMER_GROUP,
+                            CONSUMER_NAME,
+                            StreamReadGroupArgs.neverDelivered().count(BATCH_SIZE));
+            if (messages == null || messages.isEmpty()) {
+                continue;
             }
+            java.util.List<StreamMessageId> ids = new java.util.ArrayList<>(messages.size());
+            for (var entry : messages.entrySet()) {
+                // 真实消费路径包含字段解码（Base64 + 反序列化），而非复用本地对象
+                Message<?> msg = converter.fromStreamFields(entry.getValue(), String.class, TOPIC);
+                consumer.onMessage((Message<String>) msg, createContext(TOPIC, CONSUMER_GROUP));
+                ids.add(entry.getKey());
+                processed++;
+            }
+            stream.ack(CONSUMER_GROUP, ids.toArray(new StreamMessageId[0]));
         }
     }
 
@@ -235,15 +278,9 @@ public class StreamConsumerBenchmark {
     }
 
     public static void main(String[] args) throws RunnerException {
+        // 与类级注解保持一致（fork 数等由 @Fork/@Warmup/@Measurement 决定），消除结果来源歧义
         Options opt =
-                new OptionsBuilder()
-                        .include(StreamConsumerBenchmark.class.getSimpleName())
-                        .warmupTime(TimeValue.seconds(2))
-                        .warmupIterations(3)
-                        .measurementTime(TimeValue.seconds(3))
-                        .measurementIterations(5)
-                        .forks(1)
-                        .build();
+                new OptionsBuilder().include(StreamConsumerBenchmark.class.getSimpleName()).build();
         new Runner(opt).run();
     }
 }

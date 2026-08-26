@@ -8,8 +8,6 @@ package io.github.streammq.adapter.redisson.filter.expression;
 import java.util.Objects;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * SQL92 表达式解析器。
@@ -32,14 +30,16 @@ import org.slf4j.LoggerFactory;
  */
 public class SelectorParser {
 
-    private static final Logger LOG = LoggerFactory.getLogger(SelectorParser.class);
-
     private static final Pattern IDENTIFIER_PATTERN = Pattern.compile("^[a-zA-Z_][a-zA-Z0-9_]*");
     private static final Pattern STRING_PATTERN = Pattern.compile("^'([^']*)'");
     private static final Pattern NUMBER_PATTERN = Pattern.compile("^-?\\d+(\\.\\d+)?");
 
+    /** 括号/递归最大嵌套深度：防止超深嵌套表达式触发 StackOverflowError（Error 无法被 catch(Exception) 捕获） */
+    static final int MAX_NESTING_DEPTH = 64;
+
     private final String expression;
     private int pos;
+    private int depth;
 
     public SelectorParser(String expression) {
         this.expression = Objects.nonNull(expression) ? expression.trim() : "";
@@ -96,11 +96,19 @@ public class SelectorParser {
         char ch = expression.charAt(pos);
 
         if (ch == '(') {
+            if (++depth > MAX_NESTING_DEPTH) {
+                throw new IllegalArgumentException(
+                        "SQL92 expression nesting exceeds max depth " + MAX_NESTING_DEPTH);
+            }
             pos++;
             Expression expr = parseOr();
             skipWhitespace();
+            depth--;
             if (pos < expression.length() && expression.charAt(pos) == ')') {
                 pos++;
+            } else {
+                throw new IllegalArgumentException(
+                        "Unbalanced parenthesis in SQL92 expression: " + expression);
             }
             return expr;
         }
@@ -275,7 +283,9 @@ public class SelectorParser {
         try {
             result = parser.parse();
         } catch (Exception e) {
-            throw new IllegalArgumentException("Invalid SQL92 expression: " + expression, e);
+            String detail = Objects.nonNull(e.getMessage()) ? " (" + e.getMessage() + ")" : "";
+            throw new IllegalArgumentException(
+                    "Invalid SQL92 expression: " + expression + detail, e);
         }
         if (result == null) {
             throw new IllegalArgumentException("Invalid SQL92 expression: " + expression);
@@ -292,8 +302,12 @@ public class SelectorParser {
     /**
      * 构建表达式（静态工厂方法）。
      *
+     * <p><b>0.1.0 起为 fail-closed 语义：</b>解析失败直接抛出 {@link IllegalArgumentException} 而非返回 null（返回 null
+     * 会被下游解释为"放行全部消息"，形成静默过滤反转）。 通配符/空表达式仍返回 null 表示不过滤。
+     *
      * @param expression 表达式字符串
-     * @return 表达式节点
+     * @return 表达式节点；空串或通配符返回 null
+     * @throws IllegalArgumentException 表达式非法
      */
     public static Expression build(String expression) {
         if (Objects.isNull(expression)
@@ -301,11 +315,15 @@ public class SelectorParser {
                 || "*".equals(expression.trim())) {
             return null;
         }
+        Expression result;
         try {
-            return new SelectorParser(expression).parse();
+            result = new SelectorParser(expression).parse();
         } catch (Exception e) {
-            LOG.warn("Failed to parse expression: {}", expression, e);
-            return null;
+            throw new IllegalArgumentException("Invalid SQL92 expression: " + expression, e);
         }
+        if (result == null) {
+            throw new IllegalArgumentException("Invalid SQL92 expression: " + expression);
+        }
+        return result;
     }
 }

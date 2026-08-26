@@ -94,16 +94,19 @@ public @interface StreamMQConsumer {
     MessageModel messageModel() default MessageModel.CONCURRENT;
 
     /**
-     * 最小消费线程数，默认 1。
+     * 并发消费循环数，默认 1。仅 {@link MessageModel#CONCURRENT} 且集群消费生效； 顺序 / DLQ / 广播消费固定为单循环。
      *
-     * @return 最小消费线程数
+     * <p>每个循环独立执行 XREADGROUP 拉取（共享同一 consumer name，Redis 原子分配保证互不相交）， 提升单实例并行度。此前该属性为无效占位（0.1.0
+     * 前版本），现已真实生效。
+     *
+     * @return 并发消费循环数
      */
     int consumeThreadMin() default 1;
 
     /**
-     * 最大消费线程数，默认 64。
+     * 并发消费循环数上限（{@code consumeThreadMin} 的夹取上界），默认 64。
      *
-     * @return 最大消费线程数
+     * @return 并发消费循环数上限
      */
     int consumeThreadMax() default StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX;
 
@@ -119,7 +122,7 @@ public @interface StreamMQConsumer {
      *
      * <p>超时后框架会 ACK 当前消息并调度重试投递。由于消费线程可能仍在执行业务逻辑， 重试消费与原消费可能并发执行，因此业务层必须实现幂等性。
      *
-     * <p>仅对并发消费（{@link ConsumeMode#CONCURRENTLY}）生效，顺序消费不支持超时取消。
+     * <p>仅对并发消费（{@link MessageModel#CONCURRENT}）生效，顺序消费不支持超时取消。
      *
      * @return 超时毫秒数，0 表示不超时
      */
