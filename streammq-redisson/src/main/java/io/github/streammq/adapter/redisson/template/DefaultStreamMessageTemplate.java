@@ -134,19 +134,26 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         this.transactionGroup = transactionGroup;
     }
 
-    @Override
-    public <T> SendResult syncSend(Message<T> message) {
-        return syncSend(message, DEFAULT_SEND_TIMEOUT_MILLIS, DEFAULT_SYNC_RETRY_TIMES);
-    }
+    // ===================== 发送 API（0.1.0 收敛为 SendOptions 规范形） =====================
 
     @Override
-    public <T> SendResult syncSend(Message<T> message, long timeoutMillis) {
-        return syncSend(message, timeoutMillis, DEFAULT_SYNC_RETRY_TIMES);
-    }
-
-    @Override
-    public <T> SendResult syncSend(Message<T> message, long timeoutMillis, int retryTimes) {
+    public <T> SendResult syncSend(Message<T> message, SendOptions options) {
         Objects.requireNonNull(message, "message");
+        SendOptions effective =
+                Objects.nonNull(options) ? options : SendOptions.defaults();
+        return doSyncSend(
+                message, effective.effectiveTimeoutMillis(), effective.effectiveRetryTimes());
+    }
+
+    /**
+     * 同步发送核心实现（含拦截器链、过滤器、重试与指标）。
+     *
+     * <p><b>重试安全规则：</b>仅对"确定未送达"的异常重试（序列化/客户端校验等发送前失败）。
+     * {@link io.github.streammq.core.exception.ProducerTimeoutException} /
+     * StreamMQBrokerException 意味着 XADD 可能已落库，重试会产生重复消息——直接抛出，
+     * 由业务侧按 at-least-once 语义处理。
+     */
+    private <T> SendResult doSyncSend(Message<T> message, long timeoutMillis, int retryTimes) {
         if (timeoutMillis <= 0) {
             timeoutMillis = DEFAULT_SEND_TIMEOUT_MILLIS;
         }
@@ -237,127 +244,12 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     }
 
     @Override
-    public <T> CompletableFuture<SendResult> asyncSend(Message<T> message) {
-        Objects.requireNonNull(message, "message");
-        // 注入 MDC 结构化日志上下文
-        injectProducerMdc(message);
-        try {
-            // 先执行 before 拦截器（串联派生消息），被中止时返回 failedFuture
-            Message<T> interceptedCf = applyInterceptorsBefore(message);
-            if (Objects.isNull(interceptedCf)) {
-                return CompletableFuture.failedFuture(
-                        new StreamMQException("Aborted by interceptor"));
-            }
-            final Message<T> effective = interceptedCf;
-            StreamMessageProducer producer = resolveProducer(effective.getTopic());
-            long sendStart = System.nanoTime();
-            return producer.asyncSend(effective)
-                    .whenComplete(
-                            (result, ex) -> {
-                                if (Objects.isNull(ex)) {
-                                    applyInterceptorsAfter(effective, result);
-                                    recordSendMetrics(
-                                            effective.getTopic(),
-                                            Objects.nonNull(result) && result.isSuccess(),
-                                            sendStart);
-                                } else {
-                                    Exception e =
-                                            ex instanceof Exception
-                                                    ? (Exception) ex
-                                                    : new StreamMQException(
-                                                            "async send failed", ex);
-                                    notifyProducerException(effective, e, InvokeTiming.EXECUTING);
-                                    recordSendMetrics(effective.getTopic(), false, sendStart);
-                                }
-                            });
-        } finally {
-            // 清理 MDC 结构化日志上下文
-            clearProducerMdc();
-        }
-    }
-
-    @Override
-    public <T> void asyncSend(Message<T> message, SendCallback callback) {
-        asyncSend(message, callback, DEFAULT_SEND_TIMEOUT_MILLIS);
-    }
-
-    @Override
-    public <T> void asyncSend(Message<T> message, SendCallback callback, long timeoutMillis) {
-        Objects.requireNonNull(message, "message");
-        Objects.requireNonNull(callback, "callback");
-        // 注入 MDC 结构化日志上下文
-        injectProducerMdc(message);
-        try {
-            Message<T> interceptedCb = applyInterceptorsBefore(message);
-            if (Objects.isNull(interceptedCb)) {
-                callback.onException(new StreamMQException("Aborted by interceptor"));
-                return;
-            }
-            final Message<T> effective = interceptedCb;
-            StreamMessageProducer producer = resolveProducer(effective.getTopic());
-            producer.asyncSend(effective, timeoutMillis)
-                    .whenComplete(
-                            (result, ex) -> {
-                                if (Objects.isNull(ex)) {
-                                    applyInterceptorsAfter(effective, result);
-                                    callback.onSuccess(result);
-                                } else {
-                                    Exception e =
-                                            ex instanceof Exception
-                                                    ? (Exception) ex
-                                                    : new StreamMQException(
-                                                            "async send failed", ex);
-                                    notifyProducerException(effective, e, InvokeTiming.EXECUTING);
-                                    callback.onException(
-                                            ex instanceof RuntimeException re
-                                                    ? re
-                                                    : new StreamMQException(
-                                                            "async send failed", ex));
-                                }
-                            });
-        } finally {
-            // 清理 MDC 结构化日志上下文
-            clearProducerMdc();
-        }
-    }
-
-    @Override
-    public <T> SendResult syncSend(Message<T> message, SendOptions options) {
-        Objects.requireNonNull(options, "options");
-        return syncSend(message, options.effectiveTimeoutMillis(), options.effectiveRetryTimes());
-    }
-
-    @Override
     public <T> CompletableFuture<SendResult> asyncSend(Message<T> message, SendOptions options) {
-        Objects.requireNonNull(options, "options");
         Objects.requireNonNull(message, "message");
-        // 在专用执行器中按 SendOptions 的超时/重试语义执行，保证调用方非阻塞。
-        long timeoutMillis = options.effectiveTimeoutMillis();
-        int retryTimes = options.effectiveRetryTimes();
+        // 在专用虚拟线程执行器中按 SendOptions 语义执行（含拦截器/重试/指标），
+        // 保证调用方非阻塞；不使用 ForkJoinPool.commonPool 以免饿死其它框架组件
         return CompletableFuture.supplyAsync(
-                () -> syncSend(message, timeoutMillis, retryTimes), asyncSendExecutor);
-    }
-
-    @Override
-    public <T> void asyncSend(Message<T> message, SendOptions options, SendCallback callback) {
-        Objects.requireNonNull(options, "options");
-        Objects.requireNonNull(message, "message");
-        Objects.requireNonNull(callback, "callback");
-        long timeoutMillis = options.effectiveTimeoutMillis();
-        int retryTimes = options.effectiveRetryTimes();
-        CompletableFuture.supplyAsync(
-                        () -> syncSend(message, timeoutMillis, retryTimes), asyncSendExecutor)
-                .whenComplete(
-                        (result, ex) -> {
-                            if (Objects.isNull(ex)) {
-                                callback.onSuccess(result);
-                            } else {
-                                callback.onException(
-                                        ex instanceof RuntimeException re
-                                                ? re
-                                                : new StreamMQException("async send failed", ex));
-                            }
-                        });
+                () -> syncSend(message, options), asyncSendExecutor);
     }
 
     @Override
@@ -385,55 +277,15 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     }
 
     @Override
-    public <T> List<SendResult> syncSendBatch(BatchMessage<T> batch) {
+    public <T> List<SendResult> syncSendBatch(BatchMessage<T> batch, SendOptions options) {
         Objects.requireNonNull(batch, "batch");
         if (batch.isEmpty()) {
             throw new IllegalArgumentException("batch is empty");
         }
-
-        List<Message<T>> interceptedMessages = new ArrayList<>(batch.getMessages().size());
-        for (Message<T> message : batch.getMessages()) {
-            Message<T> intercepted = applyInterceptorsBefore(message);
-            if (Objects.isNull(intercepted)) {
-                throw new StreamMQException(
-                        "Batch send aborted by interceptor for topic: " + message.getTopic());
-            }
-            interceptedMessages.add(intercepted);
-        }
-
-        StreamMessageProducer producer = resolveProducer(batch.getTopic());
-        List<SendResult> results;
-        try {
-            results = producer.syncSendBatch(interceptedMessages);
-        } catch (RuntimeException ex) {
-            for (Message<T> msg : interceptedMessages) {
-                notifyProducerException(msg, ex, InvokeTiming.EXECUTING);
-            }
-            throw ex;
-        }
-
-        List<SendResult> finalResults = new ArrayList<>(results.size());
-        for (int i = 0; i < results.size(); i++) {
-            SendResult result = results.get(i);
-            applyInterceptorsAfter(interceptedMessages.get(i), result);
-            finalResults.add(result);
-        }
-        return finalResults;
-    }
-
-    @Override
-    public <T> List<SendResult> syncSendBatch(
-            BatchMessage<T> batch, long timeoutMillis, int retryTimes) {
-        Objects.requireNonNull(batch, "batch");
-        if (batch.isEmpty()) {
-            throw new IllegalArgumentException("batch is empty");
-        }
-        if (timeoutMillis <= 0) {
-            timeoutMillis = DEFAULT_SEND_TIMEOUT_MILLIS;
-        }
-        if (retryTimes < 0) {
-            retryTimes = 0;
-        }
+        SendOptions effective =
+                Objects.nonNull(options) ? options : SendOptions.defaults();
+        long timeoutMillis = effective.effectiveTimeoutMillis();
+        int retryTimes = Math.max(0, effective.effectiveRetryTimes());
 
         List<Message<T>> interceptedMessages = new ArrayList<>(batch.getMessages().size());
         for (Message<T> message : batch.getMessages()) {

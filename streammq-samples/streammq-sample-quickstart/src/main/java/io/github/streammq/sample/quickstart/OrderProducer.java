@@ -50,7 +50,12 @@ public class OrderProducer {
     public SendResult createOrder(String orderId, String content) {
         log.info("Producing order message: orderId={}, content={}", orderId, content);
         SendResult result =
-                service.send(SampleConstants.TOPIC, content, SampleConstants.TAG_CREATED, orderId);
+                service.send(
+                        SampleConstants.TOPIC,
+                        content,
+                        MessageMetadataBuilder.create()
+                                .tag(SampleConstants.TAG_CREATED)
+                                .keys(orderId));
         log.info(
                 "Order message sent successfully: orderId={}, msgId={}, status={}",
                 orderId,
@@ -86,7 +91,11 @@ public class OrderProducer {
         log.info("Producing order message asynchronously: orderId={}", orderId);
         CompletableFuture<SendResult> future =
                 service.asyncSend(
-                        SampleConstants.TOPIC, content, SampleConstants.TAG_ASYNC, orderId);
+                        SampleConstants.TOPIC,
+                        content,
+                        MessageMetadataBuilder.create()
+                                .tag(SampleConstants.TAG_ASYNC)
+                                .keys(orderId));
 
         future.thenAccept(
                         result ->
@@ -120,7 +129,10 @@ public class OrderProducer {
                 "Producing order message asynchronously with timeout: orderId={}, timeout={}ms",
                 orderId,
                 timeoutMillis);
-        return service.asyncSend(SampleConstants.TOPIC, content, timeoutMillis);
+        return service.asyncSend(
+                SampleConstants.TOPIC,
+                content,
+                MessageMetadataBuilder.create().timeoutMillis(timeoutMillis));
     }
 
     // ===================== 异步发送（SendCallback） =====================
@@ -154,7 +166,11 @@ public class OrderProducer {
                     }
                 };
 
-        service.asyncSend(SampleConstants.TOPIC, content, SampleConstants.TAG_CALLBACK, callback);
+        service.asyncSend(
+                SampleConstants.TOPIC,
+                content,
+                MessageMetadataBuilder.create().tag(SampleConstants.TAG_CALLBACK),
+                callback);
     }
 
     // ===================== 单向发送 =====================
@@ -169,7 +185,12 @@ public class OrderProducer {
      */
     public void createOrderOneway(String orderId, String content) {
         log.info("Producing order message oneway: orderId={}", orderId);
-        service.sendOneway(SampleConstants.TOPIC, content, SampleConstants.TAG_ONEWAY, orderId);
+        service.sendOneway(
+                SampleConstants.TOPIC,
+                content,
+                MessageMetadataBuilder.create()
+                        .tag(SampleConstants.TAG_ONEWAY)
+                        .keys(orderId));
         log.info("Oneway message sent (no response): orderId={}", orderId);
     }
 
@@ -215,9 +236,16 @@ public class OrderProducer {
      */
     public List<SendResult> createOrdersBatchSimple(List<String> contents) {
         log.info("Producing batch order messages (simple API): count={}", contents.size());
-        List<SendResult> results =
-                service.sendBatch(
-                        SampleConstants.TOPIC, SampleConstants.TAG_SIMPLE_BATCH, contents);
+        BatchMessage.Builder<String> simpleBuilder =
+                BatchMessage.<String>withTopic(SampleConstants.TOPIC);
+        for (int i = 0; i < contents.size(); i++) {
+            simpleBuilder.add(
+                    MessageBuilder.<String>withTopic(SampleConstants.TOPIC)
+                            .tag(SampleConstants.TAG_SIMPLE_BATCH)
+                            .body(contents.get(i))
+                            .build());
+        }
+        List<SendResult> results = service.sendBatch(simpleBuilder.build());
         log.info("Simple batch messages sent: count={}", results.size());
         return results;
     }
@@ -272,8 +300,8 @@ public class OrderProducer {
                         .tag(SampleConstants.TAG_TIMEOUT_RETRY)
                         .keys(orderId);
 
-        SendResult result =
-                service.send(SampleConstants.TOPIC, content, metadata, timeoutMillis, retryTimes);
+        metadata.timeoutMillis(timeoutMillis).retryTimes(retryTimes);
+        SendResult result = service.send(SampleConstants.TOPIC, content, metadata);
         log.info(
                 "Timeout/retry message sent: orderId={}, msgId={}", orderId, result.getMessageId());
         return result;

@@ -30,6 +30,7 @@ import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.message.MessageMetadataBuilder;
+import io.github.streammq.core.message.SendOptions;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.message.SendStatus;
 import io.github.streammq.core.producer.ProducerConfig;
@@ -237,7 +238,7 @@ class CoreIntegrationTest extends StreamMQTestBase {
             Message<String> msg =
                     MessageBuilder.<String>withTopic(topic).body("timeout-body").build();
 
-            SendResult result = template.syncSend(msg, 5000L);
+            SendResult result = template.syncSend(msg, SendOptions.of(5000L, 2));
 
             StreamMQAssertions.assertThat(result).isSuccess().hasTopic(topic);
         }
@@ -249,7 +250,7 @@ class CoreIntegrationTest extends StreamMQTestBase {
             Message<String> msg =
                     MessageBuilder.<String>withTopic(topic).body("retry-body").build();
 
-            SendResult result = template.syncSend(msg, 5000L, 3);
+            SendResult result = template.syncSend(msg, SendOptions.of(5000L, 3));
 
             StreamMQAssertions.assertThat(result).isSuccess();
             RStream<String, String> stream =

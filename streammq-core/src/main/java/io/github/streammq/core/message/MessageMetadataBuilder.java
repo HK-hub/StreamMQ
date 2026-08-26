@@ -76,7 +76,44 @@ public final class MessageMetadataBuilder {
      */
     @Getter private String bornHost;
 
+    /** 发送超时毫秒数（&lt;=0 表示未设置，使用默认值） */
+    @Getter private long timeoutMillis = -1;
+
+    /** 发送重试次数（&lt;0 表示未设置，使用默认值） */
+    @Getter private int retryTimes = -1;
+
     private MessageMetadataBuilder() {}
+
+    /**
+     * 设置发送超时毫秒数（topic 形态下替代 SendOptions）。
+     *
+     * @param timeoutMillis 超时毫秒数（&lt;= 0 使用默认）
+     * @return this
+     */
+    public MessageMetadataBuilder timeoutMillis(long timeoutMillis) {
+        this.timeoutMillis = timeoutMillis;
+        return this;
+    }
+
+    /**
+     * 设置同步发送重试次数（topic 形态下替代 SendOptions）。
+     *
+     * @param retryTimes 重试次数（&lt; 0 使用默认）
+     * @return this
+     */
+    public MessageMetadataBuilder retryTimes(int retryTimes) {
+        this.retryTimes = retryTimes;
+        return this;
+    }
+
+    /**
+     * 将本构造器中的超时/重试设置转换为 {@link SendOptions}。
+     *
+     * @return SendOptions
+     */
+    public SendOptions toSendOptions() {
+        return SendOptions.of(timeoutMillis, retryTimes);
+    }
 
     /**
      * 创建新的元数据构造器。

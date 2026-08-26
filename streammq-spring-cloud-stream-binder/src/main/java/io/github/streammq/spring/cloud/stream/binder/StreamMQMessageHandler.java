@@ -110,7 +110,11 @@ public class StreamMQMessageHandler implements MessageHandler {
         Objects.requireNonNull(message, "message");
         try {
             io.github.streammq.core.message.Message<Object> streamMessage = convert(message);
-            SendResult result = template.syncSend(streamMessage, sendTimeout, retryTimes);
+            SendResult result =
+                    template.syncSend(
+                            streamMessage,
+                            io.github.streammq.core.message.SendOptions.of(
+                                    sendTimeout, retryTimes));
             if (Objects.nonNull(result) && result.getSendStatus() == SendStatus.SEND_OK) {
                 log.debug(
                         "消息发送成功: topic={}, messageId={}",

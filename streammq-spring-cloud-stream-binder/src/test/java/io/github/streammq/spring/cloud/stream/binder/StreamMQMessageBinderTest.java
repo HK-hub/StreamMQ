@@ -21,6 +21,7 @@ import io.github.streammq.core.listener.StreamMQListenerContainer;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.message.MessageId;
+import io.github.streammq.core.message.SendOptions;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.message.SendStatus;
 import io.github.streammq.core.template.StreamMessageTemplate;
@@ -97,7 +98,7 @@ class StreamMQMessageBinderTest {
                         System.currentTimeMillis(),
                         null,
                         null);
-        when(template.syncSend(any(), anyLong(), anyInt())).thenReturn(sendResult);
+        when(template.syncSend(any(), any(SendOptions.class))).thenReturn(sendResult);
 
         StreamMQProducerProperties extension = new StreamMQProducerProperties();
         extension.setTag("tag1");
@@ -121,7 +122,9 @@ class StreamMQMessageBinderTest {
 
         // Then
         verify(template, times(1))
-                .syncSend(any(io.github.streammq.core.message.Message.class), eq(5000L), eq(3));
+                .syncSend(
+                        any(io.github.streammq.core.message.Message.class),
+                        eq(io.github.streammq.core.message.SendOptions.of(5000L, 3)));
     }
 
     @Test
@@ -129,7 +132,8 @@ class StreamMQMessageBinderTest {
     void createProducerMessageHandler_shouldThrowOnSendFailure() throws Exception {
         // Given
         when(producerDestination.getName()).thenReturn("test-topic");
-        when(template.syncSend(any(), anyLong(), anyInt())).thenThrow(new RuntimeException("连接失败"));
+        when(template.syncSend(any(), any(SendOptions.class)))
+                .thenThrow(new RuntimeException("连接失败"));
 
         StreamMQProducerProperties extension = new StreamMQProducerProperties();
         ExtendedProducerProperties<StreamMQProducerProperties> producerProperties =

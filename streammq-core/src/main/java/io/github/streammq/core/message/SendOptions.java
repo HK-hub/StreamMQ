@@ -52,6 +52,31 @@ public final class SendOptions implements Serializable {
     }
 
     /**
+     * 返回使用全部默认值（超时 3000ms、同步重试 2 次）的共享实例。
+     *
+     * <p>实例不可变且语义等价，可安全复用。
+     *
+     * @return 默认 SendOptions
+     */
+    public static SendOptions defaults() {
+        return DEFAULT;
+    }
+
+    /** 共享的默认实例（全字段未设置，按默认值生效）。 */
+    private static final SendOptions DEFAULT = new SendOptions(-1, -1);
+
+    /**
+     * 以指定超时与重试次数创建选项。
+     *
+     * @param timeoutMillis 超时毫秒数（&lt;=0 使用默认）
+     * @param retryTimes 重试次数（&lt;0 使用默认）
+     * @return SendOptions
+     */
+    public static SendOptions of(long timeoutMillis, int retryTimes) {
+        return new SendOptions(timeoutMillis, retryTimes);
+    }
+
+    /**
      * 创建 Builder。
      *
      * @return 新的 Builder

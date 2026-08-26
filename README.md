@@ -356,20 +356,31 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 
 ### StreamMessageTemplate 编程模型
 
-统一的发送入口，支持同步、异步、单向、批量、事务五种发送方式。
+统一的发送入口。0.1.0 起 API 已收敛：每个发送模式仅保留一个 `SendOptions` 规范形，
+此前的 timeout / retry / callback 伸缩重载全部移除；零参便捷形式以 default 方法提供。
 
 ```java
 public interface StreamMessageTemplate {
+    // 规范形（唯一参数空间）
+    <T> SendResult syncSend(Message<T> message, SendOptions options);
+    <T> CompletableFuture<SendResult> asyncSend(Message<T> message, SendOptions options);
+    <T> List<SendResult> syncSendBatch(BatchMessage<T> batch, SendOptions options);
+    <T> void sendOneway(Message<T> message);          // fire-and-forget
+    <T> SendResult executeInTransaction(Message<T> message, TransactionCallback<T> callback);
+
+    // 便捷 default 方法
     <T> SendResult syncSend(Message<T> message);
-    <T> SendResult syncSend(Message<T> message, long timeoutMillis);
-    <T> SendResult syncSend(Message<T> message, long timeoutMillis, int retryTimes);
     <T> CompletableFuture<SendResult> asyncSend(Message<T> message);
     <T> void asyncSend(Message<T> message, SendCallback callback);
-    <T> void sendOneway(Message<T> message);
+    <T> void asyncSend(Message<T> message, SendOptions options, SendCallback callback);
     <T> List<SendResult> syncSendBatch(BatchMessage<T> batch);
-    <T> SendResult executeInTransaction(Message<T> message, TransactionCallback<T> callback);
+
+    // SPI 访问器：拦截器/过滤器/转换器管理
 }
 ```
+
+`StreamMessageService` 门面同步收敛为三种正交维度：发送模式 × 载体形态（完整 Message 或
+topic+body+`MessageMetadataBuilder`）× 参数（`SendOptions` / 元数据内联超时重试）。
 
 ### 事务消息
 

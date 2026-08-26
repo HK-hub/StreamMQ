@@ -11,8 +11,47 @@ on:
       - main
 
 jobs:
+  guard:
+    name: Guards (parent↔BOM property sync)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Verify parent pom.xml and streammq-bom/pom.xml dependency versions are in sync
+        run: |
+          set -euo pipefail
+          extract() {
+            grep -oP '^\s*<([a-zA-Z0-9.-]+)\.version>[^<]+</\1\.version>\s*$' "$1" \
+              | sed -E 's/^\s*<([a-zA-Z0-9.-]+)\.version>([^<]+)<\/\1\.version>\s*$/\1=\2/' \
+              | sort
+          }
+          extract pom.xml > /tmp/parent.props
+          extract streammq-bom/pom.xml > /tmp/bom.props
+          fail=0
+          # 1) 双方共同声明的依赖版本必须一致（BOM 特意不管理父 POM 的插件/测试工具版本，忽略仅单侧存在的键）
+          while IFS='=' read -r k v; do
+            # ${...} 引用型属性（如 streammq=${project.version}）由下方规则 2 单独核对
+            case "$v" in '${'*) continue ;; esac
+            bv=$(grep -P "^${k}=" /tmp/bom.props | head -1 | cut -d= -f2- || true)
+            if [ -n "$bv" ] && [ "$bv" != "$v" ]; then
+              echo "::error::版本属性漂移：$k parent=$v bom=$bv"
+              fail=1
+            fi
+          done < /tmp/parent.props
+          # 2) BOM 的 streammq 版本必须等于根 <version>（parent 侧为 ${project.version} 引用，单独核对）
+          root_ver=$(grep -m1 -oP '(?<=<version>)[^<]+' pom.xml)
+          bom_streammq=$(grep -P '^streammq=' /tmp/bom.props | cut -d= -f2-)
+          if [ "$bom_streammq" != "$root_ver" ]; then
+            echo "::error::BOM 管理的 streammq 版本($bom_streammq) 与根 <version>($root_ver) 不一致"
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] || exit 1
+          echo "parent ↔ BOM version properties are in sync"
+
   build:
     name: Build
+    needs: guard
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
