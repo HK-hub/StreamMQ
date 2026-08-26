@@ -16,9 +16,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.redisson.api.PendingEntry;
@@ -114,14 +114,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
         this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
         this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
         this.minIdleMs = minIdleMs > 0 ? minIdleMs : DEFAULT_MIN_IDLE_MS;
-        this.scanExecutor =
-                new ScheduledThreadPoolExecutor(
-                        1,
-                        r -> {
-                            Thread t = new Thread(r, StreamMQConstants.THREAD_PELCLAIM_SCHEDULER);
-                            t.setDaemon(true);
-                            return t;
-                        });
+        this.scanExecutor = Executors.newSingleThreadScheduledExecutor();
     }
 
     /**
@@ -182,14 +175,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
         if (Objects.nonNull(scanExecutor) && !scanExecutor.isShutdown()) {
             return;
         }
-        scanExecutor =
-                new ScheduledThreadPoolExecutor(
-                        1,
-                        r -> {
-                            Thread t = new Thread(r, StreamMQConstants.THREAD_PELCLAIM_SCHEDULER);
-                            t.setDaemon(true);
-                            return t;
-                        });
+        scanExecutor = Executors.newSingleThreadScheduledExecutor();
     }
 
     /** 停止调度器（取消扫描任务并关闭线程池，线程为 daemon，不阻塞 JVM 退出）。 */

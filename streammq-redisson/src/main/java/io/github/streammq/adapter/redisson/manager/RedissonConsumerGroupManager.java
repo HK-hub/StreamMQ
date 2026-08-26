@@ -132,16 +132,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
         this.instanceTimeoutMs =
                 instanceTimeoutMs > 0 ? instanceTimeoutMs : DEFAULT_INSTANCE_TIMEOUT_MS;
         this.semaphoreKey = StreamMQKeys.consumerGroupSemaphore(namespace, group);
-        this.heartbeatExecutor =
-                new ScheduledThreadPoolExecutor(
-                        1,
-                        r -> {
-                            Thread t =
-                                    new Thread(
-                                            r, StreamMQConstants.THREAD_HEARTBEAT_PREFIX + group);
-                            t.setDaemon(true);
-                            return t;
-                        });
+        this.heartbeatExecutor = Executors.newSingleThreadScheduledExecutor();
     }
 
     /**

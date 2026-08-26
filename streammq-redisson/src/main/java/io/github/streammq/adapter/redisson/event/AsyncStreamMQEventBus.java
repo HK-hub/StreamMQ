@@ -30,6 +30,17 @@ public class AsyncStreamMQEventBus implements StreamMQEventBus {
 
     private static final Logger LOG = LoggerFactory.getLogger(AsyncStreamMQEventBus.class);
 
+    /** 默认构造：内部统一虚拟线程池。 */
+    public AsyncStreamMQEventBus() {
+        this(Executors.newVirtualThreadPerTaskExecutor(), true);
+    }
+
+    /** 注入执行器构造：Spring 自动装配使用；{@link #close()} 不关闭外部池。 */
+    public AsyncStreamMQEventBus(ExecutorService executor, boolean ownsExecutor) {
+        this.executor = Objects.requireNonNull(executor, "executor");
+        this.ownsExecutor = ownsExecutor;
+    }
+
     /**
      * 单订阅者最大排队事件数：超过后丢弃并告警。
      *
@@ -38,7 +49,10 @@ public class AsyncStreamMQEventBus implements StreamMQEventBus {
     static final int MAX_PENDING_PER_SUBSCRIBER = 10_000;
 
     private final Map<Class<?>, List<Consumer<?>>> subscribers = new ConcurrentHashMap<>();
-    private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService executor;
+
+    /** 是否拥有执行器所有权（决定 close 是否关闭） */
+    private final boolean ownsExecutor;
 
     /** 各订阅者的在途任务计数（信号量式背压） */
     private final Map<Consumer<?>, java.util.concurrent.atomic.AtomicInteger> pendingCounts =
@@ -98,8 +112,10 @@ public class AsyncStreamMQEventBus implements StreamMQEventBus {
         LOG.debug("Subscribed to event: {}", eventType.getSimpleName());
     }
 
-    /** 关闭事件总线，释放异步分发线程池。 */
+    /** 关闭事件总线（仅关闭内部创建的池；注入的池由提供方管理）。 */
     public void close() {
-        executor.shutdown();
+        if (ownsExecutor) {
+            executor.shutdown();
+        }
     }
 }

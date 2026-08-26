@@ -40,6 +40,8 @@ import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import jakarta.annotation.PostConstruct;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -146,11 +148,25 @@ public class StreamMQCoreAutoConfiguration {
      *
      * @return 异步事件总线
      */
+    /**
+     * StreamMQ 统一虚拟线程池：容器消费循环、异步发送、事件分发等全部复用此池。
+     *
+     * <p><b>自定义方式：</b>注册任意 {@link ExecutorService} Bean 即可覆盖本默认实现， 全部内部组件（容器 / 模板 /
+     * 事件总线）自动切换到用户提供的执行器。
+     *
+     * @return 虚拟线程池
+     */
+    @Bean(name = "streammqVirtualExecutor", destroyMethod = "shutdown")
+    @ConditionalOnMissingBean(ExecutorService.class)
+    public ExecutorService streammqVirtualExecutor() {
+        return Executors.newVirtualThreadPerTaskExecutor();
+    }
+
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean(StreamMQEventBus.class)
-    public StreamMQEventBus streamMQEventBus() {
-        LOG.debug("Creating AsyncStreamMQEventBus");
-        return new AsyncStreamMQEventBus();
+    public StreamMQEventBus streamMQEventBus(ExecutorService streammqVirtualExecutor) {
+        LOG.debug("Creating AsyncStreamMQEventBus (shared virtual executor)");
+        return new AsyncStreamMQEventBus(streammqVirtualExecutor, false);
     }
 
     /**
@@ -331,7 +347,8 @@ public class StreamMQCoreAutoConfiguration {
             StreamMQEventBus eventBus,
             ObjectProvider<TransactionScanner> transactionScannerProvider,
             ObjectProvider<StreamMQMetrics> metricsProvider,
-            ObjectProvider<ProducerInterceptor> producerInterceptorProvider) {
+            ObjectProvider<ProducerInterceptor> producerInterceptorProvider,
+            ExecutorService streammqVirtualExecutor) {
         String defaultGroup = properties.getProducer().getGroup();
         String txGroup = properties.getTransaction().getDefaultGroup();
         // 注入 namespace / send-message-timeout / stream.max-len 到 defaultConfig,
@@ -354,6 +371,8 @@ public class StreamMQCoreAutoConfiguration {
                 new DefaultStreamMessageTemplate(
                         producerFactory, defaultGroup, converter, defaultConfig, txGroup);
         template.setEventBus(eventBus);
+        // 异步发送复用统一虚拟线程池（用户可通过覆盖 ExecutorService Bean 自定义）
+        template.setAsyncSendExecutor(streammqVirtualExecutor);
         // 注入 TransactionScanner（如果可用），启用完整的半消息 + 回查事务流程
         TransactionScanner scanner = transactionScannerProvider.getIfAvailable();
         if (scanner != null) {

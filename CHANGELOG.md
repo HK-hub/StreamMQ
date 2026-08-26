@@ -176,6 +176,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **parent↔BOM 版本属性 CI 守卫**：新增 guard job 校验两份 POM 共同声明的依赖版本一致、
   BOM streammq 版本与根 `<version>` 一致
 
+#### 接口化与线程模型统一（第三轮重构）
+
+- **容器协作组件全部接口化**：RegistrationStore / MessageProcessor / ContainerStateMachine /
+  ConsumerTuning / PerConsumerSpiResolver / ConsumeLoopSupervisor / ListenerRegistrar /
+  ConsumerGroupManagerFactory / SchedulerTargetBinder 均拆分为「接口 + Default 实现」，
+  容器与组件之间只依赖接口——用户可对任一协作对象提供自定义实现
+- **线程模型统一规范化**：
+  - 移除全部 `Supplier<ExecutorService>` 包装，改为直接注入 `ExecutorService`
+  - 移除库内散落的 `Thread.ofVirtual(...).name(...)` / `new Thread(r, name)` 手工建线方式
+    （模板/事件总线/生产者默认统一虚拟线程池；调度器触发器为标准单线程
+    `newSingleThreadScheduledExecutor`）
+  - 执行器所有权规则：内部创建的池在 close/stop 时关闭；外部注入的池由提供方管理生命周期
+  - `RedissonStreamProducer#setAsyncExecutor` / `DefaultStreamMessageTemplate#setAsyncSendExecutor` /
+    `AsyncStreamMQEventBus(ExecutorService, boolean)` / `DefaultStreamMQListenerContainer#setConsumeExecutor`
+    支持注入外部执行器（仅 INIT 状态可换）
+- **Spring 装配**：新增 `streammqVirtualExecutor` Bean（`@ConditionalOnMissingBean(ExecutorService.class)`，
+  用户注册任意 ExecutorService Bean 即全局覆盖）；容器 / 模板 / 事件总线自动装配均注入该池
+
 ## [0.1.0]
 
 ### Planned (V2.0, 规划中，尚未实现)

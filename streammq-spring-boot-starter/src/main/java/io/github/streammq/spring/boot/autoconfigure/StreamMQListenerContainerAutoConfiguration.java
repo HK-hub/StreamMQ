@@ -83,6 +83,8 @@ public class StreamMQListenerContainerAutoConfiguration {
             ObjectProvider<ConsumerFilter> consumerFilterProvider,
             ObjectProvider<StreamMQMetrics> metricsProvider,
             ObjectProvider<PelClaimScheduler> pelClaimSchedulerProvider,
+            org.springframework.beans.factory.ObjectProvider<java.util.concurrent.ExecutorService>
+                    executorProvider,
             ApplicationContext applicationContext) {
         String namespace = properties.getNamespace();
         LOG.info(
@@ -107,6 +109,12 @@ public class StreamMQListenerContainerAutoConfiguration {
         container.setMaxBatchSizeLimit(properties.getConsumer().getMaxBatchSizeLimit());
         container.setInflightCapacity(properties.getConsumer().getInflightCapacity());
         container.setDefaultVirtualNodes(properties.getRebalance().getVirtualNodes());
+        // 统一线程模型：容器消费循环复用 streammqVirtualExecutor（用户可覆盖该 Bean 自定义）
+        java.util.concurrent.ExecutorService executor = executorProvider.getIfAvailable();
+        if (executor != null) {
+            container.setConsumeExecutor(executor);
+            LOG.info("Injected custom ExecutorService into ListenerContainer");
+        }
         // 消费超时取消宽限期与消费者组心跳/实例超时（streammq.consumer.* / streammq.group.*）
         container.setTimeoutCancelGraceMillis(
                 properties.getConsumer().getTimeoutCancelGraceMillis());

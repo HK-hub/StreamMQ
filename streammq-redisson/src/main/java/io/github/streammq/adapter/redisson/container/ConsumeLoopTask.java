@@ -1,0 +1,208 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
+package io.github.streammq.adapter.redisson.container;
+
+import io.github.streammq.core.exception.StreamMQBrokerException;
+import io.github.streammq.core.listener.ListenerRegistration;
+import io.github.streammq.core.listener.ListenerType;
+import io.github.streammq.core.listener.StreamMQListener;
+import io.github.streammq.core.message.Message;
+import io.github.streammq.core.util.CollectionUtils;
+import java.time.Duration;
+import java.util.List;
+import java.util.Objects;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+/**
+ * 单个读循环任务（God class 拆分第二轮）。
+ *
+ * <p><b>设计模式：Template Method。</b>{@link #run()} 固化读循环骨架：
+ *
+ * <pre>
+ * 创建监听器 → [钩子] 装配派发策略 → [钩子] PEL 启动排空 → 主循环{ 暂停让位 | 拉取 | 派发 } → 退出日志
+ * </pre>
+ *
+ * 变化点全部以参数/钩子注入：{@code retryMode}（拉取 retry Stream）、{@code primaryLoop} （是否负责 PEL 排空与 inflight
+ * 泵登记）、{@link MessageSink}（同步直发 vs 有界队列解耦）。 错误处理策略固化在骨架中：中断退出、Broker 异常退避、意外异常退避。
+ *
+ * @author StreamMQ Contributors
+ * @since 0.1.0
+ */
+final class ConsumeLoopTask implements Runnable {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ConsumeLoopTask.class);
+
+    /** 暂停状态下消费循环的休眠间隔（毫秒） */
+    private static final long PAUSED_SLEEP_MILLIS =
+            io.github.streammq.core.StreamMQConstants.DEFAULT_PAUSED_SLEEP_MS;
+
+    /** Broker 异常后消费循环的退避休眠间隔（毫秒） */
+    private static final long BROKER_ERROR_BACKOFF_MILLIS =
+            io.github.streammq.core.StreamMQConstants.DEFAULT_BROKER_ERROR_BACKOFF_MS;
+
+    /** 循环依赖集合（由容器装配，字段收拢避免长参数列表——Parameter Object）。 */
+    record LoopContext(
+            ListenerRegistration<?> reg,
+            boolean retryMode,
+            boolean primaryLoop,
+            MessageProcessor processor,
+            ConsumeLoopSupervisor supervisor,
+            java.util.concurrent.ExecutorService executor,
+            java.util.function.BooleanSupplier running,
+            java.util.function.BooleanSupplier paused,
+            java.util.function.IntSupplier inflightCapacity,
+            ListenerFactory listenerFactory) {
+
+        /** 监听器创建函数式抽象（容器侧委托 {@code ListenerConfig.from(reg, retryMode)}）。 */
+        interface ListenerFactory {
+            StreamMQListener create(ListenerRegistration<?> reg, boolean retryMode);
+        }
+    }
+
+    private final LoopContext ctx;
+    private StreamMQListener listener;
+
+    ConsumeLoopTask(LoopContext ctx) {
+        this.ctx = Objects.requireNonNull(ctx, "ctx");
+    }
+
+    // ===================== Template Method =====================
+
+    @Override
+    public void run() {
+        if (!createListener()) {
+            return;
+        }
+        LOG.info(
+                "Consume loop started: topic={}, group={}, retryMode={}, concurrencySlot={},"
+                        + " listener={}",
+                ctx.reg().getTopic(),
+                ctx.reg().getGroup(),
+                ctx.retryMode(),
+                ctx.primaryLoop() ? 0 : "aux",
+                ctx.reg().getConsumer().getClass().getSimpleName());
+
+        MessageSink sink =
+                MessageSink.forCapacity(
+                        ctx.inflightCapacity().getAsInt(),
+                        ctx.reg(),
+                        listener,
+                        ctx.processor(),
+                        ctx.supervisor(),
+                        ctx.executor(),
+                        ctx.running());
+        try {
+            hookDrainOwnPending();
+            while (ctx.running().getAsBoolean()) {
+                if (ctx.paused().getAsBoolean()) {
+                    ContainerSupport.sleepQuietly(PAUSED_SLEEP_MILLIS);
+                    continue;
+                }
+                if (!pullAndDispatch(sink)) {
+                    break;
+                }
+            }
+        } finally {
+            LOG.info(
+                    "Consume loop exited: topic={}, group={}, retryMode={}",
+                    ctx.reg().getTopic(),
+                    ctx.reg().getGroup(),
+                    ctx.retryMode());
+        }
+    }
+
+    /** 钩子：primary 且并发集群消费时排空本消费者 PEL 遗留消息（at-least-once 补齐）。 */
+    private void hookDrainOwnPending() {
+        if (!ctx.primaryLoop()
+                || ctx.reg().getType() != ListenerType.AUTO_ACK
+                || ctx.reg().isDlqMode()) {
+            return;
+        }
+        int drained = 0;
+        while (ctx.running().getAsBoolean() && !ctx.paused().getAsBoolean()) {
+            List<Message<?>> pending = listener.drainPendingOnce(ctx.reg().getPullBatchSize());
+            if (pending.isEmpty()) {
+                if (drained > 0) {
+                    LOG.info(
+                            "PEL drain complete: topic={}, group={}, recovered={}",
+                            ctx.reg().getTopic(),
+                            ctx.reg().getGroup(),
+                            drained);
+                }
+                return;
+            }
+            for (Message<?> message : pending) {
+                if (!ctx.running().getAsBoolean()) {
+                    return;
+                }
+                ctx.processor().processMessage(message, ctx.reg(), listener);
+                drained++;
+            }
+        }
+    }
+
+    /** 拉取一批并逐条派发；返回 false 表示应退出主循环（中断/容器停止）。 */
+    private boolean pullAndDispatch(MessageSink sink) {
+        try {
+            List<Message<?>> messages =
+                    listener.pullBlock(
+                            ctx.reg().getPullBatchSize(),
+                            Duration.ofMillis(ctx.reg().getPullBlockTimeoutMillis()));
+            if (CollectionUtils.isEmpty(messages)) {
+                long interval = ctx.reg().getPullIntervalMillis();
+                if (interval > 0) {
+                    ContainerSupport.sleepQuietly(interval);
+                }
+                return true;
+            }
+            for (Message<?> message : messages) {
+                if (!ctx.running().getAsBoolean()) {
+                    return false;
+                }
+                sink.dispatch(message);
+            }
+            return true;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (StreamMQBrokerException ex) {
+            LOG.warn(
+                    "Broker error in consume loop (topic={}, group={}): {}",
+                    ctx.reg().getTopic(),
+                    ctx.reg().getGroup(),
+                    ex.getMessage());
+            ContainerSupport.sleepQuietly(BROKER_ERROR_BACKOFF_MILLIS);
+            return true;
+        } catch (RuntimeException ex) {
+            LOG.warn(
+                    "Unexpected error in consume loop (topic={}, group={}): {}",
+                    ctx.reg().getTopic(),
+                    ctx.reg().getGroup(),
+                    ex.getMessage(),
+                    ex);
+            ContainerSupport.sleepQuietly(BROKER_ERROR_BACKOFF_MILLIS);
+            return true;
+        }
+    }
+
+    private boolean createListener() {
+        try {
+            listener = ctx.listenerFactory().create(ctx.reg(), ctx.retryMode());
+            return true;
+        } catch (RuntimeException ex) {
+            LOG.error(
+                    "Failed to create consumer for listener (topic={}, group={}, retryMode={}): {},"
+                            + " listener will not consume",
+                    ctx.reg().getTopic(),
+                    ctx.reg().getGroup(),
+                    ctx.retryMode(),
+                    ex.getMessage(),
+                    ex);
+            return false;
+        }
+    }
+}

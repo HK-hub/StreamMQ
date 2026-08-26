@@ -18,9 +18,9 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.Setter;
@@ -178,14 +178,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
         this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
         this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
-        this.scanExecutor =
-                new ScheduledThreadPoolExecutor(
-                        1,
-                        r -> {
-                            Thread t = new Thread(r, StreamMQConstants.THREAD_DELAY_SCHEDULER);
-                            t.setDaemon(true);
-                            return t;
-                        });
+        this.scanExecutor = Executors.newSingleThreadScheduledExecutor();
     }
 
     /** 启动调度器。 */
@@ -210,14 +203,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
         if (Objects.nonNull(scanExecutor) && !scanExecutor.isShutdown()) {
             return;
         }
-        scanExecutor =
-                new ScheduledThreadPoolExecutor(
-                        1,
-                        r -> {
-                            Thread t = new Thread(r, StreamMQConstants.THREAD_DELAY_SCHEDULER);
-                            t.setDaemon(true);
-                            return t;
-                        });
+        scanExecutor = Executors.newSingleThreadScheduledExecutor();
     }
 
     /** 停止调度器（取消扫描任务并关闭线程池，线程为 daemon，不阻塞 JVM 退出）。 */

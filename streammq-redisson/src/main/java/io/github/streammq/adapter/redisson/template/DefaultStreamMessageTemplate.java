@@ -83,14 +83,20 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     @Setter private volatile StreamMQEventBus eventBus;
 
     /**
-     * 异步发送专用执行器（虚拟线程，daemon）。
-     *
-     * <p>不使用 {@code ForkJoinPool.commonPool()}：异步发送在线程内执行阻塞式 XADD（超时×重试 最长可达数秒），占用 commonPool 会饿死
-     * JVM 内其它依赖 commonPool 的框架组件。 虚拟线程按需创建、阻塞代价低，且为 daemon 不阻碍 JVM 退出。
+     * 异步发送专用执行器：默认统一虚拟线程池（不占用 ForkJoinPool.commonPool）。 Spring 环境由自动装配注入统一管理的实现（{@link
+     * #setAsyncSendExecutor}）。
      */
-    private final java.util.concurrent.ExecutorService asyncSendExecutor =
-            java.util.concurrent.Executors.newThreadPerTaskExecutor(
-                    Thread.ofVirtual().name("streammq-async-send-", 0).factory());
+    private volatile java.util.concurrent.ExecutorService asyncSendExecutor =
+            java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
+
+    /**
+     * 注入异步发送执行器（须在首次发送前调用；容器不关闭外部池，生命周期归提供方）。
+     *
+     * @param executor 异步执行器
+     */
+    public void setAsyncSendExecutor(java.util.concurrent.ExecutorService executor) {
+        this.asyncSendExecutor = java.util.Objects.requireNonNull(executor, "executor");
+    }
 
     /**
      * 构造 Template。

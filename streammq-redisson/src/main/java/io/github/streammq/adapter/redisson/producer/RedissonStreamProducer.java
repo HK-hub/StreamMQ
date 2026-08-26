@@ -72,11 +72,35 @@ public class RedissonStreamProducer implements StreamMessageProducer {
     private final int maxLen;
     private final int compressThreshold;
     private final long maxMessageSize;
-    private final ExecutorService asyncExecutor;
+
+    /** 异步发送执行器：默认统一虚拟线程池；可通过 {@link #setAsyncExecutor} 注入外部实现 */
+    private volatile ExecutorService asyncExecutor;
+
+    /** 是否拥有执行器所有权（决定 close 是否关闭） */
+    private volatile boolean ownsAsyncExecutor = true;
+
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     /** 压缩编解码器（可选注入，配合 compressThreshold 使用） */
     @Setter private CompressionCodec compressionCodec;
+
+    /**
+     * 注入外部异步执行器（统一线程模型：默认内部虚拟线程池，可替换为 Spring 管理的实现）。
+     *
+     * <p>必须在首次发送前调用；注入后 {@link #close()} 不再关闭该池（生命周期归提供方）。
+     *
+     * @param executor 异步执行器
+     */
+    public void setAsyncExecutor(ExecutorService executor) {
+        Objects.requireNonNull(executor, "executor");
+        synchronized (this) {
+            if (this.ownsAsyncExecutor && this.asyncExecutor != null) {
+                this.asyncExecutor.shutdown();
+            }
+            this.asyncExecutor = executor;
+            this.ownsAsyncExecutor = false;
+        }
+    }
 
     /** 关闭异步执行线程池时的等待超时（秒） */
     private static final long ASYNC_AWAIT_TERMINATION_SECONDS =
@@ -132,7 +156,9 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         this.compressThreshold = compressThreshold;
         this.maxMessageSize =
                 maxMessageSize > 0 ? maxMessageSize : StreamMQConstants.MAX_MESSAGE_SIZE_BYTES;
+        // 默认统一虚拟线程池；可通过 setAsyncExecutor 注入外部实现（Spring 统一线程模型）
         this.asyncExecutor = Executors.newVirtualThreadPerTaskExecutor();
+        this.ownsAsyncExecutor = true;
     }
 
     @Override
@@ -582,7 +608,11 @@ public class RedissonStreamProducer implements StreamMessageProducer {
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
-            asyncExecutor.shutdown();
+            if (ownsAsyncExecutor) {
+                asyncExecutor.shutdown();
+            } else {
+                LOG.debug("Injected async executor left open (managed by provider)");
+            }
             try {
                 if (!asyncExecutor.awaitTermination(
                         ASYNC_AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {

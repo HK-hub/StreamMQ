@@ -9,132 +9,68 @@ import io.github.streammq.core.filter.ConsumerFilter;
 import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.policy.ConsumerGroupManager;
 import io.github.streammq.core.policy.RetryAndDlqHandler;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
 /**
- * 容器注册存储：集中持有注册表与 per-consumer 策略实例缓存。
+ * 容器注册存储（状态载体）。
  *
- * <p>从 {@code DefaultStreamMQListenerContainer} 拆出的状态载体（God class 拆分，红队审查
- * F-02-12）：容器只负责编排生命周期与消费循环，注册/策略缓存的存取统一经由本类， 保证键语义（{@code reg.key()} / DLQ 前缀）只有一处定义。
+ * <p><b>SPI：</b>容器与消费管线仅依赖本接口；默认实现 {@link DefaultRegistrationStore}。 高级用户可在容器 start 前通过 {@code
+ * setRegistrationStore} 注入自定义实现 （例如增加注册审计、指标埋点等装饰逻辑）。
  *
- * <p>线程安全：全部基于 {@link ConcurrentHashMap}。
+ * <p>键语义唯一于此定义：{@code reg.key()} / DLQ 前缀。
+ *
+ * <p>实现要求：线程安全。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-final class RegistrationStore {
+public interface RegistrationStore {
 
-    private final ConcurrentMap<String, ListenerRegistration<?>> registrations =
-            new ConcurrentHashMap<>();
+    // ===================== 注册表 =====================
 
-    /** per-consumer ACK/重试/DLQ 路由处理器（按注解实例化的策略组合） */
-    private final ConcurrentMap<String, RetryAndDlqHandler> handlers = new ConcurrentHashMap<>();
+    Collection<ListenerRegistration<?>> registrations();
 
-    /** per-consumer 过滤器链缓存（key: reg.key()，value: 预构建的过滤器列表） */
-    private final ConcurrentMap<String, List<ConsumerFilter>> filters = new ConcurrentHashMap<>();
+    int registrationCount();
 
-    /** 消费者组管理器（per-group 实例，管理心跳与重平衡） */
-    private final ConcurrentMap<String, ConsumerGroupManager> groupManagers =
-            new ConcurrentHashMap<>();
+    ListenerRegistration<?> registration(String key);
 
-    Collection<ListenerRegistration<?>> registrations() {
-        return registrations.values();
-    }
+    ListenerRegistration<?> putRegistration(ListenerRegistration<?> reg);
 
-    int registrationCount() {
-        return registrations.size();
-    }
+    ListenerRegistration<?> removeRegistration(String key);
 
-    ListenerRegistration<?> registration(String key) {
-        return registrations.get(key);
-    }
+    /** 快照当前全部注册（遍历期间并发注册安全）。 */
+    List<ListenerRegistration<?>> snapshotRegistrations();
 
-    ListenerRegistration<?> putRegistration(ListenerRegistration<?> reg) {
-        return registrations.put(reg.key(), reg);
-    }
+    // ===================== per-consumer 处理器 =====================
 
-    ListenerRegistration<?> removeRegistration(String key) {
-        return registrations.remove(key);
-    }
+    RetryAndDlqHandler handler(String key);
 
-    RetryAndDlqHandler handler(String key) {
-        return handlers.get(key);
-    }
+    void putHandler(String key, RetryAndDlqHandler handler);
 
-    void putHandler(String key, RetryAndDlqHandler handler) {
-        handlers.put(key, handler);
-    }
+    Collection<RetryAndDlqHandler> handlers();
 
-    Collection<RetryAndDlqHandler> handlers() {
-        return handlers.values();
-    }
+    void removeHandler(String key);
 
-    void removeHandler(String key) {
-        handlers.remove(key);
-    }
+    // ===================== 组管理器 =====================
 
-    List<ConsumerFilter> filters(String key) {
-        return filters.get(key);
-    }
+    ConsumerGroupManager groupManager(String key);
 
-    void putFilters(String key, List<ConsumerFilter> chain) {
-        filters.put(key, chain);
-    }
+    void putGroupManager(String key, ConsumerGroupManager manager);
 
-    void removeFilters(String key) {
-        filters.remove(key);
-    }
+    Collection<ConsumerGroupManager> groupManagers();
 
-    ConsumerGroupManager groupManager(String key) {
-        return groupManagers.get(key);
-    }
+    /** 注销并移除指定组管理器（注销失败仅记录）。 */
+    void removeAndUnregisterGroupManager(String key);
 
-    void putGroupManager(String key, ConsumerGroupManager manager) {
-        groupManagers.put(key, manager);
-    }
+    /** 注销全部组管理器（容器 stop）。 */
+    void clearGroupManagers();
 
-    Collection<ConsumerGroupManager> groupManagers() {
-        return groupManagers.values();
-    }
+    // ===================== per-consumer 过滤器链缓存 =====================
 
-    void removeAndUnregisterGroupManager(String key) {
-        ConsumerGroupManager manager = groupManagers.remove(key);
-        if (manager != null) {
-            try {
-                manager.unregister();
-            } catch (RuntimeException ex) {
-                // 注销失败不影响其余清理；心跳超时后由回收任务兜底
-            }
-        }
-    }
+    List<ConsumerFilter> filters(String key);
 
-    void clearGroupManagers() {
-        for (ConsumerGroupManager manager : groupManagers.values()) {
-            try {
-                manager.unregister();
-            } catch (RuntimeException ex) {
-                // 同上
-            }
-        }
-        groupManagers.clear();
-    }
+    void putFilters(String key, List<ConsumerFilter> chain);
 
-    /** 运行中的消费组管理器数量（诊断用）。 */
-    int groupManagerCount() {
-        return groupManagers.size();
-    }
-
-    /** 快照当前全部注册（供遍历期间并发注册安全）。 */
-    List<ListenerRegistration<?>> snapshotRegistrations() {
-        return new ArrayList<>(registrations.values());
-    }
-
-    Map<String, ListenerRegistration<?>> registrationMap() {
-        return java.util.Collections.unmodifiableMap(registrations);
-    }
+    void removeFilters(String key);
 }
