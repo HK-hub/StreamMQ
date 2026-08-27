@@ -153,6 +153,9 @@ public class TransactionScanner implements StreamMQScheduler {
     /** 默认单次扫描批量 */
     public static final int DEFAULT_BATCH_SIZE = StreamMQConstants.DEFAULT_BATCH_SIZE;
 
+    /** 回查器执行默认超时（毫秒）：慢回查不得阻塞整个扫描线程 */
+    public static final long DEFAULT_CHECKER_TIMEOUT_MILLIS = 30_000L;
+
     /** txstate Hash 中目标 Topic 字段后缀 */
     private static final String FIELD_TARGET_SUFFIX = StreamMQConstants.TX_FIELD_TARGET_SUFFIX;
 
@@ -188,6 +191,17 @@ public class TransactionScanner implements StreamMQScheduler {
 
     /** 孤儿半消息保留期（毫秒），超过且无状态引用的 half 条目由维护任务清理 */
     @Setter private volatile long orphanHalfRetentionMs = DEFAULT_ORPHAN_HALF_RETENTION_MS;
+
+    /** 单次回查器执行超时（毫秒），可通过 {@link #setCheckerTimeoutMillis(long)} 覆盖 */
+    @Setter private volatile long checkerTimeoutMillis = DEFAULT_CHECKER_TIMEOUT_MILLIS;
+
+    /**
+     * per-group 回查互斥锁登记表：同一 txGroup 的回查器串行执行。
+     *
+     * <p>此前回查在扫描线程上内联执行——一个慢 checker 拖住全部组的扫描，且多实例/多轮扫描可能对 同组并发触发 check（业务侧非幂等时产生重复副作用）。锁对象为普通
+     * {@code Object}（无争用时零开销）。
+     */
+    private final ConcurrentMap<String, Object> groupCheckLocks = new ConcurrentHashMap<>();
 
     /** 维护扫描轮次计数器 */
     private final AtomicLong maintenanceCounter = new AtomicLong();
@@ -384,6 +398,8 @@ public class TransactionScanner implements StreamMQScheduler {
             scanExecutor.shutdownNow();
             Thread.currentThread().interrupt();
         }
+        // 释放 per-group 回查锁登记表：stop 后 restart 由 computeIfAbsent 按需重建
+        groupCheckLocks.clear();
         LOG.info("TransactionScanner stopped");
     }
 
@@ -713,23 +729,13 @@ public class TransactionScanner implements StreamMQScheduler {
             return;
         }
 
-        // 调用 checker
+        // 调用 checker：per-group 串行 + 专用虚拟线程 + 超时 join。
+        // 慢/挂死的 checker 不再阻塞扫描线程（超时按 UNKNOWN 有界重查），同组重复触发被串行化
         TransactionContext ctx =
                 new TransactionContext(
                         txId, txGroup, null, System.currentTimeMillis(), new HashMap<>());
-        LocalTransactionState state;
-        try {
-            @SuppressWarnings({"unchecked", "rawtypes"})
-            LocalTransactionState s = ((TransactionChecker) checker).check(halfMessage, ctx);
-            state = s;
-        } catch (Exception ex) {
-            LOG.warn(
-                    "TransactionChecker threw exception, treated as UNKNOW: txId={}: {}",
-                    txId,
-                    ex.getMessage(),
-                    ex);
-            state = LocalTransactionState.UNKNOW;
-        }
+        LocalTransactionState state =
+                invokeCheckerWithTimeout(checker, halfMessage, ctx, txId, txGroup);
 
         recordTransactionCheckMetrics(txGroup, state.name());
 
@@ -770,6 +776,75 @@ public class TransactionScanner implements StreamMQScheduler {
     }
 
     // ===================== 辅助方法 =====================
+
+    /**
+     * 执行回查器：同组串行 + 超时控制。
+     *
+     * <p>checker 在专用虚拟线程上运行，扫描线程 {@code join(timeout)} 等待：
+     *
+     * <ul>
+     *   <li>正常返回 → 使用返回值（null 视为 UNKNOWN）
+     *   <li>抛异常 → 记 WARN，按 UNKNOWN 有界重查（既有语义）
+     *   <li>超时/中断 → 放弃等待，按 UNKNOWN 处理并记 WARN；孤儿 checker 线程随其自然结束 （虚拟线程无法强制终止），其返回值被丢弃
+     * </ul>
+     *
+     * <p>同组互斥：{@code synchronized(groupLock)} 串行化同一 txGroup 的回查执行， 防止慢回查期间下一轮扫描对同组并发触发。
+     *
+     * @return 回查结果状态（绝不返回 null）
+     */
+    private LocalTransactionState invokeCheckerWithTimeout(
+            TransactionChecker<?> checker,
+            Message<?> halfMessage,
+            TransactionContext ctx,
+            String txId,
+            String txGroup) {
+        Object groupLock = groupCheckLocks.computeIfAbsent(txGroup, k -> new Object());
+        long timeoutMillis = checkerTimeoutMillis;
+        final java.util.concurrent.atomic.AtomicReference<LocalTransactionState> result =
+                new java.util.concurrent.atomic.AtomicReference<>();
+        synchronized (groupLock) {
+            Thread worker =
+                    Thread.ofVirtual()
+                            .name("tx-checker-" + txGroup + "-" + txId)
+                            .start(
+                                    () -> {
+                                        try {
+                                            @SuppressWarnings({"unchecked", "rawtypes"})
+                                            LocalTransactionState s =
+                                                    ((TransactionChecker) checker)
+                                                            .check(halfMessage, ctx);
+                                            result.set(s);
+                                        } catch (Exception ex) {
+                                            LOG.warn(
+                                                    "TransactionChecker threw exception, treated"
+                                                            + " as UNKNOW: txId={}: {}",
+                                                    txId,
+                                                    ex.getMessage(),
+                                                    ex);
+                                        }
+                                    });
+            boolean finished = false;
+            try {
+                // join(Duration) 为 void 返回：以 isAlive() 判定是否超时
+                worker.join(Duration.ofMillis(timeoutMillis));
+            } catch (InterruptedException ex) {
+                // 扫描线程被停机中断：放弃等待，恢复中断位后走超时路径
+                Thread.currentThread().interrupt();
+            }
+            finished = !worker.isAlive();
+            if (!finished) {
+                LOG.warn(
+                        "TransactionChecker timed out after {}ms, treated as UNKNOW:"
+                                + " txId={}, txGroup={}",
+                        timeoutMillis,
+                        txId,
+                        txGroup);
+                return LocalTransactionState.UNKNOW;
+            }
+        }
+        LocalTransactionState state = result.get();
+        return Objects.nonNull(state) ? state : LocalTransactionState.UNKNOW;
+    }
 
     /** 发布结果：PUBLISHED 成功；HALF_MISSING 半消息不存在；LOCK_BUSY 执行权被其它实例持有。 */
     private enum PublishOutcome {

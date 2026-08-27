@@ -33,7 +33,9 @@ public class DefaultConsumeLoopSupervisor implements ConsumeLoopSupervisor {
 
     @Override
     public void submitLoops(ListenerRegistration<?> reg) {
-        if (isActive(reg.key()) || isActive(reg.key() + RETRY_FUTURE_SUFFIX)) {
+        // 幂等守卫必须覆盖全部循环形态：基础、retry、以及 :cc-N 并发扩展循环——
+        // 此前仅检查前两者，consumeThreadMin>1 时部分并发循环仍在运行也会重复提交
+        if (hasActiveLoops(reg.key())) {
             return;
         }
         if (reg.getType() == ListenerType.AUTO_ACK && !reg.isDlqMode()) {
@@ -41,21 +43,38 @@ public class DefaultConsumeLoopSupervisor implements ConsumeLoopSupervisor {
             submitPrimaryWithConcurrency(reg, concurrency);
             submitRetryWithConcurrency(reg, concurrency);
         } else {
-            Future<?> future = loopFactory.launch(reg, false, true);
+            Future<?> future = loopFactory.launch(reg, false, true, 0);
             if (Objects.nonNull(futures.putIfAbsent(reg.key(), future))) {
                 future.cancel(true);
             }
         }
     }
 
+    /** 该注册的任一读循环（基础 / retry / 并发扩展）是否仍在运行。 */
+    private boolean hasActiveLoops(String baseKey) {
+        String retryKey = baseKey + RETRY_FUTURE_SUFFIX;
+        for (Map.Entry<String, Future<?>> entry : futures.entrySet()) {
+            String k = entry.getKey();
+            boolean isLoop =
+                    k.equals(baseKey)
+                            || k.equals(retryKey)
+                            || k.startsWith(baseKey + CONCURRENCY_FUTURE_SUFFIX)
+                            || k.startsWith(retryKey + CONCURRENCY_FUTURE_SUFFIX);
+            if (isLoop && !entry.getValue().isDone()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void submitPrimaryWithConcurrency(ListenerRegistration<?> reg, int concurrency) {
-        Future<?> primary = loopFactory.launch(reg, false, true);
+        Future<?> primary = loopFactory.launch(reg, false, true, 0);
         if (Objects.nonNull(futures.putIfAbsent(reg.key(), primary))) {
             primary.cancel(true);
         }
         for (int i = 1; i < concurrency; i++) {
             final int idx = i;
-            Future<?> f = loopFactory.launch(reg, false, false);
+            Future<?> f = loopFactory.launch(reg, false, false, idx);
             if (Objects.nonNull(
                     futures.putIfAbsent(reg.key() + CONCURRENCY_FUTURE_SUFFIX + idx, f))) {
                 f.cancel(true);
@@ -64,7 +83,7 @@ public class DefaultConsumeLoopSupervisor implements ConsumeLoopSupervisor {
     }
 
     private void submitRetryWithConcurrency(ListenerRegistration<?> reg, int concurrency) {
-        Future<?> retry = loopFactory.launch(reg, true, true);
+        Future<?> retry = loopFactory.launch(reg, true, true, 0);
         String retryKey = reg.key() + RETRY_FUTURE_SUFFIX;
         if (Objects.nonNull(futures.putIfAbsent(retryKey, retry))) {
             retry.cancel(true);
@@ -72,7 +91,7 @@ public class DefaultConsumeLoopSupervisor implements ConsumeLoopSupervisor {
         }
         for (int i = 1; i < concurrency; i++) {
             final int idx = i;
-            Future<?> f = loopFactory.launch(reg, true, false);
+            Future<?> f = loopFactory.launch(reg, true, false, idx);
             if (Objects.nonNull(
                     futures.putIfAbsent(retryKey + CONCURRENCY_FUTURE_SUFFIX + idx, f))) {
                 f.cancel(true);
@@ -80,6 +99,12 @@ public class DefaultConsumeLoopSupervisor implements ConsumeLoopSupervisor {
         }
     }
 
+    /**
+     * 登记 inflight 泵 Future（供 unregister/stop 取消）。
+     *
+     * <p>{@code key} 必须按循环唯一（调用方传入 {@code reg.key()[":retry"]#loopIndex}）， 否则同一注册的多个并发泵互相覆盖登记项，
+     * 先前的泵泄漏为无法取消的孤儿线程。
+     */
     @Override
     public void registerInflightPump(String key, Future<?> pumpFuture) {
         futures.put(key + INFLIGHT_PROCESSOR_SUFFIX, pumpFuture);
@@ -114,7 +139,18 @@ public class DefaultConsumeLoopSupervisor implements ConsumeLoopSupervisor {
                 || futureKey.startsWith(key + CONCURRENCY_FUTURE_SUFFIX)
                 || futureKey.equals(key + RETRY_FUTURE_SUFFIX)
                 || futureKey.startsWith(key + RETRY_FUTURE_SUFFIX + CONCURRENCY_FUTURE_SUFFIX)
-                || futureKey.equals(key + INFLIGHT_PROCESSOR_SUFFIX);
+                || isInflightPumpOf(futureKey, key)
+                || isInflightPumpOf(futureKey, key + RETRY_FUTURE_SUFFIX);
+    }
+
+    /**
+     * 判断泵 Future 键是否属于给定循环前缀。
+     *
+     * <p>泵键形如 {@code {loopKey}#{idx}:inflight-processor}（loopKey = 注册键或注册键+{@code :retry}）；{@code
+     * '#'} 不可能出现在注册键中，按前缀匹配不会误伤其它注册。
+     */
+    private static boolean isInflightPumpOf(String futureKey, String prefix) {
+        return futureKey.startsWith(prefix + "#") && futureKey.endsWith(INFLIGHT_PROCESSOR_SUFFIX);
     }
 
     private boolean isActive(String futureKey) {

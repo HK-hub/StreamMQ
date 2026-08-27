@@ -235,13 +235,14 @@ public class RedissonStreamListener implements StreamMQListener {
         RStream<String, String> stream = getStream();
         String effectiveGroup = getEffectiveGroup();
         try {
-            // greaterThan(MIN) 即 XREADGROUP id=0：仅返回本消费者 PEL 中 ID 大于 0-0 的
-            // 已投递未确认条目（不含 '>' 的"从未投递"新消息）
+            // 显式构造 (0,0) 实例而非 MIN 常量：Redisson 会把 greaterThan(MIN) 序列化为 "-"，
+            // 该写法仅 XRANGE 合法，XREADGROUP 直接报 ERR Invalid stream ID；
+            // XREADGROUP 的历史读取需要字面量 "0-0"（仅本消费者 PEL，不含 '>' 新消息）
             Map<StreamMessageId, Map<String, String>> result =
                     stream.readGroup(
                             effectiveGroup,
                             consumerName,
-                            StreamReadGroupArgs.greaterThan(StreamMessageId.MIN)
+                            StreamReadGroupArgs.greaterThan(new StreamMessageId(0L, 0L))
                                     .count(maxMessages));
             if (CollectionUtils.isEmpty(result)) {
                 return List.of();
@@ -407,13 +408,44 @@ public class RedissonStreamListener implements StreamMQListener {
                         msg);
                 groupCreated.set(false);
             }
-            LOG.error(
-                    "doRead failed: streamKey={}, effectiveGroup={}, error={}",
-                    stream.getName(),
-                    effectiveGroup,
-                    ex.getMessage());
+            if (interruptedFailure(ex)) {
+                // 容器停止引发的中断（Redisson 包装为 RuntimeException）：恢复中断位并降级为
+                // debug——ERROR 级堆栈在停机日志中是噪音，非真实 IO 故障
+                Thread.currentThread().interrupt();
+                LOG.debug(
+                        "doRead interrupted, shutting down: streamKey={}, effectiveGroup={}",
+                        stream.getName(),
+                        effectiveGroup);
+            } else {
+                LOG.error(
+                        "doRead failed: streamKey={}, effectiveGroup={}, error={}",
+                        stream.getName(),
+                        effectiveGroup,
+                        ex.getMessage());
+            }
             throw new StreamMQBrokerException("readGroup failed for topic " + topic, null, ex);
         }
+    }
+
+    /**
+     * 判断异常是否由线程中断引起。
+     *
+     * <p>Redisson 将底层 {@link InterruptedException} 包装为 RuntimeException 抛出 （消息含 {@code
+     * java.lang.InterruptedException}），需沿 cause 链与消息双重识别。
+     */
+    private static boolean interruptedFailure(Throwable ex) {
+        Throwable t = ex;
+        while (Objects.nonNull(t)) {
+            if (t instanceof InterruptedException) {
+                return true;
+            }
+            String msg = t.getMessage();
+            if (Objects.nonNull(msg) && msg.contains("java.lang.InterruptedException")) {
+                return true;
+            }
+            t = t.getCause();
+        }
+        return false;
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -427,13 +459,13 @@ public class RedissonStreamListener implements StreamMQListener {
         if (Objects.isNull(bodyType)) {
             String simpleTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE_NAME);
             if (StringUtils.isNotEmpty(simpleTypeName)) {
-                bodyType = findClassBySimpleName(simpleTypeName);
+                bodyType = loadClassBySimpleName(simpleTypeName);
             }
         }
         if (Objects.isNull(bodyType)) {
             String fullTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE);
             if (StringUtils.isNotEmpty(fullTypeName)) {
-                bodyType = findClassBySimpleName(fullTypeName);
+                bodyType = loadClassBySimpleName(fullTypeName);
                 if (Objects.isNull(bodyType)) {
                     LOG.warn(
                             "Body type class not found by full name, fallback to String: {}",
@@ -494,7 +526,18 @@ public class RedissonStreamListener implements StreamMQListener {
         }
     }
 
-    private Class<?> findClassBySimpleName(String simpleName) {
+    /**
+     * 以 simpleName 加载 body 目标类型（仅类名匹配，支持跨包/跨模块解析）。
+     *
+     * <p><b>{@code init=false} 安全性：</b>调用 {@code Class.forName(name, false, loader)} 不触发
+     * 静态初始化——反序列化目标类型的解析只做加载，绝不在消费线程上执行用户静态块 （副作用/慢初始化会阻塞消费循环）。
+     *
+     * <p>命中结果缓存于实例级 {@code classCache}（作用域限制见字段说明）。
+     *
+     * @param simpleName 类名（simple name 或 full name）
+     * @return 加载到的类；找不到返回 null（由调用方走回退链）
+     */
+    private Class<?> loadClassBySimpleName(String simpleName) {
         Class<?> cached = classCache.get(simpleName);
         if (Objects.nonNull(cached)) {
             return cached;
@@ -525,8 +568,11 @@ public class RedissonStreamListener implements StreamMQListener {
      *
      * <p>仅 broadcast 且非 dlq/retry 模式时写入；失败静默（最坏情况是组被回收后由 ensureGroup 重建，语义等同旧版 close-destroy
      * 路径，不会更糟）。
+     *
+     * <p><b>公开为暂停期保活钩子：</b>消费循环在容器暂停期间不执行拉取，若不补发心跳， 停留超过 {@link #BROADCAST_GROUP_STALE_TTL_MS}
+     * 后组会被僵尸回收任务销毁，resume 时全量重放历史。 {@code ConsumeLoopTask} 在暂停休眠周期内调用本方法维持注册表活性；非广播实例调用为 no-op。
      */
-    private void heartbeatBroadcastRegistry() {
+    public void heartbeatBroadcastRegistry() {
         if (!broadcast || dlqMode || retryMode) {
             return;
         }
@@ -636,13 +682,22 @@ public class RedissonStreamListener implements StreamMQListener {
                             topic,
                             effectiveGroup);
                 } else {
-                    // 其他错误重置标志位，允许下次重试
+                    // 其他错误重置标志位，允许下次重试；中断类失败（容器停止）仅降级 debug
                     groupCreated.set(false);
-                    LOG.error(
-                            "createGroup failed: streamKey={}, effectiveGroup={}, error={}",
-                            stream.getName(),
-                            effectiveGroup,
-                            ex.getMessage());
+                    if (interruptedFailure(ex)) {
+                        Thread.currentThread().interrupt();
+                        LOG.debug(
+                                "createGroup interrupted, shutting down: streamKey={},"
+                                        + " effectiveGroup={}",
+                                stream.getName(),
+                                effectiveGroup);
+                    } else {
+                        LOG.error(
+                                "createGroup failed: streamKey={}, effectiveGroup={}, error={}",
+                                stream.getName(),
+                                effectiveGroup,
+                                ex.getMessage());
+                    }
                     throw new StreamMQBrokerException(
                             "createGroup failed for topic " + topic + ", group " + effectiveGroup,
                             null,

@@ -36,6 +36,17 @@ public class DefaultSchedulerTargetBinder implements SchedulerTargetBinder {
                 count++;
             } else {
                 scheduler.registerRetryTarget(reg.getGroup(), reg.getGroup(), 0);
+                // 防御性可观测性：注册目标 max 与监听器声明值来自同一 reg，理论上一致；
+                // 若未来任一侧改动导致漂移，此处 INFO 提示双真源分歧
+                if (0 != reg.getMaxReconsumeTimes()) {
+                    LOG.info(
+                            "Retry target max (0, DLQ sentinel) differs from listener"
+                                    + " maxReconsumeTimes ({}): topic={}, group={} — check"
+                                    + " dual source-of-truth",
+                            reg.getMaxReconsumeTimes(),
+                            reg.getTopic(),
+                            reg.getGroup());
+                }
             }
         }
         LOG.info(
@@ -47,32 +58,45 @@ public class DefaultSchedulerTargetBinder implements SchedulerTargetBinder {
     @Override
     public void bindPelClaimTargets(PelClaimScheduler scheduler) {
         Objects.requireNonNull(scheduler, "scheduler");
-        int orderlyCount = 0;
-        int concurrentCount = 0;
+        int topicCount = 0;
+        int retryCount = 0;
+        int dlqCount = 0;
         for (ListenerRegistration<?> reg : store.registrations()) {
             if (reg.isDlqMode()) {
+                // DLQ 流 PEL 恢复：滞留条目尾部复制重投（此前 DLQ 组被整体跳过，
+                // 实例崩溃后的 DLQ pending 永久卡死）
+                scheduler.registerDlqTarget(reg.getTopic(), reg.getGroup());
+                dlqCount++;
                 continue;
             }
             if (reg.getType() == ListenerType.ORDERLY) {
+                // 顺序消费失败在分片锁内原地重试、耗尽直接转 DLQ，无 retry Stream
                 scheduler.registerTarget(
                         reg.getTopic(),
                         reg.getGroup(),
                         reg.getMaxReconsumeTimes(),
                         true,
                         reg.getShardCount());
-                orderlyCount++;
+                topicCount++;
             } else if (reg.getType() == ListenerType.AUTO_ACK
                     && reg.getConsumeMode() != ConsumeMode.BROADCASTING) {
                 scheduler.registerTarget(
                         reg.getTopic(), reg.getGroup(), reg.getMaxReconsumeTimes());
-                concurrentCount++;
+                topicCount++;
+                // 并发集群消费的 retry Stream 同样存在 PEL（消费者名含容器随机 token，
+                // 重启后自身排空读不到遗留条目），注册 RETRY 目标补齐跨重启恢复；
+                // 广播模式各实例独立组、无共享 retry 流，不注册
+                scheduler.registerRetryStreamTarget(
+                        reg.getTopic(), reg.getGroup(), reg.getMaxReconsumeTimes());
+                retryCount++;
             }
         }
         LOG.info(
-                "Registered {} PelClaim targets ({} orderly, {} concurrent)",
-                orderlyCount + concurrentCount,
-                orderlyCount,
-                concurrentCount);
+                "Registered {} PelClaim targets ({} topic, {} retry-stream, {} dlq)",
+                topicCount + retryCount + dlqCount,
+                topicCount,
+                retryCount,
+                dlqCount);
     }
 
     @Override

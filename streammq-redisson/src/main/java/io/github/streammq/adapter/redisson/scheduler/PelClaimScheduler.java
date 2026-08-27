@@ -31,15 +31,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * PEL 认领调度器，用于顺序消费 SUSPEND 后的消息恢复（对齐 RocketMQ 顺序消费的 queue 重投）。
+ * PEL 认领调度器，用于消费组 PEL 滞留消息的恢复（对齐 RocketMQ 顺序消费的 queue 重投）。
  *
- * <p>顺序消费失败时消息留在 PEL 中，本调度器周期扫描各 orderly 消费组的 PEL，将空闲超过阈值的消息重新投递， 保证顺序消息不会因消费者崩溃而永久卡死。
+ * <p>支持三类扫描目标（{@link PelClaimTargetKind}）：业务流（TOPIC，含顺序分片锁保护）、 重试流（RETRY）、死信流（DLQ）。 消费者名含容器随机
+ * token，实例崩溃后其 PEL 遗留无人排空； 本调度器周期扫描各类目标，将空闲超过阈值的消息以「XADD 副本 + ACK 旧条目」方式重新投递， 保证消息不因消费者崩溃而永久卡死。
  *
- * <p>实现说明：容器消费者通过 {@code XREADGROUP >}（neverDelivered）读取，XAUTOCLAIM 投递到固定消费者名 的消息永远不会被再次读取（永久卡在
- * PEL）；因此这里采用「XADD 新 entry（递增 {@code retryTimes}，保留 {@code originalMessageId} 原 ID 字段）+ ACK 旧
- * entry」的方式，使消息作为新消息被消费者重新拉取。
- *
- * <p>当消息的 {@code retryTimes} 字段超过 {@code maxReconsumeTimes} 时，从 PEL 中 ACK 移除并 XADD 到 DLQ Stream。
+ * <p>当 TOPIC/RETRY 种类消息的 {@code retryTimes} 字段超过 {@code maxReconsumeTimes} 时， 从 PEL 中 ACK 移除并 XADD
+ * 到 DLQ Stream；DLQ 种类一律尾部复制重投（终局投递语义）。
  *
  * <p>线程安全：所有字段均为 final 或线程安全类型。
  *
@@ -118,7 +116,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
     }
 
     /**
-     * 注册一个 PEL 认领目标（topic + group）。
+     * 注册一个 PEL 认领目标（topic + group，TOPIC 种类）。
      *
      * @param topic 主题
      * @param group 消费者组名
@@ -129,7 +127,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
     }
 
     /**
-     * 注册一个 PEL 认领目标（完整参数）。
+     * 注册一个 PEL 认领目标（完整参数，TOPIC 种类）。
      *
      * @param topic 主题
      * @param group 消费者组名
@@ -141,16 +139,71 @@ public class PelClaimScheduler implements StreamMQScheduler {
             String topic, String group, int maxReconsumeTimes, boolean orderly, int shardCount) {
         Objects.requireNonNull(topic, "topic");
         Objects.requireNonNull(group, "group");
-        String key = topic + ":" + group;
-        targets.put(key, new PelClaimTarget(topic, group, maxReconsumeTimes, orderly, shardCount));
+        String key = targetKey(PelClaimTargetKind.TOPIC, topic, group);
+        targets.put(
+                key,
+                new PelClaimTarget(
+                        PelClaimTargetKind.TOPIC,
+                        topic,
+                        group,
+                        maxReconsumeTimes,
+                        orderly,
+                        shardCount));
         LOG.info(
-                "Registered PelClaim target: topic={}, group={}, maxReconsumeTimes={},"
+                "Registered PelClaim TOPIC target: topic={}, group={}, maxReconsumeTimes={},"
                         + " orderly={}, shardCount={}",
                 topic,
                 group,
                 maxReconsumeTimes,
                 orderly,
                 shardCount);
+    }
+
+    /**
+     * 注册重试流 PEL 认领目标（RETRY 种类）。
+     *
+     * <p>并发集群消费失败的消息经 RetryScheduler 写入 retry Stream；消费者名含容器随机 token， 实例崩溃后其 PEL 遗留无人排空——本目标以「超限转
+     * DLQ / 尾部复制重投」恢复该部分消息。
+     *
+     * @param topic 原始主题
+     * @param group 消费者组名
+     * @param maxReconsumeTimes 最大重试次数
+     */
+    public void registerRetryStreamTarget(String topic, String group, int maxReconsumeTimes) {
+        Objects.requireNonNull(topic, "topic");
+        Objects.requireNonNull(group, "group");
+        String key = targetKey(PelClaimTargetKind.RETRY, topic, group);
+        targets.put(
+                key,
+                new PelClaimTarget(
+                        PelClaimTargetKind.RETRY, topic, group, maxReconsumeTimes, false, 0));
+        LOG.info(
+                "Registered PelClaim RETRY target: topic={}, group={}, maxReconsumeTimes={}",
+                topic,
+                group,
+                maxReconsumeTimes);
+    }
+
+    /**
+     * 注册死信流 PEL 认领目标（DLQ 种类）。
+     *
+     * <p>此前 DLQ 组被绑定器整体跳过，DLQ Stream 中滞留的 pending（实例崩溃后消费者名失效） 永久卡死。本目标将滞留条目原样复制到流尾 + ACK 旧条目，DLQ
+     * 消费者重新处理； 消息携带的失败策略计数随行，循环仍受策略约束。
+     *
+     * @param topic 注册的 DLQ 监听主题（即组名，用于日志与互斥锁键）
+     * @param group 死信所属消费者组名
+     */
+    public void registerDlqTarget(String topic, String group) {
+        Objects.requireNonNull(topic, "topic");
+        Objects.requireNonNull(group, "group");
+        String key = targetKey(PelClaimTargetKind.DLQ, topic, group);
+        targets.put(key, new PelClaimTarget(PelClaimTargetKind.DLQ, topic, group, 0, false, 0));
+        LOG.info("Registered PelClaim DLQ target: topic={}, group={}", topic, group);
+    }
+
+    /** 目标去重键：种类前缀避免不同类别在同一 topic/group 维度上互相覆盖。 */
+    private static String targetKey(PelClaimTargetKind kind, String topic, String group) {
+        return kind.name() + ":" + topic + ":" + group;
     }
 
     @Override
@@ -243,14 +296,14 @@ public class PelClaimScheduler implements StreamMQScheduler {
     /**
      * 扫描指定目标的 PEL，对空闲超阈值的消息执行重投或 DLQ 路由。
      *
-     * <p><b>多实例互斥：</b>整个目标扫描持分布式锁（tryLock，不等待）， 同一时刻仅一个实例对同一 topic:group 执行「XADD 副本 + ACK」，
-     * 消除滚动发布期间 N 实例并发扫描造成的 ×N 重复投递。
+     * <p><b>多实例互斥：</b>整个目标扫描持分布式锁（tryLock，不等待）， 同一时刻仅一个实例对同一目标执行「XADD 副本 + ACK」， 消除滚动发布期间 N
+     * 实例并发扫描造成的 ×N 重复投递。
      *
      * <p><b>活消费者保护：</b>
      *
      * <ul>
      *   <li>阈值 {@code minIdleMs} 默认 60s，为消费超时（30s）+ 取消宽限期的约 2 倍， 正常慢处理不会被误判；
-     *   <li>ORDERLY 目标额外检查消息所属分片的分布式锁是否仍被持有——看门狗续期中的分片锁 代表该消息正被某个实例合法处理（顺序消费无超时包装），此时绝不认领。
+     *   <li>ORDERLY（TOPIC 种类）额外检查消息所属分片的分布式锁是否仍被持有——看门狗续期中的分片锁 代表该消息正被某个实例合法处理（顺序消费无超时包装），此时绝不认领。
      * </ul>
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -272,7 +325,8 @@ public class PelClaimScheduler implements StreamMQScheduler {
         if (!locked) {
             LOG.debug(
                     "PelClaim scan skipped, another instance holds the scan lock:"
-                            + " topic={}, group={}",
+                            + " kind={}, topic={}, group={}",
+                    target.kind,
                     target.topic,
                     target.group);
             return;
@@ -287,6 +341,16 @@ public class PelClaimScheduler implements StreamMQScheduler {
     }
 
     private void doScanPel(PelClaimTarget target) {
+        switch (target.kind) {
+            case RETRY -> doScanRetryStreamPel(target);
+            case DLQ -> doScanDlqPel(target);
+            case TOPIC -> doScanTopicPel(target);
+        }
+    }
+
+    /** TOPIC 种类扫描：业务流 PEL 认领（既有语义，保持不变——分片锁保护、超限转 DLQ、 递增 retryTimes 重投）。 */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void doScanTopicPel(PelClaimTarget target) {
         String streamKey = StreamMQKeys.topicStream(namespace, target.topic);
         RStream<String, String> stream = redisson.getStream(streamKey);
         String dlqStreamKey = StreamMQKeys.dlqStream(namespace, target.group);
@@ -394,6 +458,147 @@ public class PelClaimScheduler implements StreamMQScheduler {
         }
     }
 
+    /**
+     * RETRY 种类扫描：重试流 PEL 认领。
+     *
+     * <p>重试流消费者名含容器随机 token，实例崩溃后其 pending 永远等不到原消费者 ACK。 恢复方式：
+     *
+     * <ul>
+     *   <li>{@code retryTimes >= maxReconsumeTimes} → 先 XADD 到 DLQ 流（附 DLQ 原因字段）， 成功后 ACK
+     *       重试流旧条目（顺序不可颠倒）；
+     *   <li>否则将条目<b>原样</b>复制到同一重试流尾部 + ACK 旧条目——消费循环经 {@code >} 读取 新 ID 重新处理，retryTimes
+     *       等计数字段保持不变，计数继续正确累计。
+     * </ul>
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void doScanRetryStreamPel(PelClaimTarget target) {
+        String streamKey = StreamMQKeys.retryStream(namespace, target.topic, target.group);
+        RStream<String, String> stream = redisson.getStream(streamKey);
+        String dlqStreamKey = StreamMQKeys.dlqStream(namespace, target.group);
+        try {
+            var pending =
+                    stream.listPending(
+                            target.group, StreamMessageId.MIN, StreamMessageId.MAX, batchSize);
+            if (CollectionUtils.isEmpty(pending)) {
+                return;
+            }
+            for (PendingEntry entry : pending) {
+                try {
+                    StreamMessageId id = entry.getId();
+                    if (entry.getIdleTime() < minIdleMs) {
+                        continue;
+                    }
+                    var readResult = stream.range(id, id);
+                    if (CollectionUtils.isEmpty(readResult)) {
+                        // 条目已被 MAXLEN 裁剪：ACK 解除 PEL 引用避免积压永生
+                        stream.ack(target.group, id);
+                        LOG.warn(
+                                "Pending retry entry trimmed from stream (MAXLEN), ACK to"
+                                        + " unblock PEL: topic={}, group={}, id={}, consumer={}",
+                                target.topic,
+                                target.group,
+                                id,
+                                entry.getConsumerName());
+                        continue;
+                    }
+                    Map<String, String> fields =
+                            (Map<String, String>) readResult.values().iterator().next();
+                    int retryTimes = parseRetryTimes(fields);
+                    if (retryTimes >= target.maxReconsumeTimes) {
+                        // 超限 → 先 XADD 到 DLQ，成功后再 ACK 移除（顺序不可颠倒）
+                        fields.put(RetryScheduler.FIELD_DLQ_REASON, DlqReason.MAX_RETRY.getCode());
+                        fields.put(
+                                RetryScheduler.FIELD_ORIGINAL_RETRY_COUNT,
+                                Integer.toString(retryTimes));
+                        redisson.<String, String>getStream(dlqStreamKey)
+                                .add(StreamAddArgs.entries(fields));
+                        stream.ack(target.group, id);
+                        LOG.info(
+                                "Retry-stream message entered DLQ: topic={}, group={}, id={},"
+                                        + " retryTimes={}",
+                                target.topic,
+                                target.group,
+                                id,
+                                retryTimes);
+                    } else {
+                        // 未超限：原样复制到流尾（计数字段随行）+ ACK 旧条目，
+                        // 消费者以 '>' 读到新 ID 后继续按既有计数处理
+                        stream.add(StreamAddArgs.entries(fields));
+                        stream.ack(target.group, id);
+                        LOG.info(
+                                "Retry-stream pending redelivered (tail copy): topic={},"
+                                        + " group={}, id={}, retryTimes={}",
+                                target.topic,
+                                target.group,
+                                id,
+                                retryTimes);
+                    }
+                } catch (Exception ex) {
+                    LOG.warn("Failed to process pending retry entry: {}", ex.getMessage());
+                }
+            }
+        } catch (RuntimeException ex) {
+            LOG.warn(
+                    "listPending failed for retry stream, topic={}, group={}: {}",
+                    target.topic,
+                    target.group,
+                    ex.getMessage());
+        }
+    }
+
+    /**
+     * DLQ 种类扫描：死信流 PEL 认领。
+     *
+     * <p>DLQ 条目不设重试上限判定（进入 DLQ 即终局投递），一律原样复制到流尾 + ACK 旧条目； DLQ 消费者重新处理，消息携带的失败策略计数随行，失败策略仍能约束循环。
+     */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void doScanDlqPel(PelClaimTarget target) {
+        String streamKey = StreamMQKeys.dlqStream(namespace, target.group);
+        RStream<String, String> stream = redisson.getStream(streamKey);
+        try {
+            var pending =
+                    stream.listPending(
+                            target.group, StreamMessageId.MIN, StreamMessageId.MAX, batchSize);
+            if (CollectionUtils.isEmpty(pending)) {
+                return;
+            }
+            for (PendingEntry entry : pending) {
+                try {
+                    StreamMessageId id = entry.getId();
+                    if (entry.getIdleTime() < minIdleMs) {
+                        continue;
+                    }
+                    var readResult = stream.range(id, id);
+                    if (CollectionUtils.isEmpty(readResult)) {
+                        stream.ack(target.group, id);
+                        LOG.warn(
+                                "Pending DLQ entry trimmed from stream (MAXLEN), ACK to unblock"
+                                        + " PEL: group={}, id={}, consumer={}",
+                                target.group,
+                                id,
+                                entry.getConsumerName());
+                        continue;
+                    }
+                    Map<String, String> fields =
+                            (Map<String, String>) readResult.values().iterator().next();
+                    stream.add(StreamAddArgs.entries(fields));
+                    stream.ack(target.group, id);
+                    LOG.info(
+                            "DLQ pending redelivered (tail copy): group={}, id={}",
+                            target.group,
+                            id);
+                } catch (Exception ex) {
+                    LOG.warn("Failed to process pending DLQ entry: {}", ex.getMessage());
+                }
+            }
+        } catch (RuntimeException ex) {
+            LOG.warn(
+                    "listPending failed for DLQ stream, group={}: {}",
+                    target.group,
+                    ex.getMessage());
+        }
+    }
+
     /** 判断消息所属分片的分布式锁是否仍被持有（持有 = 有实例正在处理该分片的消息）。 */
     private boolean isShardLockHeld(PelClaimTarget target, Map<String, String> fields) {
         if (target.shardCount <= 0) {
@@ -434,6 +639,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
     }
 
     private static final class PelClaimTarget {
+        final PelClaimTargetKind kind;
         final String topic;
         final String group;
         final int maxReconsumeTimes;
@@ -441,11 +647,13 @@ public class PelClaimScheduler implements StreamMQScheduler {
         final int shardCount;
 
         PelClaimTarget(
+                PelClaimTargetKind kind,
                 String topic,
                 String group,
                 int maxReconsumeTimes,
                 boolean orderly,
                 int shardCount) {
+            this.kind = Objects.requireNonNull(kind, "kind");
             this.topic = topic;
             this.group = group;
             this.maxReconsumeTimes = maxReconsumeTimes;

@@ -49,6 +49,7 @@ final class ConsumeLoopTask implements Runnable {
             ListenerRegistration<?> reg,
             boolean retryMode,
             boolean primaryLoop,
+            int loopIndex,
             MessageProcessor processor,
             ConsumeLoopSupervisor supervisor,
             java.util.concurrent.ExecutorService executor,
@@ -86,6 +87,13 @@ final class ConsumeLoopTask implements Runnable {
                 ctx.primaryLoop() ? 0 : "aux",
                 ctx.reg().getConsumer().getClass().getSimpleName());
 
+        // 泵登记键按循环唯一：同一注册的多个并发循环（consumeThreadMin>1）各自持有独立泵，
+        // 取消时可全部命中（此前固定键互相覆盖导致泵泄漏）
+        String pumpKey =
+                ctx.reg().key()
+                        + (ctx.retryMode() ? DefaultConsumeLoopSupervisor.RETRY_FUTURE_SUFFIX : "")
+                        + "#"
+                        + ctx.loopIndex();
         MessageSink sink =
                 MessageSink.forCapacity(
                         ctx.inflightCapacity().getAsInt(),
@@ -94,11 +102,16 @@ final class ConsumeLoopTask implements Runnable {
                         ctx.processor(),
                         ctx.supervisor(),
                         ctx.executor(),
-                        ctx.running());
+                        ctx.running(),
+                        pumpKey);
+        // 暂停期间保活钩子：广播监听器暂停时不读流、心跳停止，超过 BROADCAST_GROUP_STALE_TTL_MS
+        // 会被僵尸组回收任务销毁，resume 后全量重放历史。暂停每个休眠周期触发一次广播组心跳。
+        Runnable heartbeatHook = buildPauseHeartbeatHook();
         try {
-            hookDrainOwnPending();
+            hookDrainOwnPending(sink);
             while (ctx.running().getAsBoolean()) {
                 if (ctx.paused().getAsBoolean()) {
+                    heartbeatHook.run();
                     ContainerSupport.sleepQuietly(PAUSED_SLEEP_MILLIS);
                     continue;
                 }
@@ -115,13 +128,33 @@ final class ConsumeLoopTask implements Runnable {
         }
     }
 
-    /** 钩子：primary 且并发集群消费时排空本消费者 PEL 遗留消息（at-least-once 补齐）。 */
-    private void hookDrainOwnPending() {
+    /**
+     * 构建暂停期心跳钩子：广播监听器刷新注册表心跳（非广播为 no-op—— 心跳方法内部按 broadcast 标志自过滤）。
+     *
+     * <p>异常已在心跳实现内静默（debug 日志），此处不再包裹。
+     */
+    private Runnable buildPauseHeartbeatHook() {
+        if (listener
+                instanceof
+                io.github.streammq.adapter.redisson.listener.RedissonStreamListener
+                                redissonListener) {
+            return redissonListener::heartbeatBroadcastRegistry;
+        }
+        return () -> {};
+    }
+
+    /**
+     * 钩子：primary 且并发集群消费时排空本消费者 PEL 遗留消息（at-least-once 补齐）。
+     *
+     * <p>背压启用时排空条目经由 inflight sink 派发（与主循环一致的解耦路径）； 背压禁用（sink 为同步直发）时保持原内联同步处理。
+     */
+    private void hookDrainOwnPending(MessageSink sink) {
         if (!ctx.primaryLoop()
                 || ctx.reg().getType() != ListenerType.AUTO_ACK
                 || ctx.reg().isDlqMode()) {
             return;
         }
+        boolean viaSink = ctx.inflightCapacity().getAsInt() > 0;
         int drained = 0;
         while (ctx.running().getAsBoolean() && !ctx.paused().getAsBoolean()) {
             List<Message<?>> pending = listener.drainPendingOnce(ctx.reg().getPullBatchSize());
@@ -139,7 +172,17 @@ final class ConsumeLoopTask implements Runnable {
                 if (!ctx.running().getAsBoolean()) {
                     return;
                 }
-                ctx.processor().processMessage(message, ctx.reg(), listener);
+                if (viaSink) {
+                    try {
+                        sink.dispatch(message);
+                    } catch (InterruptedException ie) {
+                        // 停机中断：恢复中断位并退出排空（剩余条目仍在 PEL，可再次恢复）
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                } else {
+                    ctx.processor().processMessage(message, ctx.reg(), listener);
+                }
                 drained++;
             }
         }

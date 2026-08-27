@@ -147,9 +147,17 @@
 
     <profiles>
         <!--
-            运行 JMH 基准：mvn test -Pbenchmark
+            运行 JMH 基准：mvn -Pbenchmark -pl streammq-benchmark test
             基准耗时较长且默认通过 Testcontainers 启动 Redis（需 Docker），
             因此不绑定到默认生命周期，避免 mvn test / mvn verify 被劫持。
+
+            也可单独触发某一组基准（CI benchmark.yml 采用此方式）：
+            mvn -Pbenchmark -pl streammq-benchmark exec:java@benchmark-template
+            mvn -Pbenchmark -pl streammq-benchmark exec:java@benchmark-serialization
+            mvn -Pbenchmark -pl streammq-benchmark exec:java@benchmark-consumer
+
+            注意：基准准备/清理阶段含 flushdb，直连非独占 Redis 时必须追加
+            -Dstreammq.benchmark.allowFlush=true 显式授权。
         -->
         <profile>
             <id>benchmark</id>
@@ -159,22 +167,44 @@
                         <groupId>org.codehaus.mojo</groupId>
                         <artifactId>exec-maven-plugin</artifactId>
                         <version>3.1.0</version>
+                        <configuration>
+                            <classpathScope>test</classpathScope>
+                        </configuration>
                         <executions>
                             <execution>
-                                <id>run-benchmarks</id>
+                                <id>benchmark-template</id>
                                 <phase>test</phase>
                                 <goals>
                                     <goal>java</goal>
                                 </goals>
+                                <configuration>
+                                    <mainClass>io.github.streammq.benchmark.StreamMessageTemplateBenchmark</mainClass>
+                                    <arguments>
+                                        <argument>-Djdk.attach.allowAttachSelf=true</argument>
+                                    </arguments>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>benchmark-serialization</id>
+                                <phase>test</phase>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <mainClass>io.github.streammq.benchmark.SerializationBenchmark</mainClass>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>benchmark-consumer</id>
+                                <phase>test</phase>
+                                <goals>
+                                    <goal>java</goal>
+                                </goals>
+                                <configuration>
+                                    <mainClass>io.github.streammq.benchmark.StreamConsumerBenchmark</mainClass>
+                                </configuration>
                             </execution>
                         </executions>
-                        <configuration>
-                            <classpathScope>test</classpathScope>
-                            <mainClass>io.github.streammq.benchmark.StreamMessageTemplateBenchmark</mainClass>
-                            <arguments>
-                                <argument>-Djdk.attach.allowAttachSelf=true</argument>
-                            </arguments>
-                        </configuration>
                     </plugin>
                 </plugins>
             </build>

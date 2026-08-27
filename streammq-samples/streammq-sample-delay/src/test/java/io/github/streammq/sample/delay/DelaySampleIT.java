@@ -42,7 +42,7 @@ import org.springframework.test.context.ActiveProfiles;
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 @DisplayName("延时消息示例集成测试")
 @EnabledIf(
-        value = "io.github.streammq.core.util.RedisAvailability#localhostAvailable",
+        value = "io.github.streammq.test.util.RedisAvailability#localhostAvailable",
         disabledReason = "Redis not available at localhost:6379")
 class DelaySampleIT {
 

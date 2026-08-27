@@ -126,6 +126,41 @@ class MessageTest {
                                             0L, null, null, 0))
                     .isInstanceOf(IllegalArgumentException.class);
         }
+
+        @Test
+        @DisplayName("topic 含非法字符（':' '*' '{' '}' 空白）抛 IAE，与 Builder 同规则")
+        void fullConstructor_topicInvalidCharactersRejected() {
+            for (String bad : new String[] {"a:b", "a*b", "a{b", "a}b", "a b", "order:"}) {
+                assertThatThrownBy(
+                                () ->
+                                        new Message<>(
+                                                bad, null, null, null, null, null, "body", null,
+                                                null, 0L, null, null, 0))
+                        .as("topic '%s' 应被拒绝", bad)
+                        .isInstanceOf(IllegalArgumentException.class);
+            }
+        }
+
+        @Test
+        @DisplayName("topic 自动 trim 规范化（与 Builder 行为一致）")
+        void fullConstructor_topicTrimmed() {
+            Message<String> message =
+                    new Message<>(
+                            "  order-topic  ",
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            "body",
+                            null,
+                            null,
+                            0L,
+                            null,
+                            null,
+                            0);
+            assertThat(message.getTopic()).isEqualTo("order-topic");
+        }
     }
 
     @Nested
@@ -270,6 +305,68 @@ class MessageTest {
             Message<String> message = sample().addUserProperty("k", "v");
             assertThatExceptionOfType(UnsupportedOperationException.class)
                     .isThrownBy(() -> message.getUserProperties().put("new", "val"));
+        }
+    }
+
+    @Nested
+    @DisplayName("equals / hashCode 值语义")
+    class EqualsHashCode {
+
+        @Test
+        @DisplayName("同 topic + 同 messageId 的派生实例相等（round-trip）")
+        void equalWhenSameTopicAndMessageId() {
+            MessageId id = new MessageId("100-0");
+            Message<String> original = sample().withMessageId(id);
+            // withXxx 派生保留 topic + messageId → 值相等
+            Message<String> roundTrip = original.withTag("other-tag").withBody("other-body");
+            assertThat(roundTrip).isEqualTo(original);
+            assertThat(original.hashCode()).isEqualTo(roundTrip.hashCode());
+        }
+
+        @Test
+        @DisplayName("topic 不同则不相等")
+        void notEqualWhenTopicDiffers() {
+            MessageId id = new MessageId("100-0");
+            assertThat(sample().withMessageId(id))
+                    .isNotEqualTo(sample().withTopic("t2").withMessageId(id));
+        }
+
+        @Test
+        @DisplayName("messageId 不同则不相等")
+        void notEqualWhenMessageIdDiffers() {
+            assertThat(sample().withMessageId(new MessageId("100-0")))
+                    .isNotEqualTo(sample().withMessageId(new MessageId("100-1")));
+        }
+
+        @Test
+        @DisplayName("messageId 为 null 时退化为同一性语义：字段相同的两个实例也不相等")
+        void identitySemanticsWhenMessageIdNull() {
+            Message<String> m1 = sample();
+            Message<String> m2 =
+                    new Message<>(
+                            "topic",
+                            "tag",
+                            "keys",
+                            "shard",
+                            null,
+                            null,
+                            "body",
+                            null,
+                            null,
+                            1234567890L,
+                            "host:8080",
+                            null,
+                            0);
+            assertThat(m1).isEqualTo(m1);
+            assertThat(m1).isNotEqualTo(m2);
+        }
+
+        @Test
+        @DisplayName("与不同类型对象比较不相等，equals/hashCode 对 null messageId 稳定")
+        void miscContract() {
+            assertThat(sample()).isNotEqualTo("not-a-message");
+            // 不抛异常即可
+            sample().hashCode();
         }
     }
 

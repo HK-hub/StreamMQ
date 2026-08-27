@@ -138,9 +138,17 @@ public class SelectorParser {
                 return new NullExpression(new PropertyExpression(identifier), true);
             } else if (matchIgnoreCase("NOT")) {
                 skipWhitespace();
-                matchIgnoreCase("NULL");
+                // IS NOT 后必须显式跟随 NULL：旧实现静默吞掉缺失的 NULL（`a IS NOT 'x'`
+                // 被当作 `a IS NOT NULL`），语义反转且尾随垃圾被容忍
+                if (!matchIgnoreCase("NULL")) {
+                    throw new IllegalArgumentException(
+                            "'IS NOT' must be followed by NULL in SQL92 expression: " + expression);
+                }
                 return new NullExpression(new PropertyExpression(identifier), false);
             }
+            throw new IllegalArgumentException(
+                    "'IS' must be followed by NULL or [NOT] NULL in SQL92 expression: "
+                            + expression);
         }
 
         CompareExpression.CompareType compareType = null;
@@ -305,6 +313,9 @@ public class SelectorParser {
      * <p><b>0.1.0 起为 fail-closed 语义：</b>解析失败直接抛出 {@link IllegalArgumentException} 而非返回 null（返回 null
      * 会被下游解释为"放行全部消息"，形成静默过滤反转）。 通配符/空表达式仍返回 null 表示不过滤。
      *
+     * <p><b>尾随内容同样拒绝：</b>与 {@link #buildStrict} 一致——宽松模式此前容忍尾随垃圾 （如 {@code a = 1 b}），未消费的 token
+     * 静默丢失，现统一拒绝。
+     *
      * @param expression 表达式字符串
      * @return 表达式节点；空串或通配符返回 null
      * @throws IllegalArgumentException 表达式非法
@@ -315,15 +326,6 @@ public class SelectorParser {
                 || "*".equals(expression.trim())) {
             return null;
         }
-        Expression result;
-        try {
-            result = new SelectorParser(expression).parse();
-        } catch (Exception e) {
-            throw new IllegalArgumentException("Invalid SQL92 expression: " + expression, e);
-        }
-        if (result == null) {
-            throw new IllegalArgumentException("Invalid SQL92 expression: " + expression);
-        }
-        return result;
+        return buildStrict(expression);
     }
 }

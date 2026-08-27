@@ -26,6 +26,7 @@ public class DefaultDlqFailureContext implements DlqFailureContext {
     private final Map<String, String> dlqFields;
     private final int maxDlqRetryAttempts;
     private final long dlqRetryDelayMs;
+    private final String consumerGroup;
 
     public DefaultDlqFailureContext(
             int dlqAttempts,
@@ -35,7 +36,8 @@ public class DefaultDlqFailureContext implements DlqFailureContext {
             Throwable lastFailureCause,
             Map<String, String> dlqFields,
             int maxDlqRetryAttempts,
-            long dlqRetryDelayMs) {
+            long dlqRetryDelayMs,
+            String consumerGroup) {
         this.dlqAttempts = dlqAttempts;
         this.dlqReason = dlqReason;
         this.originalTopic = originalTopic;
@@ -44,6 +46,7 @@ public class DefaultDlqFailureContext implements DlqFailureContext {
         this.dlqFields = dlqFields;
         this.maxDlqRetryAttempts = maxDlqRetryAttempts;
         this.dlqRetryDelayMs = dlqRetryDelayMs;
+        this.consumerGroup = consumerGroup;
     }
 
     @Override
@@ -79,6 +82,11 @@ public class DefaultDlqFailureContext implements DlqFailureContext {
     @Override
     public long dlqRetryDelayMs() {
         return dlqRetryDelayMs;
+    }
+
+    @Override
+    public String consumerGroup() {
+        return consumerGroup;
     }
 
     @Override

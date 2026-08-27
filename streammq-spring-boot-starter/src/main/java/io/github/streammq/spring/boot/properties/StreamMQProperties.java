@@ -17,7 +17,6 @@ import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import java.time.Duration;
 import lombok.Data;
-import lombok.ToString;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -68,7 +67,6 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  */
 @ConfigurationProperties(prefix = StreamMQSpringConstants.PROP_PREFIX)
 @Data
-@ToString(exclude = {"accessKey", "secretKey"})
 public class StreamMQProperties {
 
     /** 是否启用 StreamMQ 自动装配，默认 true */
@@ -100,20 +98,6 @@ public class StreamMQProperties {
 
     /** 健康检查配置 */
     private Health health = new Health();
-
-    /**
-     * Redis 鉴权 accessKey。
-     *
-     * <p>注意：此值以明文形式存储在配置中，生产环境建议使用环境变量或配置中心加密存储。
-     */
-    private String accessKey = "";
-
-    /**
-     * Redis 鉴权 secretKey。
-     *
-     * <p>注意：此值以明文形式存储在配置中，生产环境建议使用环境变量或配置中心加密存储。 日志输出会自动脱敏此字段。
-     */
-    private String secretKey = "";
 
     /** 重平衡策略配置 */
     private Rebalance rebalance = new Rebalance();
@@ -390,6 +374,11 @@ public class StreamMQProperties {
             throw new IllegalArgumentException(
                     "streammq.producer.stream-max-len must be >= 0, got: " + producer.streamMaxLen);
         }
+        if (producer.maxMessageSize <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.producer.max-message-size must be > 0, got: "
+                            + producer.maxMessageSize);
+        }
         if (consumer.batchSize <= 0) {
             throw new IllegalArgumentException(
                     "streammq.consumer.batch-size must be > 0, got: " + consumer.batchSize);
@@ -422,6 +411,23 @@ public class StreamMQProperties {
             throw new IllegalArgumentException(
                     "streammq.dlq.max-dlq-retry-attempts must be >= 0, got: "
                             + dlq.maxDlqRetryAttempts);
+        }
+        if (dlq.dlqRetryDelayMs < 0) {
+            throw new IllegalArgumentException(
+                    "streammq.dlq.dlq-retry-delay-ms must be >= 0, got: " + dlq.dlqRetryDelayMs);
+        }
+        if (retry.maxReconsumeTimes < 0) {
+            throw new IllegalArgumentException(
+                    "streammq.retry.max-reconsume-times must be >= 0, got: "
+                            + retry.maxReconsumeTimes);
+        }
+        if (retry.batchSize <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.retry.batch-size must be > 0, got: " + retry.batchSize);
+        }
+        if (delay.batchSize <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.delay.batch-size must be > 0, got: " + delay.batchSize);
         }
         if (consumer.timeoutCancelGraceMillis <= 0) {
             throw new IllegalArgumentException(

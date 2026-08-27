@@ -8,6 +8,7 @@ package io.github.streammq.adapter.redisson.compression;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.exception.StreamMQException;
 import java.nio.charset.StandardCharsets;
 import org.junit.jupiter.api.DisplayName;
@@ -106,6 +107,28 @@ class GzipCompressionCodecTest {
     void decompressInvalidData() {
         byte[] invalid = "not a gzip stream".getBytes(StandardCharsets.UTF_8);
         assertThatThrownBy(() -> codec.decompress(invalid)).isInstanceOf(StreamMQException.class);
+    }
+
+    @Test
+    @DisplayName("解压炸弹：展开超过 16MB 上限时抛 SerializationException 而非 OOM")
+    void decompressBombRejected() {
+        // 高度可压缩的明文（全零）压缩后极小，解压会膨胀超过上限
+        byte[] bomb = new byte[(int) (GzipCompressionCodec.MAX_EXPANDED_BYTES + 1024 * 1024)];
+        byte[] compressed = codec.compress(bomb);
+        assertThat(compressed.length).isLessThan(1024 * 1024);
+
+        assertThatThrownBy(() -> codec.decompress(compressed))
+                .isInstanceOf(SerializationException.class)
+                .hasMessageContaining("decompressed payload exceeds limit");
+    }
+
+    @Test
+    @DisplayName("解压输出恰好在 16MB 上限内正常返回")
+    void decompressWithinLimitSucceeds() {
+        byte[] payload = new byte[(int) GzipCompressionCodec.MAX_EXPANDED_BYTES];
+        byte[] compressed = codec.compress(payload);
+        byte[] decompressed = codec.decompress(compressed);
+        assertThat(decompressed).hasSize(payload.length);
     }
 
     @Test

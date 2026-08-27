@@ -10,6 +10,7 @@ import io.github.streammq.adapter.redisson.security.DenyAllAuthenticator;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.policy.ManagementAuthenticator;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
+import java.util.Map;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,10 +58,11 @@ public class StreamMQHealthAutoConfiguration {
             LoggerFactory.getLogger(StreamMQHealthAutoConfiguration.class);
 
     /**
-     * StreamMQ 健康检查器：综合检查 Redis 连通性 + Listener 容器状态。
+     * StreamMQ 健康检查器：综合检查 Redis 连通性 + Listener 容器状态 + 调度器启动状态。
      *
-     * @param redisson Redisson 客户端
+     * @param redisson Redis 客户端
      * @param listenerContainerProvider Listener 容器（可选）
+     * @param schedulerLifecycleProvider 调度器生命周期（可选，用于暴露部分启动失败）
      * @return HealthIndicator
      */
     @Bean
@@ -68,9 +70,12 @@ public class StreamMQHealthAutoConfiguration {
     public HealthIndicator streamMQHealthIndicator(
             RedissonClient redisson,
             org.springframework.beans.factory.ObjectProvider<DefaultStreamMQListenerContainer>
-                    listenerContainerProvider) {
+                    listenerContainerProvider,
+            org.springframework.beans.factory.ObjectProvider<StreamMQSchedulerLifecycle>
+                    schedulerLifecycleProvider) {
         LOG.debug("Creating StreamMQHealthIndicator");
-        return new StreamMQHealthIndicator(redisson, listenerContainerProvider.getIfAvailable());
+        return new StreamMQHealthIndicator(
+                redisson, listenerContainerProvider.getIfAvailable(), schedulerLifecycleProvider);
     }
 
     /** 管理端点的后端逻辑 Bean（供 StreamMQActuatorEndpoint 使用）。 */
@@ -135,17 +140,24 @@ public class StreamMQHealthAutoConfiguration {
 
         private final RedissonClient redisson;
         private final DefaultStreamMQListenerContainer listenerContainer;
+        private final org.springframework.beans.factory.ObjectProvider<StreamMQSchedulerLifecycle>
+                schedulerLifecycleProvider;
 
         /**
          * 构造健康检查器。
          *
-         * @param redisson Redisson 客户端
+         * @param redisson Redis 客户端
          * @param listenerContainer Listener 容器（可为 null，表示未装配）
+         * @param schedulerLifecycleProvider 调度器生命周期提供者（可为 null，表示未装配）
          */
         public StreamMQHealthIndicator(
-                RedissonClient redisson, DefaultStreamMQListenerContainer listenerContainer) {
+                RedissonClient redisson,
+                DefaultStreamMQListenerContainer listenerContainer,
+                org.springframework.beans.factory.ObjectProvider<StreamMQSchedulerLifecycle>
+                        schedulerLifecycleProvider) {
             this.redisson = redisson;
             this.listenerContainer = listenerContainer;
+            this.schedulerLifecycleProvider = schedulerLifecycleProvider;
         }
 
         @Override
@@ -155,10 +167,15 @@ public class StreamMQHealthAutoConfiguration {
                 long start = System.currentTimeMillis();
                 long val = redisson.getAtomicLong(StreamMQConstants.HEALTH_CHECK_KEY).get();
                 long elapsed = System.currentTimeMillis() - start;
-                Health.Builder builder = isListenerContainerHealthy() ? Health.up() : Health.down();
+                boolean schedulersHealthy = isSchedulersHealthy();
+                Health.Builder builder =
+                        isListenerContainerHealthy() && schedulersHealthy
+                                ? Health.up()
+                                : Health.down();
                 builder.withDetail(StreamMQSpringConstants.HEALTH_DETAIL_PING_LATENCY, elapsed);
                 builder.withDetail(StreamMQSpringConstants.HEALTH_DETAIL_HEALTH_VALUE, val);
                 buildListenerContainerDetails(builder);
+                buildSchedulerDetails(builder);
                 return builder.build();
             } catch (RuntimeException ex) {
                 return Health.down(ex)
@@ -172,6 +189,34 @@ public class StreamMQHealthAutoConfiguration {
         /** 容器已装配但未运行时视为不健康（与 Binder 健康指标行为对齐）。 */
         private boolean isListenerContainerHealthy() {
             return listenerContainer == null || listenerContainer.isRunning();
+        }
+
+        /** 调度器存在部分启动失败时视为不健康：调度器未装配（provider 为空或无 Bean）不影响整体状态。 */
+        private boolean isSchedulersHealthy() {
+            if (schedulerLifecycleProvider == null) {
+                return true;
+            }
+            StreamMQSchedulerLifecycle lifecycle = schedulerLifecycleProvider.getIfAvailable();
+            if (lifecycle == null) {
+                return true;
+            }
+            return lifecycle.getSchedulerStatuses().values().stream()
+                    .noneMatch(
+                            status ->
+                                    status.startsWith(
+                                            StreamMQSchedulerLifecycle.STATUS_FAILED_PREFIX));
+        }
+
+        private void buildSchedulerDetails(Health.Builder builder) {
+            if (schedulerLifecycleProvider == null) {
+                return;
+            }
+            StreamMQSchedulerLifecycle lifecycle = schedulerLifecycleProvider.getIfAvailable();
+            if (lifecycle != null) {
+                builder.withDetail(
+                        StreamMQSpringConstants.HEALTH_DETAIL_SCHEDULER_STATUSES,
+                        Map.copyOf(lifecycle.getSchedulerStatuses()));
+            }
         }
 
         private void buildListenerContainerDetails(Health.Builder builder) {

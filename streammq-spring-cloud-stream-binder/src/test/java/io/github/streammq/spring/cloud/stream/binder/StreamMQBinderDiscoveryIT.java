@@ -7,7 +7,7 @@ package io.github.streammq.spring.cloud.stream.binder;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import io.github.streammq.core.util.RedisAvailability;
+import io.github.streammq.test.util.RedisAvailability;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -38,7 +38,7 @@ import org.springframework.test.context.DynamicPropertySource;
 @DirtiesContext
 @DisplayName("StreamMQ Binder 发现测试")
 @EnabledIf(
-        value = "io.github.streammq.core.util.RedisAvailability#localhostAvailable",
+        value = "io.github.streammq.test.util.RedisAvailability#localhostAvailable",
         disabledReason = "Redis not available at localhost:6379")
 class StreamMQBinderDiscoveryIT {
     @BeforeAll

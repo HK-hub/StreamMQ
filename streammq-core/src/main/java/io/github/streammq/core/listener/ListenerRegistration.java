@@ -24,6 +24,9 @@ import java.util.concurrent.locks.Lock;
  *
  * <p>使用 Builder 模式构造（参见 {@link ListenerRegistration.Builder}），避免多参数构造器的可读性问题。
  *
+ * @apiNote <b>线程封闭约定</b>：本对象名义上是值对象，但保留少量 setter （如 {@link #setNamespace(String)}、{@link
+ *     #setConverterInstance(MessageConverter)}） 供容器在启动前回填运行时字段。调用方必须在将注册信息交给容器之前完成全部变更；
+ *     容器注册完成后将其视为不可变对象，此后再修改属于未定义行为。{@code getShardLocks()} 等集合访问器返回不可修改视图/防御性拷贝。
  * @param <T> Listener 处理的 body 类型
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -46,6 +49,11 @@ public interface ListenerRegistration<T> {
 
     long getConsumeTimeoutMillis();
 
+    /**
+     * 返回顺序消费分片锁（不可修改视图；null 表示未设置）。
+     *
+     * @return 分片锁列表
+     */
     List<Lock> getShardLocks();
 
     int getPullBatchSize();
@@ -93,11 +101,18 @@ public interface ListenerRegistration<T> {
     /**
      * 并发消费循环数下限（原线程池语义，现为读循环数）：仅 CONCURRENT 集群消费生效。
      *
-     * @return 并发数（&gt;= 1）
+     * @return 并发数（&gt;= 1，构造时夹取下界 1）
      */
     int getConsumeThreadMin();
 
-    /** 并发消费循环数上限（夹取上界）。 */
+    /**
+     * 并发消费循环数上限（构造时夹取至 &gt;= {@link #getConsumeThreadMin()}）。
+     *
+     * <p>注意：与 {@link ListenerConfig} 的校验策略不同——注册模型对非法值「夹取」以保证运行期弹性， ListenerConfig 构造器则直接抛出
+     * IllegalArgumentException。
+     *
+     * @return 上限（&gt;= 下限）
+     */
     int getConsumeThreadMax();
 
     /**

@@ -148,11 +148,8 @@ public final class Message<T> implements Serializable {
             String bornHost,
             String transactionId,
             int reconsumeTimes) {
-        Objects.requireNonNull(topic, "topic");
-        if (topic.trim().isEmpty()) {
-            throw new IllegalArgumentException("topic must not be empty");
-        }
-        this.topic = topic;
+        // 与 MessageBuilder 同规则校验：非 null、非空、不含 ':' '*' '{' '}' 或空白，并 trim 规范化
+        this.topic = StringUtils.requireValidTopic(topic);
         this.tag = tag;
         this.keys = keys;
         this.shardingKey = shardingKey;
@@ -216,14 +213,13 @@ public final class Message<T> implements Serializable {
     /**
      * 返回带有指定 topic 的新 Message 实例。
      *
+     * <p>校验规则与构造器一致（非 null、非空、不含 {@code ':'}、{@code '*'}、{@code '{'}、{@code '}'} 或空白）， 由 {@code
+     * Message} 私有全参构造器统一执行。
+     *
      * @param topic 新的 topic
      * @return 新的 Message 实例
      */
     public Message<T> withTopic(String topic) {
-        Objects.requireNonNull(topic, "topic");
-        if (topic.trim().isEmpty()) {
-            throw new IllegalArgumentException("topic must not be empty");
-        }
         return new Message<>(
                 topic,
                 tag,
@@ -558,6 +554,39 @@ public final class Message<T> implements Serializable {
                 bornHost,
                 transactionId,
                 reconsumeTimes);
+    }
+
+    /**
+     * 基于 topic + messageId 的值相等语义。
+     *
+     * <p>两者均非 null 时按值比较；任一实例的 messageId 为 null 时退化为同一性语义（仅同一实例相等）—— 因为发送前消息尚未获得框架分配的 ID，无法与其他同
+     * topic 消息区分。
+     *
+     * @param o 比较对象
+     * @return true 如果语义上相等
+     */
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (!(o instanceof Message<?> other)) {
+            return false;
+        }
+        if (Objects.isNull(messageId) || Objects.isNull(other.messageId)) {
+            return false;
+        }
+        return topic.equals(other.topic) && messageId.equals(other.messageId);
+    }
+
+    /**
+     * 与 {@link #equals} 一致：messageId 非 null 时为 {@code hash(topic, messageId)}， 否退化为同一性哈希。
+     *
+     * @return 哈希值
+     */
+    @Override
+    public int hashCode() {
+        return Objects.isNull(messageId) ? super.hashCode() : Objects.hash(topic, messageId);
     }
 
     @Override

@@ -35,7 +35,7 @@ public interface MessageConverter {
     Map<String, String> toStreamFields(Message<?> message);
 
     /**
-     * 将 Stream Entry 字段 Map 还原为 Message（不允许字段缺失 Topic，除非实现另有语义）。
+     * 将 Stream Entry 字段 Map 还原为 Message（不允许字段缺失 Topic）。
      *
      * <p>默认委托到 {@link #fromStreamFields(Map, Class, String)} 并传入 {@code null} 回填值。
      *
@@ -52,6 +52,10 @@ public interface MessageConverter {
     /**
      * 将 Stream Entry 字段 Map 还原为 Message，并指定回填 Topic。
      *
+     * <p><b>这是实现方唯一必须覆盖的方法</b>：两参形式与三参形式的默认实现互为委托， 若两者均未覆盖将互相递归导致 {@code
+     * StackOverflowError}。因此本方法的默认实现直接抛出 {@link UnsupportedOperationException} 以便在首次调用时快速失败，
+     * 引导实现方覆盖本方法（或同时覆盖两参形式）。 内置实现（如 redisson 适配层的 {@code AbstractMessageConverter}）均已覆盖三参形式。
+     *
      * <p>{@link Message} 为不可变对象；当 Entry 字段中不携带 Topic（跨平台生产者场景）时， 使用调用方已知的 {@code fallbackTopic}
      * 补全。两个字段来源均缺失 Topic 时抛出异常。
      *
@@ -60,11 +64,14 @@ public interface MessageConverter {
      * @param fallbackTopic 字段缺失 Topic 时的回填值（可为 null，表示不允许缺失）
      * @param <T> body 类型
      * @return 完整的不可变 Message 实例
+     * @throws UnsupportedOperationException 默认实现总是抛出，实现方必须覆盖本方法
      * @throws io.github.streammq.core.exception.SerializationException 反序列化失败或 Topic 缺失
      */
     default <T> Message<T> fromStreamFields(
             Map<String, String> fields, Class<T> targetType, String fallbackTopic) {
-        return fromStreamFields(fields, targetType);
+        throw new UnsupportedOperationException(
+                "MessageConverter implementation must override fromStreamFields(Map, Class,"
+                        + " String)");
     }
 
     /**

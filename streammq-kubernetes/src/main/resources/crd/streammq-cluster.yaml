@@ -1,9 +1,18 @@
 # StreamMQ Kubernetes CustomResourceDefinitions
 #
-# Full CRD definitions with OpenAPI v3 schema validation for:
+# Full CRD definition with OpenAPI v3 schema validation for:
 # - StreamMQCluster: cluster configuration and operator management
-# - StreamMQTopic: topic lifecycle management
-# - StreamMQConsumerGroup: consumer group with auto-scaling
+#
+# NOTE: Only StreamMQCluster is implemented by the operator today.
+# StreamMQTopic / StreamMQConsumerGroup CRDs were advertised here previously
+# but never implemented by the controller — do not re-add them until the
+# operator actually reconciles those kinds.
+#
+# Required RBAC: watching ALL namespaces by default (operator.watch-all-namespaces=true)
+# requires a ClusterRole with get/list/watch on streammqclusters.streammq.io plus
+# Deployment create/update/patch/status permissions across namespaces.
+# Set operator.watch-all-namespaces=false (with operator.watch-namespaces list)
+# to scope the operator to specific namespaces and relax RBAC accordingly.
 #
 # Requires: Kubernetes 1.16+ (apiextensions.k8s.io/v1)
 # Group: streammq.io
@@ -254,5 +263,3 @@ spec:
       type: date
       jsonPath: .metadata.creationTimestamp
 
----
-apiVersion: apiextensions.k8s.io/v1

@@ -221,6 +221,41 @@ class SelectorParserTest {
     }
 
     @Test
+    void testIsNotNullRequiresNullKeyword() {
+        // IS NOT 后缺失 NULL：宽松与严格模式都必须拒绝（旧实现静默当作 IS NOT NULL）
+        assertThatThrownBy(() -> SelectorParser.build("a IS NOT 'x'"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("IS NOT");
+        assertThatThrownBy(() -> SelectorParser.buildStrict("a IS NOT 123"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("IS NOT");
+
+        // IS 后既非 NULL 也非 NOT：拒绝（旧实现落入比较分支后整体解析失败，语义含糊）
+        assertThatThrownBy(() -> SelectorParser.build("a IS 'x'"))
+                .isInstanceOf(IllegalArgumentException.class);
+
+        // 合法形态不受影响
+        assertThat(SelectorParser.build("a IS NOT NULL")).isNotNull();
+        assertThat(SelectorParser.buildStrict("a IS NULL")).isNotNull();
+    }
+
+    @Test
+    void testTrailingGarbageRejectedInLenientMode() {
+        // 宽松模式同样拒绝尾随垃圾（旧实现静默吞掉未消费 token）
+        assertThatThrownBy(() -> SelectorParser.build("a = 1 b"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("trailing");
+        assertThatThrownBy(() -> SelectorParser.build("a = 1 )"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("trailing");
+
+        // 严格模式保持既有行为
+        assertThatThrownBy(() -> SelectorParser.buildStrict("a = 1 b"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("trailing");
+    }
+
+    @Test
     void testDeepNestingRejectedWithoutStackOverflow() {
         StringBuilder deep = new StringBuilder();
         for (int i = 0; i < 10_000; i++) {

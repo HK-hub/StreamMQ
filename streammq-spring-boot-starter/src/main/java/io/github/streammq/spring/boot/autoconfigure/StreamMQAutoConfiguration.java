@@ -23,12 +23,19 @@ import org.springframework.context.annotation.Import;
  * <p>装配链：
  *
  * <ol>
+ *   <li>{@link StreamMQTraceAutoConfiguration} - 追踪存储 / 查询服务（可选）
  *   <li>{@link StreamMQCoreAutoConfiguration} - 序列化器 / 转换器 / 工厂 / 模板 / 服务
  *   <li>{@link StreamMQSchedulerAutoConfiguration} - 重试 / 延时 / 事务回查 调度器
  *   <li>{@link StreamMQListenerContainerAutoConfiguration} - Listener 容器 + 注解扫描 + SmartLifecycle
  *   <li>{@link StreamMQHealthAutoConfiguration} - Actuator HealthIndicator（可选）
- *   <li>{@link StreamMQMetricsAutoConfiguration} - Micrometer 指标收集器（可选）
  * </ol>
+ *
+ * <p>注意：{@link StreamMQMetricsAutoConfiguration} <b>不通过 {@code @Import} 引入</b>。 它依赖 {@code
+ * MeterRegistry} Bean，必须登记在 {@code
+ * META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports} 中并配合
+ * {@code @AutoConfigureAfter(MetricsAutoConfiguration)} 才能在 Boot 注册 {@code MeterRegistry} 之后评估
+ * {@code @ConditionalOnBean(MeterRegistry)}； 若经 {@code @Import} 嵌套引入则不参与 .imports 排序， 会因装配过早而静默丢失
+ * {@link io.github.streammq.core.metrics.StreamMQMetrics} Bean。
  *
  * <p>触发方式：
  *
@@ -52,7 +59,6 @@ import org.springframework.context.annotation.Import;
     StreamMQCoreAutoConfiguration.class,
     StreamMQSchedulerAutoConfiguration.class,
     StreamMQListenerContainerAutoConfiguration.class,
-    StreamMQHealthAutoConfiguration.class,
-    StreamMQMetricsAutoConfiguration.class
+    StreamMQHealthAutoConfiguration.class
 })
 public class StreamMQAutoConfiguration {}

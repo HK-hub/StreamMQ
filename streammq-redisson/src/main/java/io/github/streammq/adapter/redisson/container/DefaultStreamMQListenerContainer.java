@@ -5,16 +5,12 @@
  */
 package io.github.streammq.adapter.redisson.container;
 
-import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy;
 import io.github.streammq.adapter.redisson.filter.DefaultConsumerFilterChain;
-import io.github.streammq.adapter.redisson.filter.SimpleSqlSelectorFilter;
-import io.github.streammq.adapter.redisson.filter.SimpleTagSelectorFilter;
 import io.github.streammq.adapter.redisson.handler.DefaultRetryAndDlqHandler;
 import io.github.streammq.adapter.redisson.interceptor.DefaultConsumerInterceptorChain;
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
 import io.github.streammq.adapter.redisson.lock.RedissonOrderlyShardLockManager;
-import io.github.streammq.adapter.redisson.manager.RedissonConsumerGroupManager;
 import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.core.StreamMQConstants;
@@ -23,18 +19,14 @@ import io.github.streammq.core.annotation.StreamMQDlqConsumer;
 import io.github.streammq.core.consumer.*;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.enums.ConsumeAction;
-import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.filter.ConsumerFilter;
 import io.github.streammq.core.filter.ConsumerFilterChain;
 import io.github.streammq.core.filter.ConsumerFilterResolver;
-import io.github.streammq.core.filter.ExpressionSelectorFilter;
 import io.github.streammq.core.interceptor.ConsumerInterceptor;
 import io.github.streammq.core.interceptor.ConsumerInterceptorChain;
 import io.github.streammq.core.listener.*;
 import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.policy.*;
-import io.github.streammq.core.serializer.MessageSerializer;
-import io.github.streammq.core.util.SpiResolver;
 import io.github.streammq.core.util.StringUtils;
 import java.util.*;
 import java.util.concurrent.*;
@@ -604,65 +596,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         spiResolver().resolveInto(reg, store);
     }
 
-    /** 解析 per-consumer 重平衡策略实例。 */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private RebalanceStrategy resolveRebalanceStrategy(ListenerRegistration<?> reg) {
-        Class<? extends RebalanceStrategy> rebalanceClass = reg.getRebalanceStrategy();
-        if (Objects.isNull(rebalanceClass) || rebalanceClass == RebalanceStrategy.class) {
-            return new io.github.streammq.adapter.redisson.rebalance.AverageRebalanceStrategy();
-        }
-        // 一致性哈希策略支持通过 streammq.rebalance.virtual-nodes 配置虚拟节点数
-        if (rebalanceClass
-                == io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy
-                        .class) {
-            return new io.github.streammq.adapter.redisson.rebalance
-                    .ConsistentHashRebalanceStrategy(defaultVirtualNodes);
-        }
-        try {
-            return SpiResolver.resolveOrInstantiate(
-                    (Class) rebalanceClass, RebalanceStrategy.class, null);
-        } catch (RuntimeException ex) {
-            LOG.warn(
-                    "Failed to instantiate rebalanceStrategy for {}, using default: {}",
-                    reg.key(),
-                    ex.getMessage());
-            return new io.github.streammq.adapter.redisson.rebalance.AverageRebalanceStrategy();
-        }
-    }
-
-    /**
-     * 解析 per-consumer 消息转换器：
-     *
-     * <ul>
-     *   <li>注解指定自定义 {@code messageConverter} 类 → 无参实例化
-     *   <li>注解指定自定义 {@code serializer} 类 → 实例化后包装为 {@link DefaultMessageConverter}
-     *   <li>均为 marker → 回退全局转换器
-     * </ul>
-     */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private MessageConverter resolveConverter(ListenerRegistration<?> reg) {
-        Class<? extends MessageConverter> converterClass = reg.getMessageConverter();
-        Class<? extends MessageSerializer> serializerClass = reg.getSerializer();
-        if (Objects.nonNull(converterClass) && converterClass != MessageConverter.class) {
-            return SpiResolver.resolveOrInstantiate(
-                    (Class) converterClass, MessageConverter.class, this.messageConverter);
-        }
-        if (Objects.nonNull(serializerClass) && serializerClass != MessageSerializer.class) {
-            try {
-                MessageSerializer<?> serializer =
-                        serializerClass.getDeclaredConstructor().newInstance();
-                return new DefaultMessageConverter(serializer);
-            } catch (ReflectiveOperationException e) {
-                throw new IllegalArgumentException(
-                        "Failed to instantiate serializer "
-                                + serializerClass.getName()
-                                + " (requires public no-arg constructor)",
-                        e);
-            }
-        }
-        return this.messageConverter;
-    }
-
     @Override
     public Collection<ConsumerMetadata> getConsumers() {
         List<ConsumerMetadata> list = new ArrayList<>(store.registrationCount());
@@ -705,7 +638,15 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         LOG.info("Starting ListenerContainer with {} registration(s)", store.registrationCount());
         // start 语义为全新启动：复位 pause，避免"pause 后 stop 再 start"重启进静默暂停
         paused = false;
-        lifecycle.markRunning();
+        if (!lifecycle.markRunning()) {
+            // 竞态守卫：启动期间发生并发 stop（状态已离开 STARTING）时必须中止——
+            // 继续登记组管理器/提交读循环会复活已停止的容器并泄漏 Redis 侧注册数据
+            LOG.warn(
+                    "Container start aborted: lifecycle changed to {} during startup (stop won"
+                            + " the race)",
+                    lifecycle.current());
+            return;
+        }
         for (ListenerRegistration<?> reg : store.registrations()) {
             if (!reg.isDlqMode()) {
                 store.putGroupManager(reg.key(), groupManagerFactory().createAndRegister(reg));
@@ -732,23 +673,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         if (consumerFactory instanceof RedissonStreamListenerFactory redissonFactory) {
             redissonFactory.reopen();
         }
-    }
-
-    /** 为单个注册创建并登记 ConsumerGroupManager（start 与动态注册共用）。 */
-    private void createAndRegisterGroupManager(ListenerRegistration<?> reg) {
-        String instanceId = reg.getGroup() + "-" + UUID.randomUUID().toString().substring(0, 8);
-        ConsumerGroupManager cgm =
-                new RedissonConsumerGroupManager(
-                        redisson,
-                        reg.getNamespace(),
-                        reg.getGroup(),
-                        instanceId,
-                        resolveRebalanceStrategy(reg),
-                        heartbeatIntervalMs,
-                        instanceTimeoutMs);
-        cgm.register();
-        cgm.cleanupStaleGroups();
-        store.putGroupManager(reg.key(), cgm);
     }
 
     @Override
@@ -843,12 +767,13 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     /** 循环命令工厂：装配 LoopContext 并提交到消费线程池。 */
     private Future<?> launchLoop(
-            ListenerRegistration<?> reg, boolean retryMode, boolean primaryLoop) {
+            ListenerRegistration<?> reg, boolean retryMode, boolean primaryLoop, int loopIndex) {
         ConsumeLoopTask.LoopContext ctx =
                 new ConsumeLoopTask.LoopContext(
                         reg,
                         retryMode,
                         primaryLoop,
+                        loopIndex,
                         messageProcessor,
                         loopSupervisor,
                         consumeExecutor,
@@ -875,93 +800,6 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 "Dynamically wired registration while container running: topic={}, group={}",
                 reg.getTopic(),
                 reg.getGroup());
-    }
-
-    /**
-     * 构建 per-consumer 过滤器链（在注册时调用一次，缓存结果）。
-     *
-     * <p>执行顺序：
-     *
-     * <ol>
-     *   <li>selectorExpression（SimpleTagSelectorFilter / SimpleSqlSelectorFilter，order = -1）- 最先执行
-     *   <li>全局过滤器（顺序由 order 决定）
-     *   <li>per-consumer 过滤器（顺序由 order 决定，从 Spring 容器获取）
-     * </ol>
-     *
-     * @param reg Listener 注册信息
-     * @return 预构建的过滤器列表
-     */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    private List<ConsumerFilter> buildConsumerFilters(ListenerRegistration<?> reg) {
-        List<ConsumerFilter> allFilters = new ArrayList<>();
-
-        String selectorExpression = reg.getSelectorExpression();
-        if (StringUtils.isNotEmpty(selectorExpression)
-                && !StreamMQConstants.SELECTOR_WILDCARD.equals(selectorExpression)) {
-            SelectorType selectorType = reg.getSelectorType();
-            ExpressionSelectorFilter selectorFilter =
-                    switch (selectorType) {
-                        case TAG -> new SimpleTagSelectorFilter(selectorExpression);
-                        case SQL92 -> new SimpleSqlSelectorFilter(selectorExpression);
-                    };
-            allFilters.add(selectorFilter);
-            LOG.debug(
-                    "Built selector filter for {}: type={}, expression={}",
-                    reg.key(),
-                    selectorType,
-                    selectorExpression);
-        }
-
-        allFilters.addAll(consumerFilterChain.getFilters());
-
-        Class<? extends ConsumerFilter>[] perConsumerFilterClasses =
-                (Class<? extends ConsumerFilter>[]) reg.getConsumerFilter();
-        if (Objects.nonNull(perConsumerFilterClasses) && perConsumerFilterClasses.length > 0) {
-            for (Class<? extends ConsumerFilter> filterClass : perConsumerFilterClasses) {
-                ConsumerFilter filter = resolveConsumerFilter(filterClass);
-                if (Objects.nonNull(filter)) {
-                    allFilters.add(filter);
-                    LOG.debug("Added per-consumer filter for {}: {}", reg.key(), filter.name());
-                }
-            }
-        }
-
-        allFilters.sort(Comparator.comparingInt(ConsumerFilter::order));
-
-        return Collections.unmodifiableList(allFilters);
-    }
-
-    /**
-     * 解析 per-consumer 过滤器：优先通过 filterResolver 获取，回退到反射实例化。
-     *
-     * @param filterClass 过滤器类
-     * @return 过滤器实例，可为 null
-     */
-    private ConsumerFilter resolveConsumerFilter(Class<? extends ConsumerFilter> filterClass) {
-        if (Objects.isNull(filterClass) || filterClass == ConsumerFilter.class) {
-            return null;
-        }
-
-        ConsumerFilterResolver resolver = this.filterResolver;
-        if (Objects.nonNull(resolver)) {
-            ConsumerFilter filter = resolver.resolve(filterClass);
-            if (Objects.nonNull(filter)) {
-                return filter;
-            }
-            LOG.debug(
-                    "Filter {} not resolved by filterResolver, trying reflection",
-                    filterClass.getName());
-        }
-
-        try {
-            return filterClass.getDeclaredConstructor().newInstance();
-        } catch (ReflectiveOperationException e) {
-            LOG.warn(
-                    "Failed to instantiate per-consumer filter {}: {}",
-                    filterClass.getName(),
-                    e.getMessage());
-            return null;
-        }
     }
 
     // ===================== 协作类懒构建与覆盖点（仅 INIT 状态可覆盖） =====================

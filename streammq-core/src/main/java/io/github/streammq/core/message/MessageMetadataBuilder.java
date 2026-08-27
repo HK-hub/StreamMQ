@@ -189,9 +189,12 @@ public final class MessageMetadataBuilder {
      * @param key 属性 Key
      * @param value 属性 Value
      * @return this
+     * @throws NullPointerException 如果 key 或 value 为 null（立即失败，避免延迟到属性快照时才抛出）
      */
     public MessageMetadataBuilder property(String key, String value) {
-        this.properties.put(Objects.requireNonNull(key, "key"), value);
+        this.properties.put(
+                Objects.requireNonNull(key, "property key"),
+                Objects.requireNonNull(value, "property value"));
         return this;
     }
 
@@ -214,9 +217,12 @@ public final class MessageMetadataBuilder {
      * @param key 属性 Key
      * @param value 属性 Value
      * @return this
+     * @throws NullPointerException 如果 key 或 value 为 null（立即失败，避免延迟到属性快照时才抛出）
      */
     public MessageMetadataBuilder userProperty(String key, String value) {
-        this.userProperties.put(Objects.requireNonNull(key, "key"), value);
+        this.userProperties.put(
+                Objects.requireNonNull(key, "userProperty key"),
+                Objects.requireNonNull(value, "userProperty value"));
         return this;
     }
 

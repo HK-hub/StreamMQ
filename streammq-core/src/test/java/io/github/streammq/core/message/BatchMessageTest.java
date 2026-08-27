@@ -83,14 +83,12 @@ class BatchMessageTest {
         }
 
         @Test
-        @DisplayName("addAll 传入 null 不影响 builder")
+        @DisplayName("addAll 传入 null 抛 IllegalArgumentException（与 add null 校验对称）")
         void addAllNull() {
-            BatchMessage<String> batch =
-                    BatchMessage.<String>withTopic("topic")
-                            .addAll(null)
-                            .add(newMessage("topic", "b"))
-                            .build();
-            assertThat(batch.size()).isEqualTo(1);
+            BatchMessage.Builder<String> builder = BatchMessage.withTopic("topic");
+            assertThatThrownBy(() -> builder.addAll(null))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("messages list must not be null");
         }
 
         @Test

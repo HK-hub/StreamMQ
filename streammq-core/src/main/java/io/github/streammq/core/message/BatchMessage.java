@@ -128,12 +128,15 @@ public final class BatchMessage<T> {
          *
          * @param messages 消息列表
          * @return this
+         * @throws IllegalArgumentException 如果 {@code messages} 为 null（与 {@link #add(Message)} 的
+         *     null 校验对称，避免静默忽略）
          */
         public Builder<T> addAll(List<Message<T>> messages) {
-            if (Objects.nonNull(messages)) {
-                for (Message<T> m : messages) {
-                    add(m);
-                }
+            if (Objects.isNull(messages)) {
+                throw new IllegalArgumentException("messages list must not be null");
+            }
+            for (Message<T> m : messages) {
+                add(m);
             }
             return this;
         }

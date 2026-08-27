@@ -30,6 +30,10 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
     private final List<Message<T>> receivedMessages = new ArrayList<>();
     private final AtomicInteger successCount = new AtomicInteger(0);
     private final AtomicInteger failCount = new AtomicInteger(0);
+
+    /** 当前 latch 已通过存量补偿的数量（原子跟踪，防止补偿超量 countDown） */
+    private final AtomicInteger compensatedCount = new AtomicInteger(0);
+
     private final List<Exception> exceptions = new ArrayList<>();
     private volatile CountDownLatch latch;
 
@@ -106,6 +110,7 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
             exceptions.clear();
         }
         latch = null;
+        compensatedCount.set(0);
         nextAction = ConsumeAction.SUCCESS;
         shouldFail = false;
         failAfterCount = Integer.MAX_VALUE;
@@ -127,12 +132,7 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
         // 与 onMessage 的 countDown 在同一把锁下完成"创建 latch + 补偿已收消息"，
         // 消除并发到达的消息被重复计数导致 latch 提前归零的竞态
         synchronized (this) {
-            CountDownLatch fresh = new CountDownLatch(expectedCount);
-            int alreadyReceived = receivedMessages.size();
-            for (int i = 0; i < Math.min(alreadyReceived, expectedCount); i++) {
-                fresh.countDown();
-            }
-            this.latch = fresh;
+            installLatch(expectedCount);
         }
         if (!latch.await(timeoutMillis, TimeUnit.MILLISECONDS)) {
             throw new AssertionError(
@@ -146,14 +146,36 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
     /**
      * 预设置 latch，用于在发送消息前初始化等待。
      *
+     * <p>与 {@link #awaitMessages(int, long)} 共用「创建 latch + 补偿存量」逻辑：对已到达的存量消息逐条补偿（此前实现只补偿一次，
+     * expectedCount&gt;1 且消息已全部到达时调用方会永久挂起）；补偿数量经 {@code compensatedCount} 原子跟踪并封顶于期望值， 防止重复补偿导致超量
+     * countDown。
+     *
      * @param expectedCount 期望的消息数量
      */
     public void prepareAwait(int expectedCount) {
-        this.latch = new CountDownLatch(expectedCount);
-        // 检查是否已经收到了足够的消息
-        if (getReceivedCount() >= expectedCount) {
-            this.latch.countDown();
+        // 与 onMessage 的 countDown 在同一把锁下完成"创建 latch + 补偿存量"，
+        // 保证任一消息要么被补偿计数、要么触发新 latch，二者只取其一
+        synchronized (this) {
+            installLatch(expectedCount);
         }
+    }
+
+    /**
+     * 在持有 {@code this} 锁的前提下创建新 latch 并补偿已到达的存量消息。
+     *
+     * @param expectedCount 期望的消息数量
+     */
+    private void installLatch(int expectedCount) {
+        CountDownLatch fresh = new CountDownLatch(expectedCount);
+        int alreadyArrived = receivedMessages.size();
+        // 逐条补偿存量消息；封顶于 expectedCount，且以原子计数防重复补偿超量
+        int compensate = Math.min(alreadyArrived, expectedCount);
+        compensatedCount.set(0);
+        for (int i = 0; i < compensate && compensatedCount.get() < expectedCount; i++) {
+            fresh.countDown();
+            compensatedCount.incrementAndGet();
+        }
+        this.latch = fresh;
     }
 
     /**

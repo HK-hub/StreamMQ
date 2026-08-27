@@ -15,10 +15,23 @@ import org.junit.jupiter.api.Test;
 class CloudK8sPropertiesTest {
 
     @Test
-    @DisplayName("默认 enabled 为 true")
-    void defaultEnabledIsTrue() {
+    @DisplayName("默认 enabled 为 false（模块默认关闭，需显式开启）")
+    void defaultEnabledIsFalse() {
         CloudK8sProperties properties = new CloudK8sProperties();
-        assertThat(properties.isEnabled()).isTrue();
+        assertThat(properties.isEnabled()).isFalse();
+    }
+
+    @Test
+    @DisplayName("默认 operatorWatchAllNamespaces 为 true 且 watch 列表为空")
+    void defaultOperatorWatchSettings() {
+        CloudK8sProperties properties = new CloudK8sProperties();
+        assertThat(properties.isOperatorWatchAllNamespaces()).isTrue();
+        assertThat(properties.getOperatorWatchNamespaces()).isNull();
+
+        properties.setOperatorWatchAllNamespaces(false);
+        properties.setOperatorWatchNamespaces(java.util.List.of("ns-a", "ns-b"));
+        assertThat(properties.isOperatorWatchAllNamespaces()).isFalse();
+        assertThat(properties.getOperatorWatchNamespaces()).containsExactly("ns-a", "ns-b");
     }
 
     @Test

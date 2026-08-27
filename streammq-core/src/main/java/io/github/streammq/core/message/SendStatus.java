@@ -17,11 +17,5 @@ public enum SendStatus {
     SEND_OK,
 
     /** 发送失败（异常、超时等） */
-    SEND_FAILED,
-
-    /** 从节点未就绪（多副本场景，0.1.0 暂不产生，预留） */
-    SLAVE_NOT_READY,
-
-    /** 刷盘超时（0.1.0 暂不产生，预留） */
-    FLUSH_DISK_TIMEOUT
+    SEND_FAILED
 }

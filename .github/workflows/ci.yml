@@ -134,6 +134,44 @@ jobs:
       - name: Run integration tests
         run: mvn verify
 
+      # Tripwire：集成测试若因 Redis service 容器异常被整体跳过，mvn verify 仍会"绿色"通过。
+      # 此步骤解析 failsafe 报告，校验实际执行的 IT 数量下限与跳过率上限，防止静默失效。
+      - name: Integration test tripwire (detect silent Redis-service breakage)
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import sys
+          import xml.etree.ElementTree as ET
+
+          files = glob.glob('**/failsafe-reports/*.xml', recursive=True)
+          if not files:
+              print("::error::no failsafe-reports/*.xml found — integration tests never ran")
+              sys.exit(1)
+
+          total = skipped = 0
+          for path in files:
+              root = ET.parse(path).getroot()
+              total += int(root.get('tests', 0))
+              skipped += int(root.get('skipped', 0))
+
+          executed = total - skipped
+          print(f"Failsafe totals: tests={total} skipped={skipped} executed={executed}")
+
+          if executed < 80:
+              print("::error::integration tests executed below floor "
+                    f"(executed={executed} < 80). Likely cause: the Redis service container "
+                    "is unhealthy and ITs were silently skipped. Check redis service logs.")
+              sys.exit(1)
+
+          if skipped * 2 > total:
+              print("::error::more than 50% of integration tests were skipped "
+                    f"(skipped={skipped}/{total}). Likely cause: Redis unavailable to tests.")
+              sys.exit(1)
+
+          print("Tripwire OK: integration tests executed above floor and skip rate within limit.")
+          PY
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -147,6 +185,7 @@ jobs:
 
   security:
     name: Dependency vulnerability scan (OWASP)
+    needs: [test]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
@@ -161,3 +200,15 @@ jobs:
 
       - name: Run OWASP Dependency-Check
         run: mvn verify -Dowasp.skip=false -DskipTests
+        env:
+          # 可选：仓库 Secret 中配置 NVD_API_KEY 提升 NVD 查询限额；未配置时空串透传（匿名限速模式）
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY || '' }}
+
+      - name: Upload dependency-check reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-reports
+          path: |
+            **/target/dependency-check-report.html
+          if-no-files-found: warn

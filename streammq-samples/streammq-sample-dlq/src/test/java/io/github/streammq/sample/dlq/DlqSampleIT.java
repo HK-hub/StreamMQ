@@ -62,7 +62,7 @@ import org.springframework.test.context.TestPropertySource;
 @TestPropertySource(properties = {"spring.redis.host=127.0.0.1", "spring.redis.port=6379"})
 @DisplayName("DLQ 示例集成测试")
 @EnabledIf(
-        value = "io.github.streammq.core.util.RedisAvailability#localhostAvailable",
+        value = "io.github.streammq.test.util.RedisAvailability#localhostAvailable",
         disabledReason = "Redis not available at localhost:6379")
 class DlqSampleIT {
 

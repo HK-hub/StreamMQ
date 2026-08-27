@@ -247,6 +247,53 @@ class StreamMQMessageBinderTest {
     }
 
     @Test
+    @DisplayName("入站 traceparent/tracestate 头不复制进 outbound userProperties（保留头过滤）")
+    void messageHandler_reservedTraceHeaders_skipped() throws Exception {
+        // Given
+        when(producerDestination.getName()).thenReturn("trace-topic");
+        java.util.concurrent.atomic.AtomicReference<io.github.streammq.core.message.Message<?>>
+                captured = new java.util.concurrent.atomic.AtomicReference<>();
+        SendResult sendResult =
+                new SendResult(
+                        new MessageId("1-0"),
+                        "trace-topic",
+                        null,
+                        SendStatus.SEND_OK,
+                        System.currentTimeMillis(),
+                        null,
+                        null);
+        when(template.syncSend(any(), any(SendOptions.class)))
+                .thenAnswer(
+                        invocation -> {
+                            captured.set(invocation.getArgument(0));
+                            return sendResult;
+                        });
+
+        StreamMQProducerProperties extension = new StreamMQProducerProperties();
+        ExtendedProducerProperties<StreamMQProducerProperties> producerProperties =
+                new ExtendedProducerProperties<>(extension);
+        MessageHandler handler =
+                binder.createProducerMessageHandler(producerDestination, producerProperties, null);
+
+        Map<String, Object> headers = new HashMap<>();
+        headers.put("traceparent", "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01");
+        headers.put("tracestate", "vendor=1");
+        headers.put("custom-header", "kept");
+        org.springframework.messaging.Message<String> springMessage =
+                new GenericMessage<>("hello", headers);
+
+        // When
+        handler.handleMessage(springMessage);
+
+        // Then
+        io.github.streammq.core.message.Message<?> sent = captured.get();
+        assertThat(sent).isNotNull();
+        assertThat(sent.getUserProperties()).doesNotContainKey("traceparent");
+        assertThat(sent.getUserProperties()).doesNotContainKey("tracestate");
+        assertThat(sent.getUserProperties()).containsEntry("custom-header", "kept");
+    }
+
+    @Test
     @DisplayName("StreamMQBinderHealthIndicator 容器运行中报告 UP")
     void healthIndicator_containerRunning_shouldReportUp() {
         when(listenerContainer.isRunning()).thenReturn(true);

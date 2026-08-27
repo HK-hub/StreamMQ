@@ -33,6 +33,13 @@
     </modules>
 
     <dependencies>
+        <!-- 测试基础设施公共件（PING 探测等，test scope 专用） -->
+        <dependency>
+            <groupId>io.github.streammq</groupId>
+            <artifactId>streammq-test-support</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- 示例公共依赖 -->
         <dependency>
             <groupId>io.github.streammq</groupId>

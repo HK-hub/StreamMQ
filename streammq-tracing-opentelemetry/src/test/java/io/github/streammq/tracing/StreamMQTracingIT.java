@@ -84,7 +84,7 @@ import org.springframework.test.context.DynamicPropertySource;
 @DirtiesContext
 @DisplayName("StreamMQ Tracing 真实集成测试")
 @EnabledIf(
-        value = "io.github.streammq.core.util.RedisAvailability#localhostAvailable",
+        value = "io.github.streammq.test.util.RedisAvailability#localhostAvailable",
         disabledReason = "Redis not available at localhost:6379")
 class StreamMQTracingIT {
 

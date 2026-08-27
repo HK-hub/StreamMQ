@@ -50,6 +50,7 @@ public final class MessageBuilder<T> {
     private String bornHost;
     private int reconsumeTimes;
     private String transactionId;
+    private MessageId messageId;
 
     private MessageBuilder() {}
 
@@ -113,7 +114,8 @@ public final class MessageBuilder<T> {
                         .bornTimestamp(message.getBornTimestamp())
                         .bornHost(message.getBornHost())
                         .reconsumeTimes(message.getReconsumeTimes())
-                        .transactionId(message.getTransactionId());
+                        .transactionId(message.getTransactionId())
+                        .messageId(message.getMessageId());
         builder.properties.putAll(message.getProperties());
         builder.userProperties.putAll(message.getUserProperties());
         if (Objects.nonNull(message.getDelayLevel())) {
@@ -294,6 +296,17 @@ public final class MessageBuilder<T> {
     }
 
     /**
+     * 设置消息 ID（对应 Redis Stream Entry ID；一般由框架在消费/重试/派生场景填入）。
+     *
+     * @param messageId 消息 ID，可为 null 表示未设置
+     * @return this
+     */
+    public MessageBuilder<T> messageId(MessageId messageId) {
+        this.messageId = messageId;
+        return this;
+    }
+
+    /**
      * 设置已重试消费次数。
      *
      * @param reconsumeTimes 重试次数
@@ -334,6 +347,6 @@ public final class MessageBuilder<T> {
                         host,
                         transactionId,
                         reconsumeTimes);
-        return message;
+        return Objects.nonNull(messageId) ? message.withMessageId(messageId) : message;
     }
 }

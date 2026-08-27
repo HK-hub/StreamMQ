@@ -12,7 +12,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 /**
  * StreamMQ 云原生 K8s 增强模块配置属性。
  *
- * <p>通过 {@code streammq.cloud.k8s.*} 前缀配置 K8s 环境下的增强行为。
+ * <p>通过 {@code streammq.cloud.k8s.*} 前缀配置 K8s 环境下的增强行为。 模块<b>默认关闭</b>（{@code enabled=false}），
+ * 与自动装配的 {@code matchIfMissing=false} 语义一致， 需显式配置 {@code enabled=true} 开启。
  *
  * <p>典型配置示例：
  *
@@ -51,8 +52,8 @@ public class CloudK8sProperties {
             io.github.streammq.cloud.k8s.operator.StreamMQK8sDefaults
                     .DEFAULT_RECONCILE_INTERVAL_SECONDS;
 
-    /** 是否启用 K8s 云原生增强模块，默认开启 */
-    private boolean enabled = true;
+    /** 是否启用 K8s 云原生增强模块，默认关闭（需显式配置 enabled=true 开启） */
+    private boolean enabled = false;
 
     /** 优雅关闭等待处理中消息完成的最长时间（毫秒） */
     private long gracefulShutdownTimeoutMs = DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT_MS;
@@ -85,11 +86,37 @@ public class CloudK8sProperties {
     /** ConfigMap 热更新 watch 命名空间列表（默认 default） */
     private java.util.List<String> configWatchNamespaces;
 
+    /** Operator 是否监听全部命名空间（默认 true；为 false 时使用 {@link #operatorWatchNamespaces}） */
+    private boolean operatorWatchAllNamespaces = true;
+
+    /**
+     * Operator 监听的命名空间列表（仅当 {@code operator.watch-all-namespaces=false} 时生效）。
+     *
+     * <p>注意：收敛到指定命名空间时，部署仍需对应命名空间的读权限，但不再要求 ClusterRole 全局 watch 权限。
+     */
+    private java.util.List<String> operatorWatchNamespaces;
+
     public java.util.List<String> getConfigWatchNamespaces() {
         return configWatchNamespaces;
     }
 
     public void setConfigWatchNamespaces(java.util.List<String> namespaces) {
         this.configWatchNamespaces = namespaces;
+    }
+
+    public boolean isOperatorWatchAllNamespaces() {
+        return operatorWatchAllNamespaces;
+    }
+
+    public void setOperatorWatchAllNamespaces(boolean watchAllNamespaces) {
+        this.operatorWatchAllNamespaces = watchAllNamespaces;
+    }
+
+    public java.util.List<String> getOperatorWatchNamespaces() {
+        return operatorWatchNamespaces;
+    }
+
+    public void setOperatorWatchNamespaces(java.util.List<String> namespaces) {
+        this.operatorWatchNamespaces = namespaces;
     }
 }

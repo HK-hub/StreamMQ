@@ -6,6 +6,7 @@
 package io.github.streammq.adapter.redisson.compression;
 
 import io.github.streammq.core.compression.CompressionCodec;
+import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.exception.StreamMQException;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -32,6 +33,14 @@ public class GzipCompressionCodec implements CompressionCodec {
 
     /** 默认缓冲区大小（4KB） */
     private static final int BUFFER_SIZE = 4096;
+
+    /**
+     * 解压输出上限（16MB）：防御解压炸弹（zip bomb）。
+     *
+     * <p>恶意/损坏的 GZIP 流可用极小密文诱导解压器展开数 GB 明文导致 OOM。 解压累计输出超过该上限立即抛 {@link
+     * SerializationException}——上游毒丸消息路径会将其路由到 DLQ，不会拖垮消费线程。
+     */
+    public static final long MAX_EXPANDED_BYTES = 16L * 1024 * 1024;
 
     @Override
     public byte[] compress(byte[] data) {
@@ -61,7 +70,13 @@ public class GzipCompressionCodec implements CompressionCodec {
                 ByteArrayOutputStream bos = new ByteArrayOutputStream()) {
             byte[] buffer = new byte[BUFFER_SIZE];
             int n;
+            long expanded = 0;
             while ((n = gzip.read(buffer)) != -1) {
+                expanded += n;
+                if (expanded > MAX_EXPANDED_BYTES) {
+                    throw new SerializationException(
+                            "decompressed payload exceeds limit " + MAX_EXPANDED_BYTES + " bytes");
+                }
                 bos.write(buffer, 0, n);
             }
             return bos.toByteArray();

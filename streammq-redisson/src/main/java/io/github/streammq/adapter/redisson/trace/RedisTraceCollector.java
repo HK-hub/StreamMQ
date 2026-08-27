@@ -55,9 +55,27 @@ public class RedisTraceCollector implements TraceCollector {
     public static final String FIELD_TRACE_ID = "traceId";
     public static final String FIELD_ATTRIBUTES = "attributes";
 
+    /** 追踪 Stream 默认近似 MAXLEN：防止高频追踪写入无界增长拖垮 Redis 内存 */
+    public static final int DEFAULT_MAX_STREAM_LEN = 100_000;
+
+    /** 追踪日期 Key 的保留时长（7 天）：过期自动清理，无需外部运维 */
+    static final java.time.Duration TRACE_KEY_TTL = java.time.Duration.ofDays(7);
+
     private final RedissonClient redisson;
     private final String namespace;
     private final ObjectMapper objectMapper;
+
+    /** 追踪 Stream 近似 MAXLEN（可通过 {@link #setMaxStreamLen(int)} 覆盖；&lt;=0 表示不限制） */
+    private volatile int maxStreamLen = DEFAULT_MAX_STREAM_LEN;
+
+    /**
+     * 设置追踪 Stream 的近似 MAXLEN（XADD MAXLEN ~）。
+     *
+     * @param maxStreamLen 最大长度（&lt;=0 表示不限制）
+     */
+    public void setMaxStreamLen(int maxStreamLen) {
+        this.maxStreamLen = maxStreamLen;
+    }
 
     /**
      * 构造 Redis 追踪收集器。
@@ -142,13 +160,27 @@ public class RedisTraceCollector implements TraceCollector {
     /**
      * 将追踪记录写入当天的 trace Stream。
      *
+     * <p>每次 XADD 附加近似 MAXLEN 截断（默认 {@link #DEFAULT_MAX_STREAM_LEN}，可经 setter 覆盖）， 并对日期 Key 施加 7 天
+     * EXPIRE——双重兜底防止追踪流无界增长。保持同步写入语义。
+     *
      * @param fields Stream Entry 字段
      */
     private void writeTrace(Map<String, String> fields) {
         String date = LocalDate.now().format(DATE_FMT);
         String traceKey = StreamMQKeys.traceStream(namespace, date);
         RStream<String, String> stream = redisson.getStream(traceKey);
-        stream.add(StreamAddArgs.entries(fields));
+        int limit = maxStreamLen;
+        if (limit > 0) {
+            stream.add(StreamAddArgs.entries(fields).trimNonStrict().maxLen(limit).noLimit());
+        } else {
+            stream.add(StreamAddArgs.entries(fields));
+        }
+        try {
+            stream.expire(TRACE_KEY_TTL);
+        } catch (RuntimeException ex) {
+            // TTL 设置失败不影响追踪写入主流程（MAXLEN 已兜底内存增长）
+            LOG.debug("Trace key expire failed: {}: {}", traceKey, ex.getMessage());
+        }
     }
 
     /**

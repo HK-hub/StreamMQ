@@ -130,6 +130,10 @@ create_demo_app() {
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
     </dependencies>
 
     <build>
@@ -176,6 +180,41 @@ public class DemoApplication {
 }
 JAVA_EOF
 
+    # 创建启动即发送演示消息的 Runner（应用就绪后自动发送一条演示消息）
+    cat > "$TEMP_DIR/src/main/java/com/example/demo/DemoRunner.java" << 'JAVA_EOF'
+package com.example.demo;
+
+import io.github.streammq.core.message.SendResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.ApplicationArguments;
+import org.springframework.boot.ApplicationRunner;
+import org.springframework.stereotype.Component;
+
+/**
+ * 应用启动完成后自动发送一条演示消息，形成「发送 → 消费」闭环。
+ * 对齐 streammq-sample-quickstart 的 DemoRunner 模式。
+ */
+@Component
+public class DemoRunner implements ApplicationRunner {
+
+    private static final Logger log = LoggerFactory.getLogger(DemoRunner.class);
+
+    private final OrderService orderService;
+
+    public DemoRunner(OrderService orderService) {
+        this.orderService = orderService;
+    }
+
+    @Override
+    public void run(ApplicationArguments args) {
+        log.info("DemoRunner: 发送演示消息...");
+        SendResult result = orderService.sendOrder("demo-001", "Hello StreamMQ");
+        log.info("DemoRunner: 演示消息已发送, result={}", result);
+    }
+}
+JAVA_EOF
+
     # 创建消息发送 Service
     cat > "$TEMP_DIR/src/main/java/com/example/demo/OrderService.java" << 'JAVA_EOF'
 package com.example.demo;
@@ -216,21 +255,21 @@ import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.message.Message;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 @Component
 @StreamMQConsumer(topic = "order-topic", consumerGroup = "order-consumer-group")
 public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> {
 
+    private static final Logger log = LoggerFactory.getLogger(OrderConsumer.class);
+
     @Override
     public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
-        System.out.println("========================================");
-        System.out.println(" [StreamMQ Demo] 收到订单消息");
-        System.out.println("   消息ID: " + message.getId());
-        System.out.println("   Keys:   " + message.getKeys());
-        System.out.println("   Tag:    " + message.getTag());
-        System.out.println("   内容:   " + message.getBody());
-        System.out.println("========================================");
+        // 「收到消息」为演示脚本的轮询标记行，请勿删除
+        log.info("[StreamMQ Demo] 收到消息: keys={}, tag={}, body={}",
+                message.getKeys(), message.getTag(), message.getBody());
         return ConsumeAction.SUCCESS;
     }
 }
@@ -250,45 +289,43 @@ build_and_run() {
     log_step "启动演示应用..."
     log_info "等待应用启动（约 10 秒）..."
 
-    mvn spring-boot:run &
+    # 应用日志重定向到文件：供消费检测轮询与失败诊断使用
+    mvn spring-boot:run > "$TEMP_DIR/app.log" 2>&1 &
     APP_PID=$!
 
     sleep 10
 
     if kill -0 "$APP_PID" 2>/dev/null; then
-        log_info "应用已启动 (PID: $APP_PID)"
+        log_info "应用已启动 (PID: $APP_PID)，日志: $TEMP_DIR/app.log"
     else
         log_error "应用启动失败，请检查日志"
+        tail -n 50 "$TEMP_DIR/app.log" || true
         exit 1
     fi
 }
 
-send_test_message() {
-    log_step "发送测试消息..."
+wait_for_consumption() {
+    log_step "等待消费者接收演示消息（最长 60 秒）..."
+    log_info "演示应用启动后已自动发送一条消息（DemoRunner），此处轮询应用日志确认消费。"
 
-    # 注意：演示应用本身未暴露任何 REST 触发接口，此处仅做健康检查，
-    # 实际消息发送需在应用中调用 OrderService/OrderProducer 发送，或运行测试触发发送。
-    curl -s -X POST "http://localhost:8080/actuator/health" &>/dev/null || true
+    local waited=0
+    while [ "$waited" -lt 60 ]; do
+        if grep -q "收到消息" "$TEMP_DIR/app.log" 2>/dev/null; then
+            log_info "消费者已成功接收演示消息 ✓"
+            return 0
+        fi
+        sleep 2
+        waited=$((waited + 2))
+    done
 
-    log_info "正在发送示例订单消息..."
-    log_info "（由于 StreamMQ 演示应用已在运行，消息将自动被消费者接收）"
-    log_info ""
-    log_info "消息发送触发方式（演示应用未内置 REST 触发接口）："
-    log_info "  1. 在应用中调用 OrderProducer 发送消息"
-    log_info "  2. 运行测试触发发送"
-    log_info ""
-    log_info "如需通过 REST 手动测试，可在应用中添加 REST Controller 调用 OrderService："
-    log_info ""
-    log_info "  @RestController"
-    log_info "  public class DemoController {"
-    log_info "      private final OrderService orderService;"
-    log_info "      "
-    log_info "      @PostMapping('/send')"
-    log_info "      public SendResult send(@RequestParam String id, @RequestParam String content) {"
-    log_info "          return orderService.sendOrder(id, content);"
-    log_info "      }"
-    log_info "  }"
-    log_info ""
+    log_error "超时（60s）未检测到消息被消费，退出码非零。失败诊断信息如下："
+    log_error "--- 应用日志末尾 50 行 ---"
+    tail -n 50 "$TEMP_DIR/app.log" || true
+    log_error "--- 常见原因排查 ---"
+    log_error "1. Redis 未运行或不在 localhost:6379（redis-cli ping 验证）"
+    log_error "2. 端口 8080/6379 被占用"
+    log_error "3. 残留的消费组位点数据（可更换 namespace 或 flushdb 后重试）"
+    return 1
 }
 
 show_summary() {
@@ -304,11 +341,12 @@ show_summary() {
     echo "║    ├── pom.xml          Maven 配置               ║"
     echo "║    ├── application.yml  应用配置                 ║"
     echo "║    ├── DemoApplication.java  启动类              ║"
+    echo "║    ├── DemoRunner.java       启动即发演示消息      ║"
     echo "║    ├── OrderService.java     消息发送             ║"
     echo "║    └── OrderConsumer.java    消息消费             ║"
     echo "║                                                  ║"
     echo "║  下一步:                                         ║"
-    echo "║    1. 添加 REST Controller 暴露发送接口            ║"
+    echo "║    1. 查看 $TEMP_DIR/app.log 观察发送/消费日志      ║"
     echo "║    2. 访问 http://localhost:8080/actuator/health  ║"
     echo "║    3. 尝试发送延时/事务/顺序消息                   ║"
     echo "║    4. 查看 streammq 管理端点                      ║"
@@ -338,7 +376,7 @@ main() {
     check_prerequisites
     create_demo_app
     build_and_run
-    send_test_message
+    wait_for_consumption
     show_summary
 }
 

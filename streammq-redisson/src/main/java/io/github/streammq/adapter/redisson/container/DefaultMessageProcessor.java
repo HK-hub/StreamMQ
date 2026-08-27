@@ -127,14 +127,32 @@ public class DefaultMessageProcessor implements MessageProcessor {
                 message.getMessageId());
         try {
             // 消费者过滤器检查（全局 + per-consumer + selectorExpression）
-            if (!acceptMessage(message, reg)) {
-                LOG.debug(
-                        "Message filtered: topic={}, tag={}, group={}",
-                        message.getTopic(),
-                        message.getTag(),
-                        reg.getGroup());
-                handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
-                finalAction = ConsumeAction.SUCCESS;
+            try {
+                if (!acceptMessage(message, reg)) {
+                    LOG.debug(
+                            "Message filtered: topic={}, tag={}, group={}",
+                            message.getTopic(),
+                            message.getTag(),
+                            reg.getGroup());
+                    handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
+                    finalAction = ConsumeAction.SUCCESS;
+                    return;
+                }
+            } catch (Exception filterEx) {
+                // 过滤器求值失败 ≠ 不匹配：与消费者抛异常同路径处理（scheduleRetry /
+                // handleReconsumeLater，超限转 DLQ），绝不静默 ACK 丢消息
+                LOG.warn(
+                        "Consumer filter evaluation failed, routing to retry/DLQ"
+                                + " (topic={}, group={}, messageId={}): {}",
+                        reg.getTopic(),
+                        reg.getGroup(),
+                        message.getMessageId(),
+                        filterEx.getMessage(),
+                        filterEx);
+                interceptorChain.notifyException(message, filterEx, InvokeTiming.EXECUTING, ctx);
+                finalAction = ConsumeAction.RECONSUME_LATER;
+                handler.handleAction(
+                        ConsumeAction.RECONSUME_LATER, message, reg, listener, filterEx);
                 return;
             }
 

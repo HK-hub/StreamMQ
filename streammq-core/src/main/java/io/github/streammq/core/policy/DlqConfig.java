@@ -31,9 +31,15 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class DlqConfig {
 
-    /** DLQ 消费失败处理策略实现类 */
+    /**
+     * DLQ 消费失败处理策略实现类。
+     *
+     * <p>程序化 Builder 默认为核心级安全默认 {@link LogDlqFailureStrategy}（WARN 日志 + drop）， 可直接被反射实例化。
+     * 注解上下文（{@code @StreamMQDlqConsumer} 等）中该属性为 {@link DlqFailureStrategy} 接口类型时， 语义为「使用全局
+     * Bean」而非实例化接口——两者不可混淆。
+     */
     @Builder.Default
-    private Class<? extends DlqFailureStrategy> failureStrategyClass = DlqFailureStrategy.class;
+    private Class<? extends DlqFailureStrategy> failureStrategyClass = LogDlqFailureStrategy.class;
 
     /** DLQ 消费失败后的最大重试次数（默认 3） */
     @Builder.Default

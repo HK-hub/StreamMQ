@@ -33,7 +33,8 @@ import org.springframework.messaging.support.ErrorMessage;
  * </ol>
  *
  * <p>消息头透传：Spring Messaging 消息头中的非框架头会被复制为 StreamMQ userProperties， 消费端可通过 {@link
- * io.github.streammq.core.message.Message#getUserProperties()} 读回。
+ * io.github.streammq.core.message.Message#getUserProperties()} 读回。 保留追踪头（{@code traceparent} /
+ * {@code tracestate}）除外——它们由 OTel 生产者拦截器在发送期统一注入， 客户端提供的同名入站头会被丢弃，避免上下文冲突。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -72,6 +73,15 @@ public class StreamMQMessageHandler implements MessageHandler {
 
     /** 用户属性键：Spring Messaging contentType（透传内容类型，确保消费端能正确反序列化） */
     public static final String USER_PROPERTY_CONTENT_TYPE = "contentType";
+
+    /**
+     * 保留追踪头集合：客户端提供的 {@code traceparent} / {@code tracestate} 不允许复制进 outbound userProperties。
+     *
+     * <p>这两个 W3C 头由 OpenTelemetry 生产者拦截器在发送期注入；若入站消息携带的同名头先行写入
+     * userProperties，会与拦截器注入值冲突（后者被覆盖或产生重复键），导致下游提取到错误的父级上下文、链路断裂。
+     */
+    public static final java.util.Set<String> RESERVED_TRACE_HEADERS =
+            java.util.Set.of("traceparent", "tracestate");
 
     private final StreamMessageTemplate template;
     private final String topic;
@@ -257,7 +267,7 @@ public class StreamMQMessageHandler implements MessageHandler {
     }
 
     /**
-     * 从 Spring 消息头中提取用户自定义属性（排除框架内置头与 StreamMQ 专属头）。
+     * 从 Spring 消息头中提取用户自定义属性（排除框架内置头、StreamMQ 专属头与保留追踪头）。
      *
      * @param headers Spring 消息头
      * @return 用户属性 Map
@@ -266,7 +276,10 @@ public class StreamMQMessageHandler implements MessageHandler {
         Map<String, String> userProperties = new HashMap<>();
         headers.forEach(
                 (key, value) -> {
-                    if (isUserHeader(key) && Objects.nonNull(value)) {
+                    if (isUserHeader(key)
+                            && !RESERVED_TRACE_HEADERS.contains(
+                                    key.toLowerCase(java.util.Locale.ROOT))
+                            && Objects.nonNull(value)) {
                         userProperties.put(key, value.toString());
                     }
                 });

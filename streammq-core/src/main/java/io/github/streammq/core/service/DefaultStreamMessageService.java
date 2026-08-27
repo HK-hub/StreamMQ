@@ -96,6 +96,7 @@ public class DefaultStreamMessageService implements StreamMessageService {
         if (timeout <= 0 && retries < 0) {
             return SendOptions.defaults();
         }
-        return SendOptions.of(timeout, retries);
+        // 归一化为 -1 哨兵（未设置），避免把非法的 0/负值透传给 SendOptions.of
+        return SendOptions.of(timeout > 0 ? timeout : -1, retries >= 0 ? retries : -1);
     }
 }

@@ -18,9 +18,9 @@ import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.template.StreamMessageTemplate;
-import io.github.streammq.core.util.RedisAvailability;
 import io.github.streammq.spring.boot.autoconfigure.StreamMQCoreAutoConfiguration;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
+import io.github.streammq.test.util.RedisAvailability;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
@@ -60,7 +60,7 @@ import org.springframework.test.context.ContextConfiguration;
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 @DisplayName("Spring Boot 端到端集成测试")
 @EnabledIf(
-        value = "io.github.streammq.core.util.RedisAvailability#localhostAvailable",
+        value = "io.github.streammq.test.util.RedisAvailability#localhostAvailable",
         disabledReason = "Redis not available at localhost:6379")
 class SpringBootEndToEndIT {
     @BeforeAll

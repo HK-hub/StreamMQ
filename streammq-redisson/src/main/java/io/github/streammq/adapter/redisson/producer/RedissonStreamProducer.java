@@ -364,6 +364,8 @@ public class RedissonStreamProducer implements StreamMessageProducer {
     /**
      * 从 {@link BatchResult#getResponses()} 中按索引解析真实 Stream Entry ID；不可识别时回退占位 ID。
      *
+     * <p>回退时记录 WARN（含原始返回值），便于调用方/运维识别占位 ID 与真实投递结果。
+     *
      * @param responses 批处理各命令的返回结果
      * @param index 命令索引
      * @return 消息 ID
@@ -374,6 +376,17 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             if (response instanceof StreamMessageId streamMessageId) {
                 return MessageId.fromStreamMessageId(streamMessageId);
             }
+            LOG.warn(
+                    "Unrecognized batch response at index {}, fallback to placeholder"
+                            + " messageId: raw={}",
+                    index,
+                    response);
+        } else {
+            LOG.warn(
+                    "Batch response missing at index {} (responses={}), fallback to placeholder"
+                            + " messageId",
+                    index,
+                    Objects.nonNull(responses) ? responses.size() : "null");
         }
         return MessageId.of(System.currentTimeMillis(), 0x7fffffff & UUID.randomUUID().hashCode());
     }
@@ -605,14 +618,20 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         }
     }
 
+    /**
+     * 关闭 Producer 并释放资源。
+     *
+     * <p><b>执行器所有权规则：</b>仅当内部创建的异步执行器（{@code ownsAsyncExecutor == true}）时才执行 {@code shutdown →
+     * awaitTermination → shutdownNow} 关闭序列； 注入的外部执行器（{@link #setAsyncExecutor}）生命周期归提供方， 关闭时仅记录一条
+     * debug 日志立即返回——此前实现无条件 awaitTermination（最长阻塞数秒）并对注入池调用 shutdownNow， 会误杀宿主共享线程池。
+     */
     @Override
     public void close() {
-        if (closed.compareAndSet(false, true)) {
-            if (ownsAsyncExecutor) {
-                asyncExecutor.shutdown();
-            } else {
-                LOG.debug("Injected async executor left open (managed by provider)");
-            }
+        if (!closed.compareAndSet(false, true)) {
+            return;
+        }
+        if (ownsAsyncExecutor) {
+            asyncExecutor.shutdown();
             try {
                 if (!asyncExecutor.awaitTermination(
                         ASYNC_AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
@@ -622,7 +641,9 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                 asyncExecutor.shutdownNow();
                 Thread.currentThread().interrupt();
             }
-            LOG.info("RedissonStreamProducer closed, group={}", group);
+        } else {
+            LOG.debug("Injected async executor left open (managed by provider), group={}", group);
         }
+        LOG.info("RedissonStreamProducer closed, group={}", group);
     }
 }

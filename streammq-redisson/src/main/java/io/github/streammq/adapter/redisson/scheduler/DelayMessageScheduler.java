@@ -316,16 +316,15 @@ public class DelayMessageScheduler implements StreamMQScheduler {
         }
     }
 
-    private void doTransferExpired(RScoredSortedSet<String> zset, String msgId, String label) {
+    void doTransferExpired(RScoredSortedSet<String> zset, String msgId, String label) {
         String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
         RMap<String, String> payloadMap = redisson.getMap(payloadKey);
         Map<String, String> fields = payloadMap.readAllMap();
         if (CollectionUtils.isEmpty(fields)) {
-            LOG.warn(
-                    "Delay[{}] payload not found for msgId={}, removing stale schedule entry",
-                    label,
-                    msgId);
-            zset.remove(msgId);
+            // payload 已被 TTL 兜底回收：先登记隔离区（可观测）再移除活跃调度条目，
+            // 不再静默删除——运维可通过隔离区 ZSet 排查/重放
+            ScheduleQuarantine.quarantineAndRemove(
+                    redisson, namespace, "delay", zset, msgId, label);
             return;
         }
 

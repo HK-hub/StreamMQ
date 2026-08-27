@@ -34,7 +34,7 @@ public abstract class AbstractDlqFailureStrategy implements DlqFailureStrategy {
         log.warn(
                 "DLQ consume failed: topic={}, group={}, dlqAttempts={}/{}, reason={}, cause={}",
                 context.originalTopic(),
-                context.dlqReason(),
+                Objects.nonNull(context.consumerGroup()) ? context.consumerGroup() : "unknown",
                 context.dlqAttempts(),
                 context.maxDlqRetryAttempts(),
                 context.dlqReason(),

@@ -15,6 +15,8 @@ import io.github.streammq.core.transaction.TransactionExecutor;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 业务友好的消息发送门面，封装 {@link io.github.streammq.core.template.StreamMessageTemplate}。
@@ -38,6 +40,9 @@ import java.util.concurrent.CompletableFuture;
  * @since 0.1.0
  */
 public interface StreamMessageService extends TransactionExecutor {
+
+    /** 回调派发日志（用户回调异常不应吞掉也不应中断框架流程） */
+    Logger log = LoggerFactory.getLogger(StreamMessageService.class);
 
     // ===================== Message 形态 =====================
 
@@ -136,6 +141,8 @@ public interface StreamMessageService extends TransactionExecutor {
     /**
      * 异步发送（topic + body + 元数据 + 回调通知）。
      *
+     * <p>用户回调抛出的异常会被捕获并记录 WARN 日志（含消息 ID），不会向上传播中断完成线程。
+     *
      * @param topic 主题（必填）
      * @param body 消息体
      * @param metadata 附加元数据，可为 null
@@ -147,15 +154,24 @@ public interface StreamMessageService extends TransactionExecutor {
         asyncSend(topic, body, metadata)
                 .whenComplete(
                         (result, ex) -> {
-                            if (Objects.isNull(ex)) {
-                                callback.onSuccess(result);
-                            } else {
-                                callback.onException(
-                                        ex instanceof RuntimeException re
-                                                ? re
-                                                : new io.github.streammq.core.exception
-                                                        .StreamMQException(
-                                                        "async send failed", ex));
+                            try {
+                                if (Objects.isNull(ex)) {
+                                    callback.onSuccess(result);
+                                } else {
+                                    callback.onException(
+                                            ex instanceof RuntimeException re
+                                                    ? re
+                                                    : new io.github.streammq.core.exception
+                                                            .StreamMQException(
+                                                            "async send failed", ex));
+                                }
+                            } catch (Throwable dispatchError) {
+                                log.warn(
+                                        "async send callback threw exception: topic={},"
+                                                + " messageId={}",
+                                        topic,
+                                        Objects.nonNull(result) ? result.getMessageId() : "unknown",
+                                        dispatchError);
                             }
                         });
     }

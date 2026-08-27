@@ -138,7 +138,7 @@ public class ListenerConfig {
     @lombok.Builder.Default private final boolean enableMsgTrace = false;
 
     /**
-     * Builder 自定义验证。
+     * 全参构造器：Builder（类级 {@code @Builder} 唯一定义）构建完成后经此构造器统一执行字段校验。
      *
      * <p>验证规则：
      *
@@ -152,7 +152,6 @@ public class ListenerConfig {
      *   <li>shardCount 必须 >= 1（顺序消费时）
      * </ul>
      */
-    @lombok.Builder
     public ListenerConfig(
             String topic,
             String consumerGroup,

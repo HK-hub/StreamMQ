@@ -23,6 +23,7 @@
         <module>streammq-diagnostics</module>
         <module>streammq-kubernetes</module>
         <module>streammq-spring-cloud-stream-binder</module>
+        <module>streammq-test-support</module>
         <module>streammq-test</module>
         <module>streammq-samples</module>
         <module>streammq-benchmark</module>
@@ -536,7 +537,7 @@
                     <autoPublish>false</autoPublish>
                     <waitUntil>validated</waitUntil>
                     <!-- 示例与压测模块不发布到中央仓库 -->
-                    <excludeArtifacts>streammq-samples,streammq-sample-quickstart,streammq-sample-transaction,streammq-sample-tracing,streammq-sample-diagnostics,streammq-sample-interceptor,streammq-sample-orderly,streammq-sample-delay,streammq-sample-dlq,streammq-benchmark</excludeArtifacts>
+                    <excludeArtifacts>streammq-samples,streammq-sample-quickstart,streammq-sample-transaction,streammq-sample-tracing,streammq-sample-diagnostics,streammq-sample-interceptor,streammq-sample-orderly,streammq-sample-delay,streammq-sample-dlq,streammq-benchmark,streammq-test-support</excludeArtifacts>
                 </configuration>
             </plugin>
         </plugins>

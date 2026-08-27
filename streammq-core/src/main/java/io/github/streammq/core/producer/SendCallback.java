@@ -6,6 +6,8 @@
 package io.github.streammq.core.producer;
 
 import io.github.streammq.core.message.SendResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * 异步发送回调。
@@ -34,6 +36,9 @@ import io.github.streammq.core.message.SendResult;
 @FunctionalInterface
 public interface SendCallback {
 
+    /** 发送失败默认日志（空实现改为记录 WARN，保证异常可观测） */
+    Logger log = LoggerFactory.getLogger(SendCallback.class);
+
     /**
      * 发送成功回调。
      *
@@ -44,9 +49,11 @@ public interface SendCallback {
     /**
      * 发送失败回调。
      *
+     * <p>默认实现记录 WARN 日志（含异常堆栈），业务方可按需覆盖以实现告警/重试等逻辑。
+     *
      * @param ex 异常
      */
     default void onException(Throwable ex) {
-        // 默认实现：仅记录，业务方可按需覆盖
+        log.warn("async send failed (default SendCallback.onException)", ex);
     }
 }

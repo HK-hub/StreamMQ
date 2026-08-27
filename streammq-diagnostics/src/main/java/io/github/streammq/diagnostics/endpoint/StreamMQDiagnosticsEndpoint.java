@@ -33,6 +33,15 @@ import org.springframework.web.server.ResponseStatusException;
  *
  * <p>基础路径：{@code /streammq/diagnostics}
  *
+ * <p><b>@apiNote 信任模型（务必知悉）：</b>这些端点挂在<b>应用主端口</b>上、以普通 Spring MVC {@code @Controller} 形式注册，<b>不受
+ * {@code management.endpoints.web.exposure} 控制</b>—— 引入诊断模块并启用装配即注册生效。鉴权仍然强制执行（默认 {@code
+ * DenyAllAuthenticator} 拒绝一切访问）， 但路径本身不经过 Actuator 的管理端口隔离。生产环境建议：
+ *
+ * <ul>
+ *   <li>搭配独立的 {@code management.server.port} 将主业务流量与管理/诊断流量隔离，或
+ *   <li>通过防火墙 / Ingress 规则限制 {@code /streammq/diagnostics/**} 的可达来源
+ * </ul>
+ *
  * <p>本类不使用 {@code @RestController}，而是通过 {@link
  * StreamMQDiagnosticsAutoConfiguration#streamMQDiagnosticsEndpoint} 注册为 Bean，
  * 确保仅在诊断服务与画像服务均就绪时才启用端点，避免组件扫描导致的依赖缺失问题。

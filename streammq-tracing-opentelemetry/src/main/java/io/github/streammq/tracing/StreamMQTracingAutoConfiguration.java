@@ -68,10 +68,13 @@ public class StreamMQTracingAutoConfiguration {
      *       以启用导出
      * </ul>
      *
+     * <p>注意：不显式指定 {@code destroyMethod}——no-op 分支返回的 {@code DefaultOpenTelemetry} 没有 {@code
+     * close()} 方法（此前显式声明会在关闭期产生无意义的 shutdown 噪音）；SDK 分支由 Boot 的推断机制按需处理。
+     *
      * @param properties 追踪配置
      * @return OpenTelemetry 实例
      */
-    @Bean(destroyMethod = "close")
+    @Bean
     @ConditionalOnMissingBean
     public OpenTelemetry streamMQOpenTelemetry(StreamMQTracingProperties properties) {
         String otlpEndpoint = properties.getOtlpEndpoint();

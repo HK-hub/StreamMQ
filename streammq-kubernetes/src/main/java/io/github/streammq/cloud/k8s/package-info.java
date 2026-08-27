@@ -17,7 +17,7 @@
  *       Horizontal Pod Autoscaler 自动扩缩容使用
  * </ul>
  *
- * <p>启用方式：在 {@code application.yml} 中配置：
+ * <p>启用方式：模块默认关闭，需在 {@code application.yml} 中显式配置：
  *
  * <pre>{@code
  * streammq:
@@ -28,6 +28,11 @@
  *       health-endpoint-enabled: true
  *       config-refresh-enabled: false
  * }</pre>
+ *
+ * <p>启用后自动装配注册健康探针（{@link io.github.streammq.cloud.k8s.StreamMQHealthController} / {@link
+ * io.github.streammq.cloud.k8s.StreamMQHealthIndicator}）、优雅关闭 （{@link
+ * io.github.streammq.cloud.k8s.GracefulShutdownHandler}）； Operator / HPA / ConfigMap 热更新组件由 {@code
+ * streammq.cloud.k8s.operator.enabled=true} 子开关控制。
  *
  * <p>当 {@link io.github.streammq.core.listener.StreamMQListenerContainer} 不存在时，
  * 所有探针与指标方法将以降级方式安全返回，不抛出异常。

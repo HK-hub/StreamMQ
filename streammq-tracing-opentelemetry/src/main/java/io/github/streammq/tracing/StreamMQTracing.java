@@ -116,7 +116,7 @@ public class StreamMQTracing {
     /** Tracer 实例 */
     private final Tracer tracer;
 
-    /** 生产者 Span 注册表：按消息引用配对，跨线程安全，容量有界防泄漏 */
+    /** 生产者 Span 注册表：以 W3C traceparent 值为键配对，跨线程安全，容量有界防泄漏 */
     private final BoundedSpanRegistry producerSpans =
             new BoundedSpanRegistry(SPAN_REGISTRY_CAPACITY);
 
@@ -138,15 +138,15 @@ public class StreamMQTracing {
     // ===================== 生产者 Span =====================
 
     /**
-     * 创建生产者 Span，将 W3C TraceContext 注入消息属性，并按消息引用登记 Span。
+     * 创建生产者 Span，将 W3C TraceContext 注入消息属性，并按 traceparent 值登记 Span。
      *
      * <p>在 {@code ProducerInterceptor.beforeSend} 中调用。创建 PRODUCER 类型的 Span （名称 {@value
      * #SPAN_PRODUCER_SEND}），设置 Topic / Tag / 消息 ID 等属性， 并将 W3C {@code traceparent} / {@code
      * tracestate} 写入派生消息的用户属性。
      *
-     * <p><b>跨线程配对：</b>Span 以返回的派生消息实例为键存入有界注册表；发送完成后在 {@code afterSend} / {@code onException}
-     * 回调（可能运行于其他线程）中通过 {@link #endProducerSpan(Message, boolean, String)} 按同一消息引用结束。异步发送场景下
-     * ThreadLocal 配对会失效，因此不使用 ThreadLocal。
+     * <p><b>跨线程配对：</b>Span 以注入的 {@code traceparent} 字符串为键存入有界注册表——该键在 beforeSend 返回的派生消息与 afterSend
+     * / onException 回调收到的消息之间保持一致（同一对象携带同一属性）， 且天然全局唯一； 发送完成后通过 {@link #endProducerSpan(Message,
+     * boolean, String)} 按同一键结束。 异步发送场景下 ThreadLocal 配对会失效，因此不使用 ThreadLocal。
      *
      * @param message 待发送消息
      * @return 携带追踪上下文的派生消息（注入失败时返回原消息）
@@ -163,7 +163,13 @@ public class StreamMQTracing {
             recordStart(span);
             setProducerAttributes(span, message);
             Message<?> enriched = injectTraceContext(span, message);
-            producerSpans.track(enriched, span);
+            String registryKey = extractRegistryKey(enriched);
+            if (Objects.nonNull(registryKey)) {
+                producerSpans.track(registryKey, span, null);
+                return enriched;
+            }
+            // 无有效 traceparent（如 no-op OTel）：立即结束 Span，避免无效条目悬挂
+            endSpan(span, true);
             return enriched;
         } catch (Exception ex) {
             log.warn("注入生产者 Span 失败，降级跳过追踪: {}", ex.getMessage());
@@ -172,7 +178,7 @@ public class StreamMQTracing {
     }
 
     /**
-     * 结束与指定消息配对的生产者 Span（按消息引用查找，跨线程安全）。
+     * 结束与指定消息配对的生产者 Span（按消息携带的 traceparent 键查找，跨线程安全）。
      *
      * <p>在 {@code ProducerInterceptor.afterSend} / {@code onException} 中调用。未找到配对 Span 时
      * 静默跳过；无论成功与否都会从注册表移除条目，保证幂等且不泄漏。
@@ -185,9 +191,13 @@ public class StreamMQTracing {
         if (Objects.isNull(message)) {
             return;
         }
-        Span span = producerSpans.remove(message);
-        if (Objects.nonNull(span)) {
-            endSpan(span, success, errorMessage);
+        String registryKey = extractRegistryKey(message);
+        if (Objects.isNull(registryKey)) {
+            return;
+        }
+        BoundedSpanRegistry.Entry entry = producerSpans.remove(registryKey);
+        if (Objects.nonNull(entry)) {
+            endSpan(entry.span(), success, errorMessage);
         }
     }
 
@@ -429,6 +439,23 @@ public class StreamMQTracing {
     }
 
     // ===================== 内部工具 =====================
+
+    /**
+     * 提取消息携带的追踪配对键（W3C {@code traceparent} 值）。
+     *
+     * <p>查找顺序与 {@link #extractTraceContext(Message)} 一致：先查用户属性，再查系统属性。 该键在同一消息的 before / after
+     * 回调之间稳定，且跨消息全局唯一，适合作为注册表键。
+     *
+     * @param message 消息载体
+     * @return 配对键；无有效 traceparent 时返回 null
+     */
+    private static String extractRegistryKey(Message<?> message) {
+        String traceparent = message.getUserProperties().get(TRACEPARENT_KEY);
+        if (StringUtils.isEmpty(traceparent)) {
+            traceparent = message.getProperties().get(TRACEPARENT_KEY);
+        }
+        return StringUtils.isNotEmpty(traceparent) ? traceparent : null;
+    }
 
     /** 记录 Span 启动纳秒时间。 */
     private void recordStart(Span span) {

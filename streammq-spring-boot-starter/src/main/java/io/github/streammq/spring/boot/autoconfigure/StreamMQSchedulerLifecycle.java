@@ -6,8 +6,11 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.core.scheduler.StreamMQScheduler;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.context.SmartLifecycle;
@@ -37,8 +40,21 @@ public class StreamMQSchedulerLifecycle implements SmartLifecycle {
      */
     public static final int PHASE = Integer.MAX_VALUE - 300;
 
+    /** 调度器状态值：运行中 */
+    public static final String STATUS_RUNNING = "RUNNING";
+
+    /** 调度器状态前缀：启动失败（后接异常信息） */
+    public static final String STATUS_FAILED_PREFIX = "FAILED:";
+
     private final List<StreamMQScheduler> schedulers;
     private volatile boolean running = false;
+
+    /**
+     * 调度器名称 → 运行状态（"RUNNING" / "FAILED:&lt;reason&gt;"）。
+     *
+     * <p>供健康检查等组件读取，使「部分调度器启动失败」对运维可见而非仅停留在日志中。
+     */
+    private final Map<String, String> schedulerStatuses = new ConcurrentHashMap<>();
 
     /**
      * 构造 Lifecycle。
@@ -47,6 +63,15 @@ public class StreamMQSchedulerLifecycle implements SmartLifecycle {
      */
     public StreamMQSchedulerLifecycle(List<StreamMQScheduler> schedulers) {
         this.schedulers = Objects.requireNonNull(schedulers, "schedulers");
+    }
+
+    /**
+     * 返回各调度器的运行状态快照（只读视图）。
+     *
+     * @return 不可变 Map，key 为调度器类简称，value 为 {@code "RUNNING"} 或 {@code "FAILED:<reason>"}
+     */
+    public Map<String, String> getSchedulerStatuses() {
+        return Collections.unmodifiableMap(schedulerStatuses);
     }
 
     @Override
@@ -58,15 +83,14 @@ public class StreamMQSchedulerLifecycle implements SmartLifecycle {
         int totalCount = schedulers.size();
         int failedCount = 0;
         for (StreamMQScheduler scheduler : schedulers) {
+            String name = scheduler.getClass().getSimpleName();
             try {
                 scheduler.start();
+                schedulerStatuses.put(name, STATUS_RUNNING);
             } catch (RuntimeException ex) {
                 failedCount++;
-                LOG.error(
-                        "Failed to start scheduler {}: {}",
-                        scheduler.getClass().getSimpleName(),
-                        ex.getMessage(),
-                        ex);
+                schedulerStatuses.put(name, STATUS_FAILED_PREFIX + ex.getMessage());
+                LOG.error("Failed to start scheduler {}: {}", name, ex.getMessage(), ex);
             }
         }
         if (totalCount == 0) {
@@ -110,6 +134,7 @@ public class StreamMQSchedulerLifecycle implements SmartLifecycle {
             StreamMQScheduler scheduler = schedulers.get(i);
             try {
                 scheduler.stop();
+                schedulerStatuses.remove(scheduler.getClass().getSimpleName());
             } catch (RuntimeException ex) {
                 LOG.error(
                         "Failed to stop scheduler {}: {}",
@@ -118,6 +143,7 @@ public class StreamMQSchedulerLifecycle implements SmartLifecycle {
                         ex);
             }
         }
+        schedulerStatuses.clear();
         running = false;
     }
 

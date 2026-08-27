@@ -6,6 +6,7 @@ First off, thank you for considering contributing to StreamMQ! It's people like 
 
 - [Development Setup](#development-setup)
 - [Git Workflow](#git-workflow)
+- [DCO（开发者原产地证明）](#dco开发者原产地证明)
 - [Code Style](#code-style)
 - [Testing Requirements](#testing-requirements)
 - [Module Architecture](#module-architecture)
@@ -139,9 +140,40 @@ mvn spotless:check
 # 5. Ensure all checks pass
 mvn verify
 
-# 6. Push and create PR
+# 6. Commit with DCO sign-off（见下一节）
+git commit -s -m "feat: add your feature"
+
+# 7. Push and create PR
 git push origin feat/my-feature
 ```
+
+## DCO（开发者原产地证明）
+
+本项目采用 [DCO](https://developercertificate.org/)（Developer Certificate of Origin，开发者原产地证明）。**提交 PR 即表示您声明：该贡献由您本人创作或有权提交，并以 MIT 协议随本项目入库。**
+
+所有提交必须携带 `Signed-off-by` 尾注：
+
+```bash
+git commit -s -m "feat(core): add SQL92 message filter support"
+```
+
+`-s` 会基于当前 Git 配置的 `user.name` / `user.email` 自动附加如下尾注：
+
+```
+Signed-off-by: 张三 <zhangsan@example.com>
+```
+
+常见问题处理：
+
+```bash
+# 忘记签名时，为最近一次提交补签
+git commit --amend -s --no-edit
+
+# 为分支上的全部历史提交批量补签（以 upstream/main 为基线）
+git rebase upstream/main --exec 'git commit --amend -s --no-edit'
+```
+
+注意：`Signed-off-by` 中的姓名与邮箱必须与提交作者信息一致，否则 PR 校验无法通过。
 
 ## Code Style
 

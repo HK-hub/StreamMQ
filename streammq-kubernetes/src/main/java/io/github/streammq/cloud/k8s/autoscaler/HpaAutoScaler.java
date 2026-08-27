@@ -62,7 +62,13 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
     @Autowired(required = false)
     private KubernetesClient kubernetesClient;
 
-    @Autowired private HpaMetricsProvider metricsProvider;
+    /**
+     * HPA 指标提供者（可选注入）。
+     *
+     * <p>自动装配会注册默认实现；若用户显式关闭或自定义装配缺失，此处为 null—— 扫描循环以 WARN 日志降级跳过而非启动失败（belt+braces）。
+     */
+    @Autowired(required = false)
+    private HpaMetricsProvider metricsProvider;
 
     /** 同步间隔（秒） */
     private long syncIntervalSeconds = StreamMQK8sDefaults.DEFAULT_RECONCILE_INTERVAL_SECONDS;
@@ -149,6 +155,13 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
     private void scanAndScale() {
         if (kubernetesClient == null) {
             // KubernetesClient 不可用（非 K8s 环境）时不执行扫描
+            return;
+        }
+        if (metricsProvider == null) {
+            // 指标提供者缺失时无法做出扩缩决策：降级跳过并提示，而非抛 NPE
+            log.warn(
+                    "HpaMetricsProvider not available, skipping HPA scaling decisions"
+                            + " (register a HpaMetricsProvider bean to enable autoscaling)");
             return;
         }
         try {

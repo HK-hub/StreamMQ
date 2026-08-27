@@ -221,4 +221,21 @@ class SimpleSqlSelectorFilterTest {
         SimpleSqlSelectorFilter filter = new SimpleSqlSelectorFilter("name = 'John'");
         assertThat(filter.name()).isEqualTo("SimpleSqlSelectorFilter");
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void evaluationFailureRethrowsInsteadOfMismatch() {
+        // 求值期异常是「失败」而非「不匹配」：必须上抛（IllegalStateException 包装），
+        // 由消费管线按失败路由重试/DLQ——旧实现返回 false 会静默 ACK 丢消息
+        SimpleSqlSelectorFilter filter = new SimpleSqlSelectorFilter("amount > 100");
+
+        Message<String> poisoned = (Message<String>) org.mockito.Mockito.mock(Message.class);
+        org.mockito.Mockito.when(poisoned.getProperties()).thenReturn(java.util.Map.of());
+        org.mockito.Mockito.when(poisoned.getUserProperties())
+                .thenThrow(new RuntimeException("property table corrupted"));
+
+        org.assertj.core.api.Assertions.assertThatThrownBy(() -> filter.accept(poisoned))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("SQL92 selector evaluation failed");
+    }
 }

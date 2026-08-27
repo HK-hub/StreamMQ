@@ -180,7 +180,8 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                             cause,
                             fields,
                             dlqConfig.getMaxDlqRetryAttempts(),
-                            dlqConfig.getDlqRetryDelayMs());
+                            dlqConfig.getDlqRetryDelayMs(),
+                            reg.getGroup());
 
             LOG.info(
                     "Calling dlqFailureStrategy.decide: strategy={}, dlqRetryCount={},"
@@ -232,8 +233,9 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             }
         } catch (RuntimeException ex) {
             // 安全兜底：策略/序列化等内部异常时不得丢弃死信（死信是最后一副本）。
-            // 不 ACK，消息保留在 PEL 中——PelClaimScheduler 会在 idle 超时后重新调度处理，
-            // 与 SECONDARY_DLQ 写入失败分支保持一致的"宁可滞留、不可丢失"语义。
+            // 不 ACK，消息保留在 DLQ Stream 的 PEL 中——DLQ 组注册的 PelClaim DLQ 目标会在
+            // idle 超时后将条目尾部复制重投（copy-tail + ACK 旧条目），与 SECONDARY_DLQ
+            // 写入失败分支保持一致的"宁可滞留、不可丢失"语义。
             LOG.error(
                     "DLQ failure strategy error, keeping message in PEL (topic={}, group={},"
                             + " messageId={}): {}",
@@ -284,6 +286,8 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         try {
             batch.execute();
         } catch (RuntimeException ex) {
+            // 原子批未生效，调度条目未写入：保留 PEL 等待恢复。DLQ 组注册的 PelClaim DLQ
+            // 目标会在 idle 超时后尾部复制重投该条目，消息不会滞留丢失。
             LOG.error(
                     "Failed to schedule DLQ retry, keeping message in PEL (topic={}, group={},"
                             + " messageId={}): {}",
@@ -493,6 +497,9 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         try {
             batch.execute();
         } catch (RuntimeException ex) {
+            // 原子批未生效，调度条目未写入：保留 PEL 等待恢复。并发集群消费组注册的
+            // PelClaim TOPIC/RETRY 目标会在 idle 超时后重投（超限转 DLQ），重启后的
+            // 自身 PEL 排空亦会补齐，消息不会滞留丢失。
             LOG.error(
                     "Failed to schedule retry, keeping message in PEL (topic={}, group={},"
                             + " messageId={}): {}",

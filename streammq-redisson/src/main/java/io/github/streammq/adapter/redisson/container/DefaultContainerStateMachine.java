@@ -66,9 +66,15 @@ public class DefaultContainerStateMachine implements ContainerStateMachine {
         }
     }
 
+    /**
+     * start 第二阶段：STARTING→RUNNING（CAS 迁移）。
+     *
+     * <p>仅当当前状态为 STARTING 时迁移成功；其它状态（并发 stop 已完成、重复启动等）返回 false， 由调用方中止启动——无条件 set 会把竞态中已 STOPPED
+     * 的容器「复活」为 RUNNING（持有已关闭的执行器）。
+     */
     @Override
-    public void markRunning() {
-        state.set(ContainerState.RUNNING);
+    public boolean markRunning() {
+        return state.compareAndSet(ContainerState.STARTING, ContainerState.RUNNING);
     }
 
     @Override

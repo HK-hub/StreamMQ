@@ -37,12 +37,6 @@ public final class StreamMQSpringConstants {
     /** 健康检查配置前缀：streammq.health */
     public static final String PROP_PREFIX_HEALTH = "streammq.health";
 
-    /** 指标配置前缀：streammq.metrics */
-    public static final String PROP_PREFIX_METRICS = "streammq.metrics";
-
-    /** Listener 容器配置前缀：streammq.listener */
-    public static final String PROP_PREFIX_LISTENER = "streammq.listener";
-
     // ==================== 条件装配属性名与值 ====================
     /** 开关属性名：enabled */
     public static final String PROP_NAME_ENABLED = "enabled";
@@ -132,6 +126,9 @@ public final class StreamMQSpringConstants {
 
     /** 健康详情：容器未配置标记值 */
     public static final String HEALTH_VALUE_NOT_CONFIGURED = "NOT_CONFIGURED";
+
+    /** 健康详情：调度器状态快照 */
+    public static final String HEALTH_DETAIL_SCHEDULER_STATUSES = "scheduler.statuses";
 
     private StreamMQSpringConstants() {}
 }

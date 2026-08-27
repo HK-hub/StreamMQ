@@ -7,7 +7,7 @@ streammq:
   namespace: dlq
   producer:
     group: dlq-producer-group
-  consumer:
+  retry:
     max-reconsume-times: 3
 
 redisson:

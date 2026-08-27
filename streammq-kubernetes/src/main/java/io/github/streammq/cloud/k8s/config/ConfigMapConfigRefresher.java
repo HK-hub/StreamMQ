@@ -67,19 +67,49 @@ public class ConfigMapConfigRefresher
     @Autowired(required = false)
     private KubernetesClient kubernetesClient;
 
-    /** 用户委托刷新器（由自动装配注入，缺省为 Noop） */
+    /** 用户委托刷新器（由自动装配注入，缺省为 Noop）。 */
     private final StreamMQConfigRefresher customRefresher;
+
+    /**
+     * 延迟解析的用户委托（构造期不触碰容器，避免自引用循环：本类自身实现 {@link StreamMQConfigRefresher}，若工厂方法在创建期通过 {@code
+     * ObjectProvider#getIfAvailable()} 解析该类型，会把"正在创建中的自己" 当作候选，触发 unresolvable circular reference
+     * 启动失败——红队审查 F-05）。
+     */
+    private final java.util.function.Supplier<StreamMQConfigRefresher> lazyCustomRefresher;
 
     /** watch 命名空间列表（可注入覆盖默认值） */
     private List<String> watchNamespaces;
 
     public ConfigMapConfigRefresher() {
         this.customRefresher = new NoopConfigRefresher();
+        this.lazyCustomRefresher = null;
     }
 
     public ConfigMapConfigRefresher(StreamMQConfigRefresher delegate) {
         this.customRefresher =
                 java.util.Objects.requireNonNullElseGet(delegate, NoopConfigRefresher::new);
+        this.lazyCustomRefresher = null;
+    }
+
+    /** Spring 装配专用：延迟到首次 refresh 回调时才从容器解析用户委托， 彻底规避创建期自类型解析。 */
+    public ConfigMapConfigRefresher(
+            org.springframework.beans.factory.ObjectProvider<StreamMQConfigRefresher>
+                    lazyDelegate) {
+        this.customRefresher = null;
+        java.util.Objects.requireNonNull(lazyDelegate, "lazyDelegate");
+        this.lazyCustomRefresher =
+                () ->
+                        java.util.Objects.requireNonNullElseGet(
+                                lazyDelegate.getIfAvailable(), NoopConfigRefresher::new);
+    }
+
+    /** 取用户委托（优先延迟解析路径，兼容直接注入路径），永不返回 null。 */
+    private StreamMQConfigRefresher customRefresher() {
+        if (lazyCustomRefresher != null) {
+            StreamMQConfigRefresher resolved = lazyCustomRefresher.get();
+            return resolved != null ? resolved : new NoopConfigRefresher();
+        }
+        return customRefresher;
     }
 
     public void setWatchNamespaces(List<String> namespaces) {
@@ -376,16 +406,18 @@ public class ConfigMapConfigRefresher
                 "Refreshing retry policy: maxReconsumeTimes={}, intervals.length={}",
                 maxReconsumeTimes,
                 retryIntervals.length);
-        if (customRefresher != null) {
-            customRefresher.refreshRetryPolicy(maxReconsumeTimes, retryIntervals);
+        var delegate = customRefresher();
+        if (delegate != null) {
+            delegate.refreshRetryPolicy(maxReconsumeTimes, retryIntervals);
         }
     }
 
     @Override
     public void refreshConsumerThreads(int min, int max) {
         log.info("Refreshing consumer threads: min={}, max={}", min, max);
-        if (customRefresher != null) {
-            customRefresher.refreshConsumerThreads(min, max);
+        var delegate = customRefresher();
+        if (delegate != null) {
+            delegate.refreshConsumerThreads(min, max);
         }
     }
 
@@ -395,8 +427,9 @@ public class ConfigMapConfigRefresher
                 "Refreshing scan intervals: retryScanMs={}, delayScanMs={}",
                 retryScanMs,
                 delayScanMs);
-        if (customRefresher != null) {
-            customRefresher.refreshScanInterval(retryScanMs, delayScanMs);
+        var delegate = customRefresher();
+        if (delegate != null) {
+            delegate.refreshScanInterval(retryScanMs, delayScanMs);
         }
     }
 

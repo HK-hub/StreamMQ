@@ -16,6 +16,8 @@ import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.test.ContainerizedRedisServer;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.*;
+import org.openjdk.jmh.infra.Blackhole;
+import org.openjdk.jmh.results.format.ResultFormatType;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
@@ -104,6 +106,7 @@ public class StreamMessageTemplateBenchmark {
     @TearDown(Level.Trial)
     public void teardown() {
         if (redisson != null) {
+            requireFlushAllowed();
             redisson.getKeys().flushdb();
             redisson.shutdown();
         }
@@ -112,11 +115,29 @@ public class StreamMessageTemplateBenchmark {
         }
     }
 
+    /**
+     * 防误删守卫：flushdb 会清空目标 Redis 当前库的全部数据，必须显式授权后才会执行。
+     *
+     * <p>基准默认通过 Testcontainers 拉起独占实例，但切到 {@code -Dstreammq.redis.mode=local} 直连本地/共享 Redis 时，无守卫的
+     * flushdb 可能误删业务数据。
+     */
+    private static void requireFlushAllowed() {
+        if (!Boolean.getBoolean("streammq.benchmark.allowFlush")) {
+            throw new IllegalStateException(
+                    "Destructive operation blocked: benchmark flushdb would ERASE ALL DATA in the"
+                            + " current Redis database. Re-run with"
+                            + " -Dstreammq.benchmark.allowFlush=true to confirm the target Redis is"
+                            + " disposable.\n"
+                            + "破坏性操作已拦截：基准测试将执行 flushdb 清空当前 Redis 数据库的全部数据。请追加"
+                            + " -Dstreammq.benchmark.allowFlush=true 显式确认目标 Redis 可被清空后重试。");
+        }
+    }
+
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
-    public void syncSendThroughput() {
+    public void syncSendThroughput(Blackhole blackhole) {
         for (int i = 0; i < BATCH_SIZE; i++) {
-            template.syncSend(message);
+            blackhole.consume(template.syncSend(message));
         }
     }
 
@@ -127,13 +148,16 @@ public class StreamMessageTemplateBenchmark {
 
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
-    public void asyncSendThroughput() throws Exception {
+    public void asyncSendThroughput(Blackhole blackhole) throws Exception {
         java.util.concurrent.CompletableFuture<?>[] futures =
                 new java.util.concurrent.CompletableFuture[BATCH_SIZE];
         for (int i = 0; i < BATCH_SIZE; i++) {
             futures[i] = template.asyncSend(message);
         }
         java.util.concurrent.CompletableFuture.allOf(futures).join();
+        for (java.util.concurrent.CompletableFuture<?> future : futures) {
+            blackhole.consume(future.join());
+        }
     }
 
     public static void main(String[] args) throws RunnerException {
@@ -145,6 +169,8 @@ public class StreamMessageTemplateBenchmark {
                         .measurementTime(TimeValue.seconds(3))
                         .measurementIterations(5)
                         .forks(1)
+                        .result("target/jmh-template.txt")
+                        .resultFormat(ResultFormatType.TEXT)
                         .build();
         new Runner(opt).run();
     }

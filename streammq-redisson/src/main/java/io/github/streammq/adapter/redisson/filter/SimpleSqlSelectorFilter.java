@@ -11,8 +11,6 @@ import io.github.streammq.core.filter.SqlSelectorFilter;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.util.StringUtils;
 import java.util.Objects;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * 简单 SQL92 选择器过滤器实现。
@@ -34,8 +32,6 @@ import org.slf4j.LoggerFactory;
  * @since 0.1.0
  */
 public class SimpleSqlSelectorFilter extends SqlSelectorFilter {
-
-    private static final Logger LOG = LoggerFactory.getLogger(SimpleSqlSelectorFilter.class);
 
     private final Expression expression;
 
@@ -62,6 +58,15 @@ public class SimpleSqlSelectorFilter extends SqlSelectorFilter {
         }
     }
 
+    /**
+     * 求值 SQL92 表达式。
+     *
+     * <p><b>失败语义契约：</b>解析期错误已在构造器 fail-fast（{@link SelectorParser#buildStrict}）；
+     * 求值期异常（如属性类型与字面量不兼容的类型混淆）属于<b>评估失败</b>而非「不匹配」—— 包装为 {@link IllegalStateException}
+     * 上抛，由消费管线按消费者异常同路径处理（重试/DLQ）。 此前实现捕获后返回 {@code false}，求值失败被静默当作不匹配， 消息以 SUCCESS 处理被 ACK 丢弃。
+     *
+     * @throws IllegalStateException 表达式求值失败（原因为真实异常）
+     */
     @Override
     protected boolean evaluate(Message<?> message) {
         if (Objects.isNull(expression)) {
@@ -69,9 +74,9 @@ public class SimpleSqlSelectorFilter extends SqlSelectorFilter {
         }
         try {
             return expression.evaluate(message);
-        } catch (Exception e) {
-            LOG.warn("Failed to evaluate SQL92 expression: {}", selectorExpression, e);
-            return false;
+        } catch (RuntimeException e) {
+            throw new IllegalStateException(
+                    "SQL92 selector evaluation failed: " + selectorExpression, e);
         }
     }
 

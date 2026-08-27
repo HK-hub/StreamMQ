@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>io.github.streammq</groupId>
+        <artifactId>streammq-parent</artifactId>
+        <version>0.1.0</version>
+    </parent>
+
+    <artifactId>streammq-test-support</artifactId>
+    <name>StreamMQ Test Support</name>
+    <description>StreamMQ 测试基础设施公共件：Redis 可用性探测等零依赖测试工具（仅 test scope 使用，不发布运行时 API）</description>
+
+    <!--
+      零内部依赖的叶子模块：任何模块都可以安全地以 test scope 依赖它，
+      而不会与 streammq-test（依赖 core/redisson/starter 的顶层聚合工具包）形成环。
+    -->
+    <dependencies>
+        <!-- 无 -->
+    </dependencies>
+</project>

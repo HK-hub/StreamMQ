@@ -20,6 +20,8 @@ import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.*;
+import org.openjdk.jmh.infra.Blackhole;
+import org.openjdk.jmh.results.format.ResultFormatType;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
@@ -110,6 +112,7 @@ public class StreamConsumerBenchmark {
         java.util.Arrays.fill(chars, 'x');
         payload = new String(chars);
 
+        requireFlushAllowed();
         redisson.getKeys().flushdb();
 
         RStream<String, String> stream = redisson.getStream(TOPIC);
@@ -163,11 +166,30 @@ public class StreamConsumerBenchmark {
             feeder.interrupt();
         }
         if (redisson != null) {
+            requireFlushAllowed();
             redisson.getKeys().flushdb();
             redisson.shutdown();
         }
         if (redisServer != null) {
             redisServer.stop();
+        }
+    }
+
+    /**
+     * 防误删守卫：flushdb 会清空目标 Redis 当前库的全部数据，必须显式授权后才会执行。
+     *
+     * <p>基准默认通过 Testcontainers 拉起独占实例，但切到 {@code -Dstreammq.redis.mode=local} 直连本地/共享 Redis 时，无守卫的
+     * flushdb 可能误删业务数据。
+     */
+    private static void requireFlushAllowed() {
+        if (!Boolean.getBoolean("streammq.benchmark.allowFlush")) {
+            throw new IllegalStateException(
+                    "Destructive operation blocked: benchmark flushdb would ERASE ALL DATA in the"
+                            + " current Redis database. Re-run with"
+                            + " -Dstreammq.benchmark.allowFlush=true to confirm the target Redis is"
+                            + " disposable.\n"
+                            + "破坏性操作已拦截：基准测试将执行 flushdb 清空当前 Redis 数据库的全部数据。请追加"
+                            + " -Dstreammq.benchmark.allowFlush=true 显式确认目标 Redis 可被清空后重试。");
         }
     }
 
@@ -179,7 +201,7 @@ public class StreamConsumerBenchmark {
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
     @SuppressWarnings("unchecked")
-    public void consumeThroughput() throws Exception {
+    public void consumeThroughput(Blackhole blackhole) throws Exception {
         RStream<String, String> stream = redisson.getStream(TOPIC);
 
         StreamMessageConcurrentlyConsumer<String> consumer = (msg, ctx) -> ConsumeAction.SUCCESS;
@@ -199,6 +221,7 @@ public class StreamConsumerBenchmark {
                 // 真实消费路径包含字段解码（Base64 + 反序列化），而非复用本地对象
                 Message<?> msg = converter.fromStreamFields(entry.getValue(), String.class, TOPIC);
                 consumer.onMessage((Message<String>) msg, createContext(TOPIC, CONSUMER_GROUP));
+                blackhole.consume(msg);
                 ids.add(entry.getKey());
                 processed++;
             }
@@ -208,7 +231,7 @@ public class StreamConsumerBenchmark {
 
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
-    public void messageCreateAndConsume() throws Exception {
+    public void messageCreateAndConsume(Blackhole blackhole) throws Exception {
         StreamMessageConcurrentlyConsumer<String> consumer = (msg, ctx) -> ConsumeAction.SUCCESS;
 
         for (int i = 0; i < BATCH_SIZE; i++) {
@@ -219,17 +242,18 @@ public class StreamConsumerBenchmark {
                             .body(payload)
                             .build();
             consumer.onMessage(msg, createContext(TOPIC, CONSUMER_GROUP));
+            blackhole.consume(msg);
         }
     }
 
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
-    public void serializationRoundTrip() {
+    public void serializationRoundTrip(Blackhole blackhole) {
         JacksonJsonSerializer<String> serializer = new JacksonJsonSerializer<>();
         for (int i = 0; i < BATCH_SIZE; i++) {
             Message<String> msg = MessageBuilder.<String>withTopic(TOPIC).body(payload).build();
             byte[] bytes = serializer.serialize(msg.getBody(), String.class);
-            serializer.deserialize(bytes, String.class);
+            blackhole.consume(serializer.deserialize(bytes, String.class));
         }
     }
 
@@ -280,7 +304,11 @@ public class StreamConsumerBenchmark {
     public static void main(String[] args) throws RunnerException {
         // 与类级注解保持一致（fork 数等由 @Fork/@Warmup/@Measurement 决定），消除结果来源歧义
         Options opt =
-                new OptionsBuilder().include(StreamConsumerBenchmark.class.getSimpleName()).build();
+                new OptionsBuilder()
+                        .include(StreamConsumerBenchmark.class.getSimpleName())
+                        .result("target/jmh-consumer.txt")
+                        .resultFormat(ResultFormatType.TEXT)
+                        .build();
         new Runner(opt).run();
     }
 }

@@ -111,7 +111,7 @@ public final class StreamMQConstants {
     /** 默认消费线程下限 */
     public static final int DEFAULT_CONSUME_THREAD_MIN = 1;
 
-    /** 消费超时取消宽限期默认批量（占位，供配置对齐） */
+    /** 默认单次追踪读取最大条数（Trace 扫描批量上限，默认 10000） */
     public static final int DEFAULT_TRACE_MAX_READ_COUNT = 10_000;
 
     /** DLQ 重试最小延迟下限（毫秒） */

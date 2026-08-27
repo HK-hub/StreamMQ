@@ -73,11 +73,14 @@ import org.redisson.api.StreamMessageId;
  *
  * <p>每个测试方法使用独立的 Topic 与 ConsumerGroup，通过 flushdb 保证数据隔离。
  *
+ * <p>命名说明：类名以 {@code IT} 结尾（{@code *IT}），由 maven-failsafe-plugin 在 {@code mvn verify} 阶段执行；不匹配
+ * surefire 的 {@code *Test} 模式，避免无 Redis 环境下混入单元测试阶段。
+ *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
 @DisplayName("StreamMQ Core Integration Test (Real Redis)")
-class CoreIntegrationTest extends StreamMQTestBase {
+class CoreRedisIntegrationIT extends StreamMQTestBase {
 
     private static final String NAMESPACE = "it-core";
     private static final String PRODUCER_GROUP = "it-core-producer";

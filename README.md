@@ -33,6 +33,8 @@
 | 🖼️ 截图素材清单 | [docs/demo/screenshots/README.md](docs/demo/screenshots/README.md) |
 | 🚀 一键演示脚本 | [docs/demo/quickstart-demo.sh](docs/demo/quickstart-demo.sh) |
 
+> 💡 一键演示脚本已内置发送演示消息（应用启动即自动发送），并在超时未检测到消费时以非零退出码失败，便于录屏一次通过。
+
 ---
 
 ## 目录
@@ -81,7 +83,7 @@
 
 ### 生产就绪
 
-788 个单元测试全绿（`mvn test` 即可复现）；另有 192 个集成测试覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理、PEL 认领、广播消费等场景，在有 Redis 的环境（本地或 CI service 容器）执行 `mvn verify` 时运行，无 Redis 环境自动跳过。
+单元测试 827 个 + 集成测试 197 个（由 surefire/failsafe 报告汇总，`mvn test` / `mvn verify` 可复现；无 Redis 环境 IT 自动跳过并可在 CI 日志核对执行数下限守门），覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理、PEL 认领、广播消费等场景。
 
 ---
 
@@ -143,11 +145,11 @@
 | 底层存储 | Redis Stream | Redis Stream | Redis Stream | NameServer+Broker | Broker+KRaft |
 | 部署复杂度 | **低（仅 Redis）** | 低（仅 Redis） | 低（仅 Redis） | 高（独立集群） | 高（独立集群） |
 | 注解声明式消费 | **支持** | 不支持 | 部分支持 | 支持 | 不支持 |
-| Template 编程模型 | **支持** | 不支持 | 不支持 | 支持 | 不支持 |
+| Template 编程模型 | **支持** | 不支持 | 不支持 | 支持 | 支持（KafkaTemplate，spring-kafka 提供，非注解声明式） |
 | 事务消息 | **支持** | 不支持 | 不支持 | 支持 | 不支持 |
 | 延时消息 | **支持（18 级+任意）** | 不支持 | 不支持 | 支持（18 级） | 不支持 |
 | 顺序消息 | **支持** | 不支持 | 不支持 | 支持 | 支持（分区内） |
-| 死信队列 | **支持（含二级 DLQ）** | 不支持 | 不支持 | 支持 | 不支持 |
+| 死信队列 | **支持（含二级 DLQ）** | 不支持 | 不支持 | 支持 | 支持（spring-kafka DLT/@RetryableTopic，非注解式） |
 | 消息过滤 | **Tag + SQL92** | 不支持 | 不支持 | 支持 | 不支持 |
 | 消息压缩 | **支持（GZIP SPI）** | 不支持 | 不支持 | 支持 | 支持 |
 | 背压控制 | **支持（InflightQueue）** | 不支持 | 不支持 | 支持 | 支持 |
@@ -177,6 +179,10 @@
 ### 序列化性能 (Throughput, ops/s)
 
 测试 1KB 消息体的序列化/反序列化吞吐量（messageCount=1000，批量 1000 次）。
+
+> ⚠️ **方法学修正（v0.1.0 发布前）**：批量序列化基准现已加入 JMH `Blackhole` 消费，防止 JIT 死码消除导致
+> 吞吐虚高。下表为旧实现（无 Blackhole）测得的历史数字，仅供参考；新基线将由 CI 手动基准任务
+> （`benchmark.yml`）重新生成后回填，届时请以新数据为准。
 
 | 序列化器 | Serialize (ops/s) | Deserialize (ops/s) | RoundTrip (ops/s) | 单次序列化 (ops/s) | 单次反序列化 (ops/s) |
 |----------|-------------------|---------------------|-------------------|--------------------|----------------------|
@@ -259,6 +265,8 @@
     </dependency>
 </dependencies>
 ```
+
+> ⚠️ 必须同时引入 `redisson-spring-boot-starter` 以提供 `RedissonClient` Bean；缺失时启动将报 `NoSuchBeanDefinitionException`。
 
 ### 2. 配置
 
@@ -738,6 +746,19 @@ public class CustomMessageSerializer implements MessageSerializer {
 
 > 所有操作均需通过 `ManagementAuthenticator` 鉴权；默认 `DenyAllAuthenticator` 拒绝所有访问（返回 401），需注册 `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` Bean 后开放。管理端点可通过 `streammq.admin.enabled=false` 单独关闭。
 
+> ⚠️ **暴露面注意事项**：
+>
+> - diagnostics 端点挂载在应用**主端口**（MVC 端点实现），不受 `management.endpoints.web.exposure.*` 治理——即使 Actuator 仅暴露 health，`/actuator/streammq/**` 仍随主端口可达，请通过网络层（安全组/Ingress）限制其访问来源；
+> - 若启用了 JMX 暴露，建议将 StreamMQ 端点从 JMX 排除，避免管理能力被二次暴露：
+>
+>   ```yaml
+>   management:
+>     endpoints:
+>       jmx:
+>         exposure:
+>           exclude: "streammq"
+>   ```
+
 ### 链路追踪
 
 StreamMQ 提供两条互补的追踪路径，按需选择：
@@ -748,6 +769,14 @@ StreamMQ 提供两条互补的追踪路径，按需选择：
 | `streammq-tracing-opentelemetry` | 标准 OTel `ProducerInterceptor` / `ConsumerInterceptor`，导出标准 Span | 已有 OpenTelemetry 栈（Collector/Jaeger/Tempo）的链路观测 |
 
 两条路径独立生效、互不依赖；同一应用可同时启用（OTel Span 用于分布式追踪，TraceCollector 用于消息画像）。
+
+**三条追踪开关对照表：**
+
+| 开关 | 作用 | 产物 | 典型组合 |
+|------|------|------|----------|
+| `streammq.tracing.enabled` | TraceCollector SPI 总开关（消息级追踪采集，traceId 透传） | Slf4j 追踪日志 / 自定义 Collector 输出 | 轻量审计；配合诊断模块消息画像 |
+| `streammq.trace.enabled`（+ `streammq.trace.storage=redis`） | 消息轨迹的持久化存储与查询 | Redis Stream 存储的轨迹数据（可经管理端点查询） | 需要事后排查消息流转路径时开启 |
+| `streammq.tracing.otel.enabled` | OpenTelemetry 集成开关（拦截器注入 Span） | 标准 OTLP Span（Jaeger / Tempo / Collector 可视） | 已有 OTel 栈的分布式链路观测 |
 
 ```java
 MDC.put("traceId", "t-001");
@@ -911,23 +940,18 @@ StreamMQ 重视您的安全。遵循以下最佳实践以确保安全部署：
 
 ### 密钥管理
 
-- **accessKey / secretKey 不落日志**：StreamMQ 从不将 `accessKey` / `secretKey` 输出到日志（配置对象的 `toString` 已排除这两个字段），并建议通过环境变量注入。
-- **配置安全存储**：切勿将 `accessKey` 和 `secretKey` 硬编码在代码或公开的配置文件中。生产环境建议使用环境变量、配置中心（如 Nacos、Apollo）或密钥管理服务（如 Vault、AWS Secrets Manager）进行管理。
-- **最小权限原则**：Redis 实例应使用具有最小必要权限的账号，避免使用默认的 `requirepass` 直接复用管理员密码。
+- **凭据不落日志**：StreamMQ 从不将 Redis 密码等鉴权凭据输出到日志，并建议通过环境变量注入。
+- **配置安全存储**：切勿将 Redis 密码硬编码在代码或公开的配置文件中。生产环境建议使用环境变量、配置中心（如 Nacos、Apollo）或密钥管理服务（如 Vault、AWS Secrets Manager）进行管理。
+- **最小权限原则**：Redis 实例应使用具有最小必要权限的账号，避免直接复用管理员密码。
 
 ### 安全配置
 
 ```yaml
-streammq:
-  # accessKey 和 secretKey 推荐通过环境变量注入
-  access-key: ${STREAMMQ_ACCESS_KEY:}
-  secret-key: ${STREAMMQ_SECRET_KEY:}
-
 redisson:
   singleServerConfig:
     # 启用 TLS/SSL
     address: "rediss://127.0.0.1:6379"
-    # 使用认证
+    # 使用认证（推荐通过环境变量注入）
     password: ${REDIS_PASSWORD:}
 ```
 
@@ -952,7 +976,7 @@ redisson:
 
 ### 日志脱敏
 
-StreamMQ 从不将 `accessKey` / `secretKey` 输出到日志（配置对象的 `toString` 已排除这两个字段），并建议通过环境变量注入。
+StreamMQ 从不将 Redis 密码等鉴权凭据输出到日志，并建议通过环境变量注入。
 
 ---
 

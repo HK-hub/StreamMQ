@@ -21,7 +21,16 @@ public interface ConsumeLoopSupervisor {
 
     /** 循环命令工厂：由容器绑定到注入的 ExecutorService。 */
     interface LoopFactory {
-        Future<?> launch(ListenerRegistration<?> reg, boolean retryMode, boolean primaryLoop);
+        /**
+         * 启动单个读循环。
+         *
+         * @param reg 注册信息
+         * @param retryMode 是否为 retry Stream 循环
+         * @param primaryLoop 是否为该注册的主循环（负责 PEL 排空等一次性职责）
+         * @param loopIndex 循环序号（0 起，并发扩展循环递增）——用于生成按循环唯一的 inflight 泵登记键
+         */
+        Future<?> launch(
+                ListenerRegistration<?> reg, boolean retryMode, boolean primaryLoop, int loopIndex);
     }
 
     /** 为单个注册提交全部读循环（幂等）。 */

@@ -108,6 +108,11 @@
                 <artifactId>streammq-test</artifactId>
                 <version>${streammq.version}</version>
             </dependency>
+            <dependency>
+                <groupId>io.github.streammq</groupId>
+                <artifactId>streammq-test-support</artifactId>
+                <version>${streammq.version}</version>
+            </dependency>
 
             <!-- 第三方依赖版本（覆盖 Spring Boot 默认） -->
             <dependency>

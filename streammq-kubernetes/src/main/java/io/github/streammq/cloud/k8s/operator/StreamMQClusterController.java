@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -62,12 +63,28 @@ public class StreamMQClusterController
     @Autowired(required = false)
     private KubernetesClient kubernetesClient;
 
+    /**
+     * 配置刷新器提供者（懒解析）。
+     *
+     * <p><b>为何使用 {@link ObjectProvider} 而非直接注入：</b>{@code configMapConfigRefresher} Bean
+     * 的工厂方法在创建期会主动执行一次 {@code StreamMQConfigRefresher} 类型查找；若控制器在此处直接注入该类型， 控制器的依赖装配会强制提前创建 {@code
+     * configMapConfigRefresher}， 而后者创建期的同类型查找又会撞上 「自身正在创建中」，形成 {@code configMapConfigRefresher ↔
+     * streamMQClusterController} 启动循环。 延迟到调和阶段（lifecycle 运行期）再解析即可干净地打破循环。
+     */
     @Autowired(required = false)
-    private StreamMQConfigRefresher configRefresher;
+    private org.springframework.beans.factory.ObjectProvider<StreamMQConfigRefresher>
+            configRefresherProvider;
 
     private SharedInformerFactory informerFactory;
 
-    private SharedIndexInformer<StreamMQCluster> clusterInformer;
+    /** 已注册的 Cluster Informer（全命名空间模式为单元素；收敛模式按命名空间各一） */
+    private final List<SharedIndexInformer<StreamMQCluster>> clusterInformers = new ArrayList<>();
+
+    /** 是否监听全部命名空间（默认 true，需要 ClusterRole 级 RBAC） */
+    private volatile boolean watchAllNamespaces = true;
+
+    /** 收敛模式下的监听命名空间列表（仅当 {@code watchAllNamespaces=false} 时生效） */
+    private volatile List<String> watchNamespaces = List.of();
 
     private final Map<String, ClusterContext> clusterContexts = new ConcurrentHashMap<>();
 
@@ -97,6 +114,26 @@ public class StreamMQClusterController
         }
     }
 
+    /**
+     * 设置是否监听全部命名空间。
+     *
+     * <p>默认 true（需要 ClusterRole 级 RBAC）；设为 false 时改用 {@link #setWatchNamespaces(List)} 提供的命名空间列表。
+     *
+     * @param watchAllNamespaces true 表示全命名空间监听
+     */
+    public void setWatchAllNamespaces(boolean watchAllNamespaces) {
+        this.watchAllNamespaces = watchAllNamespaces;
+    }
+
+    /**
+     * 设置收敛模式的监听命名空间列表。
+     *
+     * @param namespaces 命名空间列表；为空时收敛模式退化为不监听任何资源
+     */
+    public void setWatchNamespaces(List<String> namespaces) {
+        this.watchNamespaces = namespaces == null ? List.of() : List.copyOf(namespaces);
+    }
+
     @Override
     public void afterPropertiesSet() {
         start();
@@ -107,6 +144,7 @@ public class StreamMQClusterController
         stop();
     }
 
+    @SuppressWarnings("deprecation")
     public void start() {
         if (!running.compareAndSet(false, true)) {
             log.warn("StreamMQClusterController already started");
@@ -119,41 +157,30 @@ public class StreamMQClusterController
         log.info("Starting StreamMQClusterController...");
 
         informerFactory = kubernetesClient.informers();
-        clusterInformer =
-                informerFactory.sharedIndexInformerFor(
-                        StreamMQCluster.class, StreamMQK8sDefaults.DEFAULT_RESYNC_PERIOD_MILLIS);
+        var eventHandler = buildEventHandler();
 
-        clusterInformer.addEventHandler(
-                new ResourceEventHandler<StreamMQCluster>() {
-                    @Override
-                    public void onAdd(StreamMQCluster cluster) {
-                        log.info(
-                                "StreamMQCluster added: {}/{}",
-                                cluster.getMetadata().getNamespace(),
-                                cluster.getMetadata().getName());
-                        reconcile(cluster);
-                    }
-
-                    @Override
-                    public void onUpdate(StreamMQCluster oldCluster, StreamMQCluster newCluster) {
-                        log.info(
-                                "StreamMQCluster updated: {}/{}",
-                                newCluster.getMetadata().getNamespace(),
-                                newCluster.getMetadata().getName());
-                        reconcile(newCluster);
-                    }
-
-                    @Override
-                    public void onDelete(
-                            StreamMQCluster cluster, boolean deletedFinalStateUnknown) {
-                        log.info(
-                                "StreamMQCluster deleted: {}/{}",
-                                cluster.getMetadata().getNamespace(),
-                                cluster.getMetadata().getName());
-                        String key = clusterKey(cluster);
-                        clusterContexts.remove(key);
-                    }
-                });
+        if (watchAllNamespaces) {
+            // 全命名空间模式（默认）：单 informer，部署需 ClusterRole watch 权限
+            SharedIndexInformer<StreamMQCluster> informer =
+                    informerFactory.sharedIndexInformerFor(
+                            StreamMQCluster.class,
+                            StreamMQK8sDefaults.DEFAULT_RESYNC_PERIOD_MILLIS);
+            informer.addEventHandler(eventHandler);
+            clusterInformers.add(informer);
+        } else {
+            // 收敛模式：按配置的命名空间逐个注册 informer，RBAC 只需对应命名空间权限
+            for (String ns : watchNamespaces) {
+                SharedIndexInformer<StreamMQCluster> informer =
+                        informerFactory
+                                .inNamespace(ns)
+                                .sharedIndexInformerFor(
+                                        StreamMQCluster.class,
+                                        StreamMQK8sDefaults.DEFAULT_RESYNC_PERIOD_MILLIS);
+                informer.addEventHandler(eventHandler);
+                clusterInformers.add(informer);
+            }
+            log.info("StreamMQClusterController watching namespaces: {}", watchNamespaces);
+        }
 
         informerFactory.startAllRegisteredInformers();
         reconcileFuture =
@@ -164,23 +191,58 @@ public class StreamMQClusterController
                 reconcileIntervalSeconds);
     }
 
+    /** 构建共享的 CR 事件处理器（ADD/UPDATE 触发调和，DELETE 清理上下文）。 */
+    private ResourceEventHandler<StreamMQCluster> buildEventHandler() {
+        return new ResourceEventHandler<StreamMQCluster>() {
+            @Override
+            public void onAdd(StreamMQCluster cluster) {
+                log.info(
+                        "StreamMQCluster added: {}/{}",
+                        cluster.getMetadata().getNamespace(),
+                        cluster.getMetadata().getName());
+                reconcile(cluster);
+            }
+
+            @Override
+            public void onUpdate(StreamMQCluster oldCluster, StreamMQCluster newCluster) {
+                log.info(
+                        "StreamMQCluster updated: {}/{}",
+                        newCluster.getMetadata().getNamespace(),
+                        newCluster.getMetadata().getName());
+                reconcile(newCluster);
+            }
+
+            @Override
+            public void onDelete(StreamMQCluster cluster, boolean deletedFinalStateUnknown) {
+                log.info(
+                        "StreamMQCluster deleted: {}/{}",
+                        cluster.getMetadata().getNamespace(),
+                        cluster.getMetadata().getName());
+                String key = clusterKey(cluster);
+                clusterContexts.remove(key);
+            }
+        };
+    }
+
     @Override
     public void run() {
         try {
-            if (clusterInformer == null) {
+            if (clusterInformers.isEmpty()) {
                 return;
             }
-            var clusters = clusterInformer.getIndexer().list();
-            for (var cluster : clusters) {
-                try {
-                    reconcile(cluster);
-                } catch (Exception e) {
-                    log.error(
-                            "Failed to reconcile cluster {}/{}: {}",
-                            cluster.getMetadata().getNamespace(),
-                            cluster.getMetadata().getName(),
-                            e.getMessage(),
-                            e);
+            for (SharedIndexInformer<StreamMQCluster> informer : clusterInformers) {
+                var clusters = informer.getIndexer().list();
+                for (var cluster : clusters) {
+                    try {
+                        reconcile(cluster);
+                    } catch (Exception e) {
+                        log.error(
+                                "Failed to reconcile cluster {}/{}: {}",
+                                cluster.getMetadata().getNamespace(),
+                                cluster.getMetadata().getName(),
+                                e.getMessage(),
+                                e);
+                    }
                 }
             }
         } catch (Exception e) {
@@ -312,7 +374,53 @@ public class StreamMQClusterController
             if (spec.getResources() != null) {
                 updateContainerResources(existingDeploy, ns, name, spec.getResources());
             }
+
+            // 镜像 / 环境变量漂移检测：CR 为唯一事实来源，存量 Deployment 与 Spec 不一致时收敛
+            updateContainerImageAndEnv(existingDeploy, ns, name, spec);
         }
+    }
+
+    /**
+     * 对比存量 Deployment 首个容器与 CR Spec 的镜像及环境变量，存在漂移时以客户端 edit+patch 方式收敛。
+     *
+     * <p>此前仅处理副本数 / 标签 / 资源，用户修改 CR 的 {@code spec.image} 或 backend 配置后， 存量 Deployment
+     * 不会更新，表现为「改了配置不生效」。
+     */
+    private void updateContainerImageAndEnv(
+            Deployment deployment, String ns, String name, StreamMQCluster.Spec spec) {
+        var containers = deployment.getSpec().getTemplate().getSpec().getContainers();
+        if (containers.isEmpty()) {
+            return;
+        }
+        var container = containers.get(0);
+        boolean imageDrift =
+                spec.getImage() != null && !spec.getImage().equals(container.getImage());
+        List<io.fabric8.kubernetes.api.model.EnvVar> desiredEnv = collectEnvVars(name, ns, spec);
+        boolean envDrift = !desiredEnv.equals(container.getEnv());
+        if (!imageDrift && !envDrift) {
+            return;
+        }
+        log.info(
+                "Detected container drift for {}/{} (imageDrift={}, envDrift={}), patching",
+                ns,
+                name,
+                imageDrift,
+                envDrift);
+        var updated =
+                new DeploymentBuilder(deployment)
+                        .editSpec()
+                        .editTemplate()
+                        .editSpec()
+                        .editContainer(0)
+                        .withImage(imageDrift ? spec.getImage() : container.getImage())
+                        .withEnv(envDrift ? desiredEnv : container.getEnv())
+                        .endContainer()
+                        .endSpec()
+                        .endTemplate()
+                        .endSpec()
+                        .build();
+        kubernetesClient.apps().deployments().inNamespace(ns).withName(name).patch(updated);
+        log.info("Updated container image/env for {}/{}", ns, name);
     }
 
     private Deployment buildDeployment(
@@ -526,6 +634,10 @@ public class StreamMQClusterController
     }
 
     private void refreshConfigIfNeeded(StreamMQCluster cluster, StreamMQCluster.Spec spec) {
+        StreamMQConfigRefresher configRefresher =
+                Objects.isNull(configRefresherProvider)
+                        ? null
+                        : configRefresherProvider.getIfAvailable();
         if (configRefresher == null || spec.getConfig() == null) {
             return;
         }

@@ -174,18 +174,11 @@ class AnnotationTest {
     class EnableStreamMQDefaults {
 
         @Test
-        @DisplayName("mode 默认 STANDARD")
-        void modeDefault() throws Exception {
+        @DisplayName("注解存在且不携带任何属性（预留属性已删除，全局行为由 streammq.* 配置表达）")
+        void annotationPresentWithoutAttributes() {
             EnableStreamMQ ann = EnableSample.class.getAnnotation(EnableStreamMQ.class);
-            assertThat(ann.mode()).isEqualTo("STANDARD");
-            assertThat(defaultValue(ann, "mode")).isEqualTo("STANDARD");
-        }
-
-        @Test
-        @DisplayName("scanBasePackages 默认空数组")
-        void scanBasePackagesDefault() {
-            EnableStreamMQ ann = EnableSample.class.getAnnotation(EnableStreamMQ.class);
-            assertThat(ann.scanBasePackages()).isEmpty();
+            assertThat(ann).isNotNull();
+            assertThat(ann.annotationType().getDeclaredMethods()).isEmpty();
         }
     }
 }

@@ -76,7 +76,11 @@ public class StreamMQMessageProducer extends MessageProducerSupport
             StreamMQBinderProperties binderProperties) {
         this.listenerContainer = Objects.requireNonNull(listenerContainer, "listenerContainer");
         this.topic = Objects.requireNonNull(topic, "topic");
-        this.group = Objects.requireNonNull(group, "group");
+        this.group =
+                Objects.requireNonNull(
+                        group,
+                        "binding target group must be resolved; anonymous bindings are unsupported"
+                                + " — set spring.cloud.stream.bindings.<name>.group");
         this.consumerProperties = Objects.requireNonNull(consumerProperties, "consumerProperties");
         this.binderProperties = Objects.requireNonNull(binderProperties, "binderProperties");
     }

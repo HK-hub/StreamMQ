@@ -108,6 +108,9 @@ public final class StreamMQKeys {
     /** 追踪类型段 */
     public static final String TYPE_TRACE = "trace";
 
+    /** 隔离区类型段（调度条目 payload 丢失时的隔离登记） */
+    public static final String TYPE_QUARANTINE = "quarantine";
+
     // ==================== Key 后缀段（suffix segment） ====================
     /** 实例列表后缀 */
     public static final String SEG_INSTANCES = "instances";
@@ -306,9 +309,12 @@ public final class StreamMQKeys {
      * <p>Retry/Delay 调度器在「读取 payload → 原子批转投」临界区前通过 SETNX+TTL 获取， 用于多实例互斥；持有者崩溃后 claim 随 TTL
      * 过期，其它实例可接管，消息不丢失。
      *
+     * <p>scope 内部多段以 {@code ':'} 连接（如 {@code topic:group}）——topic/group 命名校验禁止冒号， 因此 {@code
+     * ("a_b","c")} 与 {@code ("a","b_c")} 不会拼接出相同 Key（旧实现用 {@code '_'} 存在碰撞）。
+     *
      * @param namespace 命名空间
      * @param kind 转移类型（如 {@code retry} / {@code delay}）
-     * @param scope 作用域标识（如 {@code topic_group} 或延时 level）
+     * @param scope 作用域标识（如 {@code topic:group} 或延时 level）
      * @param msgId 消息 ID
      * @return claim Key
      */
@@ -534,6 +540,20 @@ public final class StreamMQKeys {
      */
     public static String traceStream(String namespace, String date) {
         return prefix(namespace) + SEP + TYPE_TRACE + SEP + requireNonEmpty(date, "date");
+    }
+
+    /**
+     * 隔离区 ZSet Key：{@code streammq:{ns}:quarantine:{kind}}。
+     *
+     * <p>调度器（delay/retry）发现 payload Hash 已被 7 天 TTL 回收但调度条目仍存在时， 先把 {@code
+     * member=msgId|kind、score=dueTime} 写入隔离区再移除活跃 ZSet 条目——静默删除改为 可观测的隔离登记，运维可排查/重放。
+     *
+     * @param namespace 命名空间
+     * @param kind 调度类型（如 {@code delay} / {@code retry}）
+     * @return 隔离区 ZSet Key
+     */
+    public static String quarantineZset(String namespace, String kind) {
+        return prefix(namespace) + SEP + TYPE_QUARANTINE + SEP + requireNonEmpty(kind, "kind");
     }
 
     private static String requireNonEmpty(String value, String name) {

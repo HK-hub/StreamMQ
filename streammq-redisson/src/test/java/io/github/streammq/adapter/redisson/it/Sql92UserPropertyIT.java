@@ -130,4 +130,118 @@ class Sql92UserPropertyIT extends AbstractRedisIT {
             container.stop();
         }
     }
+
+    @Test
+    @DisplayName("过滤器求值失败不 ACK 丢消息：按 maxReconsumeTimes=0 捷径直达 DLQ")
+    void filterEvaluationFailure_routesToDlqNotLost() {
+        String topic = "sql92-fail-topic";
+        String group = "sql92-fail-group";
+
+        DefaultStreamMQListenerContainer container =
+                new DefaultStreamMQListenerContainer(
+                        redisson,
+                        new RedissonStreamListenerFactory(redisson, converter),
+                        converter,
+                        new NoRetryPolicy(),
+                        namespace);
+
+        Set<String> receivedBodies = ConcurrentHashMap.newKeySet();
+        StreamMessageConcurrentlyConsumer<String> listener =
+                (msg, ctx) -> {
+                    receivedBodies.add(msg.getBody());
+                    return ConsumeAction.SUCCESS;
+                };
+        // 携带一个求值必抛异常的 per-consumer 过滤器：模拟选择器对脏属性的类型混淆等
+        // 求值失败（SimpleSqlSelectorFilter 契约见 SimpleSqlSelectorFilterTest）
+        // 注意：不能复用 mkSqlAnnotation——其 SQL92 表达式对无属性消息会"合法不匹配"并短路，
+        // 导致 ThrowingFilter 永远不被执行。此处用 TAG "*" 缺省选择器，保证链中唯一过滤器
+        // 就是求值必抛异常的 ThrowingFilter，从而验证"求值失败 → 失败路径"而非"不匹配 → ACK"。
+        StreamMQConsumer annotation =
+                withAnnotationOverride(
+                        withAnnotationOverride(
+                                withAnnotationOverride(
+                                        mkSqlAnnotation(topic, group),
+                                        "selectorType",
+                                        SelectorType.TAG),
+                                "selectorExpression",
+                                "*"),
+                        "consumerFilter",
+                        new Class<?>[] {ThrowingFilter.class});
+        StreamMQConsumer withMax = withAnnotationOverride(annotation, "maxReconsumeTimes", 0);
+        container.registerConsumer(listener, withMax);
+
+        createConsumerGroup(topic, group);
+
+        container.start();
+        try {
+            RedissonStreamProducer producer =
+                    new RedissonStreamProducer(
+                            redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
+            producer.syncSend(MessageBuilder.<String>withTopic(topic).body("poisoned").build());
+            producer.close();
+
+            // 求值失败走失败路径：maxReconsumeTimes=0 捷径直接路由 DLQ，绝不 ACK 丢失
+            String dlqKey =
+                    io.github.streammq.adapter.redisson.support.StreamMQKeys.dlqStream(
+                            namespace, group);
+            await().atMost(15, TimeUnit.SECONDS)
+                    .untilAsserted(
+                            () -> {
+                                org.redisson.api.RStream<String, String> dlqStream =
+                                        redisson.getStream(dlqKey);
+                                org.assertj.core.api.Assertions.assertThat(dlqStream.size())
+                                        .isEqualTo(1L);
+                            });
+            // 业务消费者不得收到该消息
+            await().pollDelay(java.time.Duration.ofMillis(500))
+                    .atMost(3, TimeUnit.SECONDS)
+                    .until(() -> !receivedBodies.contains("poisoned"));
+            assertThat(receivedBodies).isEmpty();
+        } finally {
+            container.stop();
+        }
+    }
+
+    /** 求值必失败的 per-consumer 过滤器（R8 失败语义验证探针）。 */
+    public static class ThrowingFilter implements io.github.streammq.core.filter.ConsumerFilter {
+        @Override
+        public boolean accept(io.github.streammq.core.message.Message<?> message) {
+            throw new IllegalStateException("simulated selector evaluation failure");
+        }
+
+        @Override
+        public String name() {
+            return "ThrowingFilter";
+        }
+    }
+
+    /** 以反射覆写动态代理注解的单个属性。 */
+    @SuppressWarnings("unchecked")
+    private static StreamMQConsumer withAnnotationOverride(
+            StreamMQConsumer base, String property, Object value) {
+        Class<? extends java.lang.annotation.Annotation> type =
+                (Class<? extends java.lang.annotation.Annotation>) base.annotationType();
+        return (StreamMQConsumer)
+                Proxy.newProxyInstance(
+                        type.getClassLoader(),
+                        new Class<?>[] {type},
+                        (proxy, method, args) ->
+                                method.getName().equals(property)
+                                        ? value
+                                        : invokeBase(base, method, args));
+    }
+
+    private static Object invokeBase(
+            StreamMQConsumer base, java.lang.reflect.Method method, Object[] args)
+            throws Exception {
+        try {
+            Object r =
+                    base.getClass()
+                            .getMethod(method.getName(), method.getParameterTypes())
+                            .invoke(base, args);
+            return r;
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            throw e.getCause() instanceof Exception cause ? cause : e;
+        }
+    }
 }

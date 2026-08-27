@@ -78,11 +78,11 @@ public class DefaultConsumerFilterChain implements ConsumerFilterChain {
                     return false;
                 }
             } catch (RuntimeException ex) {
-                LOG.warn(
-                        "ConsumerFilter {} threw exception: {}",
-                        filter.name(),
-                        ex.getMessage(),
-                        ex);
+                // 过滤器求值异常 ≠ 不匹配：静默吞掉会把"求值失败"降级为"放行/丢弃"，
+                // 造成消息被 ACK 丢失或脏数据放行。必须向上传播，由处理管线按
+                // 消费失败路由（scheduleRetry / DLQ），与消费者抛异常同语义。
+                throw new IllegalStateException(
+                        "ConsumerFilter evaluation failed: " + filter.name(), ex);
             }
         }
         return true;

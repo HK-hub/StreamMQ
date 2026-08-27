@@ -10,6 +10,7 @@ import io.github.streammq.core.util.StringUtils;
 import io.github.streammq.core.util.WebRequestAuthSupport;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import java.util.*;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.actuate.endpoint.annotation.DeleteOperation;
@@ -42,6 +43,9 @@ import org.springframework.boot.actuate.health.HealthIndicator;
  *   <li>{@code POST /actuator/streammq/config/{group}} — 更新消费组配置（JSON body）
  * </ul>
  *
+ * <p><b>参数校验：</b>路径变量中的 group / topic 按核心命名规则校验（{@link StringUtils#requireValidName}）， messageId
+ * 必须为 {@code ts-seq} 纯数字格式，组配置更新受数量 / 键名 / 值长度上限约束； 校验失败返回 HTTP 400， 未知子路径返回 HTTP 404（而非异常导致的 500）。
+ *
  * <p><b>安全：</b>所有操作（含只读）均通过 {@link ManagementAuthenticator} 鉴权，鉴权失败返回 HTTP 401。 默认实现 {@code
  * DenyAllAuthenticator} 拒绝一切访问，业务方需注册 {@code AllowAllAuthenticator} / {@code
  * BasicAuthAuthenticator} / {@code TokenAuthenticator}（或自定义实现）Bean 以开放访问。Basic 凭据取自请求的 {@code
@@ -63,6 +67,19 @@ public class StreamMQActuatorEndpoint {
 
     /** 管理端点列表默认页大小，可通过 {@link #setListPageSize(int)} 覆盖 */
     private volatile int listPageSize = StreamMQSpringConstants.DEFAULT_LIST_PAGE_SIZE;
+
+    /** 消息 ID 合法格式：{@code ts-seq}（纯数字） */
+    private static final Pattern MESSAGE_ID_PATTERN = Pattern.compile("^\\d+-\\d+$");
+
+    /** 组配置更新：单次最大键值对数量 */
+    private static final int MAX_GROUP_CONFIG_ENTRIES = 32;
+
+    /** 组配置更新：单个 key 最大长度与合法字符集 */
+    private static final Pattern GROUP_CONFIG_KEY_PATTERN =
+            Pattern.compile("^[A-Za-z0-9._-]{1,64}$");
+
+    /** 组配置更新：单个 value 最大长度（字符数） */
+    private static final int MAX_GROUP_CONFIG_VALUE_LENGTH = 1024;
 
     public StreamMQActuatorEndpoint(
             StreamMQAdminEndpoint adminEndpoint,
@@ -121,18 +138,31 @@ public class StreamMQActuatorEndpoint {
                 return topics();
             }
             case "pending" -> {
-                requireSegments(path, 3, "/streammq/pending/{group}/{topic}");
+                WebEndpointResponse<?> missing =
+                        requireSegments(path, 3, "/streammq/pending/{group}/{topic}");
+                if (missing != null) {
+                    return missing;
+                }
                 return pending(path[1], path[2]);
             }
             case "dlq" -> {
-                requireSegments(path, 2, "/streammq/dlq/{group}");
+                WebEndpointResponse<?> missing = requireSegments(path, 2, "/streammq/dlq/{group}");
+                if (missing != null) {
+                    return missing;
+                }
                 return dlq(path[1]);
             }
             case "stats" -> {
-                requireSegments(path, 3, "/streammq/stats/{group}/{topic}");
+                WebEndpointResponse<?> missing =
+                        requireSegments(path, 3, "/streammq/stats/{group}/{topic}");
+                if (missing != null) {
+                    return missing;
+                }
                 return stats(path[1], path[2]);
             }
-            default -> throw unknownPath("GET", path);
+            default -> {
+                return unknownPath("GET", path);
+            }
         }
     }
 
@@ -142,13 +172,14 @@ public class StreamMQActuatorEndpoint {
      * POST 请求统一分发：按首段路由到 requeueDlq / ackPending / triggerRebalance / createTopic /
      * updateGroupConfig。
      *
+     * <p>Topic 创建仅接受精确的 {@code ["topics"]} 单段路径；携带未知子路径时返回 HTTP 404 而非静默按创建处理。
+     *
      * @param path 端点基础路径之后的剩余段
-     * @param messageId 消息 ID（requeueDlq / ackPending 必填）
+     * @param messageId 消息 ID（requeueDlq / ackPending 必填，格式 {@code ts-seq}）
      * @param targetTopic 目标 Topic（requeueDlq 必填）
-     * @param topic Topic 名（createTopic / ackPending 使用）
-     * @param config 消费组配置（updateGroupConfig 使用）
+     * @param topic Topic 名（createTopic 使用）
+     * @param config 消费组配置（updateGroupConfig 使用，键值对数量与长度受限）
      */
-    @SuppressWarnings("unchecked")
     @WriteOperation
     public Object writeDispatch(
             @Selector(match = Selector.Match.ALL_REMAINING) String[] path,
@@ -156,28 +187,53 @@ public class StreamMQActuatorEndpoint {
             String targetTopic,
             String topic,
             Map<String, String> config) {
-        requireNonNullPath(path);
+        WebEndpointResponse<?> missingPath = requireNonNullPath(path);
+        if (missingPath != null) {
+            return missingPath;
+        }
         switch (path[0]) {
             case "dlq" -> {
-                requireSegments(path, 2, "/streammq/dlq/{group}?messageId&targetTopic (POST)");
+                WebEndpointResponse<?> missing =
+                        requireSegments(
+                                path, 2, "/streammq/dlq/{group}?messageId&targetTopic" + " (POST)");
+                if (missing != null) {
+                    return missing;
+                }
                 return requeueDlq(path[1], messageId, targetTopic);
             }
             case "ack" -> {
-                requireSegments(path, 3, "/streammq/ack/{group}/{topic}?messageId (POST)");
+                WebEndpointResponse<?> missing =
+                        requireSegments(path, 3, "/streammq/ack/{group}/{topic}?messageId (POST)");
+                if (missing != null) {
+                    return missing;
+                }
                 return ackPending(path[1], path[2], messageId);
             }
             case "rebalance" -> {
-                requireSegments(path, 2, "/streammq/rebalance/{group} (POST)");
+                WebEndpointResponse<?> missing =
+                        requireSegments(path, 2, "/streammq/rebalance/{group} (POST)");
+                if (missing != null) {
+                    return missing;
+                }
                 return triggerRebalance(path[1]);
             }
             case "topics" -> {
+                if (path.length != 1) {
+                    return unknownPath("POST", path);
+                }
                 return createTopic(topic);
             }
             case "config" -> {
-                requireSegments(path, 2, "/streammq/config/{group} (POST)");
+                WebEndpointResponse<?> missing =
+                        requireSegments(path, 2, "/streammq/config/{group} (POST)");
+                if (missing != null) {
+                    return missing;
+                }
                 return updateGroupConfig(path[1], config);
             }
-            default -> throw unknownPath("POST", path);
+            default -> {
+                return unknownPath("POST", path);
+            }
         }
     }
 
@@ -190,17 +246,30 @@ public class StreamMQActuatorEndpoint {
      */
     @DeleteOperation
     public Object deleteDispatch(@Selector(match = Selector.Match.ALL_REMAINING) String[] path) {
-        requireNonNullPath(path);
+        WebEndpointResponse<?> missingPath = requireNonNullPath(path);
+        if (missingPath != null) {
+            return missingPath;
+        }
         switch (path[0]) {
             case "dlq" -> {
-                requireSegments(path, 3, "/streammq/dlq/{group}/{messageId} (DELETE)");
+                WebEndpointResponse<?> missing =
+                        requireSegments(path, 3, "/streammq/dlq/{group}/{messageId} (DELETE)");
+                if (missing != null) {
+                    return missing;
+                }
                 return deleteDlq(path[1], path[2]);
             }
             case "topics" -> {
-                requireSegments(path, 2, "/streammq/topics/{topic} (DELETE)");
+                WebEndpointResponse<?> missing =
+                        requireSegments(path, 2, "/streammq/topics/{topic} (DELETE)");
+                if (missing != null) {
+                    return missing;
+                }
                 return deleteTopic(path[1]);
             }
-            default -> throw unknownPath("DELETE", path);
+            default -> {
+                return unknownPath("DELETE", path);
+            }
         }
     }
 
@@ -244,10 +313,9 @@ public class StreamMQActuatorEndpoint {
         if (denied != null) {
             return denied;
         }
-        if (StringUtils.isEmpty(topic)) {
-            // 空 topic 会下探到 Redis 产生难以理解的报错，这里直接给出明确 4xx 语义
-            throw new IllegalArgumentException(
-                    "topic is required: /actuator/streammq/pending/{group}/{topic}");
+        WebEndpointResponse<?> invalid = checkGroupAndTopic(group, topic);
+        if (invalid != null) {
+            return invalid;
         }
         return adminEndpoint.listPending(group, topic, listPageSize);
     }
@@ -258,6 +326,10 @@ public class StreamMQActuatorEndpoint {
         if (denied != null) {
             return denied;
         }
+        WebEndpointResponse<?> invalid = checkGroup(group);
+        if (invalid != null) {
+            return invalid;
+        }
         return adminEndpoint.listDlq(group, listPageSize);
     }
 
@@ -267,8 +339,17 @@ public class StreamMQActuatorEndpoint {
         if (denied != null) {
             return denied;
         }
-        if (StringUtils.isEmpty(targetTopic)) {
-            throw new IllegalArgumentException("targetTopic is required");
+        WebEndpointResponse<?> invalid = checkGroup(group);
+        if (invalid != null) {
+            return invalid;
+        }
+        invalid = checkName(targetTopic, "targetTopic");
+        if (invalid != null) {
+            return invalid;
+        }
+        invalid = checkMessageId(messageId);
+        if (invalid != null) {
+            return invalid;
         }
         return adminEndpoint.requeueDlq(group, messageId, targetTopic);
     }
@@ -279,6 +360,14 @@ public class StreamMQActuatorEndpoint {
         if (denied != null) {
             return denied;
         }
+        WebEndpointResponse<?> invalid = checkGroup(group);
+        if (invalid != null) {
+            return invalid;
+        }
+        invalid = checkMessageId(messageId);
+        if (invalid != null) {
+            return invalid;
+        }
         return adminEndpoint.deleteDlq(group, messageId);
     }
 
@@ -287,6 +376,10 @@ public class StreamMQActuatorEndpoint {
                 checkPermission(StreamMQSpringConstants.RES_STATS_PREFIX + group);
         if (denied != null) {
             return denied;
+        }
+        WebEndpointResponse<?> invalid = checkGroupAndTopic(group, topic);
+        if (invalid != null) {
+            return invalid;
         }
         return adminEndpoint.getStats(group, topic);
     }
@@ -297,6 +390,14 @@ public class StreamMQActuatorEndpoint {
         if (denied != null) {
             return denied;
         }
+        WebEndpointResponse<?> invalid = checkGroupAndTopic(group, topic);
+        if (invalid != null) {
+            return invalid;
+        }
+        invalid = checkMessageId(messageId);
+        if (invalid != null) {
+            return invalid;
+        }
         return adminEndpoint.ackPending(group, topic, messageId);
     }
 
@@ -306,6 +407,10 @@ public class StreamMQActuatorEndpoint {
         if (denied != null) {
             return denied;
         }
+        WebEndpointResponse<?> invalid = checkGroup(group);
+        if (invalid != null) {
+            return invalid;
+        }
         return adminEndpoint.triggerRebalance(group);
     }
 
@@ -314,9 +419,9 @@ public class StreamMQActuatorEndpoint {
         if (denied != null) {
             return denied;
         }
-        if (StringUtils.isEmpty(topic)) {
-            throw new IllegalArgumentException(
-                    "topic is required: POST /actuator/streammq/topics?topic=");
+        WebEndpointResponse<?> invalid = checkName(topic, "topic");
+        if (invalid != null) {
+            return invalid;
         }
         return adminEndpoint.createTopic(topic);
     }
@@ -325,6 +430,10 @@ public class StreamMQActuatorEndpoint {
         WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_TOPICS);
         if (denied != null) {
             return denied;
+        }
+        WebEndpointResponse<?> invalid = checkName(topic, "topic");
+        if (invalid != null) {
+            return invalid;
         }
         return adminEndpoint.deleteTopic(topic);
     }
@@ -335,32 +444,126 @@ public class StreamMQActuatorEndpoint {
         if (denied != null) {
             return denied;
         }
+        WebEndpointResponse<?> invalid = checkGroup(group);
+        if (invalid != null) {
+            return invalid;
+        }
+        invalid = checkGroupConfigCaps(config);
+        if (invalid != null) {
+            return invalid;
+        }
         return adminEndpoint.updateGroupConfig(group, config);
     }
 
     // ===================== 参数校验辅助 =====================
 
-    private void requireNonNullPath(String[] path) {
+    /** 名称类参数缺失时返回 HTTP 400 响应，否则返回 null。 */
+    private WebEndpointResponse<?> requireNonNullPath(String[] path) {
         if (Objects.isNull(path)
                 || path.length == 0
                 || Objects.isNull(path[0])
                 || path[0].isEmpty()) {
-            throw new IllegalArgumentException(
+            return badRequest(
                     "Path segment is required. See README management API table for routes.");
         }
+        return null;
     }
 
-    private void requireSegments(String[] path, int minLength, String usage) {
+    /** 路径段数量不足时返回 HTTP 400 响应，否则返回 null。 */
+    private WebEndpointResponse<?> requireSegments(String[] path, int minLength, String usage) {
         if (path.length < minLength || StringUtils.isEmpty(path[minLength - 1])) {
-            throw new IllegalArgumentException("Missing path segments, expected: " + usage);
+            return badRequest("Missing path segments, expected: " + usage);
         }
+        return null;
     }
 
-    private IllegalArgumentException unknownPath(String method, String[] path) {
-        return new IllegalArgumentException(
+    /** 未知子路径统一返回 HTTP 404 响应（此前为异常 → 500）。 */
+    private WebEndpointResponse<Map<String, Object>> unknownPath(String method, String[] path) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", 404);
+        body.put(
+                "error",
                 "Unknown "
                         + method
                         + " path: /actuator/streammq/"
                         + String.join("/", Arrays.asList(path)));
+        return new WebEndpointResponse<>(body, 404);
+    }
+
+    /** 构造 HTTP 400 错误响应。 */
+    private WebEndpointResponse<Map<String, Object>> badRequest(String message) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", 400);
+        body.put("error", message);
+        return new WebEndpointResponse<>(body, 400);
+    }
+
+    /** 校验 group 与 topic 命名合法性（与核心层命名规则一致），非法时返回 400。 */
+    private WebEndpointResponse<?> checkGroupAndTopic(String group, String topic) {
+        WebEndpointResponse<?> invalid = checkGroup(group);
+        if (invalid != null) {
+            return invalid;
+        }
+        return checkName(topic, "topic");
+    }
+
+    /** 校验消费者组命名合法性，非法时返回 400。 */
+    private WebEndpointResponse<?> checkGroup(String group) {
+        return checkName(group, "consumerGroup");
+    }
+
+    /** 按核心命名规则（{@link StringUtils#requireValidName}）校验名称类参数； 非法时返回携带原因的 HTTP 400 响应。 */
+    private WebEndpointResponse<?> checkName(String value, String kind) {
+        try {
+            StringUtils.requireValidName(value, kind);
+            return null;
+        } catch (RuntimeException ex) {
+            LOG.warn("StreamMQ admin request rejected, invalid {}: {}", kind, ex.getMessage());
+            return badRequest(ex.getMessage());
+        }
+    }
+
+    /** 校验消息 ID 格式（{@code ts-seq} 纯数字），非法时返回 400。 */
+    private WebEndpointResponse<?> checkMessageId(String messageId) {
+        if (StringUtils.isEmpty(messageId)
+                || !MESSAGE_ID_PATTERN.matcher(messageId.trim()).matches()) {
+            return badRequest("Invalid messageId '" + messageId + "', expected format: ts-seq");
+        }
+        return null;
+    }
+
+    /**
+     * 校验消费组配置上限：键值对数量 ≤ {@value #MAX_GROUP_CONFIG_ENTRIES}、 key 匹配 {@code [A-Za-z0-9._-]{1,64}}、
+     * value 长度 ≤ {@value #MAX_GROUP_CONFIG_VALUE_LENGTH} 字符； 违规时返回 400。
+     */
+    private WebEndpointResponse<?> checkGroupConfigCaps(Map<String, String> config) {
+        if (config == null || config.isEmpty()) {
+            return badRequest("config must not be null or empty");
+        }
+        if (config.size() > MAX_GROUP_CONFIG_ENTRIES) {
+            return badRequest(
+                    "config size "
+                            + config.size()
+                            + " exceeds cap of "
+                            + MAX_GROUP_CONFIG_ENTRIES
+                            + " entries");
+        }
+        for (Map.Entry<String, String> entry : config.entrySet()) {
+            String key = entry.getKey();
+            if (key == null || !GROUP_CONFIG_KEY_PATTERN.matcher(key).matches()) {
+                return badRequest(
+                        "Invalid config key '" + key + "', must match ^[A-Za-z0-9._-]{1,64}$");
+            }
+            String value = entry.getValue();
+            if (value != null && value.length() > MAX_GROUP_CONFIG_VALUE_LENGTH) {
+                return badRequest(
+                        "Config value for key '"
+                                + key
+                                + "' exceeds max length of "
+                                + MAX_GROUP_CONFIG_VALUE_LENGTH
+                                + " chars");
+            }
+        }
+        return null;
     }
 }

@@ -95,10 +95,31 @@ public class StreamMQCoreAutoConfiguration {
         this.properties = properties;
     }
 
-    /** 启动时校验配置属性值合法性。 */
+    /** 启动时校验配置属性值合法性，并输出一次追踪能力姿态摘要。 */
     @PostConstruct
     void validateProperties() {
         properties.validate();
+        logTracingPosture();
+    }
+
+    /**
+     * 输出追踪相关开关的启动期摘要（单条 INFO），便于运维确认实际生效的追踪姿态。
+     *
+     * <p>内容：日志级追踪（{@code streammq.tracing.enabled}）、存储级追踪（{@code streammq.trace.enabled} 与 {@code
+     * streammq.trace.storage}）、OpenTelemetry 是否在 classpath（供 otel 模块判定）。
+     */
+    private void logTracingPosture() {
+        boolean otelDetected =
+                org.springframework.util.ClassUtils.isPresent(
+                        "io.opentelemetry.api.OpenTelemetry",
+                        org.springframework.util.ClassUtils.getDefaultClassLoader());
+        LOG.info(
+                "StreamMQ tracing posture: tracing.enabled={}, trace.enabled={},"
+                        + " trace.storage={}, otel.detected(classpath)={}",
+                properties.getTracing().isEnabled(),
+                properties.getTrace().isEnabled(),
+                properties.getTrace().getStorage(),
+                otelDetected);
     }
 
     /**
@@ -151,22 +172,23 @@ public class StreamMQCoreAutoConfiguration {
     /**
      * StreamMQ 统一虚拟线程池：容器消费循环、异步发送、事件分发等全部复用此池。
      *
-     * <p><b>自定义方式：</b>注册任意 {@link ExecutorService} Bean 即可覆盖本默认实现， 全部内部组件（容器 / 模板 /
-     * 事件总线）自动切换到用户提供的执行器。
+     * <p><b>自定义方式：</b>注册名为 {@code streammqExecutor} 的 {@link ExecutorService} Bean 即可覆盖本默认实现，
+     * 全部内部组件（容器 / 模板 / 事件总线）自动切换到用户提供的执行器。 注意：仅按 <b>Bean 名称</b> {@code streammqExecutor}
+     * 判定是否回退，避免误吞用户自定义的其他任意 {@link ExecutorService} Bean。
      *
      * @return 虚拟线程池
      */
-    @Bean(name = "streammqVirtualExecutor", destroyMethod = "shutdown")
-    @ConditionalOnMissingBean(ExecutorService.class)
-    public ExecutorService streammqVirtualExecutor() {
+    @Bean(name = "streammqExecutor", destroyMethod = "shutdown")
+    @ConditionalOnMissingBean(name = "streammqExecutor")
+    public ExecutorService streammqExecutor() {
         return Executors.newVirtualThreadPerTaskExecutor();
     }
 
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean(StreamMQEventBus.class)
-    public StreamMQEventBus streamMQEventBus(ExecutorService streammqVirtualExecutor) {
+    public StreamMQEventBus streamMQEventBus(ExecutorService streammqExecutor) {
         LOG.debug("Creating AsyncStreamMQEventBus (shared virtual executor)");
-        return new AsyncStreamMQEventBus(streammqVirtualExecutor, false);
+        return new AsyncStreamMQEventBus(streammqExecutor, false);
     }
 
     /**
@@ -348,7 +370,7 @@ public class StreamMQCoreAutoConfiguration {
             ObjectProvider<TransactionScanner> transactionScannerProvider,
             ObjectProvider<StreamMQMetrics> metricsProvider,
             ObjectProvider<ProducerInterceptor> producerInterceptorProvider,
-            ExecutorService streammqVirtualExecutor) {
+            ExecutorService streammqExecutor) {
         String defaultGroup = properties.getProducer().getGroup();
         String txGroup = properties.getTransaction().getDefaultGroup();
         // 注入 namespace / send-message-timeout / stream.max-len 到 defaultConfig,
@@ -371,8 +393,8 @@ public class StreamMQCoreAutoConfiguration {
                 new DefaultStreamMessageTemplate(
                         producerFactory, defaultGroup, converter, defaultConfig, txGroup);
         template.setEventBus(eventBus);
-        // 异步发送复用统一虚拟线程池（用户可通过覆盖 ExecutorService Bean 自定义）
-        template.setAsyncSendExecutor(streammqVirtualExecutor);
+        // 异步发送复用统一虚拟线程池（用户可通过覆盖名为 streammqExecutor 的 Bean 自定义）
+        template.setAsyncSendExecutor(streammqExecutor);
         // 注入 TransactionScanner（如果可用），启用完整的半消息 + 回查事务流程
         TransactionScanner scanner = transactionScannerProvider.getIfAvailable();
         if (scanner != null) {

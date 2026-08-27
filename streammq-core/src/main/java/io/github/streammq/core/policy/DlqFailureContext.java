@@ -38,6 +38,17 @@ public interface DlqFailureContext {
     /** 消息的原始 topic */
     String originalTopic();
 
+    /**
+     * 消费者组名。
+     *
+     * <p>由适配层构造上下文时填充；默认实现返回 {@code null}（兼容未携带该字段的旧实现）， 调用方需做空值防御。
+     *
+     * @return 消费者组名，可能为 null
+     */
+    default String consumerGroup() {
+        return null;
+    }
+
     /** 原始 Stream Entry ID（进入 DLQ 前的 ID） */
     String originalMessageId();
 

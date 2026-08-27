@@ -18,36 +18,6 @@
       ]
     },
     {
-      "name": "streammq.producer.compression-codec",
-      "values": [
-        {
-          "value": "io.github.streammq.adapter.redisson.compression.GzipCompressionCodec",
-          "description": "GZIP 压缩（默认实现）"
-        }
-      ]
-    },
-    {
-      "name": "streammq.consumer.retry-policy",
-      "values": [
-        {
-          "value": "io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy",
-          "description": "固定间隔数组重试策略（默认，对齐 RocketMQ）"
-        },
-        {
-          "value": "io.github.streammq.adapter.redisson.retry.ExponentialBackoffRetryPolicy",
-          "description": "指数退避重试策略"
-        },
-        {
-          "value": "io.github.streammq.adapter.redisson.retry.FixedIntervalRetryPolicy",
-          "description": "固定间隔重试策略"
-        },
-        {
-          "value": "io.github.streammq.adapter.redisson.retry.NoRetryPolicy",
-          "description": "不重试策略"
-        }
-      ]
-    },
-    {
       "name": "streammq.rebalance.strategy",
       "values": [
         {
@@ -64,16 +34,16 @@
       "name": "streammq.dlq.failure-strategy",
       "values": [
         {
+          "value": "io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy",
+          "description": "记录日志后丢弃（默认）"
+        },
+        {
           "value": "io.github.streammq.adapter.redisson.dlq.LimitedRetryDlqFailureStrategy",
-          "description": "DLQ 内有限次重试后进入二级 DLQ（默认）"
+          "description": "DLQ 内有限次重试后进入二级 DLQ"
         },
         {
           "value": "io.github.streammq.adapter.redisson.dlq.SecondaryDlqFailureStrategy",
           "description": "直接转入二级死信队列"
-        },
-        {
-          "value": "io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy",
-          "description": "记录日志后丢弃"
         }
       ]
     }
@@ -89,7 +59,7 @@
       "name": "streammq.namespace",
       "type": "java.lang.String",
       "description": "Redis Key 命名空间前缀。",
-      "defaultValue": "streammq"
+      "defaultValue": ""
     },
     {
       "name": "streammq.tracing.enabled",

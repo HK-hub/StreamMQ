@@ -224,6 +224,39 @@ class StreamMQKeysTest {
         assertThat(StreamMQKeys.traceStream("", "20260710")).isEqualTo("streammq:trace:20260710");
     }
 
+    @Test
+    @DisplayName("quarantineZset: 隔离区 ZSet Key（delay/retry 各自独立）")
+    void quarantineZset() {
+        assertThat(StreamMQKeys.quarantineZset("ns", "delay"))
+                .isEqualTo("streammq:ns:quarantine:delay");
+        assertThat(StreamMQKeys.quarantineZset("ns", "retry"))
+                .isEqualTo("streammq:ns:quarantine:retry");
+        assertThat(StreamMQKeys.quarantineZset("", "delay")).isEqualTo("streammq:quarantine:delay");
+    }
+
+    @Test
+    @DisplayName("quarantineZset: kind 为空字符串抛出 IllegalArgumentException")
+    void quarantineZsetEmptyKind() {
+        assertThatThrownBy(() -> StreamMQKeys.quarantineZset("ns", ""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("kind");
+    }
+
+    @Test
+    @DisplayName("transferClaim: scope 多段以 ':' 连接，不同 topic/group 组合不碰撞")
+    void transferClaimScopeJoinNoCollision() {
+        // 旧实现 scope 用 '_' 连接：(a_b, c) 与 (a, b_c) 会拼出相同 Key 造成 claim 误命中；
+        // 改为 ':' 后 topic/group 命名校验禁止冒号，组合必然互异
+        String key1 = StreamMQKeys.transferClaim("ns", "retry", "a_b:c", "m1");
+        String key2 = StreamMQKeys.transferClaim("ns", "retry", "a:b_c", "m1");
+        assertThat(key1).isNotEqualTo(key2);
+        assertThat(key1).isEqualTo("streammq:ns:transfer:claim:retry:a_b:c:m1");
+
+        // 同一 topic/group 的 claim Key 保持稳定（与 RetryScheduler 调用方拼接规则一致）
+        assertThat(StreamMQKeys.transferClaim("ns", "retry", "topic:group", "m1"))
+                .isEqualTo(StreamMQKeys.transferClaim("ns", "retry", "topic:group", "m1"));
+    }
+
     @Nested
     @DisplayName("参数校验 requireNonEmpty")
     class RequireNonEmptyTests {

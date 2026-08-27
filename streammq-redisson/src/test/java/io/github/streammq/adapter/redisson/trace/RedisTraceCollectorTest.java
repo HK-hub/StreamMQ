@@ -25,6 +25,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
+import org.redisson.api.stream.StreamAddArgs;
 
 /**
  * {@link RedisTraceCollector} 单元测试，覆盖启用状态、name、记录方法、 null 入参、异常容忍与构造参数校验。
@@ -315,5 +316,61 @@ class RedisTraceCollectorTest {
         collector.recordSend(ctx);
 
         verify(redisson).getStream(contains("streammq:ns:trace:"));
+    }
+
+    // ===================== MAXLEN / EXPIRE 兜底（无界增长修复） =====================
+
+    private TraceCollector.SendTraceContext sendCtx(String traceId) {
+        return new TraceCollector.SendTraceContext(
+                "topic-1",
+                "tag-1",
+                new MessageId("9-0"),
+                "pg",
+                System.currentTimeMillis(),
+                true,
+                10L,
+                traceId,
+                new HashMap<>());
+    }
+
+    @SuppressWarnings("unchecked")
+    private org.redisson.api.stream.StreamAddParams<String, String> capturedAddArgs() {
+        org.mockito.ArgumentCaptor<StreamAddArgs<String, String>> captor =
+                org.mockito.ArgumentCaptor.forClass(
+                        (Class<StreamAddArgs<String, String>>) (Class<?>) StreamAddArgs.class);
+        verify(stream).add(captor.capture());
+        return (org.redisson.api.stream.StreamAddParams<String, String>) captor.getValue();
+    }
+
+    @Test
+    @DisplayName("XADD 默认附加近似 MAXLEN=100000，并对日期 Key 施加 7 天 EXPIRE")
+    void writeAppliesDefaultMaxlenAndTtl() {
+        collector.recordSend(sendCtx("t-maxlen-default"));
+
+        org.redisson.api.stream.StreamAddParams<String, String> args = capturedAddArgs();
+        assertThat(args.getMaxLen()).isEqualTo(RedisTraceCollector.DEFAULT_MAX_STREAM_LEN);
+        assertThat(args.isTrimStrict()).isFalse();
+        verify(stream).expire(java.time.Duration.ofDays(7));
+    }
+
+    @Test
+    @DisplayName("setter 注入小 MAXLEN 后 XADD 携带该上限")
+    void writeAppliesInjectedMaxlen() {
+        collector.setMaxStreamLen(5);
+        collector.recordSend(sendCtx("t-maxlen-small"));
+
+        assertThat(capturedAddArgs().getMaxLen()).isEqualTo(5);
+        verify(stream).expire(java.time.Duration.ofDays(7));
+    }
+
+    @Test
+    @DisplayName("maxStreamLen<=0 时 XADD 不附加截断")
+    void writeWithoutTrimWhenDisabled() {
+        collector.setMaxStreamLen(0);
+        collector.recordSend(sendCtx("t-maxlen-disabled"));
+
+        org.redisson.api.stream.StreamAddParams<String, String> args = capturedAddArgs();
+        assertThat(args.getMaxLen()).isZero();
+        verify(stream).expire(java.time.Duration.ofDays(7));
     }
 }

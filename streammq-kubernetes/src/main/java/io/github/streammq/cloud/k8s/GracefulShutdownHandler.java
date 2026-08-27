@@ -24,7 +24,7 @@ import org.springframework.beans.factory.ObjectProvider;
  * <ol>
  *   <li>标记 {@code isShuttingDown = true}（通过 {@link AtomicBoolean}）
  *   <li>通过 {@link ObjectProvider} 获取 {@link StreamMQListenerContainer}， 调用 {@code pause()} 停止拉取新消息
- *   <li>等待处理中的消息完成（最多 {@code gracefulShutdownTimeoutMs}，默认 30 秒）
+ *   <li>等待处理中的消息完成（等待 {@code gracefulShutdownTimeoutMs} 配置值，默认 30 秒）
  *   <li>调用 {@code container.stop()} 释放线程与连接
  * </ol>
  *
@@ -35,9 +35,6 @@ import org.springframework.beans.factory.ObjectProvider;
  */
 @Slf4j
 public class GracefulShutdownHandler implements DisposableBean {
-
-    /** in-flight 消息等待宽限期上限（毫秒） */
-    private static final long INFLIGHT_GRACE_CAP_MS = 1_000L;
 
     private final AtomicBoolean shuttingDown = new AtomicBoolean(false);
 
@@ -99,14 +96,14 @@ public class GracefulShutdownHandler implements DisposableBean {
     /**
      * 等待处理中的消息完成。
      *
-     * <p>pause() 仅停止拉取新消息，不改变容器的 running 状态，因此不能依赖 {@code isRunning()} 判断 in-flight
-     * 是否完成。此处采用有界短等待策略： 等待固定宽限期（最多 1 秒），让 in-flight 消息自然完成，然后由 {@link #stopContainer} 统一关闭容器。
+     * <p>pause() 仅停止拉取新消息，不改变容器的 running 状态，因此不能依赖 {@code isRunning()} 判断 in-flight 是否完成。此处按 {@code
+     * streammq.cloud.k8s.graceful-shutdown-timeout-ms} 配置值原样等待（下限 0）， 让 in-flight 消息自然完成，然后由 {@link
+     * #stopContainer} 统一关闭容器。
      *
      * @param container 监听器容器
      */
     private void waitForInFlightMessages(StreamMQListenerContainer container) {
-        long gracePeriod =
-                Math.min(properties.getGracefulShutdownTimeoutMs(), INFLIGHT_GRACE_CAP_MS);
+        long gracePeriod = Math.max(0L, properties.getGracefulShutdownTimeoutMs());
         long deadline = System.currentTimeMillis() + gracePeriod;
         while (System.currentTimeMillis() < deadline) {
             try {

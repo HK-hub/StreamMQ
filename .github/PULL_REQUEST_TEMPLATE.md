@@ -28,7 +28,7 @@ Please describe the tests that you ran to verify your changes. Provide instructi
 so we can reproduce. Please also list any relevant details for your test configuration.
 
 - [ ] `mvn test` (unit tests pass)
-- [ ] `mvn verify mvn verify（本地运行 Redis 时集成测试自动启用）` (integration tests pass)
+- [ ] `mvn verify`（本地运行需本地 Redis） (integration tests pass)
 - [ ] `mvn spotless:check` (code formatting check passes)
 - [ ] `mvn enforcer:enforce` (enforcer rules pass)
 

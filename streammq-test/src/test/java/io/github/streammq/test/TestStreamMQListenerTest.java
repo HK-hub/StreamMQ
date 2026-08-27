@@ -183,6 +183,37 @@ class TestStreamMQListenerTest {
     }
 
     @Test
+    void prepareAwait_alreadyArrivedMessages_compensatesAllCounts() throws Exception {
+        int expected = 3;
+        // 回归场景：prepareAwait 之前已有 expected*2 条消息到达（旧实现只补偿一次 countDown，
+        // expectedCount>1 时 waitForMessages 会挂起直至超时）
+        for (int i = 0; i < expected * 2; i++) {
+            listener.onMessage(createTestMessage("key-" + i, "body-" + i), mockContext);
+        }
+
+        listener.prepareAwait(expected);
+
+        long start = System.nanoTime();
+        listener.waitForMessages(1000);
+        long elapsedMillis = (System.nanoTime() - start) / 1_000_000;
+
+        assertThat(elapsedMillis).isLessThan(1000);
+    }
+
+    @Test
+    void awaitMessages_afterPrepareAwait_withPreInsertedMessages_completesFast() throws Exception {
+        int expected = 4;
+        for (int i = 0; i < expected * 2; i++) {
+            listener.onMessage(createTestMessage("key-" + i, "body-" + i), mockContext);
+        }
+
+        listener.prepareAwait(expected);
+        listener.awaitMessages(expected, 1000);
+
+        assertThat(listener.getReceivedCount()).isEqualTo(expected * 2);
+    }
+
+    @Test
     void getReceivedMessages_returnsCopy() throws Exception {
         listener.onMessage(createTestMessage("key1", "body1"), mockContext);
         List<Message<String>> messages = listener.getReceivedMessages();

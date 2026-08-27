@@ -330,7 +330,7 @@ public class RetryScheduler implements StreamMQScheduler {
      * 在执行权 claim 保护下读取 payload 并原子转投：XADD 目标流 + DEL payload + ZREM 调度条目 在同一 REDIS_WRITE_ATOMIC
      * 批内提交，要么全部生效、要么全部不生效。
      */
-    private void doTransfer(
+    void doTransfer(
             String msgId,
             RetryTarget target,
             String targetStreamKey,
@@ -340,8 +340,10 @@ public class RetryScheduler implements StreamMQScheduler {
         RMap<String, String> payloadMap = redisson.getMap(payloadKey);
         Map<String, String> fields = payloadMap.readAllMap();
         if (CollectionUtils.isEmpty(fields)) {
-            LOG.warn("Retry payload not found for msgId={}, may have been processed", msgId);
-            zset.remove(msgId);
+            // payload 已被 TTL 兜底回收：先登记隔离区（可观测）再移除活跃调度条目，
+            // 不再静默删除——运维可通过隔离区 ZSet 排查/重放
+            ScheduleQuarantine.quarantineAndRemove(
+                    redisson, namespace, "retry", zset, msgId, target.topic + ":" + target.group);
             return;
         }
 
@@ -439,9 +441,9 @@ public class RetryScheduler implements StreamMQScheduler {
         }
     }
 
-    /** 转移执行权 claim Key。 */
+    /** 转移执行权 claim Key。scope 多段以 ':' 连接（topic/group 禁止冒号，无碰撞风险）。 */
     private String transferClaimKey(String topic, String group, String msgId) {
-        return StreamMQKeys.transferClaim(namespace, "retry", topic + "_" + group, msgId);
+        return StreamMQKeys.transferClaim(namespace, "retry", topic + ":" + group, msgId);
     }
 
     /**
@@ -520,7 +522,7 @@ public class RetryScheduler implements StreamMQScheduler {
     // ===================== 内部类 =====================
 
     /** 重试目标信息 */
-    private static final class RetryTarget {
+    static final class RetryTarget {
         final String topic;
         final String group;
         final int maxReconsumeTimes;

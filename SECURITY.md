@@ -27,11 +27,13 @@
 
 ### 序列化器选择
 
-`FurySerializer` 默认不启用类注册白名单（开箱即用优先）。若 Redis 实例可能被不可信方写入，请使用 `new FurySerializer(true)` 启用类注册白名单模式，收窄反序列化攻击面。
+`FurySerializer` 默认强制类注册白名单（secure-by-default）：仅允许显式注册过的类反序列化，未注册类型在反序列化前直接拒绝。首次使用前需调用 `Fury.register(Class)` 注册业务消息体类型。仅当 Redis 实例完全可信时，才可显式关闭白名单换取任意 POJO 开箱即用：`new FurySerializer(false)`——此举会重新扩大反序列化攻击面，请谨慎评估。
 
 ### 凭据管理
 
-StreamMQ 从不将 accessKey/secretKey 输出到日志。生产环境建议通过环境变量或密钥管理服务注入 Redis 密码与鉴权凭据。
+StreamMQ 从不将鉴权凭据输出到日志。生产环境建议通过环境变量或密钥管理服务注入 Redis 密码与鉴权凭据。
+
+> **已知限制（内存中的口令）**：管理鉴权口令目前以 `String` 形式存在于 JVM 堆上（Java 字符串不可主动擦除），在堆转储 / 内存快照泄露的场景下存在被读取的理论风险。高敏感环境建议对管理端点做网络隔离（仅内网/堡垒机可达），并采用短周期令牌（`TokenAuthenticator`）以缩小泄露窗口。
 
 ## 加固建议
 

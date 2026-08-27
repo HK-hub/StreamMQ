@@ -5,7 +5,7 @@
  */
 package io.github.streammq.test;
 
-import io.github.streammq.core.util.RedisAvailability;
+import io.github.streammq.test.util.RedisAvailability;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
@@ -153,9 +153,11 @@ public abstract class StreamMQTestBase {
     /**
      * 清空当前连接数据库中的全部数据（flushdb）。
      *
-     * <p><b>安全守卫：</b>默认 mode=local 直连 localhost:6379，开发机上可能存有非 StreamMQ 的数据。 为避免误删，本地模式下必须显式设置系统属性
-     * {@code -Dstreammq.test.redis.flushAllowed=true} 才会执行 flush；docker/container
-     * 模式下实例是测试独占的，无需该开关。
+     * <p><b>隔离机制说明：</b>测试间的数据隔离<b>主要依赖</b>每个测试使用独立的 namespace / topic （唯一 Redis Key），而非
+     * flushdb——后者只是可选的辅助清理手段。
+     *
+     * <p><b>安全守卫：</b>本地模式下本方法默认静默跳过（no-op），必须显式设置系统属性 {@code
+     * -Dstreammq.test.redis.flushAllowed=true} 才会真正执行 flush；docker/container 模式下实例是测试独占的，无需该开关。
      */
     protected void clearRedisData() {
         if (redissonClient == null) {

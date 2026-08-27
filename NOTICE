@@ -42,12 +42,13 @@ This product includes software developed by the following third parties.
 
 ================================================================================
 
-5. Lettuce (https://github.com/lettuce-io/lettuce-core)
+5. Netty (https://netty.io)
 
    License: Apache License, Version 2.0
-   Copyright: Copyright (c) 2011-2026 Mark Paluch
-   Version: (managed by Spring Boot BOM)
-   Used in: streammq-redisson (Redisson's Redis client dependency)
+   Copyright: Copyright (c) 2008-2026 The Netty Project
+   Version: 4.1.x (managed transitively by Redisson)
+   Used in: streammq-redisson (Redisson is built on Netty for its network layer;
+            StreamMQ/Redisson does NOT depend on Lettuce)
 
 ================================================================================
 

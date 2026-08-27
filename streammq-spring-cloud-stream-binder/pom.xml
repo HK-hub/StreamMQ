@@ -16,6 +16,13 @@
     <description>StreamMQ Spring Cloud Stream Binder：允许 Spring Cloud Stream 用户以零代码改动接入 StreamMQ 作为消息后端。</description>
 
     <dependencies>
+        <!-- 测试基础设施公共件（PING 探测等，test scope 专用） -->
+        <dependency>
+            <groupId>io.github.streammq</groupId>
+            <artifactId>streammq-test-support</artifactId>
+            <scope>test</scope>
+        </dependency>
+
         <!-- StreamMQ Core -->
         <dependency>
             <groupId>io.github.streammq</groupId>

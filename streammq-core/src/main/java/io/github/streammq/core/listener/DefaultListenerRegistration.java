@@ -17,6 +17,7 @@ import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.util.StringUtils;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.locks.Lock;
 import lombok.Getter;
 import lombok.Setter;
@@ -27,6 +28,10 @@ import lombok.Setter;
  * <p>声明式字段与运行时字段统一在此建模；此前与之并行的 {@link ListenerConfig} 已降级为派生视图——由 {@link
  * ListenerConfig#from(ListenerRegistration)} 单点映射， 供底层 {@link StreamMQListenerFactory} SPI
  * 消费，二者不再各自维护可漂移的字段副本。
+ *
+ * <p>与 {@link ListenerConfig} 的校验差异（有意保留）：本类对 {@code consumeThreadMax}/{@code shardCount}
+ * 等运行时参数采取「夹取（clamp）」策略以保证注册期弹性； 而 {@link ListenerConfig} 构造器对同类参数直接抛出 IllegalArgumentException
+ * 以便配置错误尽早暴露。详见两者各自的字段注释。
  *
  * @param <T> body 类型
  * @author StreamMQ Contributors
@@ -47,9 +52,15 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
     private final String group;
     private final ConsumeMode consumeMode;
     private final int maxReconsumeTimes;
+
+    /** 顺序消费分片数（夹取下界 0，非负；与 {@link ListenerConfig} 的「&lt;1 抛异常」策略不同） */
     private final int shardCount;
+
     private final long consumeTimeoutMillis;
+
+    /** 顺序消费分片锁（构造时防御性拷贝为不可变列表，null 表示未设置） */
     private final List<Lock> shardLocks;
+
     private final int pullBatchSize;
     private final long pullBlockTimeoutMillis;
     private final long pullIntervalMillis;
@@ -79,7 +90,7 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
     /** per-consumer 已解析转换器实例（null 表示使用全局），由容器在 SPI 解析后回填。 */
     @Getter @Setter private MessageConverter converterInstance;
 
-    /** 并发消费循环数下限与上限。 */
+    /** 并发消费循环数下限（夹取下界 1）与上限（夹取至 &gt;= min；与 {@link ListenerConfig} 的「非法即抛异常」策略不同）。 */
     private final int consumeThreadMin;
 
     private final int consumeThreadMax;
@@ -95,7 +106,8 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         this.maxReconsumeTimes = (int) requireMin("maxReconsumeTimes", b.maxReconsumeTimes, 0);
         this.shardCount = Math.max(0, b.shardCount);
         this.consumeTimeoutMillis = requireMin("consumeTimeoutMillis", b.consumeTimeoutMillis, 0);
-        this.shardLocks = b.shardLocks;
+        // 防御性拷贝为不可变列表，避免外部持有原引用在注册后被修改（容器注册后视为不可变）
+        this.shardLocks = Objects.isNull(b.shardLocks) ? null : List.copyOf(b.shardLocks);
         this.pullBatchSize = (int) requireMin("pullBatchSize", b.pullBatchSize, 1);
         this.pullBlockTimeoutMillis =
                 requireMin("pullBlockTimeoutMillis", b.pullBlockTimeoutMillis, 0);

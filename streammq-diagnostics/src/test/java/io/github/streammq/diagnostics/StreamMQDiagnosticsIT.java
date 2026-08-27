@@ -19,13 +19,13 @@ import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.core.trace.StreamMQTraceService;
 import io.github.streammq.core.trace.TraceRecord;
 import io.github.streammq.core.trace.TraceType;
-import io.github.streammq.core.util.RedisAvailability;
 import io.github.streammq.diagnostics.model.BacklogReport;
 import io.github.streammq.diagnostics.model.ConsumeAttempt;
 import io.github.streammq.diagnostics.model.DlqReport;
 import io.github.streammq.diagnostics.model.MessageProfile;
 import io.github.streammq.diagnostics.model.MessageStatus;
 import io.github.streammq.diagnostics.model.SlowConsumeReport;
+import io.github.streammq.test.util.RedisAvailability;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -86,7 +86,7 @@ import org.springframework.test.context.DynamicPropertySource;
 @DirtiesContext
 @DisplayName("StreamMQ Diagnostics 真实集成测试")
 @EnabledIf(
-        value = "io.github.streammq.core.util.RedisAvailability#localhostAvailable",
+        value = "io.github.streammq.test.util.RedisAvailability#localhostAvailable",
         disabledReason = "Redis not available at localhost:6379")
 class StreamMQDiagnosticsIT {
     @BeforeAll

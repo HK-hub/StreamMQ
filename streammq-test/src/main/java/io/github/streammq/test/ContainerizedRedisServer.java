@@ -38,9 +38,6 @@ public class ContainerizedRedisServer implements Closeable {
     /** 容器暴露的 Redis 端口 */
     private static final int EXPOSED_REDIS_PORT = StreamMQTestBase.DEFAULT_PORT;
 
-    /** 容器环境变量：禁用命令列表 */
-    private static final String ENV_DISABLE_COMMANDS = "REDIS_DISABLE_COMMANDS";
-
     /** Redis 服务器启动参数：开启 AOF 持久化 */
     private static final String ARG_APPENDONLY = "--appendonly";
 

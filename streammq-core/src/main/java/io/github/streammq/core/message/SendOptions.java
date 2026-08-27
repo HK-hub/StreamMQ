@@ -40,10 +40,10 @@ public final class SendOptions implements Serializable {
     /** 默认同步重试次数 */
     public static final int DEFAULT_RETRY_TIMES = StreamMessageTemplate.DEFAULT_SYNC_RETRY_TIMES;
 
-    /** 发送超时毫秒数（<= 0 表示使用默认值） */
+    /** 发送超时毫秒数（-1 表示未设置，其余取值必须 &gt; 0） */
     private final long timeoutMillis;
 
-    /** 同步发送重试次数（< 0 表示使用默认值） */
+    /** 同步发送重试次数（-1 表示未设置，其余取值必须 &gt;= 0） */
     private final int retryTimes;
 
     private SendOptions(long timeoutMillis, int retryTimes) {
@@ -68,11 +68,23 @@ public final class SendOptions implements Serializable {
     /**
      * 以指定超时与重试次数创建选项。
      *
-     * @param timeoutMillis 超时毫秒数（&lt;=0 使用默认）
-     * @param retryTimes 重试次数（&lt;0 使用默认）
+     * <p>参数契约与 Builder 一致：{@code timeoutMillis} 必须为 -1（未设置）或 &gt; 0；{@code retryTimes} 必须为 -1（未设置）或
+     * &gt;= 0。0 不再是合法的超时值（此前 0 会被静默替换为默认值，语义含糊）。
+     *
+     * @param timeoutMillis 超时毫秒数（-1 使用默认）
+     * @param retryTimes 重试次数（-1 使用默认，0 表示字面上的零次重试）
      * @return SendOptions
+     * @throws IllegalArgumentException 如果取值不在合法范围内
      */
     public static SendOptions of(long timeoutMillis, int retryTimes) {
+        if (timeoutMillis != -1 && timeoutMillis <= 0) {
+            throw new IllegalArgumentException(
+                    "timeoutMillis must be -1 (unset) or positive, got: " + timeoutMillis);
+        }
+        if (retryTimes != -1 && retryTimes < 0) {
+            throw new IllegalArgumentException(
+                    "retryTimes must be -1 (unset) or >= 0, got: " + retryTimes);
+        }
         return new SendOptions(timeoutMillis, retryTimes);
     }
 
@@ -134,10 +146,15 @@ public final class SendOptions implements Serializable {
         /**
          * 设置发送超时毫秒数。
          *
-         * @param timeoutMillis 超时毫秒数（<= 0 表示使用默认值 3000ms）
+         * @param timeoutMillis 超时毫秒数（必须 &gt; 0；不调用则使用默认值 3000ms）
          * @return this
+         * @throws IllegalArgumentException 如果 {@code timeoutMillis <= 0}
          */
         public Builder timeoutMillis(long timeoutMillis) {
+            if (timeoutMillis <= 0) {
+                throw new IllegalArgumentException(
+                        "timeoutMillis must be positive, got: " + timeoutMillis);
+            }
             this.timeoutMillis = timeoutMillis;
             return this;
         }
@@ -145,10 +162,14 @@ public final class SendOptions implements Serializable {
         /**
          * 设置同步发送重试次数。
          *
-         * @param retryTimes 重试次数（< 0 表示使用默认值 2 次）
+         * @param retryTimes 重试次数（必须 &gt;= 0，0 表示字面上的零次重试；不调用则使用默认值 2 次）
          * @return this
+         * @throws IllegalArgumentException 如果 {@code retryTimes < 0}
          */
         public Builder retryTimes(int retryTimes) {
+            if (retryTimes < 0) {
+                throw new IllegalArgumentException("retryTimes must be >= 0, got: " + retryTimes);
+            }
             this.retryTimes = retryTimes;
             return this;
         }

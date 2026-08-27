@@ -31,8 +31,13 @@ public interface ContainerStateMachine {
     /** start 第一阶段：STOPPED→INIT 复位后 INIT→STARTING。 */
     void beginStart();
 
-    /** start 第二阶段：STARTING→RUNNING。 */
-    void markRunning();
+    /**
+     * start 第二阶段：STARTING→RUNNING（仅限 CAS 迁移）。
+     *
+     * <p>返回 false 表示当前状态已非 STARTING（如并发 stop 已将容器置为 STOPPED）， 调用方必须放弃启动后续步骤 （登记组管理器、提交读循环等）——旧实现无条件
+     * set(RUNNING) 会在竞态下「复活」已停止的容器。
+     */
+    boolean markRunning();
 
     /** stop 入口；返回 false 表示无需停机或竞态失败。 */
     boolean tryBeginStop();

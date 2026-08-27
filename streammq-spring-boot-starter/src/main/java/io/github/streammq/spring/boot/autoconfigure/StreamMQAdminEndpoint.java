@@ -180,7 +180,13 @@ public class StreamMQAdminEndpoint {
         return result;
     }
 
-    /** 将 DLQ 消息重投到原 Topic。 */
+    /**
+     * 将 DLQ 消息原子重投到原 Topic。
+     *
+     * <p>通过单个 Lua 脚本（{@code XADD} 目标 Stream + {@code XDEL} 源 DLQ）保证重投的原子性： 此前的「先 XADD 再
+     * XDEL」两步操作在中间失败时会导致消息重复（DLQ 未删除但目标已写入）。 脚本约定：KEYS = [dlqKey, targetKey]，ARGV = [field1,
+     * value1, ..., fieldN, valueN, msgId] （字段 K/V 对在前，待删除的 DLQ 消息 ID 固定在末尾）。
+     */
     public Map<String, Object> requeueDlq(String group, String msgId, String targetTopic) {
         Map<String, Object> result = new LinkedHashMap<>();
         String dlqKey = StreamMQKeys.dlqStream(namespace, group);
@@ -198,20 +204,40 @@ public class StreamMQAdminEndpoint {
             // 移除 DLQ 元数据
             fields.remove(RetryScheduler.FIELD_DLQ_REASON);
             fields.remove(MessageFields.ORIGINAL_MESSAGE_ID);
-            // XADD 到目标 Stream
+            // 组装 ARGV：K/V 对在前，msgId 固定在末尾
             String targetStreamKey = StreamMQKeys.topicStream(namespace, targetTopic);
-            RStream<String, String> targetStream = redisson.getStream(targetStreamKey);
-            StreamMessageId newId = targetStream.add(StreamAddArgs.entries(fields));
-            // XDEL DLQ 消息
-            dlqStream.remove(streamMsgId);
+            List<Object> argv = new ArrayList<>(fields.size() * 2 + 1);
+            for (Map.Entry<String, String> entry : fields.entrySet()) {
+                argv.add(entry.getKey());
+                argv.add(entry.getValue());
+            }
+            argv.add(msgId.trim());
+            // 原子脚本：XADD 成功才 XDEL，避免两步操作中间失败导致消息重复或丢失
+            Long requeued =
+                    redisson.getScript(StringCodec.INSTANCE)
+                            .eval(
+                                    RScript.Mode.READ_WRITE,
+                                    REQUEUE_LUA,
+                                    RScript.ReturnType.INTEGER,
+                                    List.of(dlqKey, targetStreamKey),
+                                    argv.toArray());
+            if (requeued == null || requeued != 1L) {
+                result.put("success", false);
+                result.put("error", "requeue script did not execute: return " + requeued);
+                LOG.warn(
+                        "DLQ requeue script returned {}: group={}, msgId={}, targetTopic={}",
+                        requeued,
+                        group,
+                        msgId,
+                        targetTopic);
+                return result;
+            }
             result.put("success", true);
-            result.put("newMessageId", newId.toString());
             result.put("targetTopic", targetTopic);
             LOG.info(
-                    "DLQ message requeued: group={}, oldId={}, newId={}, targetTopic={}",
+                    "DLQ message requeued atomically: group={}, oldId={}, targetTopic={}",
                     group,
                     msgId,
-                    newId,
                     targetTopic);
         } catch (RuntimeException ex) {
             result.put("success", false);
@@ -220,6 +246,19 @@ public class StreamMQAdminEndpoint {
         }
         return result;
     }
+
+    /**
+     * DLQ 重投 Lua 脚本：XADD 目标流成功后 XDEL 源 DLQ 条目，返回 1；参数形态异常时返回 0。
+     *
+     * <p>ARGV 约定：偶数位为 field，紧随其后为 value，最后一个元素为待删除的消息 ID（{@code ts-seq}）。
+     */
+    private static final String REQUEUE_LUA =
+            "local n = #ARGV\n"
+                    + "if n < 3 or n % 2 == 0 then return 0 end\n"
+                    + "local msgId = table.remove(ARGV)\n"
+                    + "redis.call('XADD', KEYS[2], '*', unpack(ARGV))\n"
+                    + "redis.call('XDEL', KEYS[1], msgId)\n"
+                    + "return 1\n";
 
     /** 删除指定 DLQ 消息。 */
     public Map<String, Object> deleteDlq(String group, String msgId) {

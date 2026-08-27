@@ -70,11 +70,10 @@ public class DefaultProducerFilterChain implements ProducerFilterChain {
                     return false;
                 }
             } catch (RuntimeException ex) {
-                LOG.warn(
-                        "ProducerFilter {} threw exception: {}",
-                        filter.name(),
-                        ex.getMessage(),
-                        ex);
+                // 与消费侧同理：求值异常必须向上传播为发送失败，
+                // 绝不允许"过滤器坏了"被降级为"消息照发"
+                throw new IllegalStateException(
+                        "ProducerFilter evaluation failed: " + filter.name(), ex);
             }
         }
         return true;

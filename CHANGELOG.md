@@ -22,6 +22,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+#### 发布前最终审计修复（本轮）
+
+##### 核心修复
+
+- MessageConverter SPI default 方法互递归修复：最小实现不再触发 StackOverflowError，3 参 `fromStreamFields(Map, Class, String)` 为唯一必须覆写点
+- BodyTypeResolver 支持泛型基类继承链类型变量替换（`class Child extends Base<T>` 不再静默降级为 String）
+- 容器状态机竞态消除（生命周期并发迁移下的非法状态跳变，STARTING→RUNNING 仅在合法迁移时成立）
+- InflightSink 泵健壮性加固（处理器任意 Throwable 不再杀死泵线程；泵 Future 按 loopIndex 全量登记可取消；dispatch 自旋尊重 running 标志）
+- 时钟源统一（cleanupStaleGroups 与写入侧一致使用 Redis TIME，免疫实例时钟偏移误删活跃 peer）
+- Selector / ConsumerFilter / ProducerFilter 求值异常显式向上传播并进入失败路径（重试/DLQ），彻底消灭"求值失败被降级为放行/丢弃"的静默语义
+- own-PEL 启动排空的 XREADGROUP 历史 ID 由非法 `-` 修正为 `0-0`（此前每次排空必然 ERR 并 WARN 刷屏）
+- 广播消费者暂停期间持续心跳（暂停超过组回收阈值不再导致组被回收、恢复后全量重放）
+- 事务回查器按 group 串行化并带超时看门狗（单个慢/挂死 checker 不再拖死全部事务组扫描）
+
+##### Metrics 装配
+
+- Micrometer 指标自动装配排序修复：从父配置嵌套 @Import 中移除，改经 `.imports` 排序在 Boot 注册 MeterRegistry 之后求值——标准 Boot 应用中指标 Bean 此前静默缺失
+
+##### K8s 集成修复
+
+- 循环依赖根因修正：ConfigMapConfigRefresher 自身实现 StreamMQConfigRefresher，工厂方法创建期 getIfAvailable 会把"创建中的自己"当候选；改为 ObjectProvider 延迟到首次 refresh 回调解析
+- liveness/readiness 探针端点与 HealthIndicator、GracefulShutdownHandler 正式注册为 Bean（此前为从未装配的死代码，照文档配探针将永久 404）
+- HpaAutoScaler 必需注入的 HpaMetricsProvider 补充默认 Bean 注册
+- gracefulShutdownTimeoutMs 配置值真实生效（移除 1000ms 硬上限）；CRD 清单收敛为已实现的 StreamMQCluster；Operator 支持 watch-namespaces 定向与镜像漂移调和
+
+##### PEL 恢复
+
+- retry/DLQ 流 PEL 认领恢复（新增 RETRY/DLQ 两类认领目标：滞留条目尾部复制重投或超限转投 DLQ，实例崩溃重启后不再永久搁浅）
+
+##### close 语义
+
+- `RedissonStreamProducer.close` 语义修正：注入的外部执行器不再被 awaitTermination 空等或 shutdownNow 强杀（所有权归提供方），内部创建的执行器照常回收
+
+##### 安全加固
+
+- GZIP 解压上限（解压炸弹防护，超限受控失败进入毒丸隔离路径）
+- Trace 数据 MAXLEN/TTL 约束（追踪存储不再无限增长）
+- 移除安慰剂配置项 `streammq.access-key` / `streammq.secret-key`（从未参与任何鉴权逻辑，存在误导性）
+- 管理 API 加固（topic/group/messageId 入参校验、DLQ requeue Lua 原子化、group config 写入配额、未知子路径返回 404）
+- Spring ExecutorService 注入条件收窄为命名 Bean `streammqExecutor`（不再吞并用户无关的 ExecutorService Bean）
+
+##### 文档勘误
+
+- 配置元数据勘误（删除幻影键提示、namespace 默认值与 DLQ 策略默认标签对齐代码事实）
+- SECURITY.md Fury 序列化安全默认描述与代码对齐（默认强制白名单）；NOTICE 底层依赖表述修正（Netty）
+- README 测试数量改为可复现口径、对比表 Kafka 两处错误修正、补齐 diagnostics 治理/JMX/追踪开关矩阵说明
+- 一键演示脚本重写：真实发送消息并在超时未消费时非零退出；示例工程死配置键修正
+- CHANGELOG 重复 `[0.1.0]` 头合并；CONTRIBUTING 增加 DCO 签署要求；PR 模板乱码行修复
+
+##### 工程/测试强化
+
+- 新增零依赖叶子模块 `streammq-test-support`：RedisAvailability 以 PING/+PONG 协议握手探测并从 core 生产构件迁出；live-Redis 集成套件更名为 `CoreRedisIntegrationIT` 归入 failsafe
+- 基准测试加入 JMH `Blackhole` 消费防 JIT 死码消除；flushdb 增加 `-Dstreammq.benchmark.allowFlush=true` 防误删守卫；新增手动触发 benchmark 工作流
+- 测试强化：重复投递检测、故障注入用例、CI 集成测试数量下限 tripwire
+
 #### streammq-redisson（既有修复）
 
 - 并发消费组新增 PEL 启动排空 + PelClaim 认领覆盖，修复实例崩溃后消息永久滞留 PEL 的问题
@@ -77,7 +132,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ClassCastException；自动装配类未使用 `@AutoConfiguration` 导致与用户同名 Bean 冲突
 - 修复 AOP 代理场景下 @StreamMQDlqConsumer 元注解 Bean 在监听器注册时被误强转为
   @StreamMQConsumer 导致的 ClassCastException（DLQ 消费者此前无法经代理注册）
-- 集成测试首跑暴露并修复：诊断报告断言未跟随 locale-neutral 文案、CoreIntegrationTest 误用双参
+- 集成测试首跑暴露并修复：诊断报告断言未跟随 locale-neutral 文案、CoreRedisIntegrationIT 误用双参
   fromStreamFields、TracingSampleIT 未隔离 DemoRunner 启动事件
 
 #### streammq-spring-boot-starter
@@ -194,39 +249,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Spring 装配**：新增 `streammqVirtualExecutor` Bean（`@ConditionalOnMissingBean(ExecutorService.class)`，
   用户注册任意 ExecutorService Bean 即全局覆盖）；容器 / 模板 / 事件总线自动装配均注入该池
 
-## [0.1.0]
-
-### Planned (V2.0, 规划中，尚未实现)
-
-- Multi-backend abstraction (BackendProvider SPI) supporting Redis / Kafka / RabbitMQ / Pulsar
-- Kafka backend implementation based on Kafka Client BackendProvider
-- Cross-datacenter asynchronous replication (RPO ≤ 1s)
-- Kafka wire protocol compatibility (native Kafka Client zero-code access)
-
-> 注：以上 V2.0 规划项尚未实现，未包含在任何已发布版本中；详细规划见 README「路线图」章节。
-
-### Changed
-
-- N/A
-
-### Deprecated
-
-- N/A
-
-### Removed
-
-- N/A
-
-### Fixed
-
-- N/A
-
-### Security
-
-- N/A
-
----
-
 ## [0.1.0] - 2026-08-08
 
 ### Added
@@ -267,6 +289,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - V1.0 design documents: PRD, architecture, functional design, detailed design
 - Design documents under `docs/` (PRD / architecture / functional / detailed)
 - Configuration reference, deployment guide, FAQ
+
+### Planned (V2.0, 规划中，尚未实现)
+
+- Multi-backend abstraction (BackendProvider SPI) supporting Redis / Kafka / RabbitMQ / Pulsar
+- Kafka backend implementation based on Kafka Client BackendProvider
+- Cross-datacenter asynchronous replication (RPO ≤ 1s)
+- Kafka wire protocol compatibility (native Kafka Client zero-code access)
+
+> 注：以上 V2.0 规划项尚未实现，未包含在任何已发布版本中；详细规划见 README「路线图」章节。
 
 [Unreleased]: https://github.com/HK-hub/StreamMQ/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/HK-hub/StreamMQ/releases/tag/v0.1.0

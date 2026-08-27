@@ -203,7 +203,12 @@ public class StreamMQTopologyService {
         return nodes;
     }
 
-    /** 构建生产者到消费者的路由，速率基于时间窗口内 SEND 记录数估算。 */
+    /**
+     * 构建生产者到消费者的路由，速率基于时间窗口内 SEND 记录数估算。
+     *
+     * @apiNote 路由速率（{@code rate}）为<b>估算值</b>：按「生产计数 × 消费扇出假设」推算（同一窗口内 SEND 记录数 均匀分摊到全部
+     *     producer→consumer 组合），<b>并非实测消费速率</b>。如需精确速率请以指标体系 （Micrometer / HPA 指标）为准。
+     */
     private List<TopologyRoute> buildRoutes(
             String topic,
             List<TopologyNode> producers,

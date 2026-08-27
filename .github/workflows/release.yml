@@ -97,7 +97,17 @@ jobs:
             streammq-spring-boot-starter/target/streammq-spring-boot-starter-${{ steps.version.outputs.version }}-sources.jar
             streammq-spring-boot-starter/target/streammq-spring-boot-starter-${{ steps.version.outputs.version }}-javadoc.jar
             streammq-tracing-opentelemetry/target/streammq-tracing-opentelemetry-${{ steps.version.outputs.version }}.jar
+            streammq-tracing-opentelemetry/target/streammq-tracing-opentelemetry-${{ steps.version.outputs.version }}-sources.jar
+            streammq-tracing-opentelemetry/target/streammq-tracing-opentelemetry-${{ steps.version.outputs.version }}-javadoc.jar
             streammq-diagnostics/target/streammq-diagnostics-${{ steps.version.outputs.version }}.jar
+            streammq-diagnostics/target/streammq-diagnostics-${{ steps.version.outputs.version }}-sources.jar
+            streammq-diagnostics/target/streammq-diagnostics-${{ steps.version.outputs.version }}-javadoc.jar
             streammq-kubernetes/target/streammq-kubernetes-${{ steps.version.outputs.version }}.jar
+            streammq-kubernetes/target/streammq-kubernetes-${{ steps.version.outputs.version }}-sources.jar
+            streammq-kubernetes/target/streammq-kubernetes-${{ steps.version.outputs.version }}-javadoc.jar
             streammq-spring-cloud-stream-binder/target/streammq-spring-cloud-stream-binder-${{ steps.version.outputs.version }}.jar
+            streammq-spring-cloud-stream-binder/target/streammq-spring-cloud-stream-binder-${{ steps.version.outputs.version }}-sources.jar
+            streammq-spring-cloud-stream-binder/target/streammq-spring-cloud-stream-binder-${{ steps.version.outputs.version }}-javadoc.jar
             streammq-test/target/streammq-test-${{ steps.version.outputs.version }}.jar
+            streammq-test/target/streammq-test-${{ steps.version.outputs.version }}-sources.jar
+            streammq-test/target/streammq-test-${{ steps.version.outputs.version }}-javadoc.jar

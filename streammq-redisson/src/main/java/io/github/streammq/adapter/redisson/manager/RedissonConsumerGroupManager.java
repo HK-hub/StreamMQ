@@ -459,7 +459,9 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
         if (CollectionUtils.isEmpty(all)) {
             return;
         }
-        long now = System.currentTimeMillis();
+        // 读取侧同样使用 Redis 服务器时钟：心跳以 redisNowMs() 写入，若用本地时钟比对，
+        // 跨主机偏差会误删存活实例（快钟）或漏删僵尸实例（慢钟）
+        long now = redisNowMs();
         List<String> staleIds = new ArrayList<>();
         for (Map.Entry<String, String> entry : all.entrySet()) {
             if (now - parseTimestamp(entry.getValue()) > instanceTimeoutMs) {

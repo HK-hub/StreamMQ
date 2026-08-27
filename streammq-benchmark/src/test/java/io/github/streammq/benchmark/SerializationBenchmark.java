@@ -12,6 +12,8 @@ import io.github.streammq.core.serializer.MessageSerializer;
 import java.io.Serializable;
 import java.util.concurrent.TimeUnit;
 import org.openjdk.jmh.annotations.*;
+import org.openjdk.jmh.infra.Blackhole;
+import org.openjdk.jmh.results.format.ResultFormatType;
 import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
@@ -60,49 +62,49 @@ public class SerializationBenchmark {
 
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
-    public void jacksonSerialize() {
+    public void jacksonSerialize(Blackhole blackhole) {
         for (int i = 0; i < BATCH_SIZE; i++) {
-            jacksonSerializer.serialize(payload, TestPayload.class);
+            blackhole.consume(jacksonSerializer.serialize(payload, TestPayload.class));
         }
     }
 
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
-    public void jacksonDeserialize() {
+    public void jacksonDeserialize(Blackhole blackhole) {
         for (int i = 0; i < BATCH_SIZE; i++) {
-            jacksonSerializer.deserialize(jacksonBytes, TestPayload.class);
+            blackhole.consume(jacksonSerializer.deserialize(jacksonBytes, TestPayload.class));
         }
     }
 
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
-    public void jdkSerialize() {
+    public void jdkSerialize(Blackhole blackhole) {
         for (int i = 0; i < BATCH_SIZE; i++) {
-            jdkSerializer.serialize(payload, TestPayload.class);
+            blackhole.consume(jdkSerializer.serialize(payload, TestPayload.class));
         }
     }
 
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
-    public void jdkDeserialize() {
+    public void jdkDeserialize(Blackhole blackhole) {
         for (int i = 0; i < BATCH_SIZE; i++) {
-            jdkSerializer.deserialize(jdkBytes, TestPayload.class);
+            blackhole.consume(jdkSerializer.deserialize(jdkBytes, TestPayload.class));
         }
     }
 
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
-    public void furySerialize() {
+    public void furySerialize(Blackhole blackhole) {
         for (int i = 0; i < BATCH_SIZE; i++) {
-            furySerializer.serialize(payload, TestPayload.class);
+            blackhole.consume(furySerializer.serialize(payload, TestPayload.class));
         }
     }
 
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
-    public void furyDeserialize() {
+    public void furyDeserialize(Blackhole blackhole) {
         for (int i = 0; i < BATCH_SIZE; i++) {
-            furySerializer.deserialize(furyBytes, TestPayload.class);
+            blackhole.consume(furySerializer.deserialize(furyBytes, TestPayload.class));
         }
     }
 
@@ -138,28 +140,28 @@ public class SerializationBenchmark {
 
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
-    public void jacksonRoundTrip() {
+    public void jacksonRoundTrip(Blackhole blackhole) {
         for (int i = 0; i < BATCH_SIZE; i++) {
             byte[] bytes = jacksonSerializer.serialize(payload, TestPayload.class);
-            jacksonSerializer.deserialize(bytes, TestPayload.class);
+            blackhole.consume(jacksonSerializer.deserialize(bytes, TestPayload.class));
         }
     }
 
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
-    public void jdkRoundTrip() {
+    public void jdkRoundTrip(Blackhole blackhole) {
         for (int i = 0; i < BATCH_SIZE; i++) {
             byte[] bytes = jdkSerializer.serialize(payload, TestPayload.class);
-            jdkSerializer.deserialize(bytes, TestPayload.class);
+            blackhole.consume(jdkSerializer.deserialize(bytes, TestPayload.class));
         }
     }
 
     @Benchmark
     @OperationsPerInvocation(BATCH_SIZE)
-    public void furyRoundTrip() {
+    public void furyRoundTrip(Blackhole blackhole) {
         for (int i = 0; i < BATCH_SIZE; i++) {
             byte[] bytes = furySerializer.serialize(payload, TestPayload.class);
-            furySerializer.deserialize(bytes, TestPayload.class);
+            blackhole.consume(furySerializer.deserialize(bytes, TestPayload.class));
         }
     }
 
@@ -172,6 +174,8 @@ public class SerializationBenchmark {
                         .measurementTime(TimeValue.seconds(3))
                         .measurementIterations(5)
                         .forks(1)
+                        .result("target/jmh-serialization.txt")
+                        .resultFormat(ResultFormatType.TEXT)
                         .build();
         new Runner(opt).run();
     }

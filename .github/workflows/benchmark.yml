@@ -1,0 +1,67 @@
+name: Benchmark
+
+# 手动触发的 JMH 基准任务：结果用于回填 README 性能基准章节（历史数字为旧实现测得，待本任务重新生成）。
+on:
+  workflow_dispatch:
+
+jobs:
+  benchmark:
+    name: JMH Benchmarks
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.2-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      # 先编译基准模块及其上游依赖（exec:java 直接调用目标不会触发依赖构建）
+      - name: Build benchmark module and dependencies (skip tests)
+        run: mvn -B -pl streammq-benchmark -am test-compile -DskipTests
+
+      # 基准准备/清理含 flushdb（Testcontainers 独占实例 + 显式 allowFlush 授权）；
+      # fork/iteration 参数由各 Benchmark 类注解决定，此处不调整。
+      - name: Run JMH benchmarks (template / serialization / consumer)
+        run: >-
+          mvn -B -Pbenchmark -pl streammq-benchmark
+          exec:java@benchmark-template
+          exec:java@benchmark-serialization
+          exec:java@benchmark-consumer
+          -Dstreammq.benchmark.allowFlush=true
+
+      - name: Collect JMH result files
+        if: always()
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          found=0
+          while IFS= read -r -d '' f; do
+            cp "$f" benchmark-results/
+            found=1
+          done < <(find streammq-benchmark/target -maxdepth 1 -type f -name 'jmh*.txt' -print0)
+          if [ "$found" -eq 0 ]; then
+            echo "::warning::no jmh*.txt result files produced by benchmarks"
+          fi
+          ls -la benchmark-results
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark-results/
+          if-no-files-found: warn

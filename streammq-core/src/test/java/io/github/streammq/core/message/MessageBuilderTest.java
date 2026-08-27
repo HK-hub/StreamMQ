@@ -291,5 +291,66 @@ class MessageBuilderTest {
             assertThat(message.getTransactionId()).isEqualTo("tx-100");
             assertThat(message.isTransactionMessage()).isTrue();
         }
+
+        @Test
+        @DisplayName("messageId 设置后透传到消息；未设置时保持 null")
+        void messageId_passedThrough() {
+            Message<String> without = MessageBuilder.<String>withTopic("t").body("b").build();
+            assertThat(without.getMessageId()).isNull();
+
+            MessageId id = new MessageId("100-0");
+            Message<String> with =
+                    MessageBuilder.<String>withTopic("t").body("b").messageId(id).build();
+            assertThat(with.getMessageId()).isEqualTo(id);
+        }
+    }
+
+    @Nested
+    @DisplayName("from(Message) 复制")
+    class FromMessage {
+
+        @Test
+        @DisplayName("from 复制全部字段，包括 messageId（F-06 回归）")
+        void fromCopiesAllFieldsIncludingMessageId() {
+            MessageId id = new MessageId("1234567890-1");
+            Message<String> original =
+                    MessageBuilder.<String>withTopic("order-topic")
+                            .tag("created")
+                            .keys("order-123")
+                            .shardingKey("order-123")
+                            .transactionId("tx-1")
+                            .reconsumeTimes(2)
+                            .bornTimestamp(42L)
+                            .bornHost("host-a")
+                            .withProperty("traceId", "t-1")
+                            .withUserProperty("biz", "v")
+                            .messageId(id)
+                            .body("payload")
+                            .build();
+
+            Message<String> copy = MessageBuilder.from(original).build();
+
+            assertThat(copy.getTopic()).isEqualTo(original.getTopic());
+            assertThat(copy.getTag()).isEqualTo(original.getTag());
+            assertThat(copy.getKeys()).isEqualTo(original.getKeys());
+            assertThat(copy.getShardingKey()).isEqualTo(original.getShardingKey());
+            assertThat(copy.getBody()).isEqualTo(original.getBody());
+            assertThat(copy.getBornTimestamp()).isEqualTo(original.getBornTimestamp());
+            assertThat(copy.getBornHost()).isEqualTo(original.getBornHost());
+            assertThat(copy.getReconsumeTimes()).isEqualTo(original.getReconsumeTimes());
+            assertThat(copy.getTransactionId()).isEqualTo(original.getTransactionId());
+            assertThat(copy.getProperties()).isEqualTo(original.getProperties());
+            assertThat(copy.getUserProperties()).isEqualTo(original.getUserProperties());
+            // 关键回归：messageId 不再丢失
+            assertThat(copy.getMessageId()).isEqualTo(id);
+            assertThat(copy).isEqualTo(original);
+        }
+
+        @Test
+        @DisplayName("from 源消息无 messageId 时副本同样为 null")
+        void fromKeepsNullMessageId() {
+            Message<String> original = MessageBuilder.<String>withTopic("t").body("b").build();
+            assertThat(MessageBuilder.from(original).build().getMessageId()).isNull();
+        }
     }
 }

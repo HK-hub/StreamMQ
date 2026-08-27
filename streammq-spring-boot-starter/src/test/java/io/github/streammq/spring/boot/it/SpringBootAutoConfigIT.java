@@ -17,9 +17,9 @@ import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.core.producer.StreamMessageProducerFactory;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.template.StreamMessageTemplate;
-import io.github.streammq.core.util.RedisAvailability;
 import io.github.streammq.spring.boot.autoconfigure.*;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
+import io.github.streammq.test.util.RedisAvailability;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
@@ -55,7 +55,7 @@ import org.springframework.test.context.ContextConfiguration;
 @ContextConfiguration(classes = RedissonTestConfig.class)
 @DisplayName("Spring Boot 自动装配集成测试")
 @EnabledIf(
-        value = "io.github.streammq.core.util.RedisAvailability#localhostAvailable",
+        value = "io.github.streammq.test.util.RedisAvailability#localhostAvailable",
         disabledReason = "Redis not available at localhost:6379")
 class SpringBootAutoConfigIT {
 

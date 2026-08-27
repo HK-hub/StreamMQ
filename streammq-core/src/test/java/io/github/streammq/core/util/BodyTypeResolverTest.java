@@ -100,6 +100,39 @@ class BodyTypeResolverTest {
         }
     }
 
+    /** 泛型基类实现 Listener&lt;T&gt;，子类以具体类型继承（F-08 回归：泛型超类链必须代入解析） */
+    abstract static class GenericBaseListener<T> implements StreamMessageConcurrentlyConsumer<T> {}
+
+    static class BigDecimalChildListener extends GenericBaseListener<java.math.BigDecimal> {
+        @Override
+        public ConsumeAction onMessage(
+                Message<java.math.BigDecimal> message, ConsumeContext context) {
+            return ConsumeAction.SUCCESS;
+        }
+    }
+
+    /** 多层泛型中间类：Leaf → Mid&lt;E&gt;（实现 Listener&lt;E&gt;），绑定需跨层传递 */
+    abstract static class MidLayerListener<E> implements StreamMessageOrderlyConsumer<E> {}
+
+    static class DeepChildOfMidListener extends MidLayerListener<Integer> {
+        @Override
+        public ConsumeAction onMessage(Message<Integer> message, ConsumeOrderlyContext context) {
+            return ConsumeAction.SUCCESS;
+        }
+    }
+
+    /** 泛型传递链：Leaf → Layer&lt;A&gt; extends Base&lt;B&gt; implements Listener&lt;B&gt; */
+    abstract static class ChainBaseListener<B> implements StreamMessageConcurrentlyConsumer<B> {}
+
+    abstract static class ChainLayerListener<A> extends ChainBaseListener<A> {}
+
+    static class ChainLeafListener extends ChainLayerListener<String> {
+        @Override
+        public ConsumeAction onMessage(Message<String> message, ConsumeContext context) {
+            return ConsumeAction.SUCCESS;
+        }
+    }
+
     /** 实现 Listener 但不指定泛型（raw type）→ 应返回 null */
     @SuppressWarnings("rawtypes")
     static class RawListener implements StreamMessageConcurrentlyConsumer {
@@ -162,6 +195,27 @@ class BodyTypeResolverTest {
         @DisplayName("父类实现 StreamMQConsumer<String>，子类继承 → String.class")
         void resolveInheritedFromParent() {
             Class<?> bodyType = BodyTypeResolver.resolve(new ChildOfStringListener());
+            assertThat(bodyType).isEqualTo(String.class);
+        }
+
+        @Test
+        @DisplayName("泛型基类 Base<T> implements Listener<T>，子类 Base<BigDecimal> → BigDecimal.class")
+        void resolveGenericBaseWithConcreteChild() {
+            Class<?> bodyType = BodyTypeResolver.resolve(new BigDecimalChildListener());
+            assertThat(bodyType).isEqualTo(java.math.BigDecimal.class);
+        }
+
+        @Test
+        @DisplayName("接口在层次中间层声明（Mid<E>），子类绑定实参 → Integer.class")
+        void resolveInterfaceAtDepth() {
+            Class<?> bodyType = BodyTypeResolver.resolve(new DeepChildOfMidListener());
+            assertThat(bodyType).isEqualTo(Integer.class);
+        }
+
+        @Test
+        @DisplayName("多层泛型传递链 Layer<A> extends Base<A> → String.class")
+        void resolveDeepGenericChain() {
+            Class<?> bodyType = BodyTypeResolver.resolve(new ChainLeafListener());
             assertThat(bodyType).isEqualTo(String.class);
         }
     }
