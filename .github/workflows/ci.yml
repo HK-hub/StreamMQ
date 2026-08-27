@@ -96,6 +96,19 @@ jobs:
       - name: Run unit tests
         run: mvn test
 
+      - name: Generate IT inventory
+        run: |
+          set -euo pipefail
+          {
+            echo "StreamMQ Integration Test Inventory"
+            echo "========================================"
+            echo "Generated at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo
+            find . -path '*/target' -prune -o -type f -name '*IT.java' -print | sort
+          } > integration-tests.txt
+          echo "Total IT files: $(grep -c 'IT.java' integration-tests.txt || true)"
+          cat integration-tests.txt
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
@@ -104,6 +117,7 @@ jobs:
           path: |
             **/target/surefire-reports/
             **/target/failsafe-reports/
+            integration-tests.txt
           if-no-files-found: warn
 
   verify:

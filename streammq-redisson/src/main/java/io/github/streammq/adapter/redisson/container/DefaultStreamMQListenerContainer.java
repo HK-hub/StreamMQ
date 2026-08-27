@@ -277,6 +277,20 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 一致性哈希重平衡策略虚拟节点数（透传给 SPI 解析器） */
     private volatile int defaultVirtualNodes = StreamMQConstants.DEFAULT_VIRTUAL_NODES;
 
+    /** 全局默认 RebalanceStrategy（来自 streammq.rebalance.strategy，可为 null） */
+    private volatile Class<? extends RebalanceStrategy> defaultRebalanceStrategy;
+
+    /**
+     * 设置全局默认 RebalanceStrategy（仅 INIT 状态允许）。
+     *
+     * <p>per-consumer 注解未显式指定 rebalanceStrategy 时回退到该值； 传 null 表示回退到 {@code
+     * AverageRebalanceStrategy}。
+     */
+    public void setDefaultRebalanceStrategy(Class<? extends RebalanceStrategy> strategy) {
+        assertInitState("defaultRebalanceStrategy");
+        this.defaultRebalanceStrategy = strategy;
+    }
+
     /**
      * 注入顺序消费 PEL 认领调度器。容器启动时会将所有 ORDERLY 消费目标注册到调度器。
      *
@@ -818,6 +832,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                             () -> filterResolver,
                             () -> defaultVirtualNodes,
                             () -> metrics,
+                            defaultRebalanceStrategy,
                             perConsumerEnabled);
         }
         return spiResolver;

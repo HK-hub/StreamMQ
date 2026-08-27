@@ -83,7 +83,7 @@
 
 ### 生产就绪
 
-单元测试 827 个 + 集成测试 197 个（由 surefire/failsafe 报告汇总，`mvn test` / `mvn verify` 可复现；无 Redis 环境 IT 自动跳过并可在 CI 日志核对执行数下限守门），覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理、PEL 认领、广播消费等场景。
+单元测试 ≥ 780 个（由 `mvn test` 实际产生，surefire 报告可逐文件复现）， 集成测试 ≥ 80 个（由 `mvn verify` 在 Redis 可用时执行，CI 集成 tripwire 保证数量下限）—— surefire/failsafe 报告可逐文件复现。 覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理、PEL 认领、广播消费等场景。
 
 ---
 
@@ -238,6 +238,8 @@
 | Maven | 3.9 | 3.9+ |
 | Redis | 7.2 | 7.2+ |
 | Spring Boot | 3.3 | 3.3.5 |
+
+> ⚠️ **`mvn verify` 需本地 Redis（`localhost:6379`）。** 该命令会运行集成测试，无 Redis 时自动跳过；CI 通过 Docker service 提供 Redis。
 
 ### 1. 引入依赖
 
@@ -804,23 +806,10 @@ template.syncSend(message);  // traceId 自动透传到消费者
 
 | 文档 | 说明 |
 |------|------|
-| [架构设计](docs/02-architecture.md) | 总体架构与模块划分（历史设计稿，以代码为准） |
-| [功能设计](docs/03-functional-design.md) | 核心特性与功能说明（历史设计稿，以代码为准） |
-| [详细设计](docs/04-detailed-design.md) | 关键实现细节（历史设计稿，以代码为准） |
-| [贡献指南](CONTRIBUTING.md) | 参与贡献 |
+| [架构设计](docs/01-PRD.md) | V1.0 产品需求 |
 | Javadoc | 随 Maven Central 发布的构件附带 sources/javadoc jar |
 
-> ⚠️ docs/02 ~ 04 为实现前的历史设计稿，其中的类名、配置键与部分机制描述已随实现演进过时；
-> 当前权威参考是本 README 与代码 Javadoc。
-
-### 设计文档
-
-| 文档 | 说明 |
-|------|------|
-| [产品需求文档](docs/01-PRD.md) | V1.0 PRD |
-| [架构设计](docs/02-architecture.md) | V1.0 架构设计 |
-| [功能设计](docs/03-functional-design.md) | V1.0 功能设计 |
-| [详细设计](docs/04-detailed-design.md) | V1.0 详细设计 |
+> ⚠️ `docs/historical/` 目录保存 V1.0 起草期的设计稿（02-architecture / 03-functional / 04-detailed），其中的类名、配置键与部分机制描述已随实现演进过时，仅供考古； 当前权威参考是本 README 与代码 Javadoc。
 
 ---
 

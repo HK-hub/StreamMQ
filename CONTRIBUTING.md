@@ -453,6 +453,32 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 
 5. **PR size:** Keep PRs focused. Large PRs (>500 lines changed) should be broken into smaller, logical chunks when possible.
 
+## Cutting a Release
+
+StreamMQ 通过 Maven Central Portal (`org.sonatype.central:central-publishing-maven-plugin`) 发布。发布流程如下：
+
+1. **更新版本号** — 升级根 `pom.xml` 与 `streammq-bom/pom.xml` 中的 `<version>` 与 `<streammq.version>`，保持一致（CI `guard` job 会校验）。
+2. **更新 CHANGELOG** — 将 `[Unreleased]` 段合并入新版本，附日期。
+3. **本地 dry-run** — `mvn clean verify -DskipITs=true -Dspotless.check.skip=true -Dowasp.skip=true`；`mvn verify` 需本地 Redis。
+4. **打 tag** — `git tag -s v0.x.y -m "Release v0.x.y"`（签名 tag 满足 GPG 要求）。
+5. **触发 `release.yml`** — `workflow_dispatch` 或推送 tag；`test` job 会运行 `mvn clean verify` 兜底，`publish` job 会上传至 Central Portal。
+6. **人工确认发布** — `parent.pom.xml` 中 `<autoPublish>false</autoPublish>`，首个版本需在 [Central Portal](https://central.sonatype.com/) 人工点击 "Publish"。
+7. **首次发布后** — 将 `<autoPublish>` 翻转为 `true`，提交 PR 并在本节追加 changelog 行；后续发布由 CI 自动完成。
+8. **创建 GitHub Release** — `release.yml` 会基于 tag 自动创建 Release 并附带全部已发布构件（jar + sources + javadoc）。
+
+### 发布门禁
+
+发布 job (`release.yml#publish`) 依赖 `test` job（`mvn clean verify`）通过——任何单测/集成测试/Spotless/JaCoCo 失败都会阻塞发布。 `verify` job 的集成测试 tripwire 要求实际执行 IT ≥ 80 且跳过率 ≤ 50%，防止 Redis 静默失效导致"假绿色"。
+
+### 凭据配置
+
+CI 通过 GitHub Secrets 注入：
+
+- `CENTRAL_USERNAME` / `CENTRAL_TOKEN` — Central Portal 凭据
+- `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE` — 签名密钥
+
+本地发布需在 `~/.m2/settings.xml` 中以 `server-id=central` 配置相同凭据。
+
 ## Reporting Bugs
 
 When submitting a bug report, please use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.md) and include:

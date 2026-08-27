@@ -7,20 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- 启动时管理端点暴露面 WARN：`AdminEndpointExposureStartupWarner` 在 `ApplicationReadyEvent` 阶段检测 `/actuator/streammq/**` 是否在主应用端口（不受 `management.endpoints.web.exposure.*` 治理），启用且未隔离时输出安全提醒；可通过 `-Dstreammq.admin.startup-warn=false` 关闭。
+- Maven `maven-antrun-plugin` 在 `generate-test-resources` 阶段生成 `target/it-list.txt`：全项目 `*IT.java` 集成测试清单，作为 CI 工件 `integration-tests.txt` 上传，配套 verify tripwire 防止 Redis 静默失效。
+- Spring Cloud Stream Binder 模块级 `package-info.java` 增加依赖与限制说明（Redisson 传递依赖、分区生产不支持、DenyAll 鉴权器默认）。
+- `DefaultPerConsumerSpiResolver` 全局默认 `RebalanceStrategy` 回退路径：`streammq.rebalance.strategy` 配置（默认 `ConsistentHashRebalanceStrategy`）现真实生效——`@StreamMQConsumer` 注解未显式指定 `rebalanceStrategy` 时优先使用全局配置。
+- 集成测试 `DefaultPerConsumerSpiResolverRebalanceTest`：覆盖三种回退路径（无全局 / 全局为 ConsistentHash / per-consumer 覆盖全局）。
+- `TransactionLockManager` / `TransactionCommitExecutor` / `TransactionRetentionSweeper` / `TransactionMetricsRecorder` 四个事务协作类（拆分自 `TransactionScanner` god class），均可在隔离单元测试中独立验证。
+- `CONTRIBUTING.md` 新增「Cutting a Release」章节：Central Portal 发布流程、首次人工 Publish 步骤、autoPublish 翻转 checklist、凭据配置、发布门禁。
+
 ### Changed
 
 - 集成测试在无 Redis 环境统一自动跳过（含 Spring Boot 自动装配 IT），保证 `mvn verify` 在任意环境可复现
 - 调度器（Retry/Delay/Transaction/PelClaim）SmartLifecycle 相位调整为先于消费容器启动、晚于其停止
 - 事务消息：未注入 TransactionScanner 时快速失败（不再提供"先投递再回滚"的假事务回退路径）
 - 诊断 REST 报告增加 locale-neutral `code` 字段，message 文本改为英文；移除伪造的线程池活跃度指标
+- `OrderProducer`（streammq-sample-quickstart）从 308 行精简为 4 个核心方法：保留 `createOrder` / `createOrderWithBuilder` / `createOrderAsync` / `createOrdersBatch`；更复杂的 `oneway / callback / metadataBuilder / timeout-retry` 模式迁移至 `streammq-sample-interceptor` 与 `streammq-sample-delay`。
+- 文档导航：`docs/02-architecture.md` / `03-functional-design.md` / `04-detailed-design.md` 移入 `docs/historical/`，README 文档导航表只保留 `docs/01-PRD.md` 与 Javadoc，提示历史设计稿仅供考古。
+- README「环境要求」新增提示：`mvn verify` 需要本地 Redis（`localhost:6379`），无 Redis 时 IT 自动跳过，CI 通过 Docker service 提供。
 
 ### Removed
 
 - 移除未生效的配置项：`streammq.event.*`、`streammq.thread-name-prefix`、`streammq.tracing.collector`、`streammq.tracing.trace-topic`（自定义 TraceCollector 请直接声明 Spring Bean）
 - 移除 Kubernetes 模块中无控制器的 StreamMQTopic / StreamMQConsumerGroup CRD 与模型
 - 移除不可拉取的默认镜像名；`spec.image` 现为必填
+- 移除 README 旧的「827 单测 / 197 IT」硬编码数字（不实）；改为「≥780 单测（mvn test 实际产出）+ IT 由 CI tripwire 保证 ≥80 实际执行」。
 
 ### Fixed
+
+#### 本轮修复（2026-08-27）
+
+- **`streammq.rebalance.strategy` 全局配置此前被静默忽略**——`DefaultPerConsumerSpiResolver.resolveRebalanceStrategy` 在注解未指定时硬编码回退 `AverageRebalanceStrategy`，导致配置了 `ConsistentHashRebalanceStrategy` 的用户实际拿不到一致性哈希分片。本轮将全局配置提升为第一优先级，添加 3 个回归测试。
+- **`TransactionScanner` 仍为 god class**——本轮拆出 4 个协作类（lock / commit / retention / metrics），共 508 行从 1238 行主类中下放；保留编排职责（生命周期、注册、扫描循环、状态机迁移）。
+- **`docs/02-04` 仍被 README「文档导航」表推荐**——已确认与代码脱节，本轮移入 `docs/historical/` 并降级导航，避免新人先读过期设计稿。
+- **Quickstart 示例 `mvn verify` 是否需要本地 Redis 未在 README 提示**——本轮在「环境要求」节加粗提示。
 
 #### 发布前最终审计修复（本轮）
 

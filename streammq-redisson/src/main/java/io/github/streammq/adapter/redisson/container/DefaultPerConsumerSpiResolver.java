@@ -57,6 +57,8 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
     private final Supplier<Integer> virtualNodesSupplier;
     private final Supplier<StreamMQMetrics> metricsSupplier;
     private final boolean enabled;
+    /** 全局默认 RebalanceStrategy（来自 streammq.rebalance.strategy 配置，可为 null）。 */
+    private final Class<? extends RebalanceStrategy> globalRebalanceStrategy;
 
     public DefaultPerConsumerSpiResolver(
             RedissonClient redisson,
@@ -70,6 +72,34 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
             Supplier<Integer> virtualNodesSupplier,
             Supplier<StreamMQMetrics> metricsSupplier,
             boolean enabled) {
+        this(
+                redisson,
+                globalConverter,
+                globalRetryPolicy,
+                globalDlqFailureStrategy,
+                dlqConfig,
+                interceptorChain,
+                globalFilterChain,
+                filterResolverSupplier,
+                virtualNodesSupplier,
+                metricsSupplier,
+                null,
+                enabled);
+    }
+
+    public DefaultPerConsumerSpiResolver(
+            RedissonClient redisson,
+            MessageConverter globalConverter,
+            RetryPolicy globalRetryPolicy,
+            DlqFailureStrategy globalDlqFailureStrategy,
+            DlqConfig dlqConfig,
+            ConsumerInterceptorChain interceptorChain,
+            ConsumerFilterChain globalFilterChain,
+            Supplier<ConsumerFilterResolver> filterResolverSupplier,
+            Supplier<Integer> virtualNodesSupplier,
+            Supplier<StreamMQMetrics> metricsSupplier,
+            Class<? extends RebalanceStrategy> globalRebalanceStrategy,
+            boolean enabled) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
         this.globalConverter = Objects.requireNonNull(globalConverter, "globalConverter");
         this.globalRetryPolicy = Objects.requireNonNull(globalRetryPolicy, "globalRetryPolicy");
@@ -82,6 +112,7 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
                 Objects.requireNonNull(filterResolverSupplier, "filterResolverSupplier");
         this.virtualNodesSupplier = Objects.requireNonNull(virtualNodesSupplier);
         this.metricsSupplier = Objects.requireNonNull(metricsSupplier, "metricsSupplier");
+        this.globalRebalanceStrategy = globalRebalanceStrategy;
         this.enabled = enabled;
     }
 
@@ -149,6 +180,11 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
     public RebalanceStrategy resolveRebalanceStrategy(ListenerRegistration<?> reg) {
         Class<? extends RebalanceStrategy> rebalanceClass = reg.getRebalanceStrategy();
         if (Objects.isNull(rebalanceClass) || rebalanceClass == RebalanceStrategy.class) {
+            // 注解未显式指定时：回退到全局默认 rebalanceStrategy（来自 streammq.rebalance.strategy 配置）。
+            // 若全局默认也未设置（null），则降级为 AverageRebalanceStrategy。
+            if (globalRebalanceStrategy != null) {
+                return instantiateGlobal(globalRebalanceStrategy);
+            }
             return new io.github.streammq.adapter.redisson.rebalance.AverageRebalanceStrategy();
         }
         if (rebalanceClass
@@ -164,6 +200,30 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
             LOG.warn(
                     "Failed to instantiate rebalanceStrategy for {}, using default: {}",
                     reg.key(),
+                    ex.getMessage());
+            return new io.github.streammq.adapter.redisson.rebalance.AverageRebalanceStrategy();
+        }
+    }
+
+    /**
+     * 实例化全局默认 RebalanceStrategy（由 streammq.rebalance.strategy 注入）； Consistency Hash 时携带配置的虚拟节点数。
+     */
+    @SuppressWarnings("unchecked")
+    private RebalanceStrategy instantiateGlobal(
+            Class<? extends RebalanceStrategy> rebalanceClass) {
+        if (rebalanceClass
+                == io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy
+                        .class) {
+            return new io.github.streammq.adapter.redisson.rebalance
+                    .ConsistentHashRebalanceStrategy(virtualNodesSupplier.get());
+        }
+        try {
+            return SpiResolver.resolveOrInstantiate(
+                    (Class) rebalanceClass, RebalanceStrategy.class, null);
+        } catch (RuntimeException ex) {
+            LOG.warn(
+                    "Failed to instantiate global rebalanceStrategy {}: {}",
+                    rebalanceClass.getName(),
                     ex.getMessage());
             return new io.github.streammq.adapter.redisson.rebalance.AverageRebalanceStrategy();
         }

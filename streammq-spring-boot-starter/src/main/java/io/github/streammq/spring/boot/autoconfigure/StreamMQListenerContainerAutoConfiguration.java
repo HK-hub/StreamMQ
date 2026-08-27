@@ -111,6 +111,7 @@ public class StreamMQListenerContainerAutoConfiguration {
         container.setMaxBatchSizeLimit(properties.getConsumer().getMaxBatchSizeLimit());
         container.setInflightCapacity(properties.getConsumer().getInflightCapacity());
         container.setDefaultVirtualNodes(properties.getRebalance().getVirtualNodes());
+        container.setDefaultRebalanceStrategy(properties.getRebalance().getStrategy());
         // 统一线程模型：容器消费循环复用 streammqExecutor（仅识别该名称的 Bean，用户可同名覆盖自定义）
         java.util.concurrent.ExecutorService executor = executorProvider.getIfAvailable();
         if (executor != null) {
