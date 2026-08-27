@@ -9,7 +9,7 @@ package io.github.streammq.core.trace;
  * 追踪事件类型。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public enum TraceType {
     /** 消息发送事件 */

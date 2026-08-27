@@ -13,6 +13,7 @@ import java.lang.reflect.TypeVariable;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
+import lombok.experimental.UtilityClass;
 
 /**
  * 解析 Consumer 实现类的泛型 body 类型 T。
@@ -41,12 +42,11 @@ import java.util.Objects;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public final class BodyTypeResolver {
+@UtilityClass
+public class BodyTypeResolver {
 
     /** 层次结构遍历深度上限，防御异常深的继承链与潜在的循环引用 */
     private static final int MAX_HIERARCHY_DEPTH = 32;
-
-    private BodyTypeResolver() {}
 
     /**
      * 从 Consumer 实例解析其泛型 body 类型 T。

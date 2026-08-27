@@ -7,6 +7,7 @@ package io.github.streammq.adapter.redisson.support;
 
 import io.github.streammq.core.util.StringUtils;
 import java.util.Objects;
+import lombok.experimental.UtilityClass;
 
 /**
  * Redis Key 命名工具类，统一管理 StreamMQ 所有 Key 前缀与拼接规则。
@@ -43,7 +44,8 @@ import java.util.Objects;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public final class StreamMQKeys {
+@UtilityClass
+public class StreamMQKeys {
 
     /** Key 全局前缀 */
     public static final String PREFIX = "streammq";
@@ -153,8 +155,6 @@ public final class StreamMQKeys {
 
     /** 自定义延时等级段 */
     public static final String SEG_CUSTOM = "custom";
-
-    private StreamMQKeys() {}
 
     /**
      * 拼接命名空间前缀段：{@code streammq:{ns}}。 当 ns 为空时返回 {@code streammq}。

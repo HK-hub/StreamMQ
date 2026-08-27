@@ -8,6 +8,7 @@ package io.github.streammq.core.util;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import lombok.experimental.UtilityClass;
 
 /**
  * Web 请求鉴权辅助工具，从当前请求上下文反射读取 {@code Authorization: Basic} 头。
@@ -21,7 +22,8 @@ import java.util.Base64;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public final class WebRequestAuthSupport {
+@UtilityClass
+public class WebRequestAuthSupport {
 
     /** spring-web RequestContextHolder 全限定名（编译期解耦的反射探测目标） */
     private static final String REQUEST_CONTEXT_HOLDER_CLASS_NAME =
@@ -32,8 +34,6 @@ public final class WebRequestAuthSupport {
 
     /** Basic 鉴权 scheme 前缀 */
     private static final String BASIC_AUTH_PREFIX = "Basic ";
-
-    private WebRequestAuthSupport() {}
 
     /**
      * 从当前请求上下文中反射读取 {@code Authorization: Basic} 头，返回 {@code [user, pass]} 或 null。

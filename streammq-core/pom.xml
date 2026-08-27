@@ -29,6 +29,14 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Spring 上下文（provided：仅用于 SPI 默认实现上的 @Component 编译期引用，
+             不传递到下游；下游若引入 spring-boot-starter 会自然获得运行时依赖） -->
+        <dependency>
+            <groupId>org.springframework</groupId>
+            <artifactId>spring-context</artifactId>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- 序列化默认实现（Jackson），optional 不强依赖传递 -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

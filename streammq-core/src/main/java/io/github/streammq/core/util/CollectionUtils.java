@@ -8,6 +8,7 @@ package io.github.streammq.core.util;
 import java.util.Collection;
 import java.util.Map;
 import java.util.Objects;
+import lombok.experimental.UtilityClass;
 
 /**
  * 集合工具类，提供 null 安全的空集合判断。
@@ -17,9 +18,8 @@ import java.util.Objects;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public final class CollectionUtils {
-
-    private CollectionUtils() {}
+@UtilityClass
+public class CollectionUtils {
 
     /**
      * 判断集合是否为 null 或空集合。

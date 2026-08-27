@@ -11,9 +11,7 @@ import io.github.streammq.core.trace.StreamMQTraceService;
 import io.github.streammq.diagnostics.endpoint.StreamMQDiagnosticsEndpoint;
 import io.github.streammq.diagnostics.spi.BacklogProbe;
 import io.github.streammq.diagnostics.support.RedisBacklogProbe;
-import java.util.Objects;
 import org.redisson.api.RedissonClient;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -86,27 +84,27 @@ public class StreamMQDiagnosticsAutoConfiguration {
     }
 
     /**
-     * 装配诊断服务。
+     * 装配诊断服务（Facade）。
      *
-     * @param traceService 追踪查询服务
-     * @param listenerContainer 监听器容器
-     * @param properties 诊断配置属性
-     * @param backlogProbeProvider 积压探针（可选；存在 {@link RedisBacklogProbe} 时基于真实 Redis 数据）
+     * <p>由 {@code @Component} + 构造注入装配 3 个 analyzer + 容器 + 属性 + 可选积压探针。 探针通过 {@link
+     * ObjectProvider} 注入以兼容 Redisson 缺席场景。
+     *
      * @return 诊断服务实例
      */
     @Bean
     @ConditionalOnBean({StreamMQTraceService.class, StreamMQListenerContainer.class})
     public StreamMQDiagnosticsService streamMQDiagnosticsService(
-            StreamMQTraceService traceService,
+            SlowConsumeAnalyzer slowConsumeAnalyzer,
+            BacklogAnalyzer backlogAnalyzer,
+            DlqAnalyzer dlqAnalyzer,
             StreamMQListenerContainer listenerContainer,
-            StreamMQDiagnosticsProperties properties,
-            ObjectProvider<BacklogProbe> backlogProbeProvider) {
-        Objects.requireNonNull(traceService, "traceService");
-        Objects.requireNonNull(listenerContainer, "listenerContainer");
-        Objects.requireNonNull(properties, "properties");
-        BacklogProbe backlogProbe = backlogProbeProvider.getIfAvailable();
+            StreamMQDiagnosticsProperties properties) {
         return new StreamMQDiagnosticsService(
-                traceService, listenerContainer, properties, backlogProbe);
+                slowConsumeAnalyzer,
+                backlogAnalyzer,
+                dlqAnalyzer,
+                listenerContainer,
+                properties);
     }
 
     /**

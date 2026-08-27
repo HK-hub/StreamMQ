@@ -14,14 +14,19 @@ package io.github.streammq.core.compression;
  * <p>内置实现：
  *
  * <ul>
- *   <li>{@code GzipCompressionCodec} - 基于 GZIP 的压缩（mandatory）
- *   <li>{@code Lz4CompressionCodec} - 基于 LZ4 的压缩（optional，需引入 LZ4 依赖）
+ *   <li>{@code GzipCompressionCodec} - 基于 GZIP 的压缩（mandatory，{@code streammq-redisson} 模块默认注册）
+ *   <li>{@code Lz4CompressionCodec} - 基于 LZ4 的压缩（条件性，<b>仅当 classpath 存在
+ *       {@code org.lz4:lz4-java} 时自动注册</b>，无需用户写代码；否则 {@code streammq-redisson} 不引入任何
+ *       LZ4 编译期依赖，避免无 LZ4 需求用户被迫下载）
  * </ul>
+ *
+ * <p>用户启用 LZ4 仅需在业务工程中添加 {@code org.lz4:lz4-java} 依赖——{@code streammq-spring-boot-starter}
+ * 会通过 {@code Lz4CompressionCodecFactory.tryCreate()} 反射探测并自动注册 LZ4 Codec。
  *
  * <p>自定义实现：业务方可实现此接口注册为 Bean，框架自动注入到 Producer。
  *
  * @author StreamMQ Contributors
- * @since 1.0.0
+ * @since 0.1.0
  */
 public interface CompressionCodec {
 
@@ -44,7 +49,7 @@ public interface CompressionCodec {
     /**
      * 返回编解码器名称，用于标识压缩算法。
      *
-     * @return 名称（如 {@code gzip}、{@code lz4}）
+     * @return 名称（如 {@code gzip}；自定义实现可为 {@code lz4} / {@code zstd} / {@code snappy} 等）
      */
     String name();
 }

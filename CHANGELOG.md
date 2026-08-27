@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 集成测试 `DefaultPerConsumerSpiResolverRebalanceTest`：覆盖三种回退路径（无全局 / 全局为 ConsistentHash / per-consumer 覆盖全局）。
 - `TransactionLockManager` / `TransactionCommitExecutor` / `TransactionRetentionSweeper` / `TransactionMetricsRecorder` 四个事务协作类（拆分自 `TransactionScanner` god class），均可在隔离单元测试中独立验证。
 - `CONTRIBUTING.md` 新增「Cutting a Release」章节：Central Portal 发布流程、首次人工 Publish 步骤、autoPublish 翻转 checklist、凭据配置、发布门禁。
+- 4 个 SPI 默认实现，消除「无默认实现致 NPE」的 README 误导：
+  - `NoopProducerFilter`（接受所有消息）
+  - `LoggingProducerFilter`（按 tag/key 记录 DEBUG 日志）
+  - `LoggingProducerInterceptor`（发送前/后/异常 INFO/WARN/ERROR 日志）
+  - `LoggingConsumerInterceptor`（消费前/后/异常 DEBUG/INFO/ERROR 日志）
+- LZ4 压缩 codec 真实现：`Lz4CompressionCodec` + `Lz4CompressionCodecFactory`（条件性注册，classpath 无 lz4-java 时降级为不可用）— 修正此前 Javadoc 漂移
+- `StreamMQDiagnosticsService`（909 行 god class）拆分为 3 个独立 analyzer + 1 个 facade：
+  - `SlowConsumeAnalyzer`（247 行）+ 单元测试
+  - `BacklogAnalyzer`（211 行）+ 单元测试
+  - `DlqAnalyzer`（294 行）+ 单元测试
+  - facade `StreamMQDiagnosticsService` 缩为 220 行（薄壳，仅做依赖注入+委托）
 
 ### Changed
 
@@ -26,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `OrderProducer`（streammq-sample-quickstart）从 308 行精简为 4 个核心方法：保留 `createOrder` / `createOrderWithBuilder` / `createOrderAsync` / `createOrdersBatch`；更复杂的 `oneway / callback / metadataBuilder / timeout-retry` 模式迁移至 `streammq-sample-interceptor` 与 `streammq-sample-delay`。
 - 文档导航：`docs/02-architecture.md` / `03-functional-design.md` / `04-detailed-design.md` 移入 `docs/historical/`，README 文档导航表只保留 `docs/01-PRD.md` 与 Javadoc，提示历史设计稿仅供考古。
 - README「环境要求」新增提示：`mvn verify` 需要本地 Redis（`localhost:6379`），无 Redis 时 IT 自动跳过，CI 通过 Docker service 提供。
+- 7 个工具类改用 Lombok `@UtilityClass` 注解，删除手写 `private Xxx() {}`：StringUtils / CollectionUtils / SpiResolver / BodyTypeResolver / WebRequestAuthSupport / StreamMQKeys / MdcKeys
+- `ConsumeLoopTask` 的 `PAUSED_SLEEP_MILLIS` / `BROKER_ERROR_BACKOFF_MILLIS` 从 `static final` 改为实例字段（构造器注入），允许 `streammq.consumer.paused-sleep-millis` 与 `streammq.consumer.broker-error-backoff-millis` 真正生效
 
 ### Removed
 
@@ -42,6 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`TransactionScanner` 仍为 god class**——本轮拆出 4 个协作类（lock / commit / retention / metrics），共 508 行从 1238 行主类中下放；保留编排职责（生命周期、注册、扫描循环、状态机迁移）。
 - **`docs/02-04` 仍被 README「文档导航」表推荐**——已确认与代码脱节，本轮移入 `docs/historical/` 并降级导航，避免新人先读过期设计稿。
 - **Quickstart 示例 `mvn verify` 是否需要本地 Redis 未在 README 提示**——本轮在「环境要求」节加粗提示。
+- **README:644 链接断链**——「完整配置参考」链接指向已移走的 `docs/02-architecture.md`，本轮改为 `docs/historical/02-architecture.md`（V1.0 起草稿，仅供考古）。
+- **LZ4 文档漂移**——`CompressionCodec` Javadoc 声称 `Lz4CompressionCodec` 是 built-in 但实际不存在，本轮修正文档说明 LZ4 需用户自行引入依赖并注册 Bean。
+- **2 个配置键被静默忽略**（config 未用项审计发现）：
+  - `streammq.producer.max-message-size` 此前从未读入 `ProducerConfig`，本轮在 `StreamMQCoreAutoConfiguration.streamMQTemplate` 注入到 `ProducerConfig.maxMessageSize` 字段
+  - `streammq.cloud.k8s.config-refresh-enabled` 此前对 `ConfigMapConfigRefresher` Bean 无效，本轮加 `@ConditionalOnProperty` 门控
+- **`streammq.consumer.paused-sleep-millis` / `streammq.consumer.broker-error-backoff-millis` 真实生效**——`ConsumeLoopTask` 改用实例字段 + 构造器注入；`StreamMQListenerContainerAutoConfiguration` 从 `properties.getConsumer()` 注入到 `tuning`，再传到 `ConsumeLoopTask` 构造器
+- **`streammq.producer.retry-times` 真实生效**——`ProducerConfig` 新增 `retryTimes` 字段（默认 `DEFAULT_SYNC_RETRY_TIMES`），`StreamMQCoreAutoConfiguration.streamMQTemplate` 注入；`DefaultStreamMessageTemplate.syncSend` 在调用方未传 `SendOptions` 或 `SendOptions` 使用默认值时优先采用 `defaultConfig.getRetryTimes()`
+- **LZ4 文档漂移已修复**——Javadoc 声称 `Lz4CompressionCodec` 是 built-in 但实际不存在，本轮通过 `Lz4CompressionCodecFactory`（反射检测 classpath）真正实现条件性 LZ4 codec：classpath 有 `org.lz4:lz4-java` 时启用，否则 `tryCreate()` 返回 null、`isAvailable()` 返回 false
 
 #### 发布前最终审计修复（本轮）
 

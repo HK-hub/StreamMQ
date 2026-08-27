@@ -5,9 +5,11 @@
  */
 package io.github.streammq.adapter.redisson.support;
 
+import lombok.experimental.UtilityClass;
+
 /** MDC 键名常量定义。 */
-public final class MdcKeys {
-    private MdcKeys() {}
+@UtilityClass
+public class MdcKeys {
 
     public static final String TRACE_ID = "traceId";
     public static final String MSG_ID = "msgId";

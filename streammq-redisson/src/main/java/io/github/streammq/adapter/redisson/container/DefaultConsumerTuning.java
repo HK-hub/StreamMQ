@@ -21,6 +21,13 @@ public class DefaultConsumerTuning implements ConsumerTuning {
 
     private volatile int inflightCapacity;
 
+    /** 暂停状态下消费循环的休眠间隔（毫秒）——来自 {@code streammq.consumer.paused-sleep-millis} */
+    private volatile long pausedSleepMillis = StreamMQConstants.DEFAULT_PAUSED_SLEEP_MS;
+
+    /** Broker 异常后消费循环的退避休眠间隔（毫秒）——来自 {@code streammq.consumer.broker-error-backoff-millis} */
+    private volatile long brokerErrorBackoffMillis =
+            StreamMQConstants.DEFAULT_BROKER_ERROR_BACKOFF_MS;
+
     @Override
     public int defaultPullBatchSize() {
         return defaultPullBatchSize;
@@ -34,6 +41,16 @@ public class DefaultConsumerTuning implements ConsumerTuning {
     @Override
     public int inflightCapacity() {
         return inflightCapacity;
+    }
+
+    /** 暴露 pausedSleepMillis 给容器装配 LoopContext 时使用。 */
+    public long getPausedSleepMillis() {
+        return pausedSleepMillis;
+    }
+
+    /** 暴露 brokerErrorBackoffMillis 给容器装配 LoopContext 时使用。 */
+    public long getBrokerErrorBackoffMillis() {
+        return brokerErrorBackoffMillis;
     }
 
     public void setDefaultPullBatchSize(int batchSize) {
@@ -62,6 +79,20 @@ public class DefaultConsumerTuning implements ConsumerTuning {
 
     public void setInflightCapacity(int capacity) {
         this.inflightCapacity = Math.max(0, capacity);
+    }
+
+    /** 注入暂停休眠间隔（毫秒），{@code > 0} 才生效。 */
+    public void setPausedSleepMillis(long millis) {
+        if (millis > 0) {
+            this.pausedSleepMillis = millis;
+        }
+    }
+
+    /** 注入 Broker 异常退避间隔（毫秒），{@code > 0} 才生效。 */
+    public void setBrokerErrorBackoffMillis(long millis) {
+        if (millis > 0) {
+            this.brokerErrorBackoffMillis = millis;
+        }
     }
 
     @Override

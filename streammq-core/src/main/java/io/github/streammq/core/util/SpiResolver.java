@@ -6,6 +6,7 @@
 package io.github.streammq.core.util;
 
 import java.util.Objects;
+import lombok.experimental.UtilityClass;
 
 /**
  * SPI 实例解析工具：按注解中声明的实现类无参实例化，未声明（marker）时回退到全局默认实例。
@@ -19,9 +20,8 @@ import java.util.Objects;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public final class SpiResolver {
-
-    private SpiResolver() {}
+@UtilityClass
+public class SpiResolver {
 
     /**
      * 解析或实例化 SPI 实现。

@@ -347,6 +347,16 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         }
     }
 
+    /** 注入暂停休眠间隔（毫秒，{@code streammq.consumer.paused-sleep-millis}）。 */
+    public void setPausedSleepMillis(long millis) {
+        tuning.setPausedSleepMillis(millis);
+    }
+
+    /** 注入 Broker 异常退避间隔（毫秒，{@code streammq.consumer.broker-error-backoff-millis}）。 */
+    public void setBrokerErrorBackoffMillis(long millis) {
+        tuning.setBrokerErrorBackoffMillis(millis);
+    }
+
     /**
      * 设置消费超时取消后的宽限期（毫秒）。
      *
@@ -795,7 +805,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         () -> paused,
                         tuning::inflightCapacity,
                         this::createConsumerFor);
-        return consumeExecutor.submit(new ConsumeLoopTask(ctx));
+        return consumeExecutor.submit(
+                new ConsumeLoopTask(
+                        ctx, tuning.getPausedSleepMillis(), tuning.getBrokerErrorBackoffMillis()));
     }
 
     private void checkBeforeStart() {

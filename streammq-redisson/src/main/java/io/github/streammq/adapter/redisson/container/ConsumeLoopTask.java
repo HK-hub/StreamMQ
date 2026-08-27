@@ -36,13 +36,11 @@ final class ConsumeLoopTask implements Runnable {
 
     private static final Logger LOG = LoggerFactory.getLogger(ConsumeLoopTask.class);
 
-    /** 暂停状态下消费循环的休眠间隔（毫秒） */
-    private static final long PAUSED_SLEEP_MILLIS =
-            io.github.streammq.core.StreamMQConstants.DEFAULT_PAUSED_SLEEP_MS;
+    /** 暂停状态下消费循环的休眠间隔（毫秒）——由容器从 {@code streammq.consumer.paused-sleep-millis} 注入 */
+    private final long pausedSleepMillis;
 
-    /** Broker 异常后消费循环的退避休眠间隔（毫秒） */
-    private static final long BROKER_ERROR_BACKOFF_MILLIS =
-            io.github.streammq.core.StreamMQConstants.DEFAULT_BROKER_ERROR_BACKOFF_MS;
+    /** Broker 异常后消费循环的退避休眠间隔（毫秒）——由容器从 {@code streammq.consumer.broker-error-backoff-millis} 注入 */
+    private final long brokerErrorBackoffMillis;
 
     /** 循环依赖集合（由容器装配，字段收拢避免长参数列表——Parameter Object）。 */
     record LoopContext(
@@ -67,8 +65,10 @@ final class ConsumeLoopTask implements Runnable {
     private final LoopContext ctx;
     private StreamMQListener listener;
 
-    ConsumeLoopTask(LoopContext ctx) {
+    ConsumeLoopTask(LoopContext ctx, long pausedSleepMillis, long brokerErrorBackoffMillis) {
         this.ctx = Objects.requireNonNull(ctx, "ctx");
+        this.pausedSleepMillis = pausedSleepMillis;
+        this.brokerErrorBackoffMillis = brokerErrorBackoffMillis;
     }
 
     // ===================== Template Method =====================
@@ -112,7 +112,7 @@ final class ConsumeLoopTask implements Runnable {
             while (ctx.running().getAsBoolean()) {
                 if (ctx.paused().getAsBoolean()) {
                     heartbeatHook.run();
-                    ContainerSupport.sleepQuietly(PAUSED_SLEEP_MILLIS);
+                    ContainerSupport.sleepQuietly(pausedSleepMillis);
                     continue;
                 }
                 if (!pullAndDispatch(sink)) {
@@ -218,7 +218,7 @@ final class ConsumeLoopTask implements Runnable {
                     ctx.reg().getTopic(),
                     ctx.reg().getGroup(),
                     ex.getMessage());
-            ContainerSupport.sleepQuietly(BROKER_ERROR_BACKOFF_MILLIS);
+            ContainerSupport.sleepQuietly(brokerErrorBackoffMillis);
             return true;
         } catch (RuntimeException ex) {
             LOG.warn(
@@ -227,7 +227,7 @@ final class ConsumeLoopTask implements Runnable {
                     ctx.reg().getGroup(),
                     ex.getMessage(),
                     ex);
-            ContainerSupport.sleepQuietly(BROKER_ERROR_BACKOFF_MILLIS);
+            ContainerSupport.sleepQuietly(brokerErrorBackoffMillis);
             return true;
         }
     }

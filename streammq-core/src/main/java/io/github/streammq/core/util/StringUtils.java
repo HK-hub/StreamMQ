@@ -6,6 +6,7 @@
 package io.github.streammq.core.util;
 
 import java.util.Objects;
+import lombok.experimental.UtilityClass;
 
 /**
  * 字符串工具类，提供 null 安全的空字符串判断。
@@ -15,9 +16,8 @@ import java.util.Objects;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public final class StringUtils {
-
-    private StringUtils() {}
+@UtilityClass
+public class StringUtils {
 
     /**
      * 判断字符序列是否为 null 或空字符串。

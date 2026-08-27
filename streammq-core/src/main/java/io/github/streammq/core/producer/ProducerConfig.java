@@ -51,6 +51,10 @@ public class ProducerConfig {
     /** 单条消息最大大小（字节），发送时校验（默认 512MB = Redis Stream 上限） */
     @Builder.Default private final long maxMessageSize = StreamMQConstants.MAX_MESSAGE_SIZE_BYTES;
 
+    /** 同步发送失败时的最大重试次数（来自 {@code streammq.producer.retry-times}） */
+    @Builder.Default
+    private final int retryTimes = StreamMQConstants.DEFAULT_SYNC_RETRY_TIMES;
+
     /** 序列化器类（可选，为 null 表示使用全局配置） */
     private final Class<? extends MessageSerializer<?>> serializer;
 }

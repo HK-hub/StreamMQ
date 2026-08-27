@@ -144,9 +144,18 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     @Override
     public <T> SendResult syncSend(Message<T> message, SendOptions options) {
         Objects.requireNonNull(message, "message");
-        SendOptions effective = Objects.nonNull(options) ? options : SendOptions.defaults();
-        return doSyncSend(
-                message, effective.effectiveTimeoutMillis(), effective.effectiveRetryTimes());
+        // 当调用方未传 SendOptions（使用默认）或未显式覆盖 retryTimes 时，
+        // 优先采用 ProducerConfig.retryTimes（即 streammq.producer.retry-times 配置）。
+        // 显式 options 才覆盖 ProducerConfig。
+        int retryTimes =
+                Objects.nonNull(options)
+                        ? options.effectiveRetryTimes()
+                        : defaultConfig.getRetryTimes();
+        long timeoutMillis =
+                Objects.nonNull(options)
+                        ? options.effectiveTimeoutMillis()
+                        : defaultConfig.getSendMessageTimeout();
+        return doSyncSend(message, timeoutMillis, retryTimes);
     }
 
     /**

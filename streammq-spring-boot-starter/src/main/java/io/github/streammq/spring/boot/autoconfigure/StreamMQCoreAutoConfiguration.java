@@ -7,6 +7,8 @@ package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.compression.DefaultCompressionCodecRegistry;
 import io.github.streammq.adapter.redisson.compression.GzipCompressionCodec;
+import io.github.streammq.adapter.redisson.compression.Lz4CompressionCodec;
+import io.github.streammq.adapter.redisson.compression.Lz4CompressionCodecFactory;
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.event.AsyncStreamMQEventBus;
 import io.github.streammq.adapter.redisson.interceptor.TraceContextConsumerInterceptor;
@@ -194,7 +196,9 @@ public class StreamMQCoreAutoConfiguration {
     /**
      * 压缩编解码器注册表，管理所有可用 Codec（按名称索引）。
      *
-     * <p>默认注册 {@code gzip}，用户自定义 Codec 通过实现 {@link CompressionCodec} 并注册 Spring Bean 即可自动加入注册表。
+     * <p>默认注册 {@code gzip}；若 classpath 存在 {@code org.lz4:lz4-java}，自动追加 {@code lz4} Codec（通过
+     * {@link Lz4CompressionCodecFactory#tryCreate()} 反射探测，不引入编译期依赖）。 用户自定义 Codec 通过实现
+     * {@link CompressionCodec} 并注册 Spring Bean 即可自动加入注册表。
      *
      * @param codecs 所有用户注册的 CompressionCodec Bean（可选）
      * @return 注册表
@@ -206,10 +210,39 @@ public class StreamMQCoreAutoConfiguration {
         DefaultCompressionCodecRegistry registry = new DefaultCompressionCodecRegistry();
         // 内置 Codec
         registry.register(new GzipCompressionCodec());
+        // 可选 LZ4 Codec：仅当 classpath 存在 lz4-java 时注册，避免硬依赖
+        registerOptionalLz4(registry);
         // 用户自定义 Codec
         codecs.forEach(registry::register);
         LOG.debug("CompressionCodecRegistry created with codecs: {}", registry.availableCodecs());
         return registry;
+    }
+
+    /**
+     * 条件性注册 LZ4 Codec：探测 lz4-java 是否在 classpath。
+     *
+     * <p>设计要点：
+     *
+     * <ul>
+     *   <li>使用 {@link Lz4CompressionCodecFactory#isAvailable()} 仅探测不初始化，避免冷启动开销
+     *   <li>使用 {@link Lz4CompressionCodecFactory#tryCreate()} 创建实例，LZ4 不可用时返回 null 而非抛异常
+     *   <li>不可用时输出单条 INFO 日志，便于运维确认 lz4-java 未生效的原因
+     * </ul>
+     */
+    private void registerOptionalLz4(DefaultCompressionCodecRegistry registry) {
+        if (!Lz4CompressionCodecFactory.isAvailable()) {
+            LOG.info("LZ4 compression codec not available (add org.lz4:lz4-java to enable)");
+            return;
+        }
+        Lz4CompressionCodec lz4 = Lz4CompressionCodecFactory.tryCreate();
+        if (lz4 == null) {
+            // 已记录 WARN 日志
+            return;
+        }
+        registry.register(lz4);
+        LOG.info(
+                "LZ4 compression codec registered (org.lz4:lz4-java detected on classpath, name={})",
+                lz4.name());
     }
 
     /**
@@ -382,6 +415,12 @@ public class StreamMQCoreAutoConfiguration {
                         .sendMessageTimeout(properties.getProducer().getSendMessageTimeout())
                         .streamMaxLen(properties.getProducer().getStreamMaxLen())
                         .compressThreshold(properties.getProducer().getCompressThreshold())
+                        // 注入 maxMessageSize：用户配置的 streammq.producer.max-message-size
+                        // （默认 512MB 与 Redis Stream 上限对齐；推荐不超过 1MB）
+                        .maxMessageSize(properties.getProducer().getMaxMessageSize())
+                        // 注入 retryTimes：用户配置的 streammq.producer.retry-times
+                        // （默认与 StreamMessageTemplate.DEFAULT_SYNC_RETRY_TIMES 一致）
+                        .retryTimes(properties.getProducer().getRetryTimes())
                         .build();
         LOG.debug(
                 "Creating DefaultStreamMessageTemplate: defaultGroup={}, transactionGroup={},"

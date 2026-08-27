@@ -641,7 +641,7 @@ streammq:
 | `rebalanceStrategy` | Class | RebalanceStrategy.class | 重平衡策略（默认全局） |
 | `consumerFilter` | Class[] | {} | 消费者专属过滤器 |
 
-> 完整配置参考请查看本文件「[配置参考](#配置参考)」章节与 [架构设计文档](docs/02-architecture.md)。
+> 完整配置参考请查看本文件「[配置参考](#配置参考)」章节与 [架构设计文档](docs/historical/02-architecture.md)（V1.0 起草稿，仅供考古）。
 
 ---
 
