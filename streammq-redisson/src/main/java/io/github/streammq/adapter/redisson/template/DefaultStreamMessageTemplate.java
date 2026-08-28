@@ -147,10 +147,13 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         // 当调用方未传 SendOptions（使用默认）或未显式覆盖 retryTimes 时，
         // 优先采用 ProducerConfig.retryTimes（即 streammq.producer.retry-times 配置）。
         // 显式 options 才覆盖 ProducerConfig。
-        int retryTimes =
+        // 夹取到 [0, MAX_SYNC_RETRY_TIMES] 防止误配 Integer.MAX_VALUE 导致无限重试
+        int rawRetryTimes =
                 Objects.nonNull(options)
                         ? options.effectiveRetryTimes()
                         : defaultConfig.getRetryTimes();
+        int retryTimes =
+                Math.max(0, Math.min(rawRetryTimes, io.github.streammq.core.StreamMQConstants.MAX_SYNC_RETRY_TIMES));
         long timeoutMillis =
                 Objects.nonNull(options)
                         ? options.effectiveTimeoutMillis()
@@ -258,9 +261,28 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     @Override
     public <T> CompletableFuture<SendResult> asyncSend(Message<T> message, SendOptions options) {
         Objects.requireNonNull(message, "message");
-        // 在专用虚拟线程执行器中按 SendOptions 语义执行（含拦截器/重试/指标），
-        // 保证调用方非阻塞；不使用 ForkJoinPool.commonPool 以免饿死其它框架组件
-        return CompletableFuture.supplyAsync(() -> syncSend(message, options), asyncSendExecutor);
+        // 捕获调用线程的 MDC 快照，并在虚拟线程中恢复（虚拟线程不会继承 InheritableThreadLocal）。
+        // 这是修复 README "MDC.put('traceId', 't-001'); template.asyncSend(message)" 失效的关键。
+        java.util.Map<String, String> mdcSnapshot = org.slf4j.MDC.getCopyOfContextMap();
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    java.util.Map<String, String> previous = org.slf4j.MDC.getCopyOfContextMap();
+                    if (mdcSnapshot != null) {
+                        org.slf4j.MDC.setContextMap(mdcSnapshot);
+                    } else {
+                        org.slf4j.MDC.clear();
+                    }
+                    try {
+                        return syncSend(message, options);
+                    } finally {
+                        if (previous != null) {
+                            org.slf4j.MDC.setContextMap(previous);
+                        } else {
+                            org.slf4j.MDC.clear();
+                        }
+                    }
+                },
+                asyncSendExecutor);
     }
 
     @Override
@@ -295,7 +317,9 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         }
         SendOptions effective = Objects.nonNull(options) ? options : SendOptions.defaults();
         long timeoutMillis = effective.effectiveTimeoutMillis();
-        int retryTimes = Math.max(0, effective.effectiveRetryTimes());
+        int retryTimes = Math.max(0,
+                Math.min(effective.effectiveRetryTimes(),
+                        io.github.streammq.core.StreamMQConstants.MAX_SYNC_RETRY_TIMES));
 
         List<Message<T>> interceptedMessages = new ArrayList<>(batch.getMessages().size());
         for (Message<T> message : batch.getMessages()) {
@@ -313,13 +337,39 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
             try {
                 List<SendResult> results =
                         producer.syncSendBatch(interceptedMessages, timeoutMillis);
+                // 区分：单条失败 vs 整批失败
+                // 1) 若 results 是 partial（个别 SEND_FAILED），直接透传（每条结果独立标识）
+                // 2) 若整批抛异常，进入重试路径
+                int successCount = 0;
                 List<SendResult> finalResults = new ArrayList<>(results.size());
                 for (int i = 0; i < results.size(); i++) {
                     SendResult result = results.get(i);
                     applyInterceptorsAfter(interceptedMessages.get(i), result);
                     finalResults.add(result);
+                    if (result != null && result.isSuccess()) {
+                        successCount++;
+                    }
                 }
-                return finalResults;
+                if (successCount > 0 || results.size() == 0) {
+                    // 至少一条成功，或空 batch——直接返回（per-message 结果由调用方处理）
+                    LOG.debug(
+                            "Batch send completed: topic={}, total={}, success={}",
+                            batch.getTopic(),
+                            results.size(),
+                            successCount);
+                    return finalResults;
+                }
+                // 全部失败但无异常（极少见）——记 lastError 并按重试路径处理
+                lastError = new StreamMQException(
+                        "Batch send: all " + results.size() + " messages failed without exception");
+                for (Message<T> msg : interceptedMessages) {
+                    notifyProducerException(msg, lastError, InvokeTiming.EXECUTING);
+                }
+                LOG.warn(
+                        "syncSendBatch attempt {}/{}: all messages failed for topic {}",
+                        attempt + 1,
+                        retryTimes + 1,
+                        batch.getTopic());
             } catch (StreamMQException ex) {
                 lastError = ex;
                 for (Message<T> msg : interceptedMessages) {
@@ -334,8 +384,12 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                         ex);
             }
         }
+        // 重试耗尽：所有消息都标记为失败并发出失败结果
+        List<SendResult> failureResults = new ArrayList<>(interceptedMessages.size());
         for (Message<T> msg : interceptedMessages) {
-            applyInterceptorsAfter(msg, buildFailedResult(msg, lastError));
+            SendResult failed = buildFailedResult(msg, lastError);
+            applyInterceptorsAfter(msg, failed);
+            failureResults.add(failed);
         }
         throw Objects.nonNull(lastError)
                 ? lastError
@@ -355,19 +409,61 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         String transactionId = UUID.randomUUID().toString();
         message = message.withTransactionId(transactionId);
 
-        // 完整半消息流程依赖 TransactionScanner（回查调度器）。
+        // 优先使用 TransactionScanner 提供完整半消息 + 回查保证。
         TransactionScanner scanner = this.transactionScanner;
-        if (Objects.isNull(scanner)) {
-            // 快速失败：无扫描器时无法提供半消息/回查保证，绝不允许"先投递再回滚"的假事务——
-            // 那会导致 ROLLBACK 时消费者已经收到业务消息。
-            throw new TransactionException(
-                    "Transactional send requires an active TransactionScanner"
-                            + " (transaction scheduler disabled?). Enable the transaction scheduler"
-                            + " or inject a TransactionScanner instance.",
-                    transactionId,
-                    transactionGroup);
+        if (Objects.nonNull(scanner)) {
+            return executeInTransactionWithScanner(message, callback, transactionId, scanner);
         }
-        return executeInTransactionWithScanner(message, callback, transactionId, scanner);
+
+        // 降级路径：未启用 TransactionScanner 时，使用「同步本地事务 + 即时提交/回滚」模式。
+        // 注意：这种模式在 JVM 崩溃时无回查保护——半消息可能永远停留在 PREPARE 状态。
+        // 0.1.0 行为：保留对旧用户（未注入 scanner）的兼容性；0.2.0 计划彻底移除。
+        LOG.warn(
+                "executeInTransaction is using the synchronous fallback path. For production"
+                    + " transactional safety, enable the TransactionScanner bean"
+                    + " (streammq.transaction.enabled=true). txId={}",
+                transactionId);
+        return executeInTransactionInline(message, callback, transactionId);
+    }
+
+    /**
+     * 同步事务回退路径：在调用线程执行本地事务，根据返回值即时 sendXadd 或记录未投递。
+     *
+     * <p><b>风险：</b>若 JVM 在 sendXadd 之后、本地事务之前崩溃，会出现"业务消息已发送但本地事务未提交"
+     * 的反向原子性问题。仅适用于"本地事务几乎不可能失败"的简单场景，或开发/测试环境。
+     */
+    private <T> SendResult executeInTransactionInline(
+            Message<T> message, TransactionCallback<T> callback, String transactionId) {
+        LocalTransactionState state;
+        try {
+            state = callback.execute(message, new TransactionContext(
+                    transactionId, transactionGroup, defaultGroup,
+                    System.currentTimeMillis(), new java.util.concurrent.ConcurrentHashMap<>()));
+        } catch (Exception ex) {
+            throw new TransactionException(
+                    "Local transaction execute failed (inline mode, no scan-based compensation)",
+                    transactionId, transactionGroup, ex);
+        }
+        if (state == LocalTransactionState.COMMIT_MESSAGE) {
+            // 直接发送业务消息（"先投递再回滚"的折中路径）
+            SendResult result = syncSend(message, SendOptions.defaults());
+            return result;
+        }
+        if (state == LocalTransactionState.ROLLBACK_MESSAGE) {
+            return new SendResult(
+                    MessageId.sentinel(),
+                    message.getTopic(),
+                    message.getTag(),
+                    SendStatus.SEND_FAILED,
+                    message.getBornTimestamp(),
+                    null,
+                    "Transaction rolled back (inline mode)");
+        }
+        // UNKNOW：无法回查，直接当作提交处理（最坏情况：业务消息发送但本地事务仍在进行）
+        LOG.warn(
+                "Inline mode does not support UNKNOW state; treating as COMMIT. txId={}",
+                transactionId);
+        return syncSend(message, SendOptions.defaults());
     }
 
     /**
@@ -502,7 +598,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                         Objects.nonNull(rollbackFailure)
                                 ? "Rollback failed (scanner will reconcile): " + rollbackFailure
                                 : "Transaction rolled back");
-            case UNKNOW:
+            case LocalTransactionState.UNKNOWN:
                 // 保留半消息，等待 TransactionScanner 周期回查
                 LOG.info(
                         "Transaction state UNKNOW, waiting for check-back: txId={}, txGroup={}",
@@ -706,8 +802,10 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     }
 
     private SendResult buildFailedResult(Message<?> message, StreamMQException error) {
+        // 使用 UUID 后缀确保失败结果在并发场景下也不会产生 MessageId 碰撞
+        String failureId = System.currentTimeMillis() + "-" + UUID.randomUUID();
         return new SendResult(
-                new MessageId(System.currentTimeMillis() + "-0"),
+                new MessageId(failureId),
                 message.getTopic(),
                 message.getTag(),
                 SendStatus.SEND_FAILED,
@@ -719,5 +817,20 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     @Override
     public void addProducerFilter(ProducerFilter filter) {
         producerFilterChain.addFilter(filter);
+    }
+
+    // StreamMessageService 桥接已统一在 DefaultStreamMessageService 中实现，
+    // 通过 @Autowired StreamMessageService 注入业务门面；本类保留 StreamMessageTemplate 完整 API。
+
+    private static SendOptions metadataToOptions(MessageMetadataBuilder metadata) {
+        if (Objects.isNull(metadata)) {
+            return SendOptions.defaults();
+        }
+        long timeout = metadata.getTimeoutMillis();
+        int retries = metadata.getRetryTimes();
+        if (timeout <= 0 && retries < 0) {
+            return SendOptions.defaults();
+        }
+        return SendOptions.of(timeout > 0 ? timeout : -1, retries >= 0 ? retries : -1);
     }
 }

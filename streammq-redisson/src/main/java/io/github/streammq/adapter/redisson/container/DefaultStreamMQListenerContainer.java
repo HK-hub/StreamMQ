@@ -190,6 +190,18 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     private volatile ConsumerFilterResolver filterResolver =
             new io.github.streammq.adapter.redisson.filter.ReflectiveConsumerFilterResolver();
 
+    /**
+     * 过滤器 / 拦截器协调器（从 DefaultStreamMQListenerContainer 拆分出来，专门负责 filter chain
+     * 的注册与缓存重建）。
+     */
+    private volatile ListenerContainerFilterCoordinator filterCoordinator;
+
+    /**
+     * 元数据门面（从 DefaultStreamMQListenerContainer 拆分出来，专门负责消费者元数据查询与
+     * scheduler target 绑定）。
+     */
+    private volatile ListenerContainerMetadata metadataCoordinator;
+
     /** 指标收集器（可选注入，用于记录消费指标，null 时为 no-op） */
     private volatile StreamMQMetrics metrics;
 
@@ -203,6 +215,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      */
     public void setFilterResolver(ConsumerFilterResolver filterResolver) {
         this.filterResolver = filterResolver;
+        if (filterCoordinator != null) {
+            filterCoordinator.setFilterResolver(filterResolver);
+        }
     }
 
     /**
@@ -557,7 +572,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      * @param interceptor 拦截器实例
      */
     public void addConsumerInterceptor(ConsumerInterceptor interceptor) {
-        interceptorChain.addInterceptor(interceptor);
+        ensureFilterCoordinator().addInterceptor(interceptor);
     }
 
     /**
@@ -566,7 +581,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      * @param interceptors 拦截器集合
      */
     public void addConsumerInterceptors(Collection<ConsumerInterceptor> interceptors) {
-        interceptorChain.addInterceptors(interceptors);
+        ensureFilterCoordinator().addInterceptors(interceptors);
     }
 
     // ===================== 消息过滤器 =====================
@@ -577,8 +592,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      * @param filter 过滤器实例
      */
     public void addConsumerFilter(ConsumerFilter filter) {
-        consumerFilterChain.addFilter(filter);
-        rebuildConsumerFilterCache();
+        ensureFilterCoordinator().addFilter(filter, store, spiResolver());
     }
 
     /**
@@ -587,15 +601,16 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      * @param filters 过滤器集合
      */
     public void addConsumerFilters(Collection<ConsumerFilter> filters) {
-        consumerFilterChain.addFilters(filters);
-        rebuildConsumerFilterCache();
+        ensureFilterCoordinator().addFilters(filters, store, spiResolver());
     }
 
-    private void rebuildConsumerFilterCache() {
-        for (ListenerRegistration<?> reg : store.registrations()) {
-            spiResolver().rebuildFilters(reg, store);
-        }
-        LOG.debug("Rebuilt consumer filter cache for {} registrations", store.registrationCount());
+    /**
+     * 重建 per-consumer 过滤器缓存（已注册消费者的过滤器变更后调用）。
+     *
+     * <p>公开方法，便于高级用户在直接修改过滤器后手动触发缓存重建。
+     */
+    public void rebuildConsumerFilterCache() {
+        ensureFilterCoordinator().rebuildFilters(store, spiResolver());
     }
 
     @Override
@@ -622,36 +637,49 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     @Override
     public Collection<ConsumerMetadata> getConsumers() {
-        List<ConsumerMetadata> list = new ArrayList<>(store.registrationCount());
-        for (ListenerRegistration<?> reg : store.registrations()) {
-            list.add(
-                    new ConsumerMetadata(
-                            reg.getTopic(),
-                            reg.getGroup(),
-                            reg.getConsumer().getClass(),
-                            Objects.nonNull(reg.getTargetBodyType())
-                                    ? reg.getTargetBodyType()
-                                    : Object.class));
-        }
-        return Collections.unmodifiableList(list);
+        return ensureMetadata().getConsumers();
     }
 
     public boolean rebalanceGroup(String group) {
-        boolean executed = schedulerBinder().rebalanceGroup(group);
-        if (executed) {
-            LOG.info("Rebalance triggered for orderly group={}", group);
-        } else {
-            LOG.warn("Rebalance requested for unknown/non-orderly group: {}", group);
-        }
-        return executed;
+        return ensureMetadata().rebalanceGroup(group);
     }
 
     public void registerRetryTargets(RetryScheduler scheduler) {
-        schedulerBinder().bindRetryTargets(scheduler);
+        ensureMetadata().registerRetryTargets(scheduler);
     }
 
     public void registerPelClaimTargets(PelClaimScheduler scheduler) {
-        schedulerBinder.bindPelClaimTargets(scheduler);
+        ensureMetadata().registerPelClaimTargets(scheduler);
+    }
+
+    // ===================== 拆分协调器懒加载 =====================
+
+    private ListenerContainerFilterCoordinator ensureFilterCoordinator() {
+        ListenerContainerFilterCoordinator c = filterCoordinator;
+        if (c == null) {
+            synchronized (this) {
+                c = filterCoordinator;
+                if (c == null) {
+                    c = new ListenerContainerFilterCoordinator(consumerFilterChain, interceptorChain);
+                    filterCoordinator = c;
+                }
+            }
+        }
+        return c;
+    }
+
+    private ListenerContainerMetadata ensureMetadata() {
+        ListenerContainerMetadata m = metadataCoordinator;
+        if (m == null) {
+            synchronized (this) {
+                m = metadataCoordinator;
+                if (m == null) {
+                    m = new ListenerContainerMetadata(store, schedulerBinder());
+                    metadataCoordinator = m;
+                }
+            }
+        }
+        return m;
     }
 
     // ===================== 生命周期方法 =====================

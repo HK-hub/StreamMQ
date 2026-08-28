@@ -7,6 +7,83 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security (P0)
+
+- **Fury / JDK 反序列化 foot-gun 加固**：
+  - `FurySerializer(false)` 构造与 `JdkSerializer.unrestricted()` 静态工厂均被门控为
+    `-Dstreammq.security.allowUnrestrictedSerializer=true`，否则抛 `SecurityException`。
+    缺省路径永远安全；用户必须显式声明"我已知悉 RCE 风险"才能关闭白名单。
+  - `FurySerializer` 序列化/反序列化失败时携带"如何注册类 / 切到 Jackson"的可操作错误消息。
+
+### Fixed (P0)
+
+- **README QuickStart 与示例代码 API 错位**：README 之前示例使用 `StreamMessageTemplate`，
+  而 canonical sample (`streammq-sample-quickstart`) 实际使用 `StreamMessageService`——
+  用户首 5 分钟即遇编译/运行错误。README 现在明确推荐 `StreamMessageService` 门面，
+  并对 `StreamMessageTemplate` 标注"高级用法"，避免首次接触的认知割裂。
+- **README benchmark 数字与方法学声明**：将"269,760 ops/s"等被确认破损的基准从文档移除，
+  并显式承认 v0.1.0 之前曾发布过方法学有缺陷的数字（"we openly acknowledge..."）。
+  下次发布时由 CI `benchmark.yml` 任务重新生成。
+- **PRD 与 README 版本冲突**：`docs/01-PRD.md`（仍标注 "v0.1-draft 起草中"）移至
+  `docs/historical/01-PRD-v0.1-draft.md`，避免新人先读到过期文档。
+- **JDK 21 要求未文档化**：README 新增"为什么要求 JDK 21"一节，明确这是有意为之（虚拟线程、模式匹配），
+  而不是疏漏。
+
+### Changed (P1)
+
+- **God class 进一步拆分**：
+  - 新增 `ListenerContainerFilterCoordinator`（filter/interceptor 链管理）、
+    `ListenerContainerMetadata`（元数据查询 / scheduler target 绑定），
+    从 `DefaultStreamMQListenerContainer` 抽离。容器仍保留编排职责，但单文件 public 方法数从 41 降至 ~30，
+    复杂度下降 25% 以上。
+- **`DefaultStreamMessageTemplate` 仍为编排层**：暂未做二次拆分（已识别为 0.2.0 路线图项）。
+- **`executeInTransaction` 不再硬失败**：当 `TransactionScanner` 为 null 时，模板自动降级到
+  "同步本地事务 + 即时发送/回滚" 路径，并在日志 WARN 提示用户启用 Scanner 以获得完整回查保护。
+  0.1.0 → 0.2.0 行为兼容路径，0.3.0 计划移除。
+- **MDC 跨虚拟线程透传修复**：`asyncSend` 现在捕获调用线程的 MDC 快照并在虚拟线程内恢复，
+  修复 README 文档承诺 "MDC.put('traceId', 't-001'); template.asyncSend(message); traceId 自动透传"
+  实际失效的问题。
+- **`UNKNOW` 拼写错误修正**：`LocalTransactionState` 增补 `UNKNOWN` 作为标准命名，
+  `UNKNOW` 标记 `@Deprecated` 保留为 0.0.x 兼容别名。所有 case 语句与 Javadoc 迁移到 `UNKNOWN`。
+- **重试次数硬上限**：`StreamMQConstants.MAX_SYNC_RETRY_TIMES = 16` 夹取 `retryTimes` 配置，
+  防止 `Integer.MAX_VALUE` 等误配导致无限重试、业务线程阻塞数十分钟。
+- **MessageId 碰撞修复**：`buildFailedResult` 使用 UUID 后缀，替代碰撞风险的 `currentTimeMillis() + "-0"`。
+- **`syncSendBatch` 部分失败语义**：区分"单条失败"与"整批失败"，单条失败的 partial result
+  正常透传；仅在重试耗尽时把所有消息标记为失败。
+- **调度线程统一 daemon**：`TransactionScanner` / `DelayMessageScheduler` /
+  `PelClaimScheduler` / `RetryScheduler` 的扫描线程全部设为 daemon，
+  修复"JVM 因调度器非 daemon 线程挂死"的潜在问题。
+- **Fury / JdkSerializer 错误消息可操作化**：序列化失败时附带"如何修复"指南。
+
+### Added (P1)
+
+- **英文 README**：`README.en.md`，覆盖所有主要章节，机械翻译为主、关键术语校对。
+- **POM 修正说明**：README 顶部新增 "Why we require JDK 21" 章节。
+- **`AuthenticatorStartupLogger`**：启动时若 `DenyAllAuthenticator` 处于激活态且 admin 启用，
+  输出一行 INFO 提示用户如何注册其他 authenticator，避免 401 死锁。
+- **集成测试跳过警告**：`AbstractRedisIT.setUpRedis()` 在 Redis 不可用时输出
+  显眼 stderr 警告（之前是 `Assumptions.assumeTrue` 静默跳过）。
+
+### Removed
+
+- 无。
+
+### Backward Compatibility
+
+- `LocalTransactionState.UNKNOW` 仍可使用，标记 `@Deprecated`，0.3.0 移除。
+- `executeInTransaction` 在 `TransactionScanner` 缺失时改为降级而非硬抛——0.0.x 行为。
+- `FurySerializer(false)` 与 `JdkSerializer.unrestricted()` 现在要求显式系统属性；
+  现有测试已更新（`FurySerializerTest` / `JdkSerializerTest`）。
+
+### Migration Notes
+
+- 升级到 0.1.0 后若使用 `JdkSerializer.unrestricted()`，需在启动时添加：
+  `-Dstreammq.security.allowUnrestrictedSerializer=true`
+  或迁移到 `JdkSerializer(Set<String> allowedClasses)`。
+- 升级到 0.1.0 后若使用 `FurySerializer(false)`，同上。
+- 升级到 0.1.0 后所有 `LocalTransactionState.UNKNOW` 引用会出现 deprecation 警告，
+  建议迁移到 `UNKNOWN`。
+
 ### Added
 
 - 启动时管理端点暴露面 WARN：`AdminEndpointExposureStartupWarner` 在 `ApplicationReadyEvent` 阶段检测 `/actuator/streammq/**` 是否在主应用端口（不受 `management.endpoints.web.exposure.*` 治理），启用且未隔离时输出安全提醒；可通过 `-Dstreammq.admin.startup-warn=false` 关闭。

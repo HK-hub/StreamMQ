@@ -82,11 +82,25 @@ public class JdkSerializer<T extends java.io.Serializable> implements MessageSer
     /**
      * 创建完全不过滤的实例（仅供兼容迁移使用）。
      *
-     * <p>警告：等同于开放任意 classpath 类的反序列化，存在已知 gadget 利用面； 仅当 Redis 完全可信时使用，并尽快迁移到白名单模式。
+     * <p><b>警告：</b>等同于开放任意 classpath 类的反序列化，存在已知 gadget 利用面；仅当 Redis 完全可信时使用，并尽快迁移到白名单模式。
+     *
+     * <p><b>门禁：</b>必须显式设置 JVM 系统属性 {@code -Dstreammq.security.allowUnrestrictedSerializer=true}
+     * 才能创建无过滤器实例。缺省情况下抛 {@link SecurityException}——这是反序列化 RCE 的最后一道防线。
      *
      * @return 无过滤器实例
+     * @throws SecurityException 当未设置上述系统属性时
+     * @deprecated 该方法在共享/多租户 Redis 场景下是远程代码执行向量。请改用 {@link #JdkSerializer(Collection)}
+     *     显式放行业务类型；并设置 {@code -Djdk.serialFilter=...} 兜底。
      */
+    @Deprecated
     public static <T extends java.io.Serializable> JdkSerializer<T> unrestricted() {
+        if (!Boolean.getBoolean("streammq.security.allowUnrestrictedSerializer")) {
+            throw new SecurityException(
+                    "JdkSerializer.unrestricted() is gated by"
+                        + " -Dstreammq.security.allowUnrestrictedSerializer=true. This method is a"
+                        + " known RCE vector on shared Redis. Use JdkSerializer(Set<String>) to"
+                        + " explicitly allow only the classes your business code needs.");
+        }
         JdkSerializer<T> s = new JdkSerializer<>();
         s.allowedClasses.clear();
         return s;

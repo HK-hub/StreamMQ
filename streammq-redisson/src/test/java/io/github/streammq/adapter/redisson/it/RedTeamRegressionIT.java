@@ -66,7 +66,7 @@ class RedTeamRegressionIT extends AbstractRedisIT {
                 txGroup,
                 (io.github.streammq.core.transaction.TransactionChecker<Object>)
                         (message, ctx) ->
-                                io.github.streammq.core.enums.LocalTransactionState.UNKNOW);
+                                io.github.streammq.core.enums.LocalTransactionState.UNKNOWN);
         scanner.start();
         try {
             scanner.registerHalfMessage(txId, txGroup, targetTopic, fieldsOf("lock-payload"));

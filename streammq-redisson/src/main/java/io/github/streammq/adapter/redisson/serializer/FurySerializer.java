@@ -39,8 +39,21 @@ public class FurySerializer<T> implements MessageSerializer<T> {
      * 构造序列化器。
      *
      * @param requireClassRegistration 是否强制类注册白名单（生产环境建议开启以收窄反序列化攻击面）
+     * @throws SecurityException 当 {@code requireClassRegistration=false} 且未设置系统属性
+     *     {@code -Dstreammq.security.allowUnrestrictedSerializer=true} 时。 关闭白名单意味着 Redis 中被写入的字节流可反序列化
+     *     为 classpath 上的任意类，共享/多租户 Redis 场景下是远程代码执行向量。 用户必须显式声明"我已知悉风险"才能使用。
      */
     public FurySerializer(boolean requireClassRegistration) {
+        if (!requireClassRegistration
+                && !Boolean.getBoolean("streammq.security.allowUnrestrictedSerializer")) {
+            throw new SecurityException(
+                    "FurySerializer(false) is gated by"
+                        + " -Dstreammq.security.allowUnrestrictedSerializer=true. Disabling Fury's"
+                        + " class registration whitelist is a known RCE vector on shared Redis."
+                        + " Either keep the whitelist (default) and register your message types via"
+                        + " Fury.register(Class), or set the system property after confirming"
+                        + " Redis is fully trusted.");
+        }
         this.fury =
                 Fury.builder()
                         .withLanguage(Language.JAVA)
@@ -54,7 +67,18 @@ public class FurySerializer<T> implements MessageSerializer<T> {
         if (Objects.isNull(object)) {
             return new byte[0];
         }
-        return fury.serialize(object);
+        try {
+            return fury.serialize(object);
+        } catch (RuntimeException ex) {
+            throw new io.github.streammq.core.exception.SerializationException(
+                    "Fury serialize failed for " + type.getName()
+                            + ". If the cause mentions 'class ... is not registered', call"
+                            + " ((org.apache.fury.ThreadSafeFury) fury).register("
+                            + type.getName() + ".class) once at startup, or switch to Jackson"
+                            + " (JacksonJsonSerializer) which does not require pre-registration."
+                            + " Underlying: " + ex.getMessage(),
+                    ex);
+        }
     }
 
     @Override
@@ -63,7 +87,16 @@ public class FurySerializer<T> implements MessageSerializer<T> {
         if (Objects.isNull(bytes) || bytes.length == 0) {
             return null;
         }
-        return (R) fury.deserialize(bytes);
+        try {
+            return (R) fury.deserialize(bytes);
+        } catch (RuntimeException ex) {
+            throw new io.github.streammq.core.exception.SerializationException(
+                    "Fury deserialize failed for " + type.getName()
+                            + ". If the cause mentions 'class ... is not registered', register"
+                            + " the class with Fury.register() or switch to Jackson."
+                            + " Underlying: " + ex.getMessage(),
+                    ex);
+        }
     }
 
     @Override

@@ -184,7 +184,7 @@ public class RetryScheduler implements StreamMQScheduler {
         this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
         this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
         this.streamMaxLen = Math.max(0, streamMaxLen);
-        this.scanExecutor = Executors.newSingleThreadScheduledExecutor();
+        this.scanExecutor = Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "streammq-scheduler-daemon"); t.setDaemon(true); return t; });
     }
 
     /**
@@ -229,7 +229,7 @@ public class RetryScheduler implements StreamMQScheduler {
         if (Objects.nonNull(scanExecutor) && !scanExecutor.isShutdown()) {
             return;
         }
-        scanExecutor = Executors.newSingleThreadScheduledExecutor();
+        scanExecutor = Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "streammq-scheduler-daemon"); t.setDaemon(true); return t; });
     }
 
     /** 停止调度器（取消扫描任务并关闭线程池；restart 时由 ensureScanExecutorAlive 重建）。 */

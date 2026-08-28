@@ -81,6 +81,17 @@ class FurySerializerTest {
     /** 默认实例（0.1.0 起 secure-by-default：强制类注册白名单） */
     private final FurySerializer<MyData> serializer = new FurySerializer<>(false);
 
+    @org.junit.jupiter.api.BeforeAll
+    static void allowUnrestricted() {
+        // 单元测试需要"无白名单"路径，必须显式声明
+        System.setProperty("streammq.security.allowUnrestrictedSerializer", "true");
+    }
+
+    @org.junit.jupiter.api.AfterAll
+    static void disallowUnrestricted() {
+        System.clearProperty("streammq.security.allowUnrestrictedSerializer");
+    }
+
     @Test
     @DisplayName("POJO 序列化/反序列化往返（String/int/long 字段，关闭类注册校验）")
     void roundTrip() {
@@ -102,6 +113,22 @@ class FurySerializerTest {
         assertThatThrownBy(() -> secure.serialize(data, MyData.class))
                 .isInstanceOf(Exception.class)
                 .hasMessageContaining("not registered");
+    }
+
+    @Test
+    @DisplayName("FurySerializer(false) 默认抛 SecurityException（防止 foot-gun）")
+    void requiresClassRegistrationFalseGatedBySystemProperty() {
+        String previous = System.getProperty("streammq.security.allowUnrestrictedSerializer");
+        System.clearProperty("streammq.security.allowUnrestrictedSerializer");
+        try {
+            assertThatThrownBy(() -> new FurySerializer<MyData>(false))
+                    .isInstanceOf(SecurityException.class)
+                    .hasMessageContaining("streammq.security.allowUnrestrictedSerializer");
+        } finally {
+            if (previous != null) {
+                System.setProperty("streammq.security.allowUnrestrictedSerializer", previous);
+            }
+        }
     }
 
     @Test

@@ -326,7 +326,7 @@ class TransactionMessageIT extends AbstractRedisIT {
                     (TransactionChecker<Object>)
                             (message, ctx) -> {
                                 checkCount.updateAndGet(v -> v + 1);
-                                return LocalTransactionState.UNKNOW;
+                                return LocalTransactionState.UNKNOWN;
                             });
 
             scanner.start();

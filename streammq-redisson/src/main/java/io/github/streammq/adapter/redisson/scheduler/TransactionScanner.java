@@ -264,7 +264,12 @@ public class TransactionScanner implements StreamMQScheduler {
         this.checkIntervalMs = checkIntervalMs > 0 ? checkIntervalMs : DEFAULT_CHECK_INTERVAL_MS;
         this.maxCheckTimes = maxCheckTimes > 0 ? maxCheckTimes : DEFAULT_MAX_CHECK_TIMES;
         this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
-        this.scanExecutor = Executors.newSingleThreadScheduledExecutor();
+        this.scanExecutor = Executors.newSingleThreadScheduledExecutor(
+                r -> {
+                    Thread t = new Thread(r, "streammq-tx-scanner");
+                    t.setDaemon(true);
+                    return t;
+                });
         this.lockManager = new TransactionLockManager(redisson, namespace);
         this.commitExecutor = new TransactionCommitExecutor(redisson, namespace, lockManager);
         this.retentionSweeper = new TransactionRetentionSweeper(redisson, namespace);
@@ -414,7 +419,12 @@ public class TransactionScanner implements StreamMQScheduler {
         if (Objects.nonNull(scanExecutor) && !scanExecutor.isShutdown()) {
             return;
         }
-        scanExecutor = Executors.newSingleThreadScheduledExecutor();
+        scanExecutor = Executors.newSingleThreadScheduledExecutor(
+                r -> {
+                    Thread t = new Thread(r, "streammq-tx-scanner");
+                    t.setDaemon(true);
+                    return t;
+                });
     }
 
     /** 停止调度器（取消扫描任务并关闭线程池，线程为 daemon，不阻塞 JVM 退出）。 */
@@ -785,7 +795,7 @@ public class TransactionScanner implements StreamMQScheduler {
         switch (state) {
             case COMMIT_MESSAGE -> doMarkCommit(txId, txGroup);
             case ROLLBACK_MESSAGE -> doMarkRollback(txId, txGroup);
-            case UNKNOW -> {
+            case LocalTransactionState.UNKNOWN -> {
                 if (checkCount >= maxCheckTimes) {
                     LOG.warn(
                             "Transaction exceeded maxCheckTimes ({}), force rollback: txId={}",
@@ -877,11 +887,11 @@ public class TransactionScanner implements StreamMQScheduler {
                         timeoutMillis,
                         txId,
                         txGroup);
-                return LocalTransactionState.UNKNOW;
+                return LocalTransactionState.UNKNOWN;
             }
         }
         LocalTransactionState state = result.get();
-        return Objects.nonNull(state) ? state : LocalTransactionState.UNKNOW;
+        return Objects.nonNull(state) ? state : LocalTransactionState.UNKNOWN;
     }
 
     /** 将事务降级为 UNKNOWN 并重新调度回查（元数据丢失时的有界兜底路径）。 */

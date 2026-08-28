@@ -10,12 +10,12 @@ streammq:
   admin:
     enabled: true
 
-# 本地体验：开放管理端点与全部 Actuator（生产环境请收紧）
+# 本地体验：仅暴露必要端点（生产环境请根据实际需要调整）
 management:
   endpoints:
     web:
       exposure:
-        include: "*"
+        include: "health,info,metrics,prometheus,streammq"
 
 # Redisson 配置（示例用单机），生产环境请使用集群配置
 redisson:

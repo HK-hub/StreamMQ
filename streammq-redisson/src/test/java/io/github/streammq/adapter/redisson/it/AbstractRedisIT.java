@@ -41,9 +41,16 @@ public abstract class AbstractRedisIT {
 
     @BeforeEach
     void setUpRedis() {
-        Assumptions.assumeTrue(
-                RedisAvailability.isAvailable("localhost", 6379),
-                "Redis not available at localhost:6379, skipping integration test");
+        if (!RedisAvailability.isAvailable("localhost", 6379)) {
+            // 0.1.0 起：跳过时必须输出显眼警告，防止"全绿但其实没跑 IT"
+            // 期望 CI 通过 Docker service 保证 Redis 可用；若在本地看到此警告，请启动 Redis 或使用 Testcontainers。
+            System.err.println(
+                    "[StreamMQ IT] SKIPPED — Redis not available at localhost:6379."
+                            + " Start Redis (e.g. `docker run -d -p 6379:6379 redis:7.2`) to run"
+                            + " integration tests.");
+            Assumptions.assumeTrue(
+                    false, "Redis not available at localhost:6379, skipping integration test");
+        }
         Config config = new Config();
         config.useSingleServer().setAddress("redis://localhost:6379").setDatabase(0);
         // 使用 StringCodec 避免 Kryo 反序列化问题（与 Lua 脚本交互时）

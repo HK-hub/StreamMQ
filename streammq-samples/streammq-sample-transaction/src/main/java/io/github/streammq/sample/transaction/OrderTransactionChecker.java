@@ -17,13 +17,13 @@ import org.springframework.stereotype.Component;
 /**
  * 订单事务回查器示例。
  *
- * <p>当 {@link OrderTransactionProducer} 中本地事务返回 {@link LocalTransactionState#UNKNOW}
+ * <p>当 {@link OrderTransactionProducer} 中本地事务返回 {@link LocalTransactionState#UNKNOWN}
  * 或执行超时时，框架会在指定间隔后调用本回查器的 {@link #check} 方法查询本地事务的最终状态。
  *
  * <p>典型应用场景：
  *
  * <ul>
- *   <li>本地事务执行时间过长，先返回 UNKNOW
+ *   <li>本地事务执行时间过长，先返回 UNKNOWNN
  *   <li>网络抖动导致半消息 COMMIT/ROLLBACK 通知丢失
  *   <li>服务宕机恢复后，回查未确认的事务消息
  * </ul>
@@ -48,10 +48,10 @@ public class OrderTransactionChecker implements TransactionChecker<String> {
      *     <ul>
      *       <li>{@link LocalTransactionState#COMMIT_MESSAGE} - 本地事务已提交，提交半消息
      *       <li>{@link LocalTransactionState#ROLLBACK_MESSAGE} - 本地事务已回滚，删除半消息
-     *       <li>{@link LocalTransactionState#UNKNOW} - 本地事务状态仍未知，等待下次回查
+     *       <li>{@link LocalTransactionState#UNKNOWN} - 本地事务状态仍未知，等待下次回查
      *     </ul>
      *
-     * @throws Exception 业务异常，框架将其视为 UNKNOW，等待下次回查
+     * @throws Exception 业务异常，框架将其视为 UNKNOWN，等待下次回查
      */
     @Override
     public LocalTransactionState check(Message<String> message, TransactionContext context)
@@ -66,7 +66,7 @@ public class OrderTransactionChecker implements TransactionChecker<String> {
             // 模拟查询本地事务状态
             // 实际场景中通过 transactionId 查询本地事务日志表
             //   TransactionLog log = transactionLogMapper.selectByTxId(context.getTransactionId());
-            //   if (log == null) return LocalTransactionState.UNKNOW;
+            //   if (log == null) return LocalTransactionState.UNKNOWN;
             //   return log.isCommitted() ? COMMIT_MESSAGE : ROLLBACK_MESSAGE;
             LocalTransactionState state = checkLocalTransaction(context.getTransactionId());
 
@@ -81,8 +81,8 @@ public class OrderTransactionChecker implements TransactionChecker<String> {
                     context.getTransactionId(),
                     e.getMessage(),
                     e);
-            // 查询异常，返回 UNKNOW 等待下次回查
-            return LocalTransactionState.UNKNOW;
+            // 查询异常，返回 UNKNOWNN 等待下次回查
+            return LocalTransactionState.UNKNOWN;
         }
     }
 

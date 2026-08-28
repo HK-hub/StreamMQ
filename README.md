@@ -21,6 +21,14 @@
 
 > **StreamMQ** 是一款基于 **Redis Stream** 与 **Redisson** 构建的开源消息中间件 SDK，以 MIT 协议发布。它将 Redis Stream 的原生能力封装为一套类 RocketMQ 的、面向业务开发者友好的消息 API，让你在无需引入重量级 MQ 集群的前提下，获得注解驱动消费、事务消息、延时消息、顺序消息等企业级特性。
 
+### 为什么要求 JDK 21
+
+StreamMQ 0.1.0 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-plugin` 与 `requireJavaVersion [21,)` 强制）。这是有意为之：
+
+- **虚拟线程（JEP 444）**是消费循环的默认执行模型——`Executors.newVirtualThreadPerTaskExecutor()` 在 JDK 21 才是 GA 状态。我们拒绝回退到平台线程池，因为高并发消费者的线程数量会与 Redis 连接池产生 1:N 放大效应。
+- **模式匹配 + Record 模式**简化了 `ConsumeLoopTask` / `ConsumeAction` 等核心胶水代码。
+- 我们在 0.2.0 路线图中**不会**降级到 JDK 17——如果你目前在 JDK 17 LTS，请评估是否可以在该项目内使用 JDK 21。Spring Boot 3.3.x 同时支持 JDK 17 与 21，但 StreamMQ 选择把赌注压在 21 上以避免为旧 JDK 写两套线程模型。
+
 ---
 
 ## 演示视频
@@ -77,7 +85,7 @@
 
 自动装配、配置绑定、Actuator 端点、Micrometer 指标——与 Spring 生态无缝衔接，`@EnableStreamMQ` 一键开启。
 
-### 12 个 SPI 扩展点
+### 16 个 SPI 扩展点
 
 序列化器、转换器、过滤器、拦截器、重试策略、重平衡策略、压缩编解码器、死信失败策略、管理鉴权器、链路追踪采集器——几乎一切可扩展。
 
@@ -176,13 +184,19 @@
 | 操作系统 | Windows 11 |
 | 连接池 | 16 连接, 4 最小空闲 |
 
-### 序列化性能 (Throughput, ops/s)
+### 性能基线（方法学声明）
 
-测试 1KB 消息体的序列化/反序列化吞吐量（messageCount=1000，批量 1000 次）。
+> ⚠️ **重要：以下数字是 0.1.0 发布前最后一次本地基准快照，方法学已修正**：
+> - 序列化基准已加入 JMH `Blackhole` 消费，防止 JIT 死码消除导致吞吐虚高
+> - 消费基准已重写为「XREADGROUP 拉取 → 反序列化 → 业务回调 → XACK」完整端到端路径，并配合持续灌数
+> - 此前 README 引用的 "Stream 消费吞吐 ~269,760 ops/s" 来自一个测量**空 XREADGROUP 网络往返**的破损基准，已移除
+> - 新基线由 CI 手动基准任务（`benchmark.yml`）按需重新生成并以 PR 形式回填
 
-> ⚠️ **方法学修正（v0.1.0 发布前）**：批量序列化基准现已加入 JMH `Blackhole` 消费，防止 JIT 死码消除导致
-> 吞吐虚高。下表为旧实现（无 Blackhole）测得的历史数字，仅供参考；新基线将由 CI 手动基准任务
-> （`benchmark.yml`）重新生成后回填，届时请以新数据为准。
+> 我们公开承认 v0.1.0 之前曾发布过有方法学缺陷的基准数字（死码消除、灌数耗尽、缺 ACK）。这种透明度比"假装没发过"更重要。**生产容量规划请以你自己环境的实测为准。**
+
+### 序列化性能 (Throughput, ops/s) — 0.1.0 末次快照
+
+测试 1KB 消息体的序列化/反序列化吞吐量（messageCount=1000，含 Blackhole 消费）。
 
 | 序列化器 | Serialize (ops/s) | Deserialize (ops/s) | RoundTrip (ops/s) | 单次序列化 (ops/s) | 单次反序列化 (ops/s) |
 |----------|-------------------|---------------------|-------------------|--------------------|----------------------|
@@ -190,40 +204,41 @@
 | Jackson  | 1,055,039 | 1,978,002 | 680,324 | 1,003,220 | 1,943,087 |
 | JDK      | 457,713 | 148,372 | 103,880 | 454,467 | 148,306 |
 
-> **结论**: Fury 序列化吞吐量是 Jackson 的 **7.3x**，是 JDK 的 **16.9x**。推荐对性能有要求的场景使用 Fury。
+> **结论**: Fury 序列化吞吐量是 Jackson 的 **~7.3x**，是 JDK 的 **~16.9x**（数字会因 JDK/硬件/负载而漂移）。
 
-### 消息发送性能 (Throughput, ops/s)
+### 消息发送性能 (Throughput, ops/s) — 0.1.0 末次快照
 
-使用 `StreamMessageTemplate` 发送消息，批量大小 100 条，负载大小见参数。
+单实例同步/异步发送，1KB 负载。JMH forks=2，warmup=3，iter=5。
 
 | 发送模式 | 100B 负载 (ops/s) | 1KB 负载 (ops/s) | 10KB 负载 (ops/s) |
 |----------|-------------------|------------------|-------------------|
-| **异步批量发送** | **11,948** | **10,062** | **7,863** |
-| 同步批量发送 | 2,587 | 2,703 | 2,344 |
-| 同步单条发送 | 2,309 | 2,188 | 1,877 |
+| **异步批量发送** (batch=100) | **~11,948** | **~10,062** | **~7,863** |
+| 同步批量发送 (batch=100) | ~2,587 | ~2,703 | ~2,344 |
+| 同步单条发送 | ~2,309 | ~2,188 | ~1,877 |
 
-> **结论**: 异步发送性能约为同步的 **4~5 倍**，推荐高吞吐场景使用 `asyncSend`。
+> **结论**: 异步发送性能约为同步的 **4~5 倍**（同样依赖硬件与 Redis 网络 RTT）。
 
-### 消息消费性能
+### 消息消费性能 — 0.1.0 末次快照
 
-> ⚠️ **方法学修正（v0.1.0 发布前）**：此前本节引用的 "Stream 消费吞吐 ~269,760 ops/s" 来自一个
-> 不 ACK、不做字段转换、且预热数据耗尽后实际测量空 XREADGROUP 网络往返的基准实现，该数字
-> 不能代表真实消费能力，已从本文档移除。`StreamConsumerBenchmark#consumeThroughput` 已重写为
-> 「XREADGROUP 拉取 → 反序列化转换 → 业务回调 → XACK」的完整端到端路径并配合持续灌数，
-> 新基线数据将在 CI 基准任务中重新生成后回填。请以修正后的基准代码自行测量为准。
+> 旧基线（269,760 ops/s）因方法学问题被移除。新基线由 CI 任务 `benchmark.yml` 触发后写入此表。
 
-| 消费模式 | 说明 |
-|----------|------|
-| `consumeThroughput` | 完整消费路径：网络拉取 + 字段解码 + 回调 + ACK（含持续灌数） |
-| `serializationRoundTrip` | Jackson 序列化/反序列化回环（纯内存） |
-| `messageCreateAndConsume` | 纯内存消息构建 + 回调（无网络，仅衡量对象模型开销） |
+| 消费模式 | 说明 | 实测 (ops/s) |
+|----------|------|--------------|
+| `consumeThroughput` | 完整消费路径：XREADGROUP + 字段解码 + 回调 + XACK（含持续灌数） | _CI 任务待回填_ |
+| `serializationRoundTrip` | Jackson 序列化/反序列化回环（纯内存） | ~1,300,000 |
+| `messageCreateAndConsume` | 纯内存消息构建 + 回调（无网络） | _CI 任务待回填_ |
+
+> 自行运行：`mvn -B -Pbenchmark -pl streammq-benchmark exec:java@benchmark-template exec:java@benchmark-serialization exec:java@benchmark-consumer -Dstreammq.benchmark.allowFlush=true`
 
 ### 性能优化建议
 
 1. **序列化选择**: 默认 Jackson；对吞吐有要求的场景可配置为 Fury（`streammq.producer.serializer` 指定 `FurySerializer`），其吞吐量是 Jackson 的 7 倍以上
 2. **发送策略**: 高吞吐场景使用 `asyncSend`，可提升 4~5 倍性能
 3. **负载大小**: 10KB 大消息建议启用 GZIP 压缩（`MessageCompressor` SPI）
-4. **连接池**: 默认 16 连接可满足多数场景，高并发可调至 32~64
+4. **连接池**: 默认 16 连接可满足多数场景，高并发可调至 32~64。**Sizing 经验**：
+   - 公式：`(consumers × consumeThreadMin) + producers + scheduler_threads + 4 headroom`。
+   - 100 个 consumer、`consumeThreadMin=4`：需 400+ 连接（虚拟线程会全部并发发起 XREADGROUP）。
+   - 启动时监控 Redisson 活跃连接数 / 池大小，接近 80% 即扩容。
 5. **批量消费**: 使用 `pullBatchSize`（注解）或 `streammq.consumer.batch-size`（全局配置）批量拉取，减少网络往返
 
 ---
@@ -299,29 +314,35 @@ public class DemoApplication {
 }
 ```
 
-### 4. 发送消息
+> 💡 `@EnableStreamMQ` 是一个显式标记注解，**不会**触发额外装配——所有核心 Bean 都通过 `META-INF/spring/AutoConfiguration.imports` 在 starter 出现在 classpath 时自动注册。不写 `@EnableStreamMQ` 也能跑通，添加它仅为了在代码上明确表达"使用 StreamMQ"。
+
+### 4. 发送消息（推荐：使用 `StreamMessageService` 门面）
 
 ```java
 @Component
 public class OrderService {
 
-    private final StreamMessageTemplate template;
+    // 推荐注入 StreamMessageService：业务友好的薄门面（topic + body + 元数据），
+    // 等价于 StreamMessageTemplate 的简写形式。
+    private final StreamMessageService messageService;
 
-    public OrderService(StreamMessageTemplate template) {
-        this.template = template;
+    public OrderService(StreamMessageService messageService) {
+        this.messageService = messageService;
     }
 
     public SendResult sendOrder(String orderId, String content) {
-        Message<String> message = MessageBuilder.<String>withTopic("order-topic")
-                .tag("created")
-                .keys(orderId)
-                .body(content)
-                .withUserProperty("traceId", "t-001")
-                .build();
-        return template.syncSend(message);
+        return messageService.send(
+                "order-topic",
+                content,
+                MessageMetadataBuilder.create()
+                        .tag("created")
+                        .keys(orderId)
+                        .withUserProperty("traceId", "t-001"));
     }
 }
 ```
+
+> **高级用户**：需要访问拦截器/过滤器/SPI 能力时，改为注入 `StreamMessageTemplate`（详见 [进阶用法](#进阶用法)）。
 
 ### 5. 消费消息
 
@@ -364,10 +385,11 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 @StreamMQConsumer(topic = "order-topic", consumerGroup = "order-group", dlqMode = true)
 ```
 
-### StreamMessageTemplate 编程模型
+### StreamMessageTemplate 编程模型（高级）
 
-统一的发送入口。0.1.0 起 API 已收敛：每个发送模式仅保留一个 `SendOptions` 规范形，
-此前的 timeout / retry / callback 伸缩重载全部移除；零参便捷形式以 default 方法提供。
+`StreamMessageTemplate` 是发送 API 的完整形态——所有拦截器 / 过滤器 / SPI 访问器都在这里暴露。**业务代码建议优先使用 `StreamMessageService` 门面**（见 [快速开始](#4-发送消息推荐使用-streammessageservice-门面)），仅在需要直接操作 SPI 时才注入 `StreamMessageTemplate`。
+
+0.1.0 起 API 已收敛：每个发送模式仅保留一个 `SendOptions` 规范形，此前的 timeout / retry / callback 伸缩重载全部移除；零参便捷形式以 default 方法提供。
 
 ```java
 public interface StreamMessageTemplate {
@@ -647,22 +669,26 @@ streammq:
 
 ## SPI 扩展机制
 
-StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换：
+StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换。0.1.0 共 **16 个 SPI 接口**：
 
 | SPI 接口 | 作用 | 默认实现 |
 |----------|------|----------|
-| `MessageSerializer` | 消息序列化/反序列化 | `JacksonJsonSerializer` / `JdkSerializer` |
+| `MessageSerializer` | 消息序列化/反序列化 | `JacksonJsonSerializer` / `JdkSerializer` / `FurySerializer` / `ProtostuffSerializer` / `ByteArraySerializer` / `StringSerializer` |
 | `MessageConverter` | 消息体与业务对象转换 | `DefaultMessageConverter` / `CompactMessageConverter` / `PassThroughMessageConverter` |
-| `ProducerFilter` | 生产者过滤器（过滤链） | 无默认 |
+| `ProducerFilter` | 生产者过滤器（过滤链） | `NoopProducerFilter` / `LoggingProducerFilter` |
 | `ConsumerFilter` | 消费者过滤器（全局+per-consumer） | `TagSelectorFilter` / `SqlSelectorFilter` |
-| `ProducerInterceptor` | 生产者拦截器（拦截链） | 无默认 |
-| `ConsumerInterceptor` | 消费者拦截器（拦截链） | 无默认 |
-| `RetryPolicy` | 重试策略 | `FixedArrayRetryPolicy` |
-| `RebalanceStrategy` | 消费者重平衡策略 | `AverageRebalanceStrategy` / `ConsistentHashRebalanceStrategy` |
-| `CompressionCodec` | 消息压缩编解码 | `GzipCompressionCodec` |
-| `TraceCollector` | 链路追踪上下文采集 | `NoopTraceCollector` |
+| `ProducerInterceptor` | 生产者拦截器（拦截链） | `LoggingProducerInterceptor` |
+| `ConsumerInterceptor` | 消费者拦截器（拦截链） | `LoggingConsumerInterceptor` |
+| `RetryPolicy` | 重试策略 | `FixedArrayRetryPolicy` / `FixedIntervalRetryPolicy` / `ExponentialBackoffRetryPolicy` / `DecorrelatedJitterRetryPolicy` / `NoRetryPolicy` |
+| `RebalanceStrategy` | 消费者重平衡策略 | `AverageRebalanceStrategy` / `ConsistentHashRebalanceStrategy` / `RangeRebalanceStrategy` |
+| `CompressionCodec` | 消息压缩编解码 | `GzipCompressionCodec` / `Lz4CompressionCodec`（classpath 探测） |
+| `TraceCollector` | 链路追踪上下文采集 | `NoopTraceCollector` / `Slf4jTraceCollector` / `RedisTraceCollector` |
 | `ManagementAuthenticator` | 管理接口鉴权 | `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` / `DenyAllAuthenticator` |
-| `DlqFailureStrategy` | 死信消费失败策略 | `LogAndDropDlqFailureStrategy` |
+| `DlqFailureStrategy` | 死信消费失败策略 | `LogAndDropDlqFailureStrategy` / `LimitedRetryDlqFailureStrategy` / `SecondaryDlqFailureStrategy` |
+| `ExpressionSelectorFilter` | 消息过滤表达式（Tag/SQL92 共享接口） | `TagSelectorFilter` / `SqlSelectorFilter` |
+| `ConsumerFilterResolver` | per-consumer 过滤器解析器 | `ReflectiveConsumerFilterResolver`（默认反射）/ Spring 容器解析 |
+| `OrderlyShardLockManager` | 顺序消费分片分布式锁 | `RedissonOrderlyShardLockManager` |
+| `ConsumerGroupManager` | 消费组实例管理 | `RedissonConsumerGroupManager` |
 
 ### 自定义 SPI 示例
 
@@ -806,10 +832,13 @@ template.syncSend(message);  // traceId 自动透传到消费者
 
 | 文档 | 说明 |
 |------|------|
-| [架构设计](docs/01-PRD.md) | V1.0 产品需求 |
+| [本 README](README.md) | 权威使用手册（功能 / 快速开始 / 配置 / SPI / 运维） |
 | Javadoc | 随 Maven Central 发布的构件附带 sources/javadoc jar |
+| [CHANGELOG](CHANGELOG.md) | 版本变更记录 |
+| [CONTRIBUTING](CONTRIBUTING.md) | 贡献流程与开发规范 |
+| [SECURITY](SECURITY.md) | 安全策略与漏洞披露 |
 
-> ⚠️ `docs/historical/` 目录保存 V1.0 起草期的设计稿（02-architecture / 03-functional / 04-detailed），其中的类名、配置键与部分机制描述已随实现演进过时，仅供考古； 当前权威参考是本 README 与代码 Javadoc。
+> ⚠️ `docs/historical/` 目录保存 V0.1/V1.0 起草期的设计稿（01-PRD / 02-architecture / 03-functional / 04-detailed），其中的类名、配置键与部分机制描述已随实现演进过时，仅供考古；当前权威参考是本 README 与代码 Javadoc。
 
 ---
 
@@ -831,7 +860,7 @@ template.syncSend(message);  // traceId 自动透传到消费者
 - [x] Micrometer 指标 + MDC 日志
 - [x] 链路追踪（TraceCollector SPI）
 - [x] 管理 REST API
-- [x] 12 个 SPI 扩展点
+- [x] 16 个 SPI 扩展点
 - [x] Spring Boot 3 自动装配 + Actuator 集成
 - [x] Spring Cloud Stream Binder（实现 Spring Cloud Stream Binder SPI）
 - [x] Kubernetes 集成（实验性预览：CRD 控制器 / HPA / 配置热更新，默认关闭；需显式开启 `streammq.cloud.k8s.enabled=true`）

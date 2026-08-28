@@ -97,12 +97,14 @@ class EnumsTest {
     class LocalTransactionStateTest {
 
         @Test
-        @DisplayName("LocalTransactionState 含 COMMIT_MESSAGE / ROLLBACK_MESSAGE / UNKNOW")
+        @DisplayName("LocalTransactionState 含 COMMIT_MESSAGE / ROLLBACK_MESSAGE / UNKNOWN / UNKNOW(legacy)")
+        @SuppressWarnings("deprecation")
         void containsAllThreeStates() {
             assertThat(LocalTransactionState.values())
                     .containsExactlyInAnyOrder(
                             LocalTransactionState.COMMIT_MESSAGE,
                             LocalTransactionState.ROLLBACK_MESSAGE,
+                            LocalTransactionState.UNKNOWN,
                             LocalTransactionState.UNKNOW);
         }
     }

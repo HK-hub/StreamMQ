@@ -163,10 +163,38 @@ class JdkSerializerTest {
     }
 
     @Test
-    @DisplayName("unrestricted() 关闭过滤（仅供可信环境迁移）")
+    @DisplayName("unrestricted() 关闭过滤（仅供可信环境迁移，需显式系统属性）")
+    @SuppressWarnings("deprecation")
     void unrestrictedDisablesFiltering() {
-        JdkSerializer<ForeignData> open = JdkSerializer.unrestricted();
-        byte[] bytes = open.serialize(new ForeignData(), ForeignData.class);
-        assertThat(open.deserialize(bytes, ForeignData.class)).isNotNull();
+        String previous = System.getProperty("streammq.security.allowUnrestrictedSerializer");
+        System.setProperty("streammq.security.allowUnrestrictedSerializer", "true");
+        try {
+            JdkSerializer<ForeignData> open = JdkSerializer.unrestricted();
+            byte[] bytes = open.serialize(new ForeignData(), ForeignData.class);
+            assertThat(open.deserialize(bytes, ForeignData.class)).isNotNull();
+        } finally {
+            if (previous == null) {
+                System.clearProperty("streammq.security.allowUnrestrictedSerializer");
+            } else {
+                System.setProperty("streammq.security.allowUnrestrictedSerializer", previous);
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("unrestricted() 默认抛 SecurityException（防止 foot-gun）")
+    @SuppressWarnings("deprecation")
+    void unrestrictedGatedBySystemProperty() {
+        String previous = System.getProperty("streammq.security.allowUnrestrictedSerializer");
+        System.clearProperty("streammq.security.allowUnrestrictedSerializer");
+        try {
+            assertThatThrownBy(JdkSerializer::unrestricted)
+                    .isInstanceOf(SecurityException.class)
+                    .hasMessageContaining("streammq.security.allowUnrestrictedSerializer");
+        } finally {
+            if (previous != null) {
+                System.setProperty("streammq.security.allowUnrestrictedSerializer", previous);
+            }
+        }
     }
 }
