@@ -89,9 +89,7 @@ public class DlqAnalyzer {
                 classifyCount(totalDlqCount));
     }
 
-    /**
-     * 根据死信总数判定严重等级码。
-     */
+    /** 根据死信总数判定严重等级码。 */
     private String classifyCount(long totalDlqCount) {
         if (totalDlqCount > properties.getBacklogCriticalThreshold()) {
             return DiagnosticsCodes.DLQ_CRITICAL;
@@ -102,9 +100,7 @@ public class DlqAnalyzer {
         return DiagnosticsCodes.DLQ_NORMAL;
     }
 
-    /**
-     * 构建空的死信队列报告（追踪数据不存在时使用）。
-     */
+    /** 构建空的死信队列报告（追踪数据不存在时使用）。 */
     private DlqReport buildEmptyReport(String group) {
         return new DlqReport(
                 group,
@@ -199,9 +195,7 @@ public class DlqAnalyzer {
         return reasons;
     }
 
-    /**
-     * 聚合失败主题。
-     */
+    /** 聚合失败主题。 */
     private List<TopicFailureCount> aggregateFailedTopics(List<TraceRecord> failedRecords) {
         if (CollectionUtils.isEmpty(failedRecords)) {
             return Collections.emptyList();
@@ -232,9 +226,7 @@ public class DlqAnalyzer {
         return topics;
     }
 
-    /**
-     * 查找最早的追踪记录时间戳。
-     */
+    /** 查找最早的追踪记录时间戳。 */
     private long findOldestTimestamp(List<TraceRecord> records) {
         long oldest = Long.MAX_VALUE;
         for (TraceRecord record : records) {
@@ -245,9 +237,7 @@ public class DlqAnalyzer {
         return oldest == Long.MAX_VALUE ? 0L : oldest;
     }
 
-    /**
-     * 构建死信队列优化建议。
-     */
+    /** 构建死信队列优化建议。 */
     private String buildRecommendation(long totalDlqCount, List<FailureReason> topFailureReasons) {
         if (totalDlqCount <= 0) {
             return "No dead messages; consume pipeline healthy";
@@ -271,9 +261,7 @@ public class DlqAnalyzer {
         return "Dead-message count within acceptable range; keep monitoring";
     }
 
-    /**
-     * 从追踪记录中提取错误信息。
-     */
+    /** 从追踪记录中提取错误信息。 */
     private String extractErrorMessage(TraceRecord record) {
         Map<String, String> attrs = record.attributes();
         if (CollectionUtils.isEmpty(attrs)) {
@@ -282,9 +270,7 @@ public class DlqAnalyzer {
         return attrs.get(ATTR_ERROR_MESSAGE);
     }
 
-    /**
-     * 将 Map 按值降序排序。
-     */
+    /** 将 Map 按值降序排序。 */
     private static <K, V extends Comparable<V>> List<Map.Entry<K, V>> sortByValueDesc(
             Map<K, V> map) {
         List<Map.Entry<K, V>> entries = new ArrayList<>(map.entrySet());

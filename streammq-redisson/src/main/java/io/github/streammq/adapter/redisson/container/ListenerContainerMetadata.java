@@ -43,7 +43,8 @@ public class ListenerContainerMetadata {
     private final RegistrationStore store;
     private final SchedulerTargetBinder schedulerBinder;
 
-    public ListenerContainerMetadata(RegistrationStore store, SchedulerTargetBinder schedulerBinder) {
+    public ListenerContainerMetadata(
+            RegistrationStore store, SchedulerTargetBinder schedulerBinder) {
         this.store = Objects.requireNonNull(store, "store");
         this.schedulerBinder = Objects.requireNonNull(schedulerBinder, "schedulerBinder");
     }
@@ -72,8 +73,8 @@ public class ListenerContainerMetadata {
      * Trigger rebalance for a consumer group.
      *
      * @param group group name
-     * @return {@code true} if the group was found and rebalance executed; {@code false} if the group
-     *     is unknown or not an orderly group
+     * @return {@code true} if the group was found and rebalance executed; {@code false} if the
+     *     group is unknown or not an orderly group
      */
     public boolean rebalanceGroup(String group) {
         boolean executed = schedulerBinder.rebalanceGroup(group);

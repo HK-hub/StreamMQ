@@ -288,6 +288,9 @@ public class StreamMQActuatorEndpoint {
                         : "UNKNOWN");
         result.put("groups", adminEndpoint.listGroups());
         result.put("topics", adminEndpoint.listTopics());
+        // 广播消费组数量是容量规划级指标：它随实例重启累积，持续增长说明实例崩溃循环
+        // 或心跳超时配置过长，最终表现为 Redis 内存无声上涨。
+        result.put("broadcastGroups", adminEndpoint.countBroadcastGroups());
         return result;
     }
 

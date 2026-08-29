@@ -433,6 +433,25 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 | `ManagementAuthenticator` | `DenyAllAuthenticator`（fail-closed，需显式注册鉴权 Bean 开放） |
 | `DlqFailureStrategy` | `LogAndDropDlqFailureStrategy` |
 
+### Fury serializer registration
+
+`FurySerializer` is secure by default and requires application payload classes to be
+registered before the first send/receive. Prefer constructor registration in Spring
+configuration so startup fails early for a missing type:
+
+```java
+@Bean
+MessageSerializer<OrderCreated> orderSerializer() {
+    return new FurySerializer<>(OrderCreated.class, OrderUpdated.class);
+}
+```
+
+For dynamic setup, call `register(Class<?>)` or `registerAll(Class<?>...)` once during
+initialization. Do not register classes based on untrusted input. Disabling registration
+(`new FurySerializer(false)`) requires the explicit
+`-Dstreammq.security.allowUnrestrictedSerializer=true` system property and should only
+be used with a fully trusted, isolated Redis instance.
+
 ## Pull Request Process
 
 1. **Ensure the PR description clearly describes the problem and solution.** Include the relevant issue number if applicable.

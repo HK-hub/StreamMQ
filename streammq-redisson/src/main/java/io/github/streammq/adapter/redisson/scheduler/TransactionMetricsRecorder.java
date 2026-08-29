@@ -13,8 +13,7 @@ import org.slf4j.LoggerFactory;
 /**
  * 事务指标记录器：封装 commit / rollback / check 三类指标调用。
  *
- * <p>所有方法对 {@code metrics} 为 null 友好（no-op），避免业务调用方反复判空。 指标收集器自身抛出异常时记录 DEBUG 日志，
- * 不影响业务主流程。
+ * <p>所有方法对 {@code metrics} 为 null 友好（no-op），避免业务调用方反复判空。 指标收集器自身抛出异常时记录 DEBUG 日志， 不影响业务主流程。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

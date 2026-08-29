@@ -7,79 +7,100 @@
     <parent>
         <groupId>io.github.streammq</groupId>
         <artifactId>streammq-parent</artifactId>
-        <version>0.1.0</version>
+        <version>0.1.1</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
     <artifactId>streammq-test</artifactId>
-    <name>StreamMQ Test Support</name>
-    <description>StreamMQ 测试支持：Embedded Redis、Testcontainers 集成、断言工具、Mock 工具、测试 Listener 等。</description>
+    <name>StreamMQ Test Utilities</name>
+    <description>StreamMQ 测试支持：容器化 Redis（Testcontainers，需 Docker daemon）、Redis 可用性探测、断言工具、Mock 工具、测试 Listener 等。请以 test scope 引入。</description>
 
+    <!--
+      依赖可见性约定（重要）：
+
+      本模块随 Maven Central 发布，使用方以 test scope 引入。凡是 src/main/java 中测试工具类
+      **运行时必然加载**的类型，其坐标必须是可传递的普通 compile 依赖；一旦标为 optional/provided，
+      使用方会在运行期得到 NoClassDefFoundError，且无法通过补依赖自救（本模块曾经的
+      streammq-test-support 就是这类缺陷：该模块被排除发布，optional 依赖因此指向中央仓库上
+      根本不存在的 artifact）。
+
+      · 可传递（compile，非 optional）：streammq-test-support / streammq-core / slf4j-api / redisson
+      · 使用者自备（optional）：JUnit / AssertJ / Mockito / Awaitility / Testcontainers —— 测试框架
+        版本由使用方决定，不强加；未使用 Docker 模式时也不需要 Testcontainers。
+      · 使用者自备（optional）：streammq-redisson —— 不使用 Redisson 适配器的项目不应被引入该实现。
+    -->
     <dependencies>
-        <!-- 测试基础设施公共件（PING 探测等，test scope 专用） -->
+        <!-- 测试基础设施公共件（PING 探测）。随本模块一同发布，必须可传递：
+             StreamMQTestBase 在 @BeforeAll 中调用 RedisAvailability.isAvailable()。 -->
         <dependency>
             <groupId>io.github.streammq</groupId>
             <artifactId>streammq-test-support</artifactId>
         </dependency>
 
-        <!-- StreamMQ Core -->
+        <!-- StreamMQ Core：断言 / Mock / TestListener 工具类的签名与实现均直接引用 core 类型，必须可传递。 -->
         <dependency>
             <groupId>io.github.streammq</groupId>
             <artifactId>streammq-core</artifactId>
         </dependency>
 
-        <!-- SLF4J（编译期需要） -->
+        <!-- SLF4J：测试基类使用 Logger，运行时必需，必须可传递。 -->
         <dependency>
             <groupId>org.slf4j</groupId>
             <artifactId>slf4j-api</artifactId>
         </dependency>
 
-        <!-- Redisson（测试基类需要创建 RedissonClient） -->
+        <!-- Redisson：测试基类需要创建 RedissonClient，运行时必需，必须可传递。
+             版本由 streammq-bom / spring-boot-dependencies 统一管理，不会与使用方冲突。 -->
         <dependency>
             <groupId>org.redisson</groupId>
             <artifactId>redisson</artifactId>
-            <scope>provided</scope>
         </dependency>
 
-        <!-- StreamMQ Redisson Adapter（仅测试工具内部使用；optional 防止把适配层实现
-             强制传递给所有使用方——不使用 Redisson 适配器的项目不应被引入该实现） -->
+        <!-- StreamMQ Redisson Adapter：仅测试工具内部使用；optional 防止把适配层实现
+             强制传递给所有使用方——不使用 Redisson 适配器的项目不应被引入该实现。 -->
         <dependency>
             <groupId>io.github.streammq</groupId>
             <artifactId>streammq-redisson</artifactId>
             <optional>true</optional>
         </dependency>
 
-        <!-- 以下依赖在本模块为 compile scope，因为 src/main/java 中的测试工具类（断言/ Mock / EmbeddedRedis）需要使用。
-             使用方请以 test scope 引入本模块（注意：compile 依赖会传递；使用方必须以 test scope 引入本模块（同 spring-boot-starter-test 约定））。 -->
+        <!-- 以下依赖在本模块为 compile scope，因为 src/main/java 中的测试工具类（断言/ Mock / 容器化 Redis）需要使用；
+             但标记为 optional，交由使用方按其项目版本自行引入。 -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
             <scope>compile</scope>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.assertj</groupId>
             <artifactId>assertj-core</artifactId>
             <scope>compile</scope>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-junit-jupiter</artifactId>
             <scope>compile</scope>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>
             <scope>compile</scope>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.testcontainers</groupId>
             <artifactId>testcontainers</artifactId>
             <scope>compile</scope>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>com.redis</groupId>
             <artifactId>testcontainers-redis</artifactId>
             <scope>compile</scope>
+            <optional>true</optional>
         </dependency>
     </dependencies>
 

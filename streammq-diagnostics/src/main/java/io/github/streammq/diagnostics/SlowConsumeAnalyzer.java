@@ -63,7 +63,8 @@ public class SlowConsumeAnalyzer {
             return buildEmptyReport(topic, group);
         }
 
-        List<TraceRecord> consumeRecords = TraceRecordFilters.filterConsumeByGroup(topicRecords, group);
+        List<TraceRecord> consumeRecords =
+                TraceRecordFilters.filterConsumeByGroup(topicRecords, group);
         List<TraceRecord> sendRecords = TraceRecordFilters.filterSend(topicRecords);
 
         double windowSeconds = properties.getRecentWindowMs() / 1000.0;
@@ -200,9 +201,7 @@ public class SlowConsumeAnalyzer {
         return SlowConsumeCodes.HEALTHY;
     }
 
-    /**
-     * 瓶颈分析（locale-neutral code + English message）。不再伪造线程池利用率：真实 executor 指标尚未接入。
-     */
+    /** 瓶颈分析（locale-neutral code + English message）。不再伪造线程池利用率：真实 executor 指标尚未接入。 */
     private String analyzeBottleneck(
             double avgConsumeTime, double consumeRate, double produceRate, int consumerCount) {
         if (avgConsumeTime > properties.getSlowConsumeThresholdMs()) {

@@ -69,6 +69,9 @@ class MessageSinkTest {
 
             @Override
             public void setTimeoutCancelGraceMillis(long millis) {}
+
+            @Override
+            public void setExecutor(java.util.concurrent.ExecutorService executor) {}
         };
     }
 

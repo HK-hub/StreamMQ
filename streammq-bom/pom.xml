@@ -7,10 +7,10 @@
     <!-- BOM 独立，不继承 streammq-parent，避免循环依赖 -->
     <groupId>io.github.streammq</groupId>
     <artifactId>streammq-bom</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
     <packaging>pom</packaging>
     <name>StreamMQ BOM</name>
-    <description>StreamMQ 物料清单 (Bill of Materials)，统一管理 StreamMQ 各模块与第三方依赖版本。本 BOM 独立于 streammq-parent，可被任意项目 import。</description>
+    <description>StreamMQ 物料清单 (Bill of Materials)。管理 StreamMQ 全部发布构件与 Redisson 版本，并导入 spring-boot-dependencies 作为基线；不覆盖 Jackson / SLF4J / Micrometer / Spring Cloud 等与使用方业务强相关的第三方版本。本 BOM 独立于 streammq-parent，可被任意项目 import。</description>
 
     <url>https://github.com/HK-hub/StreamMQ</url>
 
@@ -35,25 +35,31 @@
         <connection>scm:git:https://github.com/HK-hub/StreamMQ.git</connection>
         <developerConnection>scm:git:https://github.com/HK-hub/StreamMQ.git</developerConnection>
         <url>https://github.com/HK-hub/StreamMQ</url>
-        <tag>v0.1.0</tag>
+        <tag>HEAD</tag>
     </scm>
 
+    <!--
+      BOM 的管理范围（有意保持克制）：
+
+      · 管理：StreamMQ 自身全部发布构件 + redisson / redisson-spring-boot-starter
+      · 管理：spring-boot-dependencies（提供使用方未显式引入时的基线版本）
+      · **不**管理：Jackson / SLF4J / Micrometer / Fury / Protostuff / Spring Cloud Stream /
+                    Spring Integration / OpenTelemetry
+
+      为什么不管第三方传递依赖：BOM 的 import 顺序通常在使用方的 spring-boot-dependencies 之后，
+      即 StreamMQ 的声明会**覆盖**使用方的版本。对 redisson 这是有意的（README 的快速开始片段
+      省略了版本号，需要 BOM 兜底）；但对 Jackson 这类"用户大概率已在用、且与 StreamMQ 无关的"
+      依赖，静默覆盖属于越权——用户会莫名其妙发现自己项目里的 Jackson 被换成了
+      streammq-bom 指定的版本。这些版本交给使用方自己的 BOM 决定。
+    -->
     <properties>
         <!-- StreamMQ 自身版本 -->
-        <streammq.version>0.1.0</streammq.version>
+        <streammq.version>0.1.1</streammq.version>
 
-        <!-- 第三方依赖版本（与 streammq-parent 保持一致） -->
+        <!-- 由本 BOM 管理的第三方版本（与 streammq-parent 保持一致） -->
         <spring-boot.version>3.3.5</spring-boot.version>
         <redisson.version>3.34.1</redisson.version>
-        <jackson.version>2.18.1</jackson.version>
-        <slf4j.version>2.0.16</slf4j.version>
-        <micrometer.version>1.13.6</micrometer.version>
         <lombok.version>1.18.34</lombok.version>
-        <fury.version>0.9.0</fury.version>
-        <protostuff.version>1.8.0</protostuff.version>
-        <spring-cloud-stream.version>4.1.3</spring-cloud-stream.version>
-        <spring-integration.version>6.3.4</spring-integration.version>
-        <opentelemetry.version>1.40.0</opentelemetry.version>
     </properties>
 
     <dependencyManagement>
@@ -108,13 +114,9 @@
                 <artifactId>streammq-test</artifactId>
                 <version>${streammq.version}</version>
             </dependency>
-            <dependency>
-                <groupId>io.github.streammq</groupId>
-                <artifactId>streammq-test-support</artifactId>
-                <version>${streammq.version}</version>
-            </dependency>
 
-            <!-- 第三方依赖版本（覆盖 Spring Boot 默认） -->
+            <!-- Redisson：README 的快速开始片段省略了版本号，依赖 BOM 兜底。
+                 这是本 BOM 唯一主动覆盖的第三方传递依赖。 -->
             <dependency>
                 <groupId>org.redisson</groupId>
                 <artifactId>redisson</artifactId>
@@ -124,102 +126,6 @@
                 <groupId>org.redisson</groupId>
                 <artifactId>redisson-spring-boot-starter</artifactId>
                 <version>${redisson.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.fasterxml.jackson.core</groupId>
-                <artifactId>jackson-databind</artifactId>
-                <version>${jackson.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.fasterxml.jackson.core</groupId>
-                <artifactId>jackson-core</artifactId>
-                <version>${jackson.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.fasterxml.jackson.core</groupId>
-                <artifactId>jackson-annotations</artifactId>
-                <version>${jackson.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>com.fasterxml.jackson.datatype</groupId>
-                <artifactId>jackson-datatype-jsr310</artifactId>
-                <version>${jackson.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.slf4j</groupId>
-                <artifactId>slf4j-api</artifactId>
-                <version>${slf4j.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.micrometer</groupId>
-                <artifactId>micrometer-core</artifactId>
-                <version>${micrometer.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.projectlombok</groupId>
-                <artifactId>lombok</artifactId>
-                <version>${lombok.version}</version>
-                <scope>provided</scope>
-            </dependency>
-
-            <!-- Apache Fury（高性能序列化） -->
-            <dependency>
-                <groupId>org.apache.fury</groupId>
-                <artifactId>fury-core</artifactId>
-                <version>${fury.version}</version>
-            </dependency>
-
-            <!-- Protostuff（Protocol Buffer 运行时序列化） -->
-            <dependency>
-                <groupId>io.protostuff</groupId>
-                <artifactId>protostuff-core</artifactId>
-                <version>${protostuff.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.protostuff</groupId>
-                <artifactId>protostuff-runtime</artifactId>
-                <version>${protostuff.version}</version>
-            </dependency>
-
-            <!-- Spring Cloud Stream -->
-            <dependency>
-                <groupId>org.springframework.cloud</groupId>
-                <artifactId>spring-cloud-stream</artifactId>
-                <version>${spring-cloud-stream.version}</version>
-            </dependency>
-
-            <!-- Spring Integration -->
-            <dependency>
-                <groupId>org.springframework.integration</groupId>
-                <artifactId>spring-integration-core</artifactId>
-                <version>${spring-integration.version}</version>
-            </dependency>
-
-            <!-- OpenTelemetry -->
-            <dependency>
-                <groupId>io.opentelemetry</groupId>
-                <artifactId>opentelemetry-api</artifactId>
-                <version>${opentelemetry.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.opentelemetry</groupId>
-                <artifactId>opentelemetry-sdk</artifactId>
-                <version>${opentelemetry.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.opentelemetry</groupId>
-                <artifactId>opentelemetry-sdk-trace</artifactId>
-                <version>${opentelemetry.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.opentelemetry</groupId>
-                <artifactId>opentelemetry-exporter-otlp</artifactId>
-                <version>${opentelemetry.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.opentelemetry</groupId>
-                <artifactId>opentelemetry-semconv</artifactId>
-                <version>${opentelemetry.version}-alpha</version>
             </dependency>
         </dependencies>
     </dependencyManagement>

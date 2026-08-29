@@ -12,6 +12,7 @@ import io.github.streammq.diagnostics.endpoint.StreamMQDiagnosticsEndpoint;
 import io.github.streammq.diagnostics.spi.BacklogProbe;
 import io.github.streammq.diagnostics.support.RedisBacklogProbe;
 import org.redisson.api.RedissonClient;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.autoconfigure.AutoConfiguration;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
@@ -84,10 +85,65 @@ public class StreamMQDiagnosticsAutoConfiguration {
     }
 
     /**
+     * 装配慢消费分析器。
+     *
+     * <p>三个 analyzer 均为 {@code @Component}，但类位于 {@code io.github.streammq.diagnostics} 包—— 普通应用（不额外
+     * {@code @ComponentScan} 该包）永远扫不到。因此本自动装配显式以 {@code @Bean} 注册并供 {@link
+     * StreamMQDiagnosticsService} 使用；若应用自行扫描了该包（{@code @Component}
+     * 已注册同类型），{@code @ConditionalOnMissingBean} 会跳过，避免重复实例。
+     *
+     * @param traceService 追踪查询服务
+     * @param listenerContainer 监听容器
+     * @param properties 诊断属性
+     * @return 慢消费分析器
+     */
+    @Bean
+    @ConditionalOnMissingBean(SlowConsumeAnalyzer.class)
+    public SlowConsumeAnalyzer slowConsumeAnalyzer(
+            StreamMQTraceService traceService,
+            StreamMQListenerContainer listenerContainer,
+            StreamMQDiagnosticsProperties properties) {
+        return new SlowConsumeAnalyzer(traceService, listenerContainer, properties);
+    }
+
+    /**
+     * 装配积压分析器。
+     *
+     * <p>积压探针为可选依赖（Redisson 缺席时回退到追踪窗口估算），以 {@link ObjectProvider} 注入。
+     *
+     * @param traceService 追踪查询服务
+     * @param properties 诊断属性
+     * @param backlogProbeProvider 积压探针（可为空）
+     * @return 积压分析器
+     */
+    @Bean
+    @ConditionalOnMissingBean(BacklogAnalyzer.class)
+    public BacklogAnalyzer backlogAnalyzer(
+            StreamMQTraceService traceService,
+            StreamMQDiagnosticsProperties properties,
+            ObjectProvider<BacklogProbe> backlogProbeProvider) {
+        return new BacklogAnalyzer(traceService, properties, backlogProbeProvider.getIfAvailable());
+    }
+
+    /**
+     * 装配死信分析器。
+     *
+     * @param traceService 追踪查询服务
+     * @param properties 诊断属性
+     * @return 死信分析器
+     */
+    @Bean
+    @ConditionalOnMissingBean(DlqAnalyzer.class)
+    public DlqAnalyzer dlqAnalyzer(
+            StreamMQTraceService traceService, StreamMQDiagnosticsProperties properties) {
+        return new DlqAnalyzer(traceService, properties);
+    }
+
+    /**
      * 装配诊断服务（Facade）。
      *
-     * <p>由 {@code @Component} + 构造注入装配 3 个 analyzer + 容器 + 属性 + 可选积压探针。 探针通过 {@link
-     * ObjectProvider} 注入以兼容 Redisson 缺席场景。
+     * <p>由三个 analyzer {@code @Bean}（见上方同名方法）+ 容器 + 属性装配；可选积压探针通过 {@link ObjectProvider} 注入以兼容
+     * Redisson 缺席场景。
      *
      * @return 诊断服务实例
      */
@@ -100,11 +156,7 @@ public class StreamMQDiagnosticsAutoConfiguration {
             StreamMQListenerContainer listenerContainer,
             StreamMQDiagnosticsProperties properties) {
         return new StreamMQDiagnosticsService(
-                slowConsumeAnalyzer,
-                backlogAnalyzer,
-                dlqAnalyzer,
-                listenerContainer,
-                properties);
+                slowConsumeAnalyzer, backlogAnalyzer, dlqAnalyzer, listenerContainer, properties);
     }
 
     /**
@@ -115,6 +167,7 @@ public class StreamMQDiagnosticsAutoConfiguration {
      * @return 积压探针
      */
     @Bean
+    @ConditionalOnClass(RedissonClient.class)
     @ConditionalOnMissingBean(BacklogProbe.class)
     @ConditionalOnBean(RedissonClient.class)
     public BacklogProbe redisBacklogProbe(

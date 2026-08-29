@@ -48,7 +48,17 @@ public class PelClaimScheduler implements StreamMQScheduler {
 
     private static final Logger LOG = LoggerFactory.getLogger(PelClaimScheduler.class);
 
-    /** PEL 空闲阈值默认值（毫秒）：消息在 PEL 中超过此时间未被 ACK 则触发 XAUTOCLAIM */
+    /**
+     * PEL 空闲阈值默认值（毫秒）：消息在 PEL 中超过此时间未被 ACK 则触发认领重投。
+     *
+     * <p><b>实现说明（勿按注释猜实现）：</b>扫描走 {@code XPENDING}（{@code RStream#listPending}）+ 按 idleTime 过滤 +
+     * 「XADD 副本 + ACK 旧条目」，<b>并未</b>使用 {@code XAUTOCLAIM}。 原因是本调度器需要在认领前读取消息体判断
+     * retryTimes、并按顺序消费分片锁活性决定是否放行，XAUTOCLAIM 无法满足该语义。
+     *
+     * <p>由此带来的吞吐特性：每轮扫描只检查 PEL 头部最多 {@code batchSize} 条。PEL 很大时，恢复延迟约为 {@code ceil(PEL 长度 /
+     * batchSize) × scanIntervalMs}——不会永久卡死（idle 时间单调增长， 头部条目终将越过阈值被清理后窗口前移），但大积压场景下恢复偏慢，可通过调大
+     * batchSize 缓解。
+     */
     private static final long DEFAULT_MIN_IDLE_MS = StreamMQConstants.DEFAULT_PEL_CLAIM_MIN_IDLE_MS;
 
     /** 默认扫描间隔（毫秒） */
@@ -112,7 +122,13 @@ public class PelClaimScheduler implements StreamMQScheduler {
         this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
         this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
         this.minIdleMs = minIdleMs > 0 ? minIdleMs : DEFAULT_MIN_IDLE_MS;
-        this.scanExecutor = Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "streammq-scheduler-daemon"); t.setDaemon(true); return t; });
+        this.scanExecutor =
+                Executors.newSingleThreadScheduledExecutor(
+                        r -> {
+                            Thread t = new Thread(r, "streammq-scheduler-daemon");
+                            t.setDaemon(true);
+                            return t;
+                        });
     }
 
     /**
@@ -228,7 +244,13 @@ public class PelClaimScheduler implements StreamMQScheduler {
         if (Objects.nonNull(scanExecutor) && !scanExecutor.isShutdown()) {
             return;
         }
-        scanExecutor = Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "streammq-scheduler-daemon"); t.setDaemon(true); return t; });
+        scanExecutor =
+                Executors.newSingleThreadScheduledExecutor(
+                        r -> {
+                            Thread t = new Thread(r, "streammq-scheduler-daemon");
+                            t.setDaemon(true);
+                            return t;
+                        });
     }
 
     /** 停止调度器（取消扫描任务并关闭线程池，线程为 daemon，不阻塞 JVM 退出）。 */

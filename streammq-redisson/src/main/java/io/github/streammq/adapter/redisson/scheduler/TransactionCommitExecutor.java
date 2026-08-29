@@ -18,15 +18,16 @@ import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.StreamMessageId;
 import org.redisson.api.stream.StreamAddArgs;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
  * 事务提交执行器：原子地将 half Stream 中的半消息转投到目标 Stream 并标记 COMMIT 状态。
  *
- * <p><b>并发控制：</b>进入临界区前必须通过 {@link TransactionLockManager}（{@code SETNX+TTL}）串行化——Lua
- * CAS 只保证状态机迁移互斥，但 CAS→批量执行之间存在窗口， 两个实例可先后看到 COMMITTING 并各自转投造成业务消息重复发布；执行权锁保证同一时刻仅一个实例执行
- * XADD。 持有者崩溃时锁随 TTL 过期，其它实例可在后续回查中接管。
+ * <p><b>并发控制：</b>进入临界区前必须通过 {@link TransactionLockManager}（{@code SETNX+TTL}）串行化——Lua CAS
+ * 只保证状态机迁移互斥，但 CAS→批量执行之间存在窗口， 两个实例可先后看到 COMMITTING 并各自转投造成业务消息重复发布；执行权锁保证同一时刻仅一个实例执行 XADD。
+ * 持有者崩溃时锁随 TTL 过期，其它实例可在后续回查中接管。
  *
  * <p>批内三个动作：{@code XADD 目标流} + {@code XDEL 半消息} + {@code HSET 状态} 全部提交或全部回滚。
  *
@@ -88,7 +89,7 @@ public class TransactionCommitExecutor {
                                 .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
         batch.<String, String>getStream(targetStreamKey).addAsync(StreamAddArgs.entries(fields));
         batch.<String, String>getStream(halfStreamKey).removeAsync(halfId);
-        RMapAsync<String, String> stateMapAsync = batch.getMap(stateHashKey);
+        RMapAsync<String, String> stateMapAsync = batch.getMap(stateHashKey, StringCodec.INSTANCE);
         stateMapAsync.putAsync(txId, TransactionScanner.STATE_COMMIT);
         try {
             batch.execute();
@@ -104,9 +105,7 @@ public class TransactionCommitExecutor {
         }
     }
 
-    /**
-     * 释放临界区（与 {@code tryAcquire} 配对）。
-     */
+    /** 释放临界区（与 {@code tryAcquire} 配对）。 */
     public void releaseLock(String txGroup, String txId) {
         lockManager.release(txGroup, txId);
     }

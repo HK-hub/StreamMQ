@@ -27,8 +27,8 @@ import org.redisson.api.RedissonClient;
 /**
  * 验证 per-consumer 未指定 rebalanceStrategy 时回退到全局默认（来自 streammq.rebalance.strategy 配置）。
  *
- * <p>此前实现硬编码回退到 {@link AverageRebalanceStrategy}，与 {@code streammq.rebalance.strategy}
- * 配置不一致；本测试在 0.1.0 后修复为优先使用全局配置。
+ * <p>此前实现硬编码回退到 {@link AverageRebalanceStrategy}，与 {@code streammq.rebalance.strategy} 配置不一致；本测试在
+ * 0.1.0 后修复为优先使用全局配置。
  */
 @DisplayName("DefaultPerConsumerSpiResolver 全局 RebalanceStrategy 回退")
 class DefaultPerConsumerSpiResolverRebalanceTest {
@@ -44,7 +44,8 @@ class DefaultPerConsumerSpiResolverRebalanceTest {
     @Test
     @DisplayName("全局默认 = ConsistentHashRebalanceStrategy 时使用一致性哈希（携带虚拟节点数）")
     void globalConsistentHash_usedWhenSet() {
-        DefaultPerConsumerSpiResolver resolver = newResolver(ConsistentHashRebalanceStrategy.class, 64);
+        DefaultPerConsumerSpiResolver resolver =
+                newResolver(ConsistentHashRebalanceStrategy.class, 64);
         RebalanceStrategy strategy = resolver.resolveRebalanceStrategy(emptyRegistration());
         assertThat(strategy).isInstanceOf(ConsistentHashRebalanceStrategy.class);
     }

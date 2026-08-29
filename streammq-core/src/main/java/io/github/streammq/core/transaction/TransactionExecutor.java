@@ -22,19 +22,13 @@ import io.github.streammq.core.message.SendResult;
  *             提交半消息（转投到目标 Topic Stream）
  *         <li>{@link io.github.streammq.core.enums.LocalTransactionState#ROLLBACK_MESSAGE} -
  *             回滚半消息（标记删除）
- *         <li>{@link io.github.streammq.core.enums.LocalTransactionState#UNKNOW} - 保留半消息，等待事务回查
+ *         <li>{@link io.github.streammq.core.enums.LocalTransactionState#UNKNOWN} - 保留半消息，等待事务回查
  *       </ul>
  * </ol>
  *
- * <p><b>简化模式 vs 完整模式：</b>
- *
- * <ul>
- *   <li><b>简化模式</b>（本接口）：在当前线程同步执行本地事务，无需配置 {@code TransactionScanner}。 适用于单实例部署或对事务一致性要求不高的场景。
- *       风险：如果 JVM 在事务执行过程中崩溃，半消息可能永远不会被提交或回滚。
- *   <li><b>完整模式</b>：通过 {@code TransactionScanner} 定期扫描半消息并触发 {@code TransactionChecker} 回查。
- *       适用于多实例部署或需要高可靠事务保证的场景。 需要配置 {@code streammq.transaction.enabled=true} 并实现 {@code
- *       TransactionChecker}。
- * </ul>
+ * <p><b>实现要求：</b>完整的半消息 + 回查语义依赖 {@code TransactionScanner}。若实现方未注入 Scanner，{@code
+ * executeInTransaction} 必须<b>快速失败</b>（抛出 {@code TransactionException}）， 而不是静默降级为"先发送后回滚"的简化路径——后者在
+ * JVM 崩溃时会留下永久悬挂的半消息， 且没有任何回查机制能够补偿。
  *
  * <p><b>可靠性保证：</b>
  *

@@ -54,11 +54,23 @@ final class ConsumeLoopTask implements Runnable {
             java.util.function.BooleanSupplier running,
             java.util.function.BooleanSupplier paused,
             java.util.function.IntSupplier inflightCapacity,
-            ListenerFactory listenerFactory) {
+            ListenerFactory listenerFactory,
+            LoopFailureReporter failureReporter) {
 
         /** 监听器创建函数式抽象（容器侧委托 {@code ListenerConfig.from(reg, retryMode)}）。 */
         interface ListenerFactory {
             StreamMQListener create(ListenerRegistration<?> reg, boolean retryMode);
+        }
+
+        /**
+         * 循环启动失败上报通道（loopKey, 失败原因）。
+         *
+         * <p>必须存在：此前监听器创建失败只会打一条 ERROR 日志然后静默退出循环——消费者在 {@code /actuator/streammq/groups}
+         * 里仍然可见、健康检查仍然 UP，运维只能靠"消息没人消费" 这一现象反推。上报后容器可将其纳入健康状态与管理端点。
+         */
+        @FunctionalInterface
+        interface LoopFailureReporter {
+            void report(String loopKey, Throwable cause);
         }
     }
 
@@ -75,7 +87,14 @@ final class ConsumeLoopTask implements Runnable {
 
     @Override
     public void run() {
-        if (!createListener()) {
+        // 泵登记键按循环唯一：同一注册的多个并发循环（consumeThreadMin>1）各自持有独立泵，
+        // 取消时可全部命中（此前固定键互相覆盖导致泵泄漏）
+        String pumpKey =
+                ctx.reg().key()
+                        + (ctx.retryMode() ? DefaultConsumeLoopSupervisor.RETRY_FUTURE_SUFFIX : "")
+                        + "#"
+                        + ctx.loopIndex();
+        if (!createListener(pumpKey)) {
             return;
         }
         LOG.info(
@@ -87,13 +106,6 @@ final class ConsumeLoopTask implements Runnable {
                 ctx.primaryLoop() ? 0 : "aux",
                 ctx.reg().getConsumer().getClass().getSimpleName());
 
-        // 泵登记键按循环唯一：同一注册的多个并发循环（consumeThreadMin>1）各自持有独立泵，
-        // 取消时可全部命中（此前固定键互相覆盖导致泵泄漏）
-        String pumpKey =
-                ctx.reg().key()
-                        + (ctx.retryMode() ? DefaultConsumeLoopSupervisor.RETRY_FUTURE_SUFFIX : "")
-                        + "#"
-                        + ctx.loopIndex();
         MessageSink sink =
                 MessageSink.forCapacity(
                         ctx.inflightCapacity().getAsInt(),
@@ -232,19 +244,30 @@ final class ConsumeLoopTask implements Runnable {
         }
     }
 
-    private boolean createListener() {
+    private boolean createListener(String loopKey) {
         try {
             listener = ctx.listenerFactory().create(ctx.reg(), ctx.retryMode());
             return true;
         } catch (RuntimeException ex) {
             LOG.error(
                     "Failed to create consumer for listener (topic={}, group={}, retryMode={}): {},"
-                            + " listener will not consume",
+                            + " listener will not consume. Check Redis connectivity/credentials and"
+                            + " the consumer group name; the failure is also reported to the health"
+                            + " indicator and /actuator/streammq/groups",
                     ctx.reg().getTopic(),
                     ctx.reg().getGroup(),
                     ctx.retryMode(),
                     ex.getMessage(),
                     ex);
+            // 上报给容器：静默失败是最难排查的一类故障，必须让它进入健康状态与可观测端点。
+            ConsumeLoopTask.LoopContext.LoopFailureReporter reporter = ctx.failureReporter();
+            if (reporter != null) {
+                try {
+                    reporter.report(loopKey, ex);
+                } catch (RuntimeException reportEx) {
+                    LOG.warn("Failed to report consume loop startup failure: {}", ex.toString());
+                }
+            }
             return false;
         }
     }

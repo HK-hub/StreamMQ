@@ -1,0 +1,6 @@
+# StreamMQ 启动失败分析器。
+#
+# 自动装配走 META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports，
+# 但 FailureAnalyzer 仍由传统的 spring.factories 机制加载（Spring Boot 3.x 未迁移该扩展点）。
+org.springframework.boot.diagnostics.FailureAnalyzer=\
+io.github.streammq.spring.boot.autoconfigure.RedissonClientMissingFailureAnalyzer

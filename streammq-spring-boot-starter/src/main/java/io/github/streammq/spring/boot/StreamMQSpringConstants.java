@@ -130,5 +130,13 @@ public final class StreamMQSpringConstants {
     /** 健康详情：调度器状态快照 */
     public static final String HEALTH_DETAIL_SCHEDULER_STATUSES = "scheduler.statuses";
 
+    /**
+     * 健康详情：消费循环启动失败登记表（loopKey → 失败原因）。
+     *
+     * <p>非空即代表存在"已注册但实际不消费"的监听器——这类静默故障此前在健康端点完全不可见。
+     */
+    public static final String HEALTH_DETAIL_LC_LOOP_FAILURES =
+            "listenerContainer.consumeLoopFailures";
+
     private StreamMQSpringConstants() {}
 }

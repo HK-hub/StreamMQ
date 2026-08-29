@@ -12,11 +12,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
- * 日志生产者过滤器（默认实现）：在 {@link ProducerFilter} 命中时记录 INFO 级别日志， 所有消息均放行（返回 {@code
- * true}），仅用于审计与问题排查。
+ * 日志生产者过滤器（默认实现）：在 {@link ProducerFilter} 命中时记录 INFO 级别日志， 所有消息均放行（返回 {@code true}），仅用于审计与问题排查。
  *
- * <p>本类是 {@link ProducerFilter} SPI 的默认空操作+日志记录实现， 业务方可注册自定义 {@link ProducerFilter} Bean
- * 覆盖本默认。 若同时存在多个同类型 Bean，Spring 依赖 {@link org.springframework.core.annotation.Order} / {@link
+ * <p>本类是 {@link ProducerFilter} SPI 的默认空操作+日志记录实现， 业务方可注册自定义 {@link ProducerFilter} Bean 覆盖本默认。
+ * 若同时存在多个同类型 Bean，Spring 依赖 {@link org.springframework.core.annotation.Order} / {@link
  * ProducerFilter#order()} 决定执行顺序。
  *
  * <p>日志格式：

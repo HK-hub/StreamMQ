@@ -178,7 +178,13 @@ public class DelayMessageScheduler implements StreamMQScheduler {
         this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
         this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
-        this.scanExecutor = Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "streammq-scheduler-daemon"); t.setDaemon(true); return t; });
+        this.scanExecutor =
+                Executors.newSingleThreadScheduledExecutor(
+                        r -> {
+                            Thread t = new Thread(r, "streammq-scheduler-daemon");
+                            t.setDaemon(true);
+                            return t;
+                        });
     }
 
     /** 启动调度器。 */
@@ -203,7 +209,13 @@ public class DelayMessageScheduler implements StreamMQScheduler {
         if (Objects.nonNull(scanExecutor) && !scanExecutor.isShutdown()) {
             return;
         }
-        scanExecutor = Executors.newSingleThreadScheduledExecutor(r -> { Thread t = new Thread(r, "streammq-scheduler-daemon"); t.setDaemon(true); return t; });
+        scanExecutor =
+                Executors.newSingleThreadScheduledExecutor(
+                        r -> {
+                            Thread t = new Thread(r, "streammq-scheduler-daemon");
+                            t.setDaemon(true);
+                            return t;
+                        });
     }
 
     /** 停止调度器（取消扫描任务并关闭线程池，线程为 daemon，不阻塞 JVM 退出）。 */
@@ -295,7 +307,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     private void transferExpired(
             RScoredSortedSet<String> zset, String msgId, String label, String claimKey) {
         try {
-            RBucket<String> claim = redisson.getBucket(claimKey);
+            RBucket<String> claim = redisson.getBucket(claimKey, StringCodec.INSTANCE);
             if (!Boolean.TRUE.equals(
                     claim.setIfAbsent(instanceId, Duration.ofMillis(transferClaimTtlMs)))) {
                 return;

@@ -127,6 +127,31 @@ class RedTeamRegressionIT extends AbstractRedisIT {
     }
 
     @Test
+    @DisplayName("P0 回归：COMMITTING 状态不可被并发 ROLLBACK 覆盖")
+    void intermediateCommitState_cannotBeOverwrittenByRollback() {
+        String txGroup = "tx-state-race-group";
+        String txId = "tx-state-race-1";
+        String targetTopic = "tx-state-race-target";
+        TransactionScanner scanner = newScanner(150, 3);
+        try {
+            scanner.registerHalfMessage(txId, txGroup, targetTopic, fieldsOf("race"));
+            RBucket<String> lockBucket =
+                    redisson.getBucket(StreamMQKeys.transactionLock(namespace, txGroup, txId));
+            lockBucket.set("other-instance", Duration.ofSeconds(10));
+
+            scanner.markCommit(txId, txGroup);
+            assertThat(stateOf(txGroup, txId)).isEqualTo(TransactionScanner.STATE_COMMITTING);
+
+            scanner.markRollback(txId, txGroup);
+            assertThat(stateOf(txGroup, txId))
+                    .as("a rollback contender must not overwrite an in-flight commit")
+                    .isEqualTo(TransactionScanner.STATE_COMMITTING);
+        } finally {
+            scanner.stop();
+        }
+    }
+
+    @Test
     @DisplayName("P1 回归：多 Topic 并发重试时 payload 相互隔离，不发生跨 Topic 错投")
     void retryPayload_isolatedAcrossTopics() throws Exception {
         String topicA = "iso-topic-a";

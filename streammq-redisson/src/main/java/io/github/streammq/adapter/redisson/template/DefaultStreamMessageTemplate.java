@@ -57,7 +57,7 @@ import org.slf4j.MDC;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
+public class DefaultStreamMessageTemplate implements StreamMessageTemplate, AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(DefaultStreamMessageTemplate.class);
 
@@ -89,13 +89,44 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
     private volatile java.util.concurrent.ExecutorService asyncSendExecutor =
             java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor();
 
+    /** Whether the template owns and therefore must close the current executor. */
+    private volatile boolean ownsAsyncSendExecutor = true;
+
+    private volatile boolean closed;
+
     /**
      * 注入异步发送执行器（须在首次发送前调用；容器不关闭外部池，生命周期归提供方）。
      *
      * @param executor 异步执行器
      */
-    public void setAsyncSendExecutor(java.util.concurrent.ExecutorService executor) {
-        this.asyncSendExecutor = java.util.Objects.requireNonNull(executor, "executor");
+    public synchronized void setAsyncSendExecutor(java.util.concurrent.ExecutorService executor) {
+        Objects.requireNonNull(executor, "executor");
+        if (closed) {
+            throw new IllegalStateException("StreamMessageTemplate is already closed");
+        }
+        java.util.concurrent.ExecutorService previous = this.asyncSendExecutor;
+        boolean previousOwned = this.ownsAsyncSendExecutor;
+        this.asyncSendExecutor = executor;
+        this.ownsAsyncSendExecutor = false;
+        if (previousOwned && previous != executor) {
+            previous.shutdown();
+        }
+    }
+
+    /**
+     * Releases resources owned by this template. An executor injected through {@link
+     * #setAsyncSendExecutor(java.util.concurrent.ExecutorService)} is intentionally left running
+     * because its lifecycle belongs to the caller.
+     */
+    @Override
+    public synchronized void close() {
+        if (closed) {
+            return;
+        }
+        closed = true;
+        if (ownsAsyncSendExecutor) {
+            asyncSendExecutor.shutdown();
+        }
     }
 
     /**
@@ -153,7 +184,11 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                         ? options.effectiveRetryTimes()
                         : defaultConfig.getRetryTimes();
         int retryTimes =
-                Math.max(0, Math.min(rawRetryTimes, io.github.streammq.core.StreamMQConstants.MAX_SYNC_RETRY_TIMES));
+                Math.max(
+                        0,
+                        Math.min(
+                                rawRetryTimes,
+                                io.github.streammq.core.StreamMQConstants.MAX_SYNC_RETRY_TIMES));
         long timeoutMillis =
                 Objects.nonNull(options)
                         ? options.effectiveTimeoutMillis()
@@ -260,29 +295,43 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
 
     @Override
     public <T> CompletableFuture<SendResult> asyncSend(Message<T> message, SendOptions options) {
+        if (closed) {
+            CompletableFuture<SendResult> failed = new CompletableFuture<>();
+            failed.completeExceptionally(
+                    new IllegalStateException("StreamMessageTemplate is closed"));
+            return failed;
+        }
         Objects.requireNonNull(message, "message");
         // 捕获调用线程的 MDC 快照，并在虚拟线程中恢复（虚拟线程不会继承 InheritableThreadLocal）。
         // 这是修复 README "MDC.put('traceId', 't-001'); template.asyncSend(message)" 失效的关键。
         java.util.Map<String, String> mdcSnapshot = org.slf4j.MDC.getCopyOfContextMap();
-        return CompletableFuture.supplyAsync(
-                () -> {
-                    java.util.Map<String, String> previous = org.slf4j.MDC.getCopyOfContextMap();
-                    if (mdcSnapshot != null) {
-                        org.slf4j.MDC.setContextMap(mdcSnapshot);
-                    } else {
-                        org.slf4j.MDC.clear();
-                    }
-                    try {
-                        return syncSend(message, options);
-                    } finally {
-                        if (previous != null) {
-                            org.slf4j.MDC.setContextMap(previous);
+        try {
+            return CompletableFuture.supplyAsync(
+                    () -> {
+                        java.util.Map<String, String> previous =
+                                org.slf4j.MDC.getCopyOfContextMap();
+                        if (mdcSnapshot != null) {
+                            org.slf4j.MDC.setContextMap(mdcSnapshot);
                         } else {
                             org.slf4j.MDC.clear();
                         }
-                    }
-                },
-                asyncSendExecutor);
+                        try {
+                            return syncSend(message, options);
+                        } finally {
+                            if (previous != null) {
+                                org.slf4j.MDC.setContextMap(previous);
+                            } else {
+                                org.slf4j.MDC.clear();
+                            }
+                        }
+                    },
+                    asyncSendExecutor);
+        } catch (java.util.concurrent.RejectedExecutionException ex) {
+            CompletableFuture<SendResult> failed = new CompletableFuture<>();
+            failed.completeExceptionally(
+                    new IllegalStateException("StreamMessageTemplate executor is unavailable", ex));
+            return failed;
+        }
     }
 
     @Override
@@ -317,9 +366,12 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         }
         SendOptions effective = Objects.nonNull(options) ? options : SendOptions.defaults();
         long timeoutMillis = effective.effectiveTimeoutMillis();
-        int retryTimes = Math.max(0,
-                Math.min(effective.effectiveRetryTimes(),
-                        io.github.streammq.core.StreamMQConstants.MAX_SYNC_RETRY_TIMES));
+        int retryTimes =
+                Math.max(
+                        0,
+                        Math.min(
+                                effective.effectiveRetryTimes(),
+                                io.github.streammq.core.StreamMQConstants.MAX_SYNC_RETRY_TIMES));
 
         List<Message<T>> interceptedMessages = new ArrayList<>(batch.getMessages().size());
         for (Message<T> message : batch.getMessages()) {
@@ -360,8 +412,11 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
                     return finalResults;
                 }
                 // 全部失败但无异常（极少见）——记 lastError 并按重试路径处理
-                lastError = new StreamMQException(
-                        "Batch send: all " + results.size() + " messages failed without exception");
+                lastError =
+                        new StreamMQException(
+                                "Batch send: all "
+                                        + results.size()
+                                        + " messages failed without exception");
                 for (Message<T> msg : interceptedMessages) {
                     notifyProducerException(msg, lastError, InvokeTiming.EXECUTING);
                 }
@@ -409,61 +464,23 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         String transactionId = UUID.randomUUID().toString();
         message = message.withTransactionId(transactionId);
 
-        // 优先使用 TransactionScanner 提供完整半消息 + 回查保证。
+        // 完整半消息 + 回查语义必须由 TransactionScanner 提供，缺失时快速失败（fail fast）。
+        //
+        // 这里刻意**不**降级为「同步本地事务 + 即时发送/回滚」的简化路径：简化路径在 JVM 崩溃时
+        // 会留下永久悬挂的半消息，且没有任何回查机制能补偿——对事务消息而言，静默降级为
+        // 低一致性语义比直接报错更危险。历史上该降级路径曾以 executeInTransactionInline 存在，
+        // 但因从未被调用（死代码）且与公开文档矛盾，已于 0.1.0 发布前移除。
         TransactionScanner scanner = this.transactionScanner;
-        if (Objects.nonNull(scanner)) {
-            return executeInTransactionWithScanner(message, callback, transactionId, scanner);
-        }
-
-        // 降级路径：未启用 TransactionScanner 时，使用「同步本地事务 + 即时提交/回滚」模式。
-        // 注意：这种模式在 JVM 崩溃时无回查保护——半消息可能永远停留在 PREPARE 状态。
-        // 0.1.0 行为：保留对旧用户（未注入 scanner）的兼容性；0.2.0 计划彻底移除。
-        LOG.warn(
-                "executeInTransaction is using the synchronous fallback path. For production"
-                    + " transactional safety, enable the TransactionScanner bean"
-                    + " (streammq.transaction.enabled=true). txId={}",
-                transactionId);
-        return executeInTransactionInline(message, callback, transactionId);
-    }
-
-    /**
-     * 同步事务回退路径：在调用线程执行本地事务，根据返回值即时 sendXadd 或记录未投递。
-     *
-     * <p><b>风险：</b>若 JVM 在 sendXadd 之后、本地事务之前崩溃，会出现"业务消息已发送但本地事务未提交"
-     * 的反向原子性问题。仅适用于"本地事务几乎不可能失败"的简单场景，或开发/测试环境。
-     */
-    private <T> SendResult executeInTransactionInline(
-            Message<T> message, TransactionCallback<T> callback, String transactionId) {
-        LocalTransactionState state;
-        try {
-            state = callback.execute(message, new TransactionContext(
-                    transactionId, transactionGroup, defaultGroup,
-                    System.currentTimeMillis(), new java.util.concurrent.ConcurrentHashMap<>()));
-        } catch (Exception ex) {
+        if (Objects.isNull(scanner)) {
             throw new TransactionException(
-                    "Local transaction execute failed (inline mode, no scan-based compensation)",
-                    transactionId, transactionGroup, ex);
+                    "TransactionScanner is required for executeInTransaction; register the"
+                        + " TransactionScanner bean (Spring Boot auto-configuration registers it"
+                        + " when streammq.transaction.enabled=true) so half messages can be"
+                        + " committed, rolled back or checked back",
+                    transactionId,
+                    transactionGroup);
         }
-        if (state == LocalTransactionState.COMMIT_MESSAGE) {
-            // 直接发送业务消息（"先投递再回滚"的折中路径）
-            SendResult result = syncSend(message, SendOptions.defaults());
-            return result;
-        }
-        if (state == LocalTransactionState.ROLLBACK_MESSAGE) {
-            return new SendResult(
-                    MessageId.sentinel(),
-                    message.getTopic(),
-                    message.getTag(),
-                    SendStatus.SEND_FAILED,
-                    message.getBornTimestamp(),
-                    null,
-                    "Transaction rolled back (inline mode)");
-        }
-        // UNKNOW：无法回查，直接当作提交处理（最坏情况：业务消息发送但本地事务仍在进行）
-        LOG.warn(
-                "Inline mode does not support UNKNOW state; treating as COMMIT. txId={}",
-                transactionId);
-        return syncSend(message, SendOptions.defaults());
+        return executeInTransactionWithScanner(message, callback, transactionId, scanner);
     }
 
     /**
@@ -474,7 +491,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
      * <ol>
      *   <li>将消息字段写入 half Stream（半消息），对消费者不可见
      *   <li>执行本地事务回调
-     *   <li>根据本地事务结果：COMMIT → 转投到业务 Stream；ROLLBACK → 删除半消息； UNKNOW → 保留半消息，等待 TransactionScanner
+     *   <li>根据本地事务结果：COMMIT → 转投到业务 Stream；ROLLBACK → 删除半消息； UNKNOWN → 保留半消息，等待 TransactionScanner
      *       回查
      * </ol>
      *
@@ -547,6 +564,10 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
         }
 
         // 4. 根据状态决定 commit / rollback / unknown
+        // null 视为 UNKNOWN：回调返回 null 与"状态未知"是同一语义，都交给回查兜底。
+        if (state == null) {
+            state = LocalTransactionState.UNKNOWN;
+        }
         switch (state) {
             case COMMIT_MESSAGE:
                 try {
@@ -601,7 +622,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate {
             case LocalTransactionState.UNKNOWN:
                 // 保留半消息，等待 TransactionScanner 周期回查
                 LOG.info(
-                        "Transaction state UNKNOW, waiting for check-back: txId={}, txGroup={}",
+                        "Transaction state UNKNOWN, waiting for check-back: txId={}, txGroup={}",
                         transactionId,
                         transactionGroup);
                 return halfResult;

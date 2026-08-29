@@ -640,7 +640,34 @@ public class RedissonStreamListener implements StreamMQListener {
                 }
             }
         }
+        // 运维可观测性：广播消费组会随实例重启持续增长（每个容器实例一个组），
+        // 清理量与残留量必须能被观测到，否则 Redis 内存只会无声上涨。
+        if (removed > 0) {
+            LOG.info(
+                    "Swept {} stale broadcast group(s): namespace={}, remaining={}",
+                    removed,
+                    namespace,
+                    registry.size());
+        }
         return removed;
+    }
+
+    /**
+     * 返回当前注册表中的广播消费组数量（含活跃与尚未被回收的僵尸组）。
+     *
+     * <p><b>为什么需要这个数字：</b>广播模式下每个容器实例使用一个独立的 Redis 消费者组，且组名随 容器实例标识（跨重启不保证相同）生成。因此组的总数约等于「实例数 ×
+     * 重启次数」在心跳超时窗口内 的累积量。该数字持续增长意味着实例在崩溃循环，或心跳超时（{@link
+     * #BROADCAST_GROUP_STALE_TTL_MS}）配置得过长——两者都会持续占用 Redis 内存（每个组都有自己的 PEL）。建议通过 {@code
+     * sweepStaleBroadcastGroups} 的结果与该方法返回值建立监控。
+     *
+     * @param redisson Redisson 客户端
+     * @param namespace 命名空间
+     * @return 注册表中的广播组条目数
+     */
+    public static long countBroadcastGroups(RedissonClient redisson, String namespace) {
+        org.redisson.api.RScoredSortedSet<String> registry =
+                redisson.<String>getScoredSortedSet(StreamMQKeys.broadcastRegistry(namespace));
+        return registry.size();
     }
 
     private void ensureGroup() {

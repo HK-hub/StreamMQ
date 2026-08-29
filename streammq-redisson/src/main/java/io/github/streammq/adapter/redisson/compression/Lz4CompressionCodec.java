@@ -16,20 +16,20 @@ import java.util.Objects;
 /**
  * 基于 LZ4 的 {@link CompressionCodec} 实现（条件性注册）。
  *
- * <p>该 Codec 由 {@link Lz4CompressionCodecFactory#tryCreate()} 在以下条件成立时自动注册到
- * {@link DefaultCompressionCodecRegistry}：
+ * <p>该 Codec 由 {@link Lz4CompressionCodecFactory#tryCreate()} 在以下条件成立时自动注册到 {@link
+ * DefaultCompressionCodecRegistry}：
  *
  * <ul>
  *   <li>classpath 上存在 {@code net.jpountz.lz4.LZ4Factory}（即用户引入了 {@code org.lz4:lz4-java} 依赖）
  * </ul>
  *
- * <p>本类<b>不持有对 lz4-java 任何类型的编译期引用</b>——所有 LZ4 类与方法均通过 {@link Class#forName(String)} +
- * {@link Method#invoke(Object, Object...)} 反射加载。这避免将 LZ4 强加给所有 streammq-redisson 用户。
+ * <p>本类<b>不持有对 lz4-java 任何类型的编译期引用</b>——所有 LZ4 类与方法均通过 {@link Class#forName(String)} + {@link
+ * Method#invoke(Object, Object...)} 反射加载。这避免将 LZ4 强加给所有 streammq-redisson 用户。
  *
  * <h3>线协议</h3>
  *
- * <p>为了在不依赖 {@code LZ4SafeDecompressor} 长度前缀的前提下支持 {@code LZ4FastDecompressor}，本 Codec 在
- * 压缩前于结果前缀写入 4 字节大端 {@code int}（原始未压缩长度），消费者先读取该长度再分配缓冲调用 fast decompress：
+ * <p>为了在不依赖 {@code LZ4SafeDecompressor} 长度前缀的前提下支持 {@code LZ4FastDecompressor}，本 Codec 在 压缩前于结果前缀写入
+ * 4 字节大端 {@code int}（原始未压缩长度），消费者先读取该长度再分配缓冲调用 fast decompress：
  *
  * <pre>
  *   [0..4)   : 4-byte big-endian original length (int)
@@ -40,11 +40,11 @@ import java.util.Objects;
  *
  * <h3>解压炸弹防护</h3>
  *
- * <p>解压时强制校验头部的原始长度不超过 {@link #MAX_EXPANDED_BYTES}（64MB），与 {@link GzipCompressionCodec}
- * 同样的防 zip-bomb 策略。
+ * <p>解压时强制校验头部的原始长度不超过 {@link #MAX_EXPANDED_BYTES}（64MB），与 {@link GzipCompressionCodec} 同样的防
+ * zip-bomb 策略。
  *
- * <p><b>异常约定：</b>{@link IllegalStateException} 仅在构造时（LZ4 不在 classpath）抛出；运行时
- * 压缩/解压失败抛出 {@link StreamMQException} 或 {@link SerializationException}，由消费侧路由到 DLQ。
+ * <p><b>异常约定：</b>{@link IllegalStateException} 仅在构造时（LZ4 不在 classpath）抛出；运行时 压缩/解压失败抛出 {@link
+ * StreamMQException} 或 {@link SerializationException}，由消费侧路由到 DLQ。
  *
  * <p>线程安全：缓存的 {@code Method} 句柄与底层 LZ4 compressor/decompressor 实例无状态，可在多线程间共享。
  *
@@ -59,8 +59,8 @@ public class Lz4CompressionCodec implements CompressionCodec {
     /**
      * 解压输出上限（64MB）：防御解压炸弹（zip bomb）。
      *
-     * <p>LZ4 fast 路径无内置长度上限校验，故需在应用层强制。恶意/损坏的 LZ4 流若头部长度被篡改为巨大值，可能导致 OOM。 头部声明的原始长度超过该上限立即抛 {@link SerializationException}——上游毒丸消息路径会将其路由到
-     * DLQ，不会拖垮消费线程。
+     * <p>LZ4 fast 路径无内置长度上限校验，故需在应用层强制。恶意/损坏的 LZ4 流若头部长度被篡改为巨大值，可能导致 OOM。 头部声明的原始长度超过该上限立即抛 {@link
+     * SerializationException}——上游毒丸消息路径会将其路由到 DLQ，不会拖垮消费线程。
      */
     public static final long MAX_EXPANDED_BYTES = 64L * 1024 * 1024;
 
@@ -85,9 +85,8 @@ public class Lz4CompressionCodec implements CompressionCodec {
     /**
      * 构造 Codec：通过 {@code Class.forName} 检测 lz4-java 是否在 classpath，并反射初始化 compressor/decompressor。
      *
-     * <p>若 LZ4 不在 classpath，立即抛 {@link IllegalStateException}——这正是「条件性」注册的关键判断。
-     * 业务上无需直接 new 该类：使用 {@link Lz4CompressionCodecFactory#tryCreate()} 即可在 LZ4 不可用时返回
-     * {@code null} 而不抛异常。
+     * <p>若 LZ4 不在 classpath，立即抛 {@link IllegalStateException}——这正是「条件性」注册的关键判断。 业务上无需直接 new 该类：使用
+     * {@link Lz4CompressionCodecFactory#tryCreate()} 即可在 LZ4 不可用时返回 {@code null} 而不抛异常。
      *
      * @throws IllegalStateException 若 lz4-java 不在 classpath，或反射初始化失败
      */
@@ -95,8 +94,7 @@ public class Lz4CompressionCodec implements CompressionCodec {
         try {
             Class<?> factoryClass = Class.forName(LZ4_FACTORY_CLASS);
             // LZ4Factory.fastestInstance() -> LZ4Factory
-            Object factory =
-                    factoryClass.getMethod("fastestInstance").invoke(null);
+            Object factory = factoryClass.getMethod("fastestInstance").invoke(null);
             // LZ4Factory.fastCompressor() -> LZ4Compressor
             this.compressor = factoryClass.getMethod("fastCompressor").invoke(factory);
             // LZ4Factory.fastDecompressor() -> LZ4FastDecompressor
@@ -155,7 +153,12 @@ public class Lz4CompressionCodec implements CompressionCodec {
             int written =
                     (int)
                             compressMethod.invoke(
-                                    compressor, data, 0, data.length, out, Integer.BYTES,
+                                    compressor,
+                                    data,
+                                    0,
+                                    data.length,
+                                    out,
+                                    Integer.BYTES,
                                     maxCompressedLength);
             byte[] result = new byte[Integer.BYTES + written];
             System.arraycopy(out, 0, result, 0, result.length);
@@ -189,15 +192,14 @@ public class Lz4CompressionCodec implements CompressionCodec {
         }
         try {
             byte[] result = new byte[originalLength];
-            decompressMethod.invoke(
-                    decompressor, data, Integer.BYTES, result, 0, originalLength);
+            decompressMethod.invoke(decompressor, data, Integer.BYTES, result, 0, originalLength);
             return result;
         } catch (InvocationTargetException ex) {
             // 常见原因：corrupt LZ4 stream / declared length mismatch
             Throwable cause = ex.getCause();
             if (cause instanceof RuntimeException) {
-                throw new SerializationException("LZ4 decompress failed: " + cause.getMessage(),
-                        cause);
+                throw new SerializationException(
+                        "LZ4 decompress failed: " + cause.getMessage(), cause);
             }
             throw new StreamMQException("LZ4 decompress failed", cause);
         } catch (IllegalAccessException ex) {

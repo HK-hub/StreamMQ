@@ -36,7 +36,8 @@ public class AuthenticatorStartupLogger {
     private final Environment environment;
 
     public AuthenticatorStartupLogger(
-            ObjectProvider<ManagementAuthenticator> authenticatorProvider, Environment environment) {
+            ObjectProvider<ManagementAuthenticator> authenticatorProvider,
+            Environment environment) {
         this.authenticatorProvider = authenticatorProvider;
         this.environment = environment;
     }
@@ -52,8 +53,8 @@ public class AuthenticatorStartupLogger {
             return;
         }
         if (authenticator instanceof DenyAllAuthenticator) {
-            boolean adminEnabled = Boolean.parseBoolean(
-                    environment.getProperty("streammq.admin.enabled", "true"));
+            boolean adminEnabled =
+                    Boolean.parseBoolean(environment.getProperty("streammq.admin.enabled", "true"));
             if (adminEnabled) {
                 LOG.info(
                         "StreamMQ admin endpoint is gated by DenyAllAuthenticator. To open access,"

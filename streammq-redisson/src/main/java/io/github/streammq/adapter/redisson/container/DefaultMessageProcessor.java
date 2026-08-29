@@ -64,7 +64,14 @@ public class DefaultMessageProcessor implements MessageProcessor {
     private final RegistrationStore store;
     private final RetryAndDlqHandler sharedRetryDlqHandler;
     private final boolean perConsumerEnabled;
-    private final ExecutorService executor;
+
+    /**
+     * 执行业务消费回调的执行器。
+     *
+     * <p>非 final：容器可在 INIT 阶段通过 {@link #setExecutor} 替换（与容器自身的 {@code setConsumeExecutor} 联动）。若此处保持
+     * final 而容器换了执行器，消费回调会持续抛 {@code RejectedExecutionException}。
+     */
+    private volatile ExecutorService executor;
 
     /** 指标收集器（可选注入，null 时为 no-op） */
     private volatile StreamMQMetrics metrics;
@@ -85,6 +92,11 @@ public class DefaultMessageProcessor implements MessageProcessor {
         this.sharedRetryDlqHandler =
                 Objects.requireNonNull(sharedRetryDlqHandler, "sharedRetryDlqHandler");
         this.perConsumerEnabled = perConsumerEnabled;
+        this.executor = Objects.requireNonNull(executor, "executor");
+    }
+
+    @Override
+    public void setExecutor(ExecutorService executor) {
         this.executor = Objects.requireNonNull(executor, "executor");
     }
 

@@ -43,7 +43,9 @@ class SlowConsumeAnalyzerTest {
 
     @BeforeEach
     void setUp() {
-        analyzer = new SlowConsumeAnalyzer(traceService, listenerContainer, new StreamMQDiagnosticsProperties());
+        analyzer =
+                new SlowConsumeAnalyzer(
+                        traceService, listenerContainer, new StreamMQDiagnosticsProperties());
     }
 
     @Test
@@ -54,7 +56,9 @@ class SlowConsumeAnalyzerTest {
             records.add(sendRecord("send-" + i, "test-topic", 1000L + i, 5L));
         }
         for (int i = 0; i < 12; i++) {
-            records.add(consumeRecord("consume-" + i, "test-topic", "test-group", true, 2000L + i, 100L));
+            records.add(
+                    consumeRecord(
+                            "consume-" + i, "test-topic", "test-group", true, 2000L + i, 100L));
         }
 
         when(traceService.queryByTopic(eq("test-topic"), anyLong(), anyLong())).thenReturn(records);
@@ -101,7 +105,8 @@ class SlowConsumeAnalyzerTest {
         assertThat(report.recommendation()).contains("Optimize consume logic");
     }
 
-    private TraceRecord sendRecord(String messageId, String topic, long timestamp, long durationMillis) {
+    private TraceRecord sendRecord(
+            String messageId, String topic, long timestamp, long durationMillis) {
         return new TraceRecord(
                 messageId,
                 topic,
@@ -115,7 +120,12 @@ class SlowConsumeAnalyzerTest {
     }
 
     private TraceRecord consumeRecord(
-            String messageId, String topic, String group, boolean success, long timestamp, long durationMillis) {
+            String messageId,
+            String topic,
+            String group,
+            boolean success,
+            long timestamp,
+            long durationMillis) {
         return new TraceRecord(
                 messageId,
                 topic,

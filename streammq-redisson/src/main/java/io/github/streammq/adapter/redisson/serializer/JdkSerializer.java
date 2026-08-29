@@ -89,8 +89,8 @@ public class JdkSerializer<T extends java.io.Serializable> implements MessageSer
      *
      * @return 无过滤器实例
      * @throws SecurityException 当未设置上述系统属性时
-     * @deprecated 该方法在共享/多租户 Redis 场景下是远程代码执行向量。请改用 {@link #JdkSerializer(Collection)}
-     *     显式放行业务类型；并设置 {@code -Djdk.serialFilter=...} 兜底。
+     * @deprecated 该方法在共享/多租户 Redis 场景下是远程代码执行向量。请改用 {@link #JdkSerializer(Collection)} 显式放行业务类型；并设置
+     *     {@code -Djdk.serialFilter=...} 兜底。
      */
     @Deprecated
     public static <T extends java.io.Serializable> JdkSerializer<T> unrestricted() {

@@ -20,8 +20,8 @@ import org.slf4j.LoggerFactory;
 /**
  * 事务执行权锁（崩溃安全）。
  *
- * <p>在事务回查器执行 publishHalfAndMarkCommit / markRollback 等临界区时， 通过 {@code SETNX + TTL}
- * 串行化同一事务的并发处理。 持有者在临界区内崩溃时，锁随 TTL 自动过期， 其它实例可在后续回查中接管，事务不会永久卡死。
+ * <p>在事务回查器执行 publishHalfAndMarkCommit / markRollback 等临界区时， 通过 {@code SETNX + TTL} 串行化同一事务的并发处理。
+ * 持有者在临界区内崩溃时，锁随 TTL 自动过期， 其它实例可在后续回查中接管，事务不会永久卡死。
  *
  * <p>释放使用 Lua compare-and-delete：仅当锁仍归本实例持有时才删除，避免误删接管者的锁。
  *
@@ -71,7 +71,9 @@ public class TransactionLockManager {
      */
     public boolean tryAcquire(String txGroup, String txId) {
         RBucket<String> lockBucket =
-                redisson.getBucket(StreamMQKeys.transactionLock(namespace, txGroup, txId));
+                redisson.getBucket(
+                        StreamMQKeys.transactionLock(namespace, txGroup, txId),
+                        StringCodec.INSTANCE);
         return Boolean.TRUE.equals(
                 lockBucket.setIfAbsent(lockHolderId, Duration.ofMillis(txLockTtlMs)));
     }

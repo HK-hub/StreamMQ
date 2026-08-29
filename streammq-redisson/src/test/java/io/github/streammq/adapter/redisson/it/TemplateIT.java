@@ -6,6 +6,7 @@
 package io.github.streammq.adapter.redisson.it;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListener;
@@ -20,6 +21,7 @@ import io.github.streammq.core.message.SendOptions;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.SendCallback;
+import io.github.streammq.core.transaction.TransactionCallback;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -89,6 +91,27 @@ class TemplateIT extends AbstractRedisIT {
         } finally {
             consumer.close();
         }
+    }
+
+    @Test
+    @DisplayName("executeInTransaction 未配置 TransactionScanner 时拒绝降级发送")
+    void executeInTransaction_withoutScannerFailsFast() {
+        String txGroup = "template-tx-group";
+        DefaultStreamMessageTemplate transactionalTemplate =
+                new DefaultStreamMessageTemplate(
+                        producerFactory,
+                        DEFAULT_GROUP,
+                        converter,
+                        ProducerConfig.builder().group(DEFAULT_GROUP).namespace(namespace).build(),
+                        txGroup);
+        Message<String> message =
+                MessageBuilder.<String>withTopic("tpl-tx-no-scanner").body("x").build();
+        TransactionCallback<String> callback =
+                (msg, ctx) -> io.github.streammq.core.enums.LocalTransactionState.COMMIT_MESSAGE;
+
+        assertThatThrownBy(() -> transactionalTemplate.executeInTransaction(message, callback))
+                .isInstanceOf(io.github.streammq.core.exception.TransactionException.class)
+                .hasMessageContaining("TransactionScanner");
     }
 
     @Test

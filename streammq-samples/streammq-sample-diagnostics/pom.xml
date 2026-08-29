@@ -6,7 +6,7 @@
     <parent>
         <groupId>io.github.streammq</groupId>
         <artifactId>streammq-samples</artifactId>
-        <version>0.1.0</version>
+        <version>0.1.1</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
     <artifactId>streammq-sample-diagnostics</artifactId>

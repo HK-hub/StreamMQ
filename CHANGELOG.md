@@ -5,7 +5,149 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.1] - 2026-08-29 — 第一个公开发布版本
+
+> **关于 `v0.1.0` 标签（发布前必读）**
+>
+> 仓库中曾存在指向 `f54b1fe`（2026-08-25）的 `v0.1.0` 标签，而其后有 11 个修复提交（含多项 P0/P1）
+> 未被包含。由于 Maven Central 构件**不可变**，同一个版本号不能被重新发布为不同内容，
+> 因此 **0.1.0 不再作为发布版本使用**，首个公开版本为 **0.1.1**。
+>
+> 发布前需要维护者手动执行：
+>
+> ```bash
+> git tag -d v0.1.0
+> git push origin :refs/tags/v0.1.0
+> ```
+>
+> `release.yml` 已增加门禁：若标签指向的提交与工作流检出的提交不一致，发布将直接失败。
+
+### Fixed (P0)
+
+- **事务消息在非 StringCodec 默认编码下「只报成功、永不发布」**：新增
+  `TransactionBinaryCodecIT`（以 Kryo 二进制默认 codec 运行）作为回归防护；此前
+  `AbstractRedisIT` 一律显式 `StringCodec`，恰好掩盖了本缺陷。
+  `TransactionScanner#casState` 等
+  Lua 脚本用 `StringCodec` 读写 txstate Hash 的字段，而 Hash 本身由 `redisson.getMap()` 以
+  **客户端默认 codec**（redisson-spring-boot-starter 默认为 Kryo 类二进制 codec，字符串 key/value
+  带二进制前缀）写入。字段编码不一致导致 Lua `HGET` 永远 miss（返回 `MISSING`），
+  `markCommit`/`markRollback` 据此静默返回——但 `executeInTransaction` 仍打印
+  「Transaction committed」并把发送结果标记为成功。真实后果：目标 Stream 从未写入任何条目、
+  半消息与 PREPARE 状态永久残留，消费端永远收不到事务消息。该缺陷只在默认 codec 非字符串时
+  出现（用户恰好配置 StringCodec/JsonJackson 则不可见），具有极强的环境相关性。
+  同类隐患一并修复（Lua 与 Java 侧 codec 统一为 StringCodec）：
+  - txstate Hash：`TransactionScanner`（注册/提交/回滚/回查/降级/清理）、`TransactionCommitExecutor`
+    （原子批置 COMMIT）、`TransactionRetentionSweeper`（保留期清理）的 `getMap()` 均显式
+    `StringCodec.INSTANCE`；
+  - 回查计数 Hash：`incrementCheckCount`（Lua `HINCRBY` 写入明文字段）与 `getCheckCount`/
+    `removeCheckEntry`（`RMap` 读取/删除）此前编码不一致，导致 `maxCheckTimes` 有界回查永不触发；
+  - 事务执行权锁与延时/重试转移 claim：`RBucket` 以默认 codec 写入持有者标识，Lua
+    compare-and-delete 却以明文比对，导致锁/claim 永远释放不掉（仅靠 TTL 兜底）——
+    `TransactionLockManager#tryAcquire`、`RetryScheduler`、`DelayMessageScheduler` 的
+    `getBucket()` 均显式 `StringCodec.INSTANCE`。
+- **诊断模块在普通应用上下文启动失败（`SlowConsumeAnalyzer` Bean 缺失）**：
+  `StreamMQDiagnosticsAutoConfiguration` 的 `streamMQDiagnosticsService` 依赖
+  `SlowConsumeAnalyzer`/`BacklogAnalyzer`/`DlqAnalyzer` 三个 `@Component` Bean，但三者位于
+  `io.github.streammq.diagnostics` 包——普通应用（未额外 `@ComponentScan` 该包）永远扫不到，
+  于是任意依赖诊断模块的应用在启动即抛 `NoSuchBeanDefinitionException`，且
+  `streammq-sample-diagnostics` 的集成测试在完整 verify 之前从未真正跑过，缺陷被长期隐藏。
+  修复：三个分析器改由自动装配显式 `@Bean` 注册（`@ConditionalOnMissingBean` 兜底，应用自行
+  扫描该包时不会重复实例化），服务 Bean 通过它们完成装配。
+- **`streammq-test` 发布构件存在无法解析的运行时依赖**：`StreamMQTestBase` 在运行期调用
+  `RedisAvailability`，而后者所在的 `streammq-test-support` 同时满足两个致命条件——在
+  `streammq-test` 中被声明为 `<optional>`（不传递），又被 `excludeArtifacts` 排除发布。
+  结果是：外部用户引入 `streammq-test` 后会得到 `NoClassDefFoundError`，且**无法通过补依赖自救**
+  （该坐标在中央仓库根本不存在）。
+  本轮修复：`streammq-test-support` 纳入发布；`streammq-test` 对
+  `streammq-test-support` / `streammq-core` / `slf4j-api` / `redisson` 改为可传递的普通 compile 依赖
+  （测试框架与 `streammq-redisson` 仍保持 optional，交由使用方决定版本）。
+
+### Fixed (P1)
+
+- **消费者创建失败从此不再是静默故障**：消费循环在创建监听器失败时（Redis 认证失败、消费者组非法、
+  配置错误）此前只打一条 ERROR 日志就退出——消费者在 `/actuator/streammq/groups` 仍然可见、
+  健康检查仍然 UP。本轮新增 `LoopFailureReporter` 上报通道，容器登记失败原因并纳入：
+  - `DefaultStreamMQListenerContainer#getConsumeLoopFailures()`
+  - 健康检查（`HealthIndicator` 在存在启动失败时返回 DOWN，详情含 loopKey → 原因）
+  - 管理端点总览 `status` 字段
+  `start()` / `stop()` 会清空登记表，避免历史失败影响下一轮判定。
+- **广播消费组累积可被观测**：新增 `RedissonStreamListener#countBroadcastGroups()`、
+  sweep 汇总日志（`Swept N stale broadcast group(s): remaining=M`），并通过管理端点总览的
+  `broadcastGroups` 字段暴露。此前该数字只能靠直接查 Redis 才能看到。
+- **执行器替换未同步给 `DefaultMessageProcessor`（潜在的"消费者静默不消费"）**：
+  `DefaultMessageProcessor` 在构造时捕获执行器引用且字段为 `final`，而容器可在 INIT 阶段被
+  `setConsumeExecutor` 换掉执行器——两者不一致时消费回调会抛 `RejectedExecutionException`。
+  本轮把 `executor` 改为 `volatile` 并在 `MessageProcessor` 接口新增 `setExecutor`，
+  容器替换执行器时先同步给协作类再关闭旧执行器（顺序颠倒会直接抛拒绝执行异常）。
+- **`StreamMQTracingIT` 跨测试污染导致偶发失败**：所有 `@Nested` 测试类共享同一个 TOPIC、
+  消费者组与消费者 Bean，上一测试的消息会在 `@BeforeEach` 的 `clear()` 之后才投递完成，
+  混入当前测试队列。断言却依赖 `getReceived().get(0)` / `hasSize(n)` / `getLastMessageId()`
+  等位置与数量——曾观测到期望 `hello-tracing` 却拿到 `topology-msg`。
+  本轮改为按内容匹配（`awaitBody` / `traceparentsOf` / `messageIdOf`），消除 flaky。
+
+### Fixed (P2)
+
+- `DefaultStreamMQListenerContainer#setConsumeExecutor` 现在会关闭构造器字段初始化时创建的
+  内部执行器（此前每注入一次泄漏一个），语义与 `DefaultStreamMessageTemplate#setAsyncSendExecutor`
+  保持一致：谁创建谁关闭。
+- `StreamMQCoreAutoConfiguration` 的 `ExecutorService` 参数补上 `@Qualifier("streammqExecutor")`
+  （此前依赖 Spring 的参数名兜底匹配，与同类装配写法不一致）。
+- `TokenAuthenticator` 修复长度预言机：与 `BasicAuthAuthenticator` 统一改为先 SHA-256 再常量时间
+  比较（`MessageDigest#isEqual` 在长度不等时立即返回，直接比较原始字节会泄露 token 长度）。
+  两者共用新增的包内私有 `SecureCredentialMatcher`，并在 Javadoc 中明确说明"摘要仅用于长度归一化，
+  不是口令散列加固"。
+- ACK 失败日志从 WARN 提升为 ERROR 并说明后果（消息留在 PEL 中，将在超过 PEL min-idle 阈值后被
+  `PelClaimScheduler` 重投，消费端必须幂等）——此前这条日志完全看不出会引发重复消费。
+- `PelClaimScheduler` 字段 Javadoc 修正：此前声称"触发 XAUTOCLAIM"，实际实现是
+  `XPENDING` + idle 过滤 + 「XADD 副本 + ACK 旧条目」；并补充了大 PEL 下的恢复延迟特性说明。
+- 删除 `StreamMQCoreAutoConfiguration` 中一段复制粘贴残留的孤儿 Javadoc。
+- `TokenAuthenticator` / `BasicAuthAuthenticator` Javadoc 补充"缺少失败重试限流"与
+  "管理端点挂在主端口、需在网络层限制访问来源"的安全边界说明。
+
+### Added
+
+- **`RedissonClientMissingFailureAnalyzer`**：缺少 `RedissonClient` Bean 时，把语焉不详的
+  `NoSuchBeanDefinitionException` 替换为含完整依赖声明与配置示例的启动失败报告。
+- **`RedissonStreamListener#countBroadcastGroups()`** 与管理端点总览的 `broadcastGroups` 字段。
+- 新增测试：`TokenAuthenticatorTest`（含长度预言机回归用例）、
+  `DefaultStreamMQListenerContainerTest`（执行器所有权、失败登记、INIT-only 约束）、
+  `EnumsTest#doesNotContainMisspelledAlias`（守卫 `UNKNOW` 不得重新引入）。
+- README / README.en 新增「广播消费的运维注意事项」与「消费者不消费时的排查路径」两节（中英同步）。
+
+### Removed
+
+- `LocalTransactionState.UNKNOW`（拼写错误的弃用别名，详见上方 Changed 条目）。
+- `DefaultStreamMessageTemplate#executeInTransactionInline`（全仓库零引用的死代码，
+  且其 Javadoc 描述的降级行为与 CHANGELOG 承诺、与实际抛异常的语义三方矛盾）。
+- `streammq-kubernetes` 从 Maven Central 发布清单中移除（实验性预览、无模块依赖、
+  核心的 `ConfigMapConfigRefresher` 默认实现为 no-op），避免在功能完整前就形成 API 兼容承诺。
+
+### Changed
+
+- **BOM 收敛**：`streammq-bom` 现在只管理 StreamMQ 自身构件 + `redisson` /
+  `redisson-spring-boot-starter`，不再覆盖 Jackson / SLF4J / Micrometer / Fury / Protostuff /
+  Spring Cloud Stream / Spring Integration / OpenTelemetry 的版本。
+  原因：BOM 的 import 顺序通常在使用方的 `spring-boot-dependencies` 之后，即 StreamMQ 的声明会
+  **静默覆盖**使用方的版本。对 redisson 这是有意的（README 快速开始片段省略版本号，需要 BOM 兜底）；
+  但对 Jackson 等"用户大概率已在用、且与 StreamMQ 无关"的依赖，覆盖属于越权。
+  已验证 reactor 全量构建（含 enforcer `dependencyConvergence`）通过。
+- **项目版本 0.1.0 → 0.1.1**：见本节开头关于 `v0.1.0` 标签的说明。
+
+### Fixed
+
+- **Fury registration API**: exposed safe `register(Class<?>)` / `registerAll(Class<?>...)`
+  methods and constructor-based registration so secure-by-default serializers are usable
+  without accessing Fury internals. Serialization errors now point to the public API.
+- **Template executor lifecycle**: `DefaultStreamMessageTemplate` now implements
+  `AutoCloseable`, shuts down only executors it owns, and releases its internal virtual
+  thread executor when a caller injects an external pool. Async sends fail fast after close.
+
+- **Fury registration API**: exposed safe `register(Class<?>)` / `registerAll(Class<?>...)`
+  methods and constructor-based registration so secure-by-default serializers are usable
+  without accessing Fury internals. Serialization errors now point to the public API.
+- **Template executor lifecycle**: `DefaultStreamMessageTemplate` now implements
+  `AutoCloseable`, shuts down only executors it owns, and releases its internal virtual
+  thread executor when a caller injects an external pool. Async sends fail fast after close.
 
 ### Security (P0)
 
@@ -37,14 +179,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     从 `DefaultStreamMQListenerContainer` 抽离。容器仍保留编排职责，但单文件 public 方法数从 41 降至 ~30，
     复杂度下降 25% 以上。
 - **`DefaultStreamMessageTemplate` 仍为编排层**：暂未做二次拆分（已识别为 0.2.0 路线图项）。
-- **`executeInTransaction` 不再硬失败**：当 `TransactionScanner` 为 null 时，模板自动降级到
-  "同步本地事务 + 即时发送/回滚" 路径，并在日志 WARN 提示用户启用 Scanner 以获得完整回查保护。
-  0.1.0 → 0.2.0 行为兼容路径，0.3.0 计划移除。
+- **`executeInTransaction` 明确为「缺失 Scanner 即快速失败」**：未注入 `TransactionScanner` 时抛出
+  `TransactionException`（错误信息含如何启用 Scanner 的可操作指引），**不**再声称会降级为
+  "同步本地事务 + 即时发送/回滚"。
+  背景：CHANGELOG 曾承诺存在该降级路径，但代码里从未调用（对应实现 `executeInTransactionInline`
+  是全仓库零引用的死代码），读文档的用户会误以为不配 Scanner 也能用。本轮删除死代码并统一为
+  快速失败——对事务消息而言，静默降级为低一致性语义比直接报错危险得多（JVM 崩溃时半消息永久悬挂）。
 - **MDC 跨虚拟线程透传修复**：`asyncSend` 现在捕获调用线程的 MDC 快照并在虚拟线程内恢复，
   修复 README 文档承诺 "MDC.put('traceId', 't-001'); template.asyncSend(message); traceId 自动透传"
   实际失效的问题。
-- **`UNKNOW` 拼写错误修正**：`LocalTransactionState` 增补 `UNKNOWN` 作为标准命名，
-  `UNKNOW` 标记 `@Deprecated` 保留为 0.0.x 兼容别名。所有 case 语句与 Javadoc 迁移到 `UNKNOWN`。
+- **`UNKNOW` 拼写错误彻底移除**：`LocalTransactionState` 只保留拼写正确的 `UNKNOWN`。
+  背景：此前 `@Deprecated` 的 `UNKNOW` 别名以"兼容 0.0.x 早期用户"为由保留，但本项目从未发布过
+  0.0.x（`git tag -l` 仅 `v0.1.0`），该理由不成立；更糟的是生产代码被迫用
+  `"UNKNOW".equals(state.name())` 字符串比较来绕过 `-Werror` 下的弃用告警——一个编译参数在决定
+  生产 API 设计。首个公开版本是移除它的唯一窗口，故本轮删除常量、字符串比较分支与相关 Javadoc。
 - **重试次数硬上限**：`StreamMQConstants.MAX_SYNC_RETRY_TIMES = 16` 夹取 `retryTimes` 配置，
   防止 `Integer.MAX_VALUE` 等误配导致无限重试、业务线程阻塞数十分钟。
 - **MessageId 碰撞修复**：`buildFailedResult` 使用 UUID 后缀，替代碰撞风险的 `currentTimeMillis() + "-0"`。
@@ -68,21 +216,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - 无。
 
-### Backward Compatibility
+### Security Defaults
 
-- `LocalTransactionState.UNKNOW` 仍可使用，标记 `@Deprecated`，0.3.0 移除。
-- `executeInTransaction` 在 `TransactionScanner` 缺失时改为降级而非硬抛——0.0.x 行为。
-- `FurySerializer(false)` 与 `JdkSerializer.unrestricted()` 现在要求显式系统属性；
-  现有测试已更新（`FurySerializerTest` / `JdkSerializerTest`）。
-
-### Migration Notes
-
-- 升级到 0.1.0 后若使用 `JdkSerializer.unrestricted()`，需在启动时添加：
-  `-Dstreammq.security.allowUnrestrictedSerializer=true`
-  或迁移到 `JdkSerializer(Set<String> allowedClasses)`。
-- 升级到 0.1.0 后若使用 `FurySerializer(false)`，同上。
-- 升级到 0.1.0 后所有 `LocalTransactionState.UNKNOW` 引用会出现 deprecation 警告，
-  建议迁移到 `UNKNOWN`。
+- `FurySerializer(false)` 与 `JdkSerializer.unrestricted()` 需要显式系统属性
+  `-Dstreammq.security.allowUnrestrictedSerializer=true` 才会生效，否则抛 `SecurityException`。
+  这是<b>默认安全</b>取向：缺省路径永远启用类白名单，用户必须显式声明"我已知悉 RCE 风险"才能关闭。
 
 ### Added
 

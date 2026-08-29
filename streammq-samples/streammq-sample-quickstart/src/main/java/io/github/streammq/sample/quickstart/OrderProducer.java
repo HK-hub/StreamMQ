@@ -19,8 +19,8 @@ import org.springframework.stereotype.Component;
 /**
  * 订单消息生产者（最小可运行示例）。
  *
- * <p>演示 StreamMQ 最常用的四种发送方式：同步 / Builder / 异步 / 批量。 完整功能（单向发送、超时重试、回调、MetadataBuilder）
- * 见 {@code streammq-sample-interceptor} 与 {@code streammq-sample-delay}。
+ * <p>演示 StreamMQ 最常用的四种发送方式：同步 / Builder / 异步 / 批量。 完整功能（单向发送、超时重试、回调、MetadataBuilder） 见 {@code
+ * streammq-sample-interceptor} 与 {@code streammq-sample-delay}。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -79,7 +79,8 @@ public class OrderProducer {
     /** 批量发送：底层走 RBatch Pipeline 一次性 XADD。 */
     public List<SendResult> createOrdersBatch(List<String> orderIds, List<String> contents) {
         log.info("Producing batch: count={}", orderIds.size());
-        BatchMessage.Builder<String> builder = BatchMessage.<String>withTopic(SampleConstants.TOPIC);
+        BatchMessage.Builder<String> builder =
+                BatchMessage.<String>withTopic(SampleConstants.TOPIC);
         for (int i = 0; i < orderIds.size(); i++) {
             builder.add(
                     MessageBuilder.<String>withTopic(SampleConstants.TOPIC)

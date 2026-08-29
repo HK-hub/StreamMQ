@@ -27,8 +27,7 @@ import org.slf4j.LoggerFactory;
  * }
  * }</pre>
  *
- * <p>本类不持有任何 lz4-java 编译期依赖，所有探测均通过 {@link Class#forName(String, boolean, ClassLoader)}
- * 完成。
+ * <p>本类不持有任何 lz4-java 编译期依赖，所有探测均通过 {@link Class#forName(String, boolean, ClassLoader)} 完成。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -60,8 +59,8 @@ public final class Lz4CompressionCodecFactory {
     /**
      * 尝试创建一个 {@link Lz4CompressionCodec}。
      *
-     * <p>若 lz4-java 不在 classpath 返回 {@code null}（<b>不抛异常</b>），便于装配层无侵入地条件性注册。
-     * 若 lz4-java 存在但反射初始化失败（极少见，多为版本不兼容），记录 WARN 日志并返回 {@code null}。
+     * <p>若 lz4-java 不在 classpath 返回 {@code null}（<b>不抛异常</b>），便于装配层无侵入地条件性注册。 若 lz4-java
+     * 存在但反射初始化失败（极少见，多为版本不兼容），记录 WARN 日志并返回 {@code null}。
      *
      * @return Codec 实例，若 LZ4 不可用或初始化失败则返回 {@code null}
      */

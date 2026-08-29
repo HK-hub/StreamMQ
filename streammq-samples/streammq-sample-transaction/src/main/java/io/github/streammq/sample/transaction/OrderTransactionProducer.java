@@ -20,7 +20,7 @@ import org.springframework.stereotype.Component;
  * 订单事务消息生产者示例。
  *
  * <p>演示事务消息发送流程：通过 {@link StreamMessageTemplate#executeInTransaction} 发送半消息并执行本地事务，根据本地事务执行结果决定
- * COMMIT 或 ROLLBACK。 当本地事务返回 {@link LocalTransactionState#UNKNOW} 时，框架会触发 {@link
+ * COMMIT 或 ROLLBACK。 当本地事务返回 {@link LocalTransactionState#UNKNOWN} 时，框架会触发 {@link
  * TransactionChecker} 进行回查。
  *
  * @author StreamMQ Contributors

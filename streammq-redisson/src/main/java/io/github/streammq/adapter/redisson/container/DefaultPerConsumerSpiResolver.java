@@ -57,6 +57,7 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
     private final Supplier<Integer> virtualNodesSupplier;
     private final Supplier<StreamMQMetrics> metricsSupplier;
     private final boolean enabled;
+
     /** 全局默认 RebalanceStrategy（来自 streammq.rebalance.strategy 配置，可为 null）。 */
     private final Class<? extends RebalanceStrategy> globalRebalanceStrategy;
 
@@ -209,8 +210,7 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
      * 实例化全局默认 RebalanceStrategy（由 streammq.rebalance.strategy 注入）； Consistency Hash 时携带配置的虚拟节点数。
      */
     @SuppressWarnings("unchecked")
-    private RebalanceStrategy instantiateGlobal(
-            Class<? extends RebalanceStrategy> rebalanceClass) {
+    private RebalanceStrategy instantiateGlobal(Class<? extends RebalanceStrategy> rebalanceClass) {
         if (rebalanceClass
                 == io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy
                         .class) {

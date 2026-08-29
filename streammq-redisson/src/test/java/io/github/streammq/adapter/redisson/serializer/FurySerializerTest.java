@@ -116,6 +116,25 @@ class FurySerializerTest {
     }
 
     @Test
+    @DisplayName("secure serializer exposes public registration API")
+    void registerAllowsPojoRoundTrip() {
+        FurySerializer<MyData> secure = new FurySerializer<>();
+        secure.register(MyData.class);
+        MyData data = new MyData("registered", 7, 42L);
+        byte[] bytes = secure.serialize(data, MyData.class);
+        assertThat(secure.deserialize(bytes, MyData.class)).isEqualTo(data);
+    }
+
+    @Test
+    @DisplayName("constructor registers initial message types")
+    void constructorRegistersTypes() {
+        FurySerializer<MyData> secure = new FurySerializer<>(MyData.class);
+        MyData data = new MyData("initial", 1, 2L);
+        assertThat(secure.deserialize(secure.serialize(data, MyData.class), MyData.class))
+                .isEqualTo(data);
+    }
+
+    @Test
     @DisplayName("FurySerializer(false) 默认抛 SecurityException（防止 foot-gun）")
     void requiresClassRegistrationFalseGatedBySystemProperty() {
         String previous = System.getProperty("streammq.security.allowUnrestrictedSerializer");

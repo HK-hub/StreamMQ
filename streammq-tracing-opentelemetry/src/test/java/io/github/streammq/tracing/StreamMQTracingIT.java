@@ -31,8 +31,10 @@ import io.opentelemetry.api.trace.SpanKind;
 import io.opentelemetry.sdk.OpenTelemetrySdk;
 import io.opentelemetry.sdk.trace.SdkTracerProvider;
 import io.opentelemetry.sdk.trace.samplers.Sampler;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -266,11 +268,10 @@ class StreamMQTracingIT {
                                     .build());
             assertThat(result.isSuccess()).isTrue();
 
-            await().atMost(10, TimeUnit.SECONDS)
-                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).hasSize(1));
+            // 按内容等待：共享 TOPIC 下不能依赖队列位置或数量
+            testConsumer.awaitBody("hello-tracing", 15);
 
-            assertThat(testConsumer.getReceived().get(0)).isEqualTo("hello-tracing");
-            String traceparent = testConsumer.getLastTraceparent();
+            String traceparent = testConsumer.traceparentOf("hello-tracing");
             assertThat(traceparent).isNotNull().matches(TRACEPARENT_REGEX);
         }
 
@@ -287,11 +288,11 @@ class StreamMQTracingIT {
                                 .build());
             }
 
-            await().atMost(15, TimeUnit.SECONDS)
-                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).hasSize(msgCount));
+            testConsumer.awaitBodies("batch-msg-", msgCount, 20);
 
-            assertThat(testConsumer.getTraceparents()).hasSize(msgCount);
-            for (String tp : testConsumer.getTraceparents()) {
+            List<String> batchTraceparents = testConsumer.traceparentsOf("batch-msg-");
+            assertThat(batchTraceparents).hasSize(msgCount);
+            for (String tp : batchTraceparents) {
                 assertThat(tp).matches(TRACEPARENT_REGEX);
             }
         }
@@ -306,8 +307,7 @@ class StreamMQTracingIT {
                             .body("query-message")
                             .build());
 
-            await().atMost(10, TimeUnit.SECONDS)
-                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
+            testConsumer.awaitBody("query-message", 15);
 
             long now = System.currentTimeMillis();
             long start = now - 5 * 60 * 1000L;
@@ -345,8 +345,7 @@ class StreamMQTracingIT {
                             .body("topology-msg")
                             .build());
 
-            await().atMost(10, TimeUnit.SECONDS)
-                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
+            testConsumer.awaitBody("topology-msg", 15);
 
             TopologyGraph topology = topologyService.getTopicTopology(TOPIC);
 
@@ -373,8 +372,7 @@ class StreamMQTracingIT {
                             .body("route-msg")
                             .build());
 
-            await().atMost(10, TimeUnit.SECONDS)
-                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
+            testConsumer.awaitBody("route-msg", 15);
 
             TopologyGraph topology = topologyService.getTopicTopology(TOPIC);
 
@@ -406,10 +404,9 @@ class StreamMQTracingIT {
                                     .body("trace-msg-body")
                                     .build());
 
-            await().atMost(10, TimeUnit.SECONDS)
-                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
+            testConsumer.awaitBody("trace-msg-body", 15);
 
-            String messageId = testConsumer.getLastMessageId();
+            String messageId = testConsumer.messageIdOf("trace-msg-body");
             MessageTrace trace = topologyService.getMessageTrace(messageId);
 
             assertThat(trace).isNotNull();
@@ -436,8 +433,7 @@ class StreamMQTracingIT {
                                 .build());
             }
 
-            await().atMost(15, TimeUnit.SECONDS)
-                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).hasSize(msgCount));
+            testConsumer.awaitBodies("topic-trace-body-", msgCount, 20);
 
             long now = System.currentTimeMillis();
             long start = now - 5 * 60 * 1000L;
@@ -466,10 +462,9 @@ class StreamMQTracingIT {
                             .body("interceptor-body")
                             .build());
 
-            await().atMost(10, TimeUnit.SECONDS)
-                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
+            testConsumer.awaitBody("interceptor-body", 15);
 
-            String traceparent = testConsumer.getLastTraceparent();
+            String traceparent = testConsumer.traceparentOf("interceptor-body");
             assertThat(traceparent).isNotNull().matches(TRACEPARENT_REGEX);
         }
 
@@ -483,10 +478,9 @@ class StreamMQTracingIT {
                             .body("consumer-span-body")
                             .build());
 
-            await().atMost(10, TimeUnit.SECONDS)
-                    .untilAsserted(() -> assertThat(testConsumer.getReceived()).isNotEmpty());
+            testConsumer.awaitBody("consumer-span-body", 15);
 
-            assertThat(testConsumer.getLastTraceparent()).isNotNull();
+            assertThat(testConsumer.traceparentOf("consumer-span-body")).isNotNull();
         }
     }
 
@@ -537,6 +531,93 @@ class StreamMQTracingIT {
             }
             Message<String> last = receivedMessages.get(receivedMessages.size() - 1);
             return last.getMessageId() != null ? last.getMessageId().getStreamEntryId() : "";
+        }
+
+        // ------------------------------------------------------------------
+        // 内容匹配的等待/查询辅助方法
+        //
+        // 为什么必须按内容匹配，而不能按位置（get(0)）或数量（hasSize(n)）：
+        // 本 IT 的所有 @Nested 测试类共享同一个 TOPIC 与同一个消费者组，消费者 Bean 也是全局单例。
+        // 上一测试发送的消息可能在 @BeforeEach 的 clear() 之后才投递完成，从而混入当前测试的队列。
+        // 曾实际观测到：FullTraceFlow 期望 "hello-tracing"，却拿到上一个测试遗留的 "topology-msg"。
+        // ------------------------------------------------------------------
+
+        /** 已收到的消息体列表（按投递顺序）。 */
+        List<String> bodies() {
+            return receivedMessages.stream().map(Message::getBody).toList();
+        }
+
+        /** 按 body 精确查找已收到的消息；未收到返回 null。 */
+        Message<String> messageByBody(String body) {
+            for (Message<String> m : receivedMessages) {
+                if (Objects.equals(body, m.getBody())) {
+                    return m;
+                }
+            }
+            return null;
+        }
+
+        /**
+         * 等待 body 精确等于 expected 的消息被消费，并返回该消息。
+         *
+         * @param expected 期望的消息体
+         * @param timeoutSeconds 超时秒数
+         * @return 匹配的消息（不会为 null，超时则断言失败）
+         */
+        Message<String> awaitBody(String expected, long timeoutSeconds) {
+            await().atMost(timeoutSeconds, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(bodies()).contains(expected));
+            return messageByBody(expected);
+        }
+
+        /**
+         * 返回指定 body 对应消息的 Stream Entry ID；未收到该消息时返回空串。
+         *
+         * <p>同理不得使用 {@link #getLastMessageId()}：共享消费者下"最后一条"未必是本测试发出的消息。
+         */
+        String messageIdOf(String body) {
+            Message<String> m = messageByBody(body);
+            if (m == null || m.getMessageId() == null) {
+                return "";
+            }
+            return m.getMessageId().getStreamEntryId();
+        }
+
+        /** 返回指定 body 对应消息上的 traceparent 属性；未收到该消息时返回 null。 */
+        String traceparentOf(String body) {
+            Message<String> m = messageByBody(body);
+            return m == null ? null : m.getUserProperties().get(StreamMQTracing.TRACEPARENT_KEY);
+        }
+
+        /** 等待 body 以 prefix 开头的消息累计收到 count 条。 */
+        void awaitBodies(String prefix, int count, long timeoutSeconds) {
+            await().atMost(timeoutSeconds, TimeUnit.SECONDS)
+                    .untilAsserted(
+                            () ->
+                                    assertThat(
+                                                    bodies().stream()
+                                                            .filter(
+                                                                    b ->
+                                                                            b != null
+                                                                                    && b.startsWith(
+                                                                                            prefix))
+                                                            .count())
+                                            .isEqualTo(count));
+        }
+
+        /** 返回 body 以 prefix 开头的消息所携带的 traceparent 列表。 */
+        List<String> traceparentsOf(String prefix) {
+            List<String> result = new ArrayList<>();
+            for (Message<String> m : receivedMessages) {
+                String body = m.getBody();
+                if (body != null && body.startsWith(prefix)) {
+                    String tp = m.getUserProperties().get(StreamMQTracing.TRACEPARENT_KEY);
+                    if (tp != null) {
+                        result.add(tp);
+                    }
+                }
+            }
+            return result;
         }
 
         void clear() {

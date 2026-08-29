@@ -17,10 +17,12 @@ import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
+import java.util.concurrent.ExecutorService;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.AutoConfigureAfter;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -83,10 +85,7 @@ public class StreamMQListenerContainerAutoConfiguration {
             ObjectProvider<ConsumerFilter> consumerFilterProvider,
             ObjectProvider<StreamMQMetrics> metricsProvider,
             ObjectProvider<PelClaimScheduler> pelClaimSchedulerProvider,
-            @org.springframework.beans.factory.annotation.Qualifier("streammqExecutor")
-                    org.springframework.beans.factory.ObjectProvider<
-                                    java.util.concurrent.ExecutorService>
-                            executorProvider,
+            @Qualifier("streammqExecutor") ObjectProvider<ExecutorService> executorProvider,
             ApplicationContext applicationContext) {
         String namespace = properties.getNamespace();
         LOG.info(
@@ -116,7 +115,7 @@ public class StreamMQListenerContainerAutoConfiguration {
         container.setDefaultVirtualNodes(properties.getRebalance().getVirtualNodes());
         container.setDefaultRebalanceStrategy(properties.getRebalance().getStrategy());
         // 统一线程模型：容器消费循环复用 streammqExecutor（仅识别该名称的 Bean，用户可同名覆盖自定义）
-        java.util.concurrent.ExecutorService executor = executorProvider.getIfAvailable();
+        ExecutorService executor = executorProvider.getIfAvailable();
         if (executor != null) {
             container.setConsumeExecutor(executor);
             LOG.info("Injected streammqExecutor into ListenerContainer");

@@ -17,10 +17,7 @@ public final class StreamMQConstants {
     /** 默认同步重试次数 */
     public static final int DEFAULT_SYNC_RETRY_TIMES = 2;
 
-    /**
-     * 同步重试次数上限。超过此值的配置将被夹取为该值，防止误配置（如 {@code Integer.MAX_VALUE}）导致无限重试、
-     * 阻塞业务线程数十分钟。
-     */
+    /** 同步重试次数上限。超过此值的配置将被夹取为该值，防止误配置（如 {@code Integer.MAX_VALUE}）导致无限重试、 阻塞业务线程数十分钟。 */
     public static final int MAX_SYNC_RETRY_TIMES = 16;
 
     /** 默认异步重试次数 */

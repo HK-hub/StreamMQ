@@ -29,7 +29,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 /**
  * {@link BacklogAnalyzer} 单元测试。
  *
- * <p>独立 mock {@link StreamMQTraceService} 与可选的 {@link BacklogProbe}， 验证积压诊断报告的严重级别 / 真实探针 fallback 行为。
+ * <p>独立 mock {@link StreamMQTraceService} 与可选的 {@link BacklogProbe}， 验证积压诊断报告的严重级别 / 真实探针 fallback
+ * 行为。
  */
 @DisplayName("BacklogAnalyzer 测试")
 @ExtendWith(MockitoExtension.class)
@@ -99,7 +100,8 @@ class BacklogAnalyzerTest {
         BacklogAnalyzer analyzerWithProbe =
                 new BacklogAnalyzer(traceService, new StreamMQDiagnosticsProperties(), probe);
 
-        when(traceService.queryByTopic(eq("test-topic"), anyLong(), anyLong())).thenReturn(List.of());
+        when(traceService.queryByTopic(eq("test-topic"), anyLong(), anyLong()))
+                .thenReturn(List.of());
 
         BacklogReport report = analyzerWithProbe.diagnose("test-topic", "test-group");
 
@@ -107,7 +109,8 @@ class BacklogAnalyzerTest {
         assertThat(report.severity()).isEqualTo(Severity.CRITICAL);
     }
 
-    private TraceRecord sendRecord(String messageId, String topic, long timestamp, long durationMillis) {
+    private TraceRecord sendRecord(
+            String messageId, String topic, long timestamp, long durationMillis) {
         return new TraceRecord(
                 messageId,
                 topic,

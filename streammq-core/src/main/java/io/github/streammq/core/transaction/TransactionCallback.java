@@ -46,10 +46,10 @@ public interface TransactionCallback<T> {
      *     <ul>
      *       <li>{@link LocalTransactionState#COMMIT_MESSAGE} - 提交半消息
      *       <li>{@link LocalTransactionState#ROLLBACK_MESSAGE} - 回滚半消息
-     *       <li>{@link LocalTransactionState#UNKNOW} - 等待事务回查
+     *       <li>{@link LocalTransactionState#UNKNOWN} - 等待事务回查
      *     </ul>
      *
-     * @throws Exception 业务异常，框架将其视为 {@link LocalTransactionState#UNKNOW}
+     * @throws Exception 业务异常，框架将其视为 {@link LocalTransactionState#UNKNOWN}
      */
     LocalTransactionState execute(Message<T> message, TransactionContext context) throws Exception;
 }

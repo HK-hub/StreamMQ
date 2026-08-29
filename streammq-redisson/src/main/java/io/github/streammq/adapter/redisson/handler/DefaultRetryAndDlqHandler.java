@@ -112,7 +112,18 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             try {
                 listener.ack(messageId);
             } catch (RuntimeException ex) {
-                LOG.warn("ACK failed (messageId={}): {}", messageId, ex.getMessage(), ex);
+                // ACK 失败不重试：消息仍留在 PEL 中，后续会被 PEL 认领调度器重新投递，
+                // at-least-once 语义得以保持（消费端必须幂等）。这里刻意提升为 ERROR 并说明后果，
+                // 因为"ACK 失败"在 Redis 抖动期间会直接表现为重复消费，是需要被运维看到的信号。
+                LOG.error(
+                        "ACK failed (messageId={}): the message stays in PEL and will be"
+                                + " redelivered by PelClaimScheduler once idle exceeds the PEL"
+                                + " min-idle threshold (default {}ms) — consumers must be"
+                                + " idempotent. cause={}",
+                        messageId,
+                        StreamMQConstants.DEFAULT_PEL_CLAIM_MIN_IDLE_MS,
+                        ex.getMessage(),
+                        ex);
             }
             return;
         }

@@ -97,15 +97,23 @@ class EnumsTest {
     class LocalTransactionStateTest {
 
         @Test
-        @DisplayName("LocalTransactionState 含 COMMIT_MESSAGE / ROLLBACK_MESSAGE / UNKNOWN / UNKNOW(legacy)")
-        @SuppressWarnings("deprecation")
+        @DisplayName("LocalTransactionState 恰好含 COMMIT_MESSAGE / ROLLBACK_MESSAGE / UNKNOWN")
         void containsAllThreeStates() {
+            // 回归守卫：公开 enum 常量一旦发布即为永久 API 承诺。此断言防止历史上拼写错误的
+            // UNKNOW 常量被重新引入（0.1.0 首个公开版本发布前已移除）。
             assertThat(LocalTransactionState.values())
                     .containsExactlyInAnyOrder(
                             LocalTransactionState.COMMIT_MESSAGE,
                             LocalTransactionState.ROLLBACK_MESSAGE,
-                            LocalTransactionState.UNKNOWN,
-                            LocalTransactionState.UNKNOW);
+                            LocalTransactionState.UNKNOWN);
+        }
+
+        @Test
+        @DisplayName("不存在拼写错误的 UNKNOW 常量")
+        void doesNotContainMisspelledAlias() {
+            assertThat(LocalTransactionState.values())
+                    .extracting(Enum::name)
+                    .doesNotContain("UNKNOW");
         }
     }
 }

@@ -8,7 +8,7 @@ A high-performance message middleware SDK built on **Redis Stream** + **Redisson
 [![Java](https://img.shields.io/badge/Java-21%2B-orange.svg)](https://openjdk.java.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.x-green.svg)](https://spring.io/projects/spring-boot)
 [![Redisson](https://img.shields.io/badge/Redisson-3.34.x-red.svg)](https://redisson.org/)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/HK-hub/StreamMQ)
+[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](https://github.com/HK-hub/StreamMQ)
 [![CI](https://github.com/HK-hub/StreamMQ/actions/workflows/ci.yml/badge.svg)](https://github.com/HK-hub/StreamMQ/actions/workflows/ci.yml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/HK-hub/StreamMQ/pulls)
 [![Stars](https://img.shields.io/github/stars/HK-hub/StreamMQ?style=social)](https://github.com/HK-hub/StreamMQ)
@@ -19,7 +19,7 @@ A high-performance message middleware SDK built on **Redis Stream** + **Redisson
 
 ### Why we require JDK 21
 
-StreamMQ 0.1.0 hard-depends on **JDK 21+** (enforced in `pom.xml` via `maven-enforcer-plugin` and `requireJavaVersion [21,)`). This is intentional:
+StreamMQ 0.1.1 hard-depends on **JDK 21+** (enforced in `pom.xml` via `maven-enforcer-plugin` and `requireJavaVersion [21,)`). This is intentional:
 
 - **Virtual threads (JEP 444)** are the default execution model for consume loops — `Executors.newVirtualThreadPerTaskExecutor()` is only GA in JDK 21. We refuse to fall back to a platform-thread pool because the consumer thread count would multiply against the Redis connection pool in a 1:N relationship.
 - **Pattern matching + Record patterns** simplify core glue code in `ConsumeLoopTask` and `ConsumeAction`.
@@ -35,6 +35,8 @@ StreamMQ 0.1.0 hard-depends on **JDK 21+** (enforced in `pom.xml` via `maven-enf
 - [Benchmarks](#benchmarks)
 - [Quick Start](#quick-start)
 - [Core Features](#core-features)
+- [Broadcast Consumption — Operational Notes](#broadcast-consumption--operational-notes)
+- [Troubleshooting: a consumer that never consumes](#troubleshooting-a-consumer-that-never-consumes)
 - [Modules](#modules)
 - [Configuration Reference](#configuration-reference)
 - [SPI Extension Points](#spi-extension-points)
@@ -163,7 +165,16 @@ Single instance, 1KB payload. JMH forks=2, warmup=3, iter=5.
 | Sync batch (batch=100) | ~2,587 | ~2,703 | ~2,344 |
 | Sync single | ~2,309 | ~2,188 | ~1,877 |
 
+> **On the blanks:** `consumeThroughput` and `messageCreateAndConsume` are still placeholders.
+> We will **not** fill in numbers we have not measured — this README previously quoted
+> methodologically broken benchmarks (dead-code elimination, exhausted feed, missing ACK), which
+> have been publicly retracted. Consumption throughput is the single most important capacity number
+> for an MQ; leaving it blank is better than misleading you.
+
 Run yourself: `mvn -B -Pbenchmark -pl streammq-benchmark exec:java@benchmark-template exec:java@benchmark-serialization exec:java@benchmark-consumer -Dstreammq.benchmark.allowFlush=true`
+Or trigger the CI benchmark job defined in
+[`.github/workflows/benchmark.yml`](.github/workflows/benchmark.yml); results are published as JMH
+artifacts and back-filled into this table.
 
 ---
 
@@ -188,7 +199,7 @@ Run yourself: `mvn -B -Pbenchmark -pl streammq-benchmark exec:java@benchmark-tem
         <dependency>
             <groupId>io.github.streammq</groupId>
             <artifactId>streammq-bom</artifactId>
-            <version>0.1.0</version>
+            <version>0.1.1</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -307,6 +318,12 @@ One-line annotation, declaratively defines the consumer; supports concurrent, or
 @StreamMQConsumer(topic = "order-topic", consumerGroup = "order-group", dlqMode = true)
 ```
 
+> ⚠️ **Broadcast consumption creates a separate Redis consumer group per container instance,
+> and the group name changes across restarts.** The total group count is therefore roughly
+> "instance count × restart count" within the heartbeat-timeout window, and it keeps consuming
+> Redis memory (every group owns its own PEL). Before using broadcast mode in production, read
+> [Broadcast Consumption — Operational Notes](#broadcast-consumption--operational-notes).
+
 ### StreamMessageService programming model (recommended)
 
 StreamMQ provides two send APIs: `StreamMessageService` (facade) and `StreamMessageTemplate` (full SPI). **Most users should inject `StreamMessageService`** — it has simpler ergonomics for `topic + body + metadata` and delegates to the template underneath.
@@ -362,6 +379,71 @@ GZIP via `CompressionCodec` SPI; auto-compresses when payload exceeds threshold.
 
 ---
 
+## Broadcast Consumption — Operational Notes
+
+**Read this before using `ConsumeMode.BROADCASTING`.**
+
+### Behaviour
+
+Redis consumer groups are inherently "competing consumers within a group". To implement broadcast
+(every instance receives every message), StreamMQ gives **each container instance its own Redis
+consumer group**, suffixed with a container-level random token. That token is **not stable across
+restarts**. Therefore:
+
+- **Every restart creates a new group**; the old one is not removed immediately.
+- Stale groups are swept after their heartbeat expires
+  (`RedissonStreamListener#sweepStaleBroadcastGroups`).
+- Until then, total group count = "instance count × restart count" within the heartbeat window.
+- Each group holds its own PEL and **occupies Redis memory**.
+
+### Capacity estimate
+
+```
+steady-state groups ≈ instance count
+peak groups         ≈ instance count × (max restarts within the heartbeat-timeout window)
+```
+
+The heartbeat timeout is controlled by `streammq.group.instance-timeout-ms`.
+
+### Signals to monitor
+
+| Signal | How to read | What an anomaly means |
+|---|---|---|
+| Broadcast group count | `GET /actuator/streammq` → `broadcastGroups` | Steady growth = crash-looping instances, or heartbeat timeout configured too long |
+| Per-sweep removals | log `Swept N stale broadcast group(s): namespace=..., remaining=M` | N stuck at 0 while `remaining` grows = the sweeper is not effective |
+| Redis memory | `INFO memory` | Cross-check against the two numbers above |
+
+### Recommendations
+
+1. **Do not use broadcast mode for workloads that restart frequently** (CI environments, Pods that
+   repeatedly OOM).
+2. Alert on `broadcastGroups`: investigate above "instance count × 3".
+3. Broadcast groups **cannot resume a previous consumption offset** — after a restart the new group
+   starts from the current point in time, and messages produced during the restart are **not**
+   replayed. If you need restart-safe delivery, use clustering consumption
+   (`ConsumeMode.CLUSTERING`) or persist offsets yourself.
+
+---
+
+## Troubleshooting: a consumer that never consumes
+
+A consumer that "registers successfully but never consumes" is the symptom most often mistaken for
+"messages are being lost". Work through these in order:
+
+1. **Check health**: `GET /actuator/health` → the `streammq` component. If any consume loop failed
+   to start, it reports `DOWN` with `listenerContainer.consumeLoopFailures`
+   (`loopKey → reason`) in the details.
+2. **Check the overview**: `GET /actuator/streammq` → the `status` field reflects the same state.
+3. **Check the logs**: the `Failed to create consumer for listener` ERROR line carries topic/group
+   and the root cause — most commonly wrong Redis credentials, an illegal consumer group name,
+   or a namespace mismatch.
+4. **Check container state**: the `containerRunning` field in `/actuator/streammq/groups`.
+
+> A failed consume loop is **not** retried automatically. After fixing the root cause you must
+> restart the application (or trigger rebalance via the management endpoint).
+
+---
+
 ## Modules
 
 | Module | Description |
@@ -375,7 +457,7 @@ GZIP via `CompressionCodec` SPI; auto-compresses when payload exceeds threshold.
 | **streammq-kubernetes** | K8s health checks, HPA, graceful shutdown, CRD operator (experimental, default off) |
 | **streammq-spring-cloud-stream-binder** | Spring Cloud Stream Binder implementation |
 | **streammq-benchmark** | JMH benchmarks |
-| **streammq-test** | Test utilities, embedded Redis, assertions, mocks |
+| **streammq-test** | Test utilities: containerized Redis (Testcontainers, **requires a Docker daemon**), Redis availability probe, assertions, mocks. Import with `test` scope |
 | **streammq-samples** | Sample projects covering all features |
 
 ---
@@ -412,7 +494,7 @@ streammq:
 
 ## SPI Extension Points
 
-0.1.0 ships with **16 SPI interfaces**:
+0.1.1 ships with **16 SPI interfaces**:
 
 | SPI Interface | Purpose | Default Implementation |
 |---|---|---|
@@ -611,7 +693,7 @@ StreamMQ takes your security seriously. Best practices:
 ### Deserialization safety
 
 - `FurySerializer` and `JdkSerializer` are **secure-by-default**:
-  - `FurySerializer` enforces class registration whitelist by default (`requireClassRegistration=true`); must register business types before first use. To disable for fully-trusted Redis: `new FurySerializer(false)` — **gated by `-Dstreammq.security.allowUnrestrictedSerializer=true`**.
+  - `FurySerializer` enforces class registration whitelist by default (`requireClassRegistration=true`). Register application payloads up front with `new FurySerializer<>(OrderCreated.class)` or `new FurySerializer<>().register(OrderCreated.class)`. To disable for fully-trusted Redis: `new FurySerializer(false)` — **gated by `-Dstreammq.security.allowUnrestrictedSerializer=true`**.
   - `JdkSerializer` has JEP 290 class name whitelist filter (target type + JDK basics); use `JdkSerializer.unrestricted()` only as a last resort — also gated by the same system property.
 
 For shared/multi-tenant Redis, keep default whitelist mode. See [SECURITY.md](SECURITY.md) for the full security policy.

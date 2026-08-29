@@ -31,10 +31,10 @@ public interface TransactionChecker<T> {
      *     <ul>
      *       <li>{@link LocalTransactionState#COMMIT_MESSAGE} - 提交半消息
      *       <li>{@link LocalTransactionState#ROLLBACK_MESSAGE} - 回滚半消息
-     *       <li>{@link LocalTransactionState#UNKNOW} - 仍未知，等待下次回查
+     *       <li>{@link LocalTransactionState#UNKNOWN} - 仍未知，等待下次回查
      *     </ul>
      *
-     * @throws Exception 业务异常，框架将其视为 {@link LocalTransactionState#UNKNOW}
+     * @throws Exception 业务异常，框架将其视为 {@link LocalTransactionState#UNKNOWN}
      */
     LocalTransactionState check(Message<T> message, TransactionContext context) throws Exception;
 }

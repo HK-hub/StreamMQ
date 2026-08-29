@@ -48,11 +48,25 @@ class DlqAnalyzerTest {
         List<TraceRecord> records = new ArrayList<>();
         // fail-a 失败 3 次（达到 DLQ 阈值）
         for (int i = 0; i < 3; i++) {
-            records.add(consumeRecord("fail-a", "test-topic", "test-group", 1000L + i, 100L, "NullPointerException"));
+            records.add(
+                    consumeRecord(
+                            "fail-a",
+                            "test-topic",
+                            "test-group",
+                            1000L + i,
+                            100L,
+                            "NullPointerException"));
         }
         // fail-b 失败 3 次
         for (int i = 0; i < 3; i++) {
-            records.add(consumeRecord("fail-b", "test-topic", "test-group", 2000L + i, 200L, "TimeoutException"));
+            records.add(
+                    consumeRecord(
+                            "fail-b",
+                            "test-topic",
+                            "test-group",
+                            2000L + i,
+                            200L,
+                            "TimeoutException"));
         }
 
         when(traceService.queryByGroup(eq("test-group"), anyLong(), anyLong())).thenReturn(records);

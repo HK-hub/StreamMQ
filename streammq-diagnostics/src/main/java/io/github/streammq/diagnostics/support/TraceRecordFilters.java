@@ -30,8 +30,7 @@ public final class TraceRecordFilters {
      * @param group 消费者组
      * @return 消费记录列表
      */
-    public static List<TraceRecord> filterConsumeByGroup(
-            List<TraceRecord> records, String group) {
+    public static List<TraceRecord> filterConsumeByGroup(List<TraceRecord> records, String group) {
         List<TraceRecord> result = new ArrayList<>();
         for (TraceRecord record : records) {
             if (Objects.nonNull(record.type())

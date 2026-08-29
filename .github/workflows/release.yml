@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Semantic version to release (for example 1.2.3 or v1.2.3)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -34,6 +39,18 @@ jobs:
           java-version: 21
           cache: maven
 
+      - name: Validate release version
+        shell: bash
+        env:
+          RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_REF#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version '$RELEASE_REF'. Expected MAJOR.MINOR.PATCH." >&2
+            exit 1
+          fi
+
       # 发布门禁：单测 + 集成测试 + Spotless/JaCoCo 全部通过才允许进入 deploy job。
       # 此前发布通道直接 deploy -DskipTests，完全绕过质量门禁，属高危流程缺陷。
       - name: Run full verify (unit + integration)
@@ -59,9 +76,41 @@ jobs:
           gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
           gpg-passphrase: MAVEN_GPG_PASSPHRASE
 
-      - name: Extract tag version
+      - name: Validate and extract release version
         id: version
-        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        shell: bash
+        env:
+          RELEASE_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${RELEASE_REF#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version '$RELEASE_REF'. Expected MAJOR.MINOR.PATCH." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # 发布门禁：标签必须指向本次工作流所检出的提交。
+      # 若标签先于修复提交打出（"先打 tag 再改代码"），这里的校验会失败，避免把
+      # 与标签内容不一致的二进制发布到 Maven Central（中央仓库构件不可变，无法回滚）。
+      - name: Verify tag points at the checked-out commit
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          tag_commit="$(git rev-list -n 1 "${RELEASE_TAG}")"
+          head_commit="$(git rev-parse HEAD)"
+          echo "tag=${RELEASE_TAG} tag_commit=${tag_commit}"
+          echo "head_commit=${head_commit}"
+          if [[ "${tag_commit}" != "${head_commit}" ]]; then
+            echo "::error::Tag ${RELEASE_TAG} points at ${tag_commit}, but the workflow checked out ${head_commit}."
+            echo "::error::The tag was created before the latest commits. Delete and re-create the tag on the"
+            echo "::error::intended commit, then re-run the release:"
+            echo "::error::  git tag -d ${RELEASE_TAG} && git push origin :refs/tags/${RELEASE_TAG}"
+            exit 1
+          fi
+          echo "Tag ${RELEASE_TAG} matches HEAD"
 
       - name: Set project version
         run: mvn versions:set -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false
@@ -83,7 +132,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: StreamMQ ${{ steps.version.outputs.version }}
-          tag_name: ${{ github.ref }}
+          tag_name: v${{ steps.version.outputs.version }}
           generate_release_notes: true
           files: |
             streammq-bom/target/streammq-bom-${{ steps.version.outputs.version }}.pom
@@ -102,12 +151,12 @@ jobs:
             streammq-diagnostics/target/streammq-diagnostics-${{ steps.version.outputs.version }}.jar
             streammq-diagnostics/target/streammq-diagnostics-${{ steps.version.outputs.version }}-sources.jar
             streammq-diagnostics/target/streammq-diagnostics-${{ steps.version.outputs.version }}-javadoc.jar
-            streammq-kubernetes/target/streammq-kubernetes-${{ steps.version.outputs.version }}.jar
-            streammq-kubernetes/target/streammq-kubernetes-${{ steps.version.outputs.version }}-sources.jar
-            streammq-kubernetes/target/streammq-kubernetes-${{ steps.version.outputs.version }}-javadoc.jar
             streammq-spring-cloud-stream-binder/target/streammq-spring-cloud-stream-binder-${{ steps.version.outputs.version }}.jar
             streammq-spring-cloud-stream-binder/target/streammq-spring-cloud-stream-binder-${{ steps.version.outputs.version }}-sources.jar
             streammq-spring-cloud-stream-binder/target/streammq-spring-cloud-stream-binder-${{ steps.version.outputs.version }}-javadoc.jar
             streammq-test/target/streammq-test-${{ steps.version.outputs.version }}.jar
             streammq-test/target/streammq-test-${{ steps.version.outputs.version }}-sources.jar
             streammq-test/target/streammq-test-${{ steps.version.outputs.version }}-javadoc.jar
+            streammq-test-support/target/streammq-test-support-${{ steps.version.outputs.version }}.jar
+            streammq-test-support/target/streammq-test-support-${{ steps.version.outputs.version }}-sources.jar
+            streammq-test-support/target/streammq-test-support-${{ steps.version.outputs.version }}-javadoc.jar

@@ -24,8 +24,8 @@ import java.util.Set;
 /**
  * StreamMQ 诊断服务 Facade，自动诊断慢消费、消息积压、死信队列等异常。
  *
- * <p>本类保留原有公共 API（{@code diagnoseXxx} / {@code getXxx}）作为统一的对外门面， 实际诊断能力由三个独立的
- * {@code Analyzer} 协作组件实现：
+ * <p>本类保留原有公共 API（{@code diagnoseXxx} / {@code getXxx}）作为统一的对外门面， 实际诊断能力由三个独立的 {@code Analyzer}
+ * 协作组件实现：
  *
  * <ul>
  *   <li>{@link SlowConsumeAnalyzer} - 慢消费诊断
@@ -33,8 +33,8 @@ import java.util.Set;
  *   <li>{@link DlqAnalyzer} - 死信队列诊断
  * </ul>
  *
- * <p>调用方（REST 端点 / 用户代码）只需依赖 {@code StreamMQDiagnosticsService} 即可获取全部诊断能力； 内部
- * {@code Analyzer} 也可被单独注入使用，便于按需扩展与单元测试。
+ * <p>调用方（REST 端点 / 用户代码）只需依赖 {@code StreamMQDiagnosticsService} 即可获取全部诊断能力； 内部 {@code Analyzer}
+ * 也可被单独注入使用，便于按需扩展与单元测试。
  *
  * <p>诊断阈值、时间窗口、DLQ 判定规则等全部通过 {@link StreamMQDiagnosticsProperties} 外部化配置， 支持用户按需调整而无需修改代码。
  *
@@ -90,7 +90,8 @@ public class StreamMQDiagnosticsService {
         Objects.requireNonNull(properties, "properties");
         this.listenerContainer = listenerContainer;
         this.properties = properties;
-        this.slowConsumeAnalyzer = new SlowConsumeAnalyzer(traceService, listenerContainer, properties);
+        this.slowConsumeAnalyzer =
+                new SlowConsumeAnalyzer(traceService, listenerContainer, properties);
         this.backlogAnalyzer = new BacklogAnalyzer(traceService, properties, backlogProbe);
         this.dlqAnalyzer = new DlqAnalyzer(traceService, properties);
     }
@@ -98,8 +99,8 @@ public class StreamMQDiagnosticsService {
     /**
      * Spring 注入主构造函数。
      *
-     * <p>由 {@code StreamMQDiagnosticsAutoConfiguration} 的 {@code @Bean} 工厂方法调用， 传入 3 个 analyzer（{@code
-     * @Component} 自动注册）+ 容器 + 属性。
+     * <p>由 {@code StreamMQDiagnosticsAutoConfiguration} 的 {@code @Bean} 工厂方法调用， 传入 3 个
+     * analyzer（{@code @Component} 自动注册）+ 容器 + 属性。
      */
     public StreamMQDiagnosticsService(
             SlowConsumeAnalyzer slowConsumeAnalyzer,

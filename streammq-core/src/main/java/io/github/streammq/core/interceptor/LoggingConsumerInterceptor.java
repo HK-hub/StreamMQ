@@ -15,11 +15,11 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
- * 日志消费者拦截器（默认实现）：在消费前/后/异常时输出 INFO/WARN/ERROR 日志， 全部放行（{@code beforeConsume}
- * 始终返回 {@code true}），仅用于审计与问题排查。
+ * 日志消费者拦截器（默认实现）：在消费前/后/异常时输出 INFO/WARN/ERROR 日志， 全部放行（{@code beforeConsume} 始终返回 {@code
+ * true}），仅用于审计与问题排查。
  *
- * <p>本类是 {@link ConsumerInterceptor} SPI 的默认空操作+日志记录实现， 业务方可注册自定义 {@link ConsumerInterceptor}
- * Bean 覆盖本默认（例如注入 traceId、限流、解密等）。 若同时存在多个同类型 Bean，Spring 依赖 {@link
+ * <p>本类是 {@link ConsumerInterceptor} SPI 的默认空操作+日志记录实现， 业务方可注册自定义 {@link ConsumerInterceptor} Bean
+ * 覆盖本默认（例如注入 traceId、限流、解密等）。 若同时存在多个同类型 Bean，Spring 依赖 {@link
  * org.springframework.core.annotation.Order} / {@link ConsumerInterceptor#order()} 决定执行顺序。
  *
  * <p>日志格式：

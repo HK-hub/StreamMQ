@@ -16,6 +16,7 @@ import org.redisson.api.RMap;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.StreamMessageId;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -25,13 +26,11 @@ import org.slf4j.LoggerFactory;
  * <p>两个清理任务：
  *
  * <ul>
- *   <li>{@link #sweepExpiredTerminalStates} - 清除超过保留期（默认 7 天）的 txstate Hash 终态字段与
- *       {@code .done} 时间戳
+ *   <li>{@link #sweepExpiredTerminalStates} - 清除超过保留期（默认 7 天）的 txstate Hash 终态字段与 {@code .done} 时间戳
  *   <li>{@link #sweepOrphanHalves} - 清除无状态引用的孤儿 half Stream 条目（超过保留期 1 天）
  * </ul>
  *
- * <p>两类任务均按 txGroup 独立执行；本类不持有线程——由 {@link TransactionScanner} 在每次扫描周期中
- * （每 N 轮）调用一次。
+ * <p>两类任务均按 txGroup 独立执行；本类不持有线程——由 {@link TransactionScanner} 在每次扫描周期中 （每 N 轮）调用一次。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -75,7 +74,7 @@ public class TransactionRetentionSweeper {
      */
     public int sweepExpiredTerminalStates(String txGroup) {
         String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
-        RMap<String, String> stateMap = redisson.getMap(stateHashKey);
+        RMap<String, String> stateMap = redisson.getMap(stateHashKey, StringCodec.INSTANCE);
         long cutoff = System.currentTimeMillis() - txStateRetentionMs;
         int removed = 0;
         // keySet 会整表读取；txstate 经保留期清理后规模有界，且本任务低频执行，可接受
@@ -123,9 +122,7 @@ public class TransactionRetentionSweeper {
         return removed;
     }
 
-    /**
-     * 维护任务：清除孤儿半消息（half Stream 中超过保留期且无状态引用的条目）。
-     */
+    /** 维护任务：清除孤儿半消息（half Stream 中超过保留期且无状态引用的条目）。 */
     public int sweepOrphanHalves(String txGroup) {
         String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
         RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
@@ -156,7 +153,9 @@ public class TransactionRetentionSweeper {
                     continue;
                 }
                 String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
-                String state = redisson.<String, String>getMap(stateHashKey).get(txId);
+                String state =
+                        redisson.<String, String>getMap(stateHashKey, StringCodec.INSTANCE)
+                                .get(txId);
                 if (state == null
                         || TransactionScanner.STATE_COMMIT.equals(state)
                         || TransactionScanner.STATE_ROLLBACK.equals(state)) {

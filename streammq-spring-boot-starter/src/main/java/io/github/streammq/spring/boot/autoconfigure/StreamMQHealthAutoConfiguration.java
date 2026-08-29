@@ -186,9 +186,16 @@ public class StreamMQHealthAutoConfiguration {
             }
         }
 
-        /** 容器已装配但未运行时视为不健康（与 Binder 健康指标行为对齐）。 */
+        /**
+         * 容器已装配但未运行时视为不健康（与 Binder 健康指标行为对齐）。
+         *
+         * <p>此外，任何消费循环启动失败同样视为不健康：这些监听器在注册表中可见但永远不会消费， 属于"静默故障"——如果健康检查仍报 UP，运维几乎不可能从指标上发现。
+         */
         private boolean isListenerContainerHealthy() {
-            return listenerContainer == null || listenerContainer.isRunning();
+            if (listenerContainer == null) {
+                return true;
+            }
+            return listenerContainer.isRunning() && listenerContainer.isConsumeLoopsHealthy();
         }
 
         /** 调度器存在部分启动失败时视为不健康：调度器未装配（provider 为空或无 Bean）不影响整体状态。 */
@@ -230,6 +237,13 @@ public class StreamMQHealthAutoConfiguration {
                 builder.withDetail(
                         StreamMQSpringConstants.HEALTH_DETAIL_LC_COUNT,
                         listenerContainer.getConsumers().size());
+                java.util.Map<String, String> loopFailures =
+                        listenerContainer.getConsumeLoopFailures();
+                if (!loopFailures.isEmpty()) {
+                    builder.withDetail(
+                            StreamMQSpringConstants.HEALTH_DETAIL_LC_LOOP_FAILURES,
+                            Map.copyOf(loopFailures));
+                }
             } else {
                 builder.withDetail(
                         StreamMQSpringConstants.HEALTH_DETAIL_LC_STATE,

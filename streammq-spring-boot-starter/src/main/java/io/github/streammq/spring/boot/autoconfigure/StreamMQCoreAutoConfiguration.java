@@ -49,6 +49,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -165,13 +166,6 @@ public class StreamMQCoreAutoConfiguration {
     }
 
     /**
-     * 事件总线，模块间异步解耦通信的核心。
-     *
-     * <p>核心流程通过事件总线发布事件，扩展模块（Tracing/Metrics/Diagnostics） 订阅事件后异步处理，核心流程不直接依赖扩展模块。
-     *
-     * @return 异步事件总线
-     */
-    /**
      * StreamMQ 统一虚拟线程池：容器消费循环、异步发送、事件分发等全部复用此池。
      *
      * <p><b>自定义方式：</b>注册名为 {@code streammqExecutor} 的 {@link ExecutorService} Bean 即可覆盖本默认实现，
@@ -186,9 +180,20 @@ public class StreamMQCoreAutoConfiguration {
         return Executors.newVirtualThreadPerTaskExecutor();
     }
 
+    /**
+     * 事件总线，模块间异步解耦通信的核心。
+     *
+     * <p>核心流程通过事件总线发布事件，扩展模块（Tracing/Metrics/Diagnostics）订阅事件后异步处理， 核心流程不直接依赖扩展模块。
+     *
+     * <p>复用 {@code streammqExecutor}：事件分发是短任务，无需独立线程池。
+     *
+     * @param streammqExecutor StreamMQ 统一执行器
+     * @return 异步事件总线
+     */
     @Bean(destroyMethod = "close")
     @ConditionalOnMissingBean(StreamMQEventBus.class)
-    public StreamMQEventBus streamMQEventBus(ExecutorService streammqExecutor) {
+    public StreamMQEventBus streamMQEventBus(
+            @Qualifier("streammqExecutor") ExecutorService streammqExecutor) {
         LOG.debug("Creating AsyncStreamMQEventBus (shared virtual executor)");
         return new AsyncStreamMQEventBus(streammqExecutor, false);
     }
@@ -196,9 +201,9 @@ public class StreamMQCoreAutoConfiguration {
     /**
      * 压缩编解码器注册表，管理所有可用 Codec（按名称索引）。
      *
-     * <p>默认注册 {@code gzip}；若 classpath 存在 {@code org.lz4:lz4-java}，自动追加 {@code lz4} Codec（通过
-     * {@link Lz4CompressionCodecFactory#tryCreate()} 反射探测，不引入编译期依赖）。 用户自定义 Codec 通过实现
-     * {@link CompressionCodec} 并注册 Spring Bean 即可自动加入注册表。
+     * <p>默认注册 {@code gzip}；若 classpath 存在 {@code org.lz4:lz4-java}，自动追加 {@code lz4} Codec（通过 {@link
+     * Lz4CompressionCodecFactory#tryCreate()} 反射探测，不引入编译期依赖）。 用户自定义 Codec 通过实现 {@link
+     * CompressionCodec} 并注册 Spring Bean 即可自动加入注册表。
      *
      * @param codecs 所有用户注册的 CompressionCodec Bean（可选）
      * @return 注册表
@@ -241,7 +246,8 @@ public class StreamMQCoreAutoConfiguration {
         }
         registry.register(lz4);
         LOG.info(
-                "LZ4 compression codec registered (org.lz4:lz4-java detected on classpath, name={})",
+                "LZ4 compression codec registered (org.lz4:lz4-java detected on classpath,"
+                        + " name={})",
                 lz4.name());
     }
 
@@ -403,7 +409,7 @@ public class StreamMQCoreAutoConfiguration {
             ObjectProvider<TransactionScanner> transactionScannerProvider,
             ObjectProvider<StreamMQMetrics> metricsProvider,
             ObjectProvider<ProducerInterceptor> producerInterceptorProvider,
-            ExecutorService streammqExecutor) {
+            @Qualifier("streammqExecutor") ExecutorService streammqExecutor) {
         String defaultGroup = properties.getProducer().getGroup();
         String txGroup = properties.getTransaction().getDefaultGroup();
         // 注入 namespace / send-message-timeout / stream.max-len 到 defaultConfig,

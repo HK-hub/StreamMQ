@@ -151,9 +151,8 @@ public class CloudK8sAutoConfiguration {
          * ConfigMap 配置热更新：包装用户提供的 {@link StreamMQConfigRefresher}（或内部 Noop）， 由其 SmartLifecycle
          * 生命周期启动/停止 watch。唯一入口，避免多 Bean 注入歧义。
          *
-         * <p>受 {@code streammq.cloud.k8s.config-refresh-enabled} 控制（默认 false）：
-         * 显式开启时才注册 ConfigMap watcher，避免默认装配即在 K8s 集群中建立 informers
-         * 占用 ApiServer 配额；显式关闭时整套热更新链路（watch + 调度）整体下线。
+         * <p>受 {@code streammq.cloud.k8s.config-refresh-enabled} 控制（默认 false）： 显式开启时才注册 ConfigMap
+         * watcher，避免默认装配即在 K8s 集群中建立 informers 占用 ApiServer 配额；显式关闭时整套热更新链路（watch + 调度）整体下线。
          */
         @Bean(destroyMethod = "stop")
         @ConditionalOnProperty(

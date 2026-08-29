@@ -22,8 +22,8 @@ import org.junit.jupiter.api.Test;
  * <p><b>测试矩阵：</b>
  *
  * <ul>
- *   <li>无论 LZ4 是否在 classpath：{@link Lz4CompressionCodecFactory#isAvailable()} 与
- *       {@link Lz4CompressionCodecFactory#tryCreate()} 行为契约
+ *   <li>无论 LZ4 是否在 classpath：{@link Lz4CompressionCodecFactory#isAvailable()} 与 {@link
+ *       Lz4CompressionCodecFactory#tryCreate()} 行为契约
  *   <li>仅当 LZ4 在 classpath（{@code streammq-redisson} 测试 scope 引入 {@code org.lz4:lz4-java}）：压缩/解压
  *       往返、空字节、null、压缩比、解压炸弹
  * </ul>
@@ -40,8 +40,7 @@ class Lz4CompressionCodecTest {
     @BeforeAll
     static void reportAvailability() {
         // 仅在控制台输出一次，便于日志定位当前构建的 LZ4 状态
-        System.out.printf(
-                "[test] LZ4 classpath probe: isAvailable=%s%n", LZ4_AVAILABLE);
+        System.out.printf("[test] LZ4 classpath probe: isAvailable=%s%n", LZ4_AVAILABLE);
     }
 
     // ================================================================

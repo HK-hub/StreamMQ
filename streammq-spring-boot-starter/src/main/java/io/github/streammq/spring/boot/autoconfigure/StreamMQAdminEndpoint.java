@@ -72,6 +72,24 @@ public class StreamMQAdminEndpoint {
         }
     }
 
+    /**
+     * 返回当前广播消费组条目数（含活跃组与尚未被回收的僵尸组）。
+     *
+     * <p>广播模式下每个容器实例占用一个独立的 Redis 消费者组，组名随容器实例标识变化，因此该数字 约等于心跳超时窗口内「实例数 ×
+     * 重启次数」的累积量。持续增长通常意味着实例处于崩溃循环， 或心跳超时配置过长——两者都会持续占用 Redis 内存。
+     *
+     * @return 广播消费组条目数；查询失败时返回 -1（不阻塞总览）
+     */
+    public long countBroadcastGroups() {
+        try {
+            return io.github.streammq.adapter.redisson.listener.RedissonStreamListener
+                    .countBroadcastGroups(redisson, namespace);
+        } catch (RuntimeException ex) {
+            LOG.debug("Failed to count broadcast groups: {}", ex.getMessage());
+            return -1L;
+        }
+    }
+
     /** 列出所有已注册的 ConsumerGroup 及其实例数、pending 消息数。 */
     public List<Map<String, Object>> listGroups() {
         List<Map<String, Object>> result = new ArrayList<>();

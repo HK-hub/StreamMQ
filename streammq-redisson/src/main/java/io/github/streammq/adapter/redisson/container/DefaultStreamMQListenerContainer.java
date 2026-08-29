@@ -138,11 +138,51 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 是否拥有消费线程池所有权（决定 stop 是否关闭） */
     private boolean ownsExecutor = true;
 
-    /** 注入自定义执行器（仅容器 INIT 状态允许）。 */
+    /**
+     * 注入自定义执行器（仅容器 INIT 状态允许）。
+     *
+     * <p><b>所有权转移：</b>构造器字段初始化时创建的默认内部执行器会在此被关闭——否则每注入一次 就泄漏一个执行器（Spring 环境下每个容器实例都会走这条路径）。语义与
+     * {@code DefaultStreamMessageTemplate#setAsyncSendExecutor} 保持一致：谁创建谁关闭。
+     */
     public void setConsumeExecutor(ExecutorService executor) {
         assertInitState("consumeExecutor");
-        this.consumeExecutor = Objects.requireNonNull(executor, "executor");
+        Objects.requireNonNull(executor, "executor");
+        ExecutorService previous = this.consumeExecutor;
+        boolean previousOwned = this.ownsExecutor;
+        this.consumeExecutor = executor;
         this.ownsExecutor = false;
+        // 必须先把新执行器同步给所有"构造时捕获了执行器引用"的协作类，再关闭旧执行器。
+        // 顺序颠倒会让 messageProcessor 继续指向已关闭的执行器，消费回调抛
+        // RejectedExecutionException——表现为"消费者静默不消费"，极难定位。
+        messageProcessor.setExecutor(executor);
+        if (previousOwned && previous != executor) {
+            previous.shutdown();
+        }
+    }
+
+    /**
+     * 消费循环启动失败登记表：loopKey → 失败原因。
+     *
+     * <p>消费循环若在创建监听器阶段失败（Redis 认证失败、消费者组非法、配置错误等），此前只会打一条 ERROR 日志后静默退出：消费者在管理端点仍可见、健康检查仍为
+     * UP，运维只能靠"消息没人消费"反推。 登记后该失败会体现在 {@link #isConsumeLoopsHealthy()} 与管理端点中。
+     *
+     * <p>{@code start()} 会清空登记表（全新启动），{@code stop()} 同样清空——停止后的历史失败不应 影响下一次启动的健康判定。
+     */
+    private final java.util.Map<String, String> consumeLoopFailures =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * 返回当前尚未恢复的消费循环启动失败（loopKey → 失败原因），空 map 表示全部正常。
+     *
+     * @return 不可修改的失败快照
+     */
+    public java.util.Map<String, String> getConsumeLoopFailures() {
+        return java.util.Map.copyOf(consumeLoopFailures);
+    }
+
+    /** 是否存在消费循环启动失败（纳入健康检查，避免"静默不消费"）。 */
+    public boolean isConsumeLoopsHealthy() {
+        return consumeLoopFailures.isEmpty();
     }
 
     private void assertInitState(String what) {
@@ -190,16 +230,10 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     private volatile ConsumerFilterResolver filterResolver =
             new io.github.streammq.adapter.redisson.filter.ReflectiveConsumerFilterResolver();
 
-    /**
-     * 过滤器 / 拦截器协调器（从 DefaultStreamMQListenerContainer 拆分出来，专门负责 filter chain
-     * 的注册与缓存重建）。
-     */
+    /** 过滤器 / 拦截器协调器（从 DefaultStreamMQListenerContainer 拆分出来，专门负责 filter chain 的注册与缓存重建）。 */
     private volatile ListenerContainerFilterCoordinator filterCoordinator;
 
-    /**
-     * 元数据门面（从 DefaultStreamMQListenerContainer 拆分出来，专门负责消费者元数据查询与
-     * scheduler target 绑定）。
-     */
+    /** 元数据门面（从 DefaultStreamMQListenerContainer 拆分出来，专门负责消费者元数据查询与 scheduler target 绑定）。 */
     private volatile ListenerContainerMetadata metadataCoordinator;
 
     /** 指标收集器（可选注入，用于记录消费指标，null 时为 no-op） */
@@ -660,7 +694,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             synchronized (this) {
                 c = filterCoordinator;
                 if (c == null) {
-                    c = new ListenerContainerFilterCoordinator(consumerFilterChain, interceptorChain);
+                    c =
+                            new ListenerContainerFilterCoordinator(
+                                    consumerFilterChain, interceptorChain);
                     filterCoordinator = c;
                 }
             }
@@ -690,6 +726,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         LOG.info("Starting ListenerContainer with {} registration(s)", store.registrationCount());
         // start 语义为全新启动：复位 pause，避免"pause 后 stop 再 start"重启进静默暂停
         paused = false;
+        // 清空上一轮遗留的消费循环启动失败：全新启动后失败会重新登记
+        consumeLoopFailures.clear();
         if (!lifecycle.markRunning()) {
             // 竞态守卫：启动期间发生并发 stop（状态已离开 STARTING）时必须中止——
             // 继续登记组管理器/提交读循环会复活已停止的容器并泄漏 Redis 侧注册数据
@@ -750,6 +788,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             Thread.currentThread().interrupt();
         }
         paused = false;
+        // 停止后清空：历史失败不应影响下一次 start 的健康判定
+        consumeLoopFailures.clear();
         lifecycle.finishStop();
         LOG.info("ListenerContainer stopped, state=STOPPED");
     }
@@ -832,10 +872,34 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         lifecycle::isRunning,
                         () -> paused,
                         tuning::inflightCapacity,
-                        this::createConsumerFor);
+                        this::createConsumerFor,
+                        this::reportConsumeLoopFailure);
         return consumeExecutor.submit(
                 new ConsumeLoopTask(
                         ctx, tuning.getPausedSleepMillis(), tuning.getBrokerErrorBackoffMillis()));
+    }
+
+    /**
+     * 记录消费循环启动失败，供健康检查与管理端点暴露。
+     *
+     * <p>失败原因取 {@code rootCause} 的一行摘要：完整堆栈已由 {@code ConsumeLoopTask} 以 ERROR 输出， 这里只保留可放进
+     * JSON/健康详情的简短描述，避免把多行堆栈塞进 Actuator 响应。
+     */
+    private void reportConsumeLoopFailure(String loopKey, Throwable cause) {
+        Throwable root = cause;
+        while (root.getCause() != null && root.getCause() != root) {
+            root = root.getCause();
+        }
+        String reason = root.getClass().getSimpleName();
+        if (root.getMessage() != null && !root.getMessage().isBlank()) {
+            reason = reason + ": " + root.getMessage();
+        }
+        consumeLoopFailures.put(loopKey, reason);
+        LOG.error(
+                "Consume loop failed to start and will not consume: loopKey={}, reason={}."
+                        + " The container health indicator will report DOWN for this condition.",
+                loopKey,
+                reason);
     }
 
     private void checkBeforeStart() {

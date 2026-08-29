@@ -7,7 +7,7 @@
     <!-- ========== StreamMQ Parent ========== -->
     <groupId>io.github.streammq</groupId>
     <artifactId>streammq-parent</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
     <packaging>pom</packaging>
     <name>StreamMQ</name>
     <description>StreamMQ - 基于 Redis Stream + Redisson 的开箱即用 Redis MQ SDK (Parent POM)</description>
@@ -53,7 +53,7 @@
         <connection>scm:git:https://github.com/HK-hub/StreamMQ.git</connection>
         <developerConnection>scm:git:https://github.com/HK-hub/StreamMQ.git</developerConnection>
         <url>https://github.com/HK-hub/StreamMQ</url>
-        <tag>v0.1.0</tag>
+        <tag>HEAD</tag>
     </scm>
 
     <!-- ========== 发布仓库（Maven Central Portal） ==========
@@ -70,7 +70,7 @@
         <maven.compiler.release>21</maven.compiler.release>
         <java.version>21</java.version>
 
-        <streammq.version>${project.version}</streammq.version>
+        <streammq.version>0.1.1</streammq.version>
 
         <!-- 依赖版本 -->
         <spring-boot.version>3.3.5</spring-boot.version>
@@ -124,6 +124,14 @@
                 <version>${streammq.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
+            </dependency>
+
+            <!-- 测试基础设施公共件。虽是内部工具模块，但它是已发布构件 streammq-test 的
+                 可传递运行时依赖，因此同样会发布到 Maven Central（不可加入 excludeArtifacts）。 -->
+            <dependency>
+                <groupId>io.github.streammq</groupId>
+                <artifactId>streammq-test-support</artifactId>
+                <version>${streammq.version}</version>
             </dependency>
 
             <!-- Spring Boot BOM -->
@@ -359,7 +367,7 @@
                         <charset>UTF-8</charset>
                         <encoding>UTF-8</encoding>
                         <docencoding>UTF-8</docencoding>
-                        <failOnError>false</failOnError>
+                        <failOnError>true</failOnError>
                     </configuration>
                     <executions>
                         <execution>
@@ -540,8 +548,14 @@
                     <!-- 首个版本先人工在 Portal 点 Publish，稳定后可改为 true 自动发布 -->
                     <autoPublish>false</autoPublish>
                     <waitUntil>validated</waitUntil>
-                    <!-- 示例与压测模块不发布到中央仓库 -->
-                    <excludeArtifacts>streammq-samples,streammq-sample-quickstart,streammq-sample-transaction,streammq-sample-tracing,streammq-sample-diagnostics,streammq-sample-interceptor,streammq-sample-orderly,streammq-sample-delay,streammq-sample-dlq,streammq-benchmark,streammq-test-support</excludeArtifacts>
+                    <!-- 不发布到中央仓库的构件：
+                         · streammq-samples*  示例工程（仅仓库内演示用）
+                         · streammq-benchmark 压测工程
+                         · streammq-kubernetes 实验性预览（无模块依赖、核心能力默认 no-op），
+                                              待功能完整后再纳入发布，避免过早形成 API 兼容承诺
+                         注意：streammq-test-support **不可**排除——它是已发布构件 streammq-test
+                         的可传递运行时依赖，排除会导致使用方 NoClassDefFoundError。 -->
+                    <excludeArtifacts>streammq-samples,streammq-sample-quickstart,streammq-sample-transaction,streammq-sample-tracing,streammq-sample-diagnostics,streammq-sample-interceptor,streammq-sample-orderly,streammq-sample-delay,streammq-sample-dlq,streammq-benchmark,streammq-kubernetes</excludeArtifacts>
                 </configuration>
             </plugin>
         </plugins>

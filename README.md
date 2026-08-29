@@ -10,7 +10,7 @@
 [![Java](https://img.shields.io/badge/Java-21%2B-orange.svg)](https://openjdk.java.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.x-green.svg)](https://spring.io/projects/spring-boot)
 [![Redisson](https://img.shields.io/badge/Redisson-3.34.x-red.svg)](https://redisson.org/)
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/HK-hub/StreamMQ)
+[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](https://github.com/HK-hub/StreamMQ)
 [![CI](https://github.com/HK-hub/StreamMQ/actions/workflows/ci.yml/badge.svg)](https://github.com/HK-hub/StreamMQ/actions/workflows/ci.yml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/HK-hub/StreamMQ/pulls)
 [![Stars](https://img.shields.io/github/stars/HK-hub/StreamMQ?style=social)](https://github.com/HK-hub/StreamMQ)
@@ -23,7 +23,7 @@
 
 ### 为什么要求 JDK 21
 
-StreamMQ 0.1.0 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-plugin` 与 `requireJavaVersion [21,)` 强制）。这是有意为之：
+StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-plugin` 与 `requireJavaVersion [21,)` 强制）。这是有意为之：
 
 - **虚拟线程（JEP 444）**是消费循环的默认执行模型——`Executors.newVirtualThreadPerTaskExecutor()` 在 JDK 21 才是 GA 状态。我们拒绝回退到平台线程池，因为高并发消费者的线程数量会与 Redis 连接池产生 1:N 放大效应。
 - **模式匹配 + Record 模式**简化了 `ConsumeLoopTask` / `ConsumeAction` 等核心胶水代码。
@@ -53,6 +53,8 @@ StreamMQ 0.1.0 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 - [性能基准测试](#性能基准测试)
 - [快速开始](#快速开始)
 - [核心特性](#核心特性)
+- [广播消费的运维注意事项](#广播消费的运维注意事项)
+- [消费者不消费时的排查路径](#消费者不消费时的排查路径)
 - [模块结构](#模块结构)
 - [配置参考](#配置参考)
 - [SPI 扩展机制](#spi-扩展机制)
@@ -162,7 +164,7 @@ StreamMQ 0.1.0 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 | 消息压缩 | **支持（GZIP SPI）** | 不支持 | 不支持 | 支持 | 支持 |
 | 背压控制 | **支持（InflightQueue）** | 不支持 | 不支持 | 支持 | 支持 |
 | Spring Boot 3 集成 | **深度集成** | 一般 | 一般 | 一般（第三方） | 一般（第三方） |
-| SPI 扩展点数量 | **12 个** | 0 | 0 | 少量 | 少量 |
+| SPI 扩展点数量 | **16 个** | 0 | 0 | 少量 | 少量 |
 | 管理接口 | **REST API + Actuator** | 无 | 无 | Dashboard | 无 |
 | 链路追踪 | **支持（TraceCollector SPI）** | 不支持 | 不支持 | 支持 | 不支持 |
 | 学习成本 | **低** | 中 | 中 | 中 | 中 |
@@ -228,7 +230,13 @@ StreamMQ 0.1.0 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 | `serializationRoundTrip` | Jackson 序列化/反序列化回环（纯内存） | ~1,300,000 |
 | `messageCreateAndConsume` | 纯内存消息构建 + 回调（无网络） | _CI 任务待回填_ |
 
+> **关于空白处**：`consumeThroughput` 与 `messageCreateAndConsume` 两行仍为占位。
+> 我们**不会**在未实测的情况下填入数字——此前 README 曾引用过方法学破损的基准（死码消除、
+> 灌数耗尽、缺 ACK），已公开撤回。消费吞吐是 MQ 最关键的容量指标，宁可留空也不误导。
+>
 > 自行运行：`mvn -B -Pbenchmark -pl streammq-benchmark exec:java@benchmark-template exec:java@benchmark-serialization exec:java@benchmark-consumer -Dstreammq.benchmark.allowFlush=true`
+> 或按 [`.github/workflows/benchmark.yml`](.github/workflows/benchmark.yml) 手动触发 CI 基准任务，
+> 结果会以 JMH 产物形式回填。
 
 ### 性能优化建议
 
@@ -264,7 +272,7 @@ StreamMQ 0.1.0 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
         <dependency>
             <groupId>io.github.streammq</groupId>
             <artifactId>streammq-bom</artifactId>
-            <version>0.1.0</version>
+            <version>0.1.1</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -283,7 +291,10 @@ StreamMQ 0.1.0 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 </dependencies>
 ```
 
-> ⚠️ 必须同时引入 `redisson-spring-boot-starter` 以提供 `RedissonClient` Bean；缺失时启动将报 `NoSuchBeanDefinitionException`。
+> ⚠️ 必须同时引入 `redisson-spring-boot-starter` 以提供 `RedissonClient` Bean。
+> StreamMQ **有意**把 `redisson` 声明为 `provided` scope——这样你可以自由决定 Redis 客户端版本，
+> 代价是必须自己引入它。若忘记，启动时 StreamMQ 的 `FailureAnalyzer` 会拦截原本语焉不详的
+> `NoSuchBeanDefinitionException`，直接给出上面这段依赖声明与配置示例。
 
 ### 2. 配置
 
@@ -385,11 +396,16 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 @StreamMQConsumer(topic = "order-topic", consumerGroup = "order-group", dlqMode = true)
 ```
 
+> ⚠️ **广播消费会为每个容器实例创建一个独立的 Redis 消费者组，且组名随实例重启而变。**
+> 这意味着组的总数约等于心跳超时窗口内「实例数 × 重启次数」的累积量，持续增长会占用 Redis 内存
+> （每个组都有自己的 PEL）。生产使用广播模式前，请务必阅读
+> [广播消费的运维注意事项](#广播消费的运维注意事项)。
+
 ### StreamMessageTemplate 编程模型（高级）
 
 `StreamMessageTemplate` 是发送 API 的完整形态——所有拦截器 / 过滤器 / SPI 访问器都在这里暴露。**业务代码建议优先使用 `StreamMessageService` 门面**（见 [快速开始](#4-发送消息推荐使用-streammessageservice-门面)），仅在需要直接操作 SPI 时才注入 `StreamMessageTemplate`。
 
-0.1.0 起 API 已收敛：每个发送模式仅保留一个 `SendOptions` 规范形，此前的 timeout / retry / callback 伸缩重载全部移除；零参便捷形式以 default 方法提供。
+0.1.1 起 API 已收敛：每个发送模式仅保留一个 `SendOptions` 规范形，此前的 timeout / retry / callback 伸缩重载全部移除；零参便捷形式以 default 方法提供。
 
 ```java
 public interface StreamMessageTemplate {
@@ -573,6 +589,69 @@ streammq:
 
 ---
 
+## 广播消费的运维注意事项
+
+**这是使用 `ConsumeMode.BROADCASTING` 前必须理解的一条实现语义。**
+
+### 行为
+
+Redis 的消费者组天然是"组内竞争消费"。要实现广播（每条消息投递给所有实例），StreamMQ 的做法是：
+
+```
+每个容器实例 → 一个独立的 Redis 消费者组（组名后缀为容器级随机标识）
+```
+
+该标识**跨重启不保证相同**（容器级 UUID，见
+`DefaultStreamMQListenerContainer#instanceToken`）。因此：
+
+- **每次重启都会产生一个新组**，旧组不会立即消失；
+- 旧组由回收任务在心跳超时后清理（`RedissonStreamListener#sweepStaleBroadcastGroups`）；
+- 清理前的窗口内，组的总数 = 心跳超时窗口内的「实例数 × 重启次数」；
+- 每个组都持有自己的 PEL，**会占用 Redis 内存**。
+
+### 容量估算
+
+```
+稳态组数量 ≈ 实例数
+峰值组数量 ≈ 实例数 × (心跳超时窗口内的最大重启次数)
+```
+
+心跳超时由 `streammq.group.instance-timeout-ms` 控制（默认见 `StreamMQConstants`）。
+
+### 需要监控的信号
+
+| 指标 | 获取方式 | 异常含义 |
+|------|----------|----------|
+| 广播组条目数 | `GET /actuator/streammq` → `broadcastGroups` | 持续增长 = 实例崩溃循环，或心跳超时配置过长 |
+| 单轮清理量 | 日志 `Swept N stale broadcast group(s): namespace=..., remaining=M` | N 长期为 0 但 `remaining` 持续增长 = 回收任务未生效 |
+| Redis 内存 | `INFO memory` | 与上面两个数字交叉验证 |
+
+### 建议
+
+1. **不要对频繁重启的工作负载使用广播模式**（如 CI 环境、反复 OOM 的 Pod）。
+2. 为 `broadcastGroups` 建立告警：超过「实例数 × 3」即排查。
+3. 广播模式下消费者组**无法复用消费位点**——重启后新组从当前时间点开始消费，
+   重启期间产生的消息**不会**被补投。若需要重启不丢消息，请使用集群消费
+   （`ConsumeMode.CLUSTERING`）或自行实现持久化位点。
+
+---
+
+## 消费者不消费时的排查路径
+
+消费者"注册成功但从不消费"是 StreamMQ 中最容易被误判为"消息丢了"的现象。按以下顺序排查：
+
+1. **看健康状态**：`GET /actuator/health` → `streammq` 组件。
+   若存在消费循环启动失败，会返回 `DOWN`，并在详情中给出
+   `listenerContainer.consumeLoopFailures`（`loopKey → 失败原因`）。
+2. **看总览**：`GET /actuator/streammq` → `status` 字段同样反映该状态。
+3. **看日志**：`Failed to create consumer for listener` 的 ERROR 行含 topic/group 与根因
+   ——最常见的是 Redis 凭据错误、消费者组名非法、命名空间不一致。
+4. **看容器状态**：`/actuator/streammq/groups` 中的 `containerRunning` 字段。
+
+> 消费循环启动失败**不会**自动重试。修复根因后需要重启应用（或调用管理端点的重平衡接口）。
+
+---
+
 ## 模块结构
 
 | 模块 | 说明 |
@@ -583,10 +662,11 @@ streammq:
 | **streammq-spring-boot-starter** | Spring Boot 3 自动装配、配置绑定、Actuator 集成 |
 | **streammq-tracing-opentelemetry** | OpenTelemetry 链路追踪集成 |
 | **streammq-diagnostics** | 消息画像、慢消费、积压、DLQ 诊断 |
-| **streammq-kubernetes** | K8s 健康检查、HPA、优雅停机、CRD Operator |
-| **streammq-spring-cloud-stream-binder** | Spring Cloud Stream Binder 实现 |
+| **streammq-kubernetes** | K8s 健康检查、HPA、优雅停机、CRD Operator。**实验性预览**：默认关闭，且当前**不发布**到 Maven Central（`ConfigMapConfigRefresher` 默认实现为 no-op）。待功能完整后再纳入发布 |
+| **streammq-spring-cloud-stream-binder** | Spring Cloud Stream Binder 实现（分区生产不支持） |
 | **streammq-benchmark** | JMH 基准测试 |
-| **streammq-test** | 测试工具包，提供嵌入式 Redis、断言工具、Mock 工具 |
+| **streammq-test** | 测试工具包：容器化 Redis（基于 Testcontainers，**需要 Docker daemon**）、Redis 可用性探测、断言工具、Mock 工具。请以 `test` scope 引入 |
+| **streammq-test-support** | 测试基础设施公共件（Redis 可用性探测）。本身零依赖，作为 `streammq-test` 的可传递依赖一同发布 |
 | **streammq-samples** | 示例工程集合，覆盖快速开始、事务、延时、顺序、DLQ、拦截器、诊断、链路追踪 |
 
 ---
@@ -669,7 +749,7 @@ streammq:
 
 ## SPI 扩展机制
 
-StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换。0.1.0 共 **16 个 SPI 接口**：
+StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换。0.1.1 共 **16 个 SPI 接口**：
 
 | SPI 接口 | 作用 | 默认实现 |
 |----------|------|----------|
@@ -977,7 +1057,12 @@ redisson:
 
 `FurySerializer` 与 `JdkSerializer` 默认均为**安全优先（secure-by-default）**：
 
-- `FurySerializer` 默认强制类注册白名单（`requireClassRegistration=true`），首次使用前需注册业务消息体类型；若 Redis 实例完全可信，可显式关闭白名单换取任意 POJO 开箱即用：
+- `FurySerializer` 默认强制类注册白名单（`requireClassRegistration=true`），首次使用前需注册业务消息体类型。可通过构造器一次性注册，或在启动阶段调用公开的 `register`/`registerAll` API：
+  ```java
+  FurySerializer<OrderCreated> serializer = new FurySerializer<>(OrderCreated.class);
+  // 等价写法：new FurySerializer<>().register(OrderCreated.class);
+  ```
+  若 Redis 实例完全可信，可显式关闭白名单换取任意 POJO 开箱即用：
   ```java
   MessageSerializer<?> serializer = new FurySerializer(false); // 仅限完全可信的 Redis
   ```

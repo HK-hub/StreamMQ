@@ -19,9 +19,9 @@ import org.slf4j.LoggerFactory;
 /**
  * Coordinator for global filter and interceptor chains on the listener container.
  *
- * <p>Extracted from {@code DefaultStreamMQListenerContainer} to reduce its surface area; the container
- * delegates "add a filter / interceptor" calls to this class and the actual filter rebuild is
- * driven lazily via {@link #rebuildFilters(RegistrationStore, PerConsumerSpiResolver)}.
+ * <p>Extracted from {@code DefaultStreamMQListenerContainer} to reduce its surface area; the
+ * container delegates "add a filter / interceptor" calls to this class and the actual filter
+ * rebuild is driven lazily via {@link #rebuildFilters(RegistrationStore, PerConsumerSpiResolver)}.
  *
  * <p><b>Why this class exists</b>:
  *
@@ -39,16 +39,15 @@ import org.slf4j.LoggerFactory;
  */
 public class ListenerContainerFilterCoordinator {
 
-    private static final Logger LOG = LoggerFactory.getLogger(ListenerContainerFilterCoordinator.class);
+    private static final Logger LOG =
+            LoggerFactory.getLogger(ListenerContainerFilterCoordinator.class);
 
     private final ConsumerFilterChain consumerFilterChain;
     private final ConsumerInterceptorChain interceptorChain;
-    private volatile ConsumerFilterResolver filterResolver =
-            new ReflectiveConsumerFilterResolver();
+    private volatile ConsumerFilterResolver filterResolver = new ReflectiveConsumerFilterResolver();
 
     public ListenerContainerFilterCoordinator(
-            ConsumerFilterChain consumerFilterChain,
-            ConsumerInterceptorChain interceptorChain) {
+            ConsumerFilterChain consumerFilterChain, ConsumerInterceptorChain interceptorChain) {
         this.consumerFilterChain =
                 Objects.requireNonNull(consumerFilterChain, "consumerFilterChain");
         this.interceptorChain = Objects.requireNonNull(interceptorChain, "interceptorChain");
@@ -66,15 +65,17 @@ public class ListenerContainerFilterCoordinator {
     // ===================== Filter chain (consumer-side) =====================
 
     /** Add a single consumer filter. Triggers filter cache rebuild. */
-    public void addFilter(ConsumerFilter filter, RegistrationStore store,
-                          PerConsumerSpiResolver spiResolver) {
+    public void addFilter(
+            ConsumerFilter filter, RegistrationStore store, PerConsumerSpiResolver spiResolver) {
         consumerFilterChain.addFilter(filter);
         rebuildFilters(store, spiResolver);
     }
 
     /** Add multiple consumer filters. Triggers filter cache rebuild. */
-    public void addFilters(Collection<ConsumerFilter> filters, RegistrationStore store,
-                           PerConsumerSpiResolver spiResolver) {
+    public void addFilters(
+            Collection<ConsumerFilter> filters,
+            RegistrationStore store,
+            PerConsumerSpiResolver spiResolver) {
         consumerFilterChain.addFilters(filters);
         rebuildFilters(store, spiResolver);
     }
