@@ -407,6 +407,18 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     }
 
     /**
+     * 注入全局顺序消费超时（毫秒），{@code streammq.consumer.orderly-consume-timeout}。
+     *
+     * <p>仅作为消费者注解未显式声明 {@code orderlyConsumeTimeout} 时的回落值：注解值 {@code > 0} 时始终优先。 默认 0
+     * 表示不启用——顺序消费超时后走串行重试、耗尽即进 DLQ，默认开启会把慢消息系统性误杀。
+     *
+     * @param millis 超时毫秒数，{@code 0} 表示不启用
+     */
+    public void setDefaultOrderlyConsumeTimeoutMillis(long millis) {
+        tuning.setDefaultOrderlyConsumeTimeoutMillis(millis);
+    }
+
+    /**
      * 设置消费超时取消后的宽限期（毫秒）。
      *
      * @param millis 宽限期，必须 &gt; 0

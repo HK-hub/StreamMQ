@@ -13,6 +13,7 @@ import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.event.AsyncStreamMQEventBus;
 import io.github.streammq.adapter.redisson.interceptor.TraceContextConsumerInterceptor;
 import io.github.streammq.adapter.redisson.interceptor.TraceContextProducerInterceptor;
+import io.github.streammq.adapter.redisson.listener.RedissonBroadcastGroupRegistry;
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducerFactory;
 import io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy;
@@ -27,6 +28,7 @@ import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.event.StreamMQEventBus;
 import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.interceptor.TraceCollector;
+import io.github.streammq.core.listener.BroadcastGroupRegistry;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.policy.DlqConfig;
@@ -522,6 +524,25 @@ public class StreamMQCoreAutoConfiguration {
     public TraceCollector streamMQSlf4jTraceCollector() {
         LOG.debug("Using Slf4jTraceCollector (tracing enabled)");
         return new Slf4jTraceCollector();
+    }
+
+    /**
+     * 默认广播消费组注册表：{@link RedissonBroadcastGroupRegistry}。
+     *
+     * <p>负责僵尸广播消费者组的回收（{@code XGROUP DESTROY} 释放已死实例占用的 PEL）与注册表计数。 遵循依赖倒置：调用方只依赖 {@link
+     * BroadcastGroupRegistry} 接口，用户可注册自定义 Bean 覆盖—— 例如接入外部监控系统、改用不同的存储布局，或在不希望自动销毁消费者组的环境中提供空实现
+     * （此时应自行承担 PEL 泄漏风险）。
+     *
+     * @param redisson Redisson 客户端
+     * @param properties 配置
+     * @return BroadcastGroupRegistry 实例
+     */
+    @Bean
+    @ConditionalOnMissingBean(BroadcastGroupRegistry.class)
+    public BroadcastGroupRegistry streamMQBroadcastGroupRegistry(
+            RedissonClient redisson, StreamMQProperties properties) {
+        LOG.debug("Using RedissonBroadcastGroupRegistry");
+        return new RedissonBroadcastGroupRegistry(redisson, properties.getNamespace());
     }
 
     /**

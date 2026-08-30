@@ -122,11 +122,33 @@ public @interface StreamMQConsumer {
      *
      * <p>超时后框架会 ACK 当前消息并调度重试投递。由于消费线程可能仍在执行业务逻辑， 重试消费与原消费可能并发执行，因此业务层必须实现幂等性。
      *
-     * <p>仅对并发消费（{@link MessageModel#CONCURRENT}）生效，顺序消费不支持超时取消。
+     * <p>仅对并发消费（{@link MessageModel#CONCURRENT}）生效，顺序消费请使用 {@link #orderlyConsumeTimeout()}。
      *
      * @return 超时毫秒数，0 表示不超时
      */
     long consumeTimeout() default StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS;
+
+    /**
+     * 顺序消费单条消息消费超时（毫秒），默认 0（不启用）。
+     *
+     * <p>仅对顺序消费（{@link MessageModel#ORDERLY}）生效。顺序消费默认不设超时——卡死的 handler 会持有分片锁
+     * 并阻塞消费循环，直到进程重启。设置本属性后：
+     *
+     * <ul>
+     *   <li>单次消费超过该时长即视为失败：框架按 {@code RECONSUME_LATER} 处理并释放分片锁（消费循环不再被阻塞）
+     *   <li>重试在 {@link #maxReconsumeTimes()} 次数内进行，耗尽后消息进入 DLQ
+     *   <li>若业务 handler 不响应线程中断，原消费线程仍可能继续运行，因此业务层必须保证幂等
+     * </ul>
+     *
+     * <p>注意：顺序消费的重试是严格串行的（同分片不越过失败消息），设置过小的超时可能将慢消息快速送入 DLQ， 建议按业务最慢耗时的 2 倍以上配置。
+     *
+     * <p><b>与全局配置的关系：</b>本属性 {@code > 0} 时优先；为 {@code 0}（默认）时回落到全局配置 {@code
+     * streammq.consumer.orderly-consume-timeout-millis}（其默认值同样为 0，即不启用）。 因此
+     * <b>全局开启后无法用本属性单独关闭某个消费者</b>——需要对该消费者放松保护时，请设置一个足够大的值。
+     *
+     * @return 超时毫秒数，0 表示回落全局配置（全局默认同样为 0，即不启用）
+     */
+    long orderlyConsumeTimeout() default 0L;
 
     /**
      * Tag 过滤表达式（SQL92 风格子集），默认 "*" 表示全部接收。 例如：{@code "tag1 || tag2"} / {@code "tag1 && tag2"}。

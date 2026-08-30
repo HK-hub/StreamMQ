@@ -8,7 +8,9 @@ package io.github.streammq.spring.boot.autoconfigure;
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.adapter.redisson.security.DenyAllAuthenticator;
 import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.core.listener.BroadcastGroupRegistry;
 import io.github.streammq.core.policy.ManagementAuthenticator;
+import io.github.streammq.core.policy.RateLimitedAuthenticator;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import java.util.Map;
 import org.redisson.api.RedissonClient;
@@ -90,14 +92,17 @@ public class StreamMQHealthAutoConfiguration {
             RedissonClient redisson,
             org.springframework.beans.factory.ObjectProvider<DefaultStreamMQListenerContainer>
                     listenerContainerProvider,
-            io.github.streammq.spring.boot.properties.StreamMQProperties properties) {
+            io.github.streammq.spring.boot.properties.StreamMQProperties properties,
+            org.springframework.beans.factory.ObjectProvider<BroadcastGroupRegistry>
+                    registryProvider) {
         LOG.debug("Creating StreamMQAdminEndpoint");
         StreamMQAdminEndpoint adminEndpoint =
                 new StreamMQAdminEndpoint(
                         redisson,
                         listenerContainerProvider.getIfAvailable(),
                         properties.getNamespace(),
-                        properties.getAdmin().getFailureRetryCooldownMillis());
+                        properties.getAdmin().getFailureRetryCooldownMillis(),
+                        registryProvider.getIfAvailable());
         adminEndpoint.setMaxPendingQuerySize(properties.getAdmin().getMaxPendingQuerySize());
         return adminEndpoint;
     }
@@ -129,9 +134,11 @@ public class StreamMQHealthAutoConfiguration {
         LOG.debug("Creating StreamMQActuatorEndpoint");
         ManagementAuthenticator authenticator =
                 authenticatorProvider.getIfAvailable(DenyAllAuthenticator::new);
+        // 包一层失败限流：即使启用 Basic/Token 弱凭据，也能抵御针对管理端点的暴力破解
+        ManagementAuthenticator rateLimited = new RateLimitedAuthenticator(authenticator);
         StreamMQActuatorEndpoint endpoint =
                 new StreamMQActuatorEndpoint(
-                        adminEndpoint, healthIndicatorProvider.getIfAvailable(), authenticator);
+                        adminEndpoint, healthIndicatorProvider.getIfAvailable(), rateLimited);
         endpoint.setListPageSize(properties.getAdmin().getListPageSize());
         return endpoint;
     }

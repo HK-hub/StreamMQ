@@ -121,6 +121,9 @@ public class ListenerConfig {
     @lombok.Builder.Default
     private final long consumeTimeoutMillis = StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS;
 
+    /** 顺序消费单条消息消费超时（毫秒），0 表示不启用（仅对 ORDERLY 生效，默认关闭） */
+    @lombok.Builder.Default private final long orderlyConsumeTimeoutMillis = 0L;
+
     @lombok.Builder.Default private final int consumeThreadMin = 1;
 
     @lombok.Builder.Default
@@ -168,6 +171,7 @@ public class ListenerConfig {
             boolean broadcast,
             int maxReconsumeTimes,
             long consumeTimeoutMillis,
+            long orderlyConsumeTimeoutMillis,
             int consumeThreadMin,
             int consumeThreadMax,
             long suspendCurrentQueueTimeMillis,
@@ -201,6 +205,11 @@ public class ListenerConfig {
             throw new IllegalArgumentException(
                     "consumeTimeoutMillis must be >= 0, got: " + consumeTimeoutMillis);
         }
+        if (orderlyConsumeTimeoutMillis < 0) {
+            throw new IllegalArgumentException(
+                    "orderlyConsumeTimeoutMillis must be >= 0, got: "
+                            + orderlyConsumeTimeoutMillis);
+        }
         if (pullBlockTimeoutMillis < 0) {
             throw new IllegalArgumentException(
                     "pullBlockTimeoutMillis must be >= 0, got: " + pullBlockTimeoutMillis);
@@ -228,6 +237,7 @@ public class ListenerConfig {
         this.broadcast = broadcast;
         this.maxReconsumeTimes = maxReconsumeTimes;
         this.consumeTimeoutMillis = consumeTimeoutMillis;
+        this.orderlyConsumeTimeoutMillis = orderlyConsumeTimeoutMillis;
         this.consumeThreadMin = consumeThreadMin;
         this.consumeThreadMax = consumeThreadMax;
         this.suspendCurrentQueueTimeMillis = suspendCurrentQueueTimeMillis;
@@ -267,6 +277,7 @@ public class ListenerConfig {
                                 == io.github.streammq.core.enums.ConsumeMode.BROADCASTING)
                 .maxReconsumeTimes(reg.getMaxReconsumeTimes())
                 .consumeTimeoutMillis(reg.getConsumeTimeoutMillis())
+                .orderlyConsumeTimeoutMillis(reg.getOrderlyConsumeTimeoutMillis())
                 .consumeThreadMin(reg.getConsumeThreadMin())
                 .consumeThreadMax(reg.getConsumeThreadMax())
                 .suspendCurrentQueueTimeMillis(reg.getSuspendCurrentQueueTimeMillis())

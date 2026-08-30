@@ -18,11 +18,11 @@ import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.Builder;
 import lombok.EqualsAndHashCode;
@@ -64,13 +64,25 @@ public class RedissonStreamListener implements StreamMQListener {
 
     private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamListener.class);
 
+    /** Class.forName 缓存上限（LRU 淘汰）：bodyTypeName 来自外部可控的流字段，缓存必须有界，防止无界增长。 */
+    private static final int CLASS_CACHE_MAX_SIZE = 256;
+
     /**
      * Class.forName 缓存，避免每条消息重复类加载查找（正结果缓存，负结果不缓存）。
      *
      * <p><b>实例级而非静态：</b>若以 simpleName 为键做成 JVM 级静态缓存，两个不同监听器 （不同 topic /
      * 不同目标类型）会发生跨实例缓存污染——先解析到的类被错误地提供给 另一个监听器，造成反序列化类型混淆。实例级缓存将作用域限制在单个监听器内。
+     *
+     * <p><b>有界 LRU：</b>超出 {@link #CLASS_CACHE_MAX_SIZE} 时淘汰最久未访问项。
      */
-    private final ConcurrentMap<String, Class<?>> classCache = new ConcurrentHashMap<>();
+    private final Map<String, Class<?>> classCache =
+            Collections.synchronizedMap(
+                    new LinkedHashMap<String, Class<?>>(16, 0.75f, true) {
+                        @Override
+                        protected boolean removeEldestEntry(Map.Entry<String, Class<?>> eldest) {
+                            return size() > CLASS_CACHE_MAX_SIZE;
+                        }
+                    });
 
     private final @NonNull RedissonClient redisson;
     private final String namespace;
@@ -563,10 +575,10 @@ public class RedissonStreamListener implements StreamMQListener {
     /**
      * 广播组心跳过期 TTL（毫秒）。
      *
-     * <p>实现已迁至 {@link BroadcastGroupRegistry}，本字段保留为兼容别名。
+     * <p>实现已迁至 {@link RedissonBroadcastGroupRegistry}，本字段保留为兼容别名。
      */
     public static final long BROADCAST_GROUP_STALE_TTL_MS =
-            BroadcastGroupRegistry.BROADCAST_GROUP_STALE_TTL_MS;
+            RedissonBroadcastGroupRegistry.BROADCAST_GROUP_STALE_TTL_MS;
 
     /**
      * 刷新本广播监听器在注册表中的心跳（ZSet score = 当前时间）。
@@ -596,29 +608,31 @@ public class RedissonStreamListener implements StreamMQListener {
     /**
      * 回收僵尸广播消费者组。
      *
-     * <p>实现已迁至 {@link BroadcastGroupRegistry#sweepStaleBroadcastGroups(RedissonClient, String)}，
-     * 本方法保留为兼容委托。
+     * <p>本方法保留为静态兼容门面，实现已迁至 {@link RedissonBroadcastGroupRegistry}（SPI 接口 {@link
+     * io.github.streammq.core.listener.BroadcastGroupRegistry} 的默认实现）。新代码应通过依赖注入使用 {@code
+     * BroadcastGroupRegistry} 接口，而非调用本静态方法——注入形式允许用户自定义实现。
      *
      * @param redisson Redisson 客户端
      * @param namespace 命名空间
      * @return 本次回收的组数量
      */
     public static int sweepStaleBroadcastGroups(RedissonClient redisson, String namespace) {
-        return BroadcastGroupRegistry.sweepStaleBroadcastGroups(redisson, namespace);
+        return new RedissonBroadcastGroupRegistry(redisson, namespace).sweepStaleBroadcastGroups();
     }
 
     /**
      * 返回当前注册表中的广播消费组数量（含活跃与尚未被回收的僵尸组）。
      *
-     * <p>实现已迁至 {@link BroadcastGroupRegistry#countBroadcastGroups(RedissonClient, String)}，
-     * 本方法保留为兼容委托。
+     * <p>本方法保留为静态兼容门面，实现已迁至 {@link RedissonBroadcastGroupRegistry}（SPI 接口 {@link
+     * io.github.streammq.core.listener.BroadcastGroupRegistry} 的默认实现）。新代码应通过依赖注入使用 {@code
+     * BroadcastGroupRegistry} 接口。
      *
      * @param redisson Redisson 客户端
      * @param namespace 命名空间
      * @return 注册表中的广播组条目数
      */
     public static long countBroadcastGroups(RedissonClient redisson, String namespace) {
-        return BroadcastGroupRegistry.countBroadcastGroups(redisson, namespace);
+        return new RedissonBroadcastGroupRegistry(redisson, namespace).countBroadcastGroups();
     }
 
     private void ensureGroup() {

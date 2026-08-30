@@ -181,7 +181,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
         this.scanExecutor =
                 Executors.newSingleThreadScheduledExecutor(
                         r -> {
-                            Thread t = new Thread(r, "streammq-scheduler-daemon");
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_DELAY_SCHEDULER);
                             t.setDaemon(true);
                             return t;
                         });
@@ -212,7 +212,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
         scanExecutor =
                 Executors.newSingleThreadScheduledExecutor(
                         r -> {
-                            Thread t = new Thread(r, "streammq-scheduler-daemon");
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_DELAY_SCHEDULER);
                             t.setDaemon(true);
                             return t;
                         });

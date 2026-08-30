@@ -81,6 +81,38 @@ public class StreamMQActuatorEndpoint {
     /** 组配置更新：单个 value 最大长度（字符数） */
     private static final int MAX_GROUP_CONFIG_VALUE_LENGTH = 1024;
 
+    /** 健康状态缓存 TTL（毫秒）：overview 高频轮询时不至于每次都触发 Redis PING */
+    private static final long HEALTH_CACHE_TTL_MILLIS = 5_000L;
+
+    /** 最近一次健康状态（volatile：缓存读写无需强一致） */
+    private volatile String cachedHealthStatus;
+
+    /** 最近一次健康状态刷新时间戳（毫秒） */
+    private volatile long cachedHealthStatusAt;
+
+    /**
+     * 返回健康状态，带短 TTL 缓存。
+     *
+     * <p>{@code overview} 是监控高频轮询入口，而 {@code healthIndicator.health()} 每次都会发起 Redis PING； 5
+     * 秒级缓存可显著降低 Redis 往返压力，且健康检查本身的时延容忍度远高于此。并发下可能重复计算一次， 幂等无害。
+     *
+     * @return 健康状态码（UP/DOWN/UNKNOWN），健康指示器缺失时为 UNKNOWN
+     */
+    private String cachedHealthStatus() {
+        if (healthIndicator == null) {
+            return "UNKNOWN";
+        }
+        long now = System.currentTimeMillis();
+        String cached = cachedHealthStatus;
+        if (cached != null && now - cachedHealthStatusAt < HEALTH_CACHE_TTL_MILLIS) {
+            return cached;
+        }
+        String status = healthIndicator.health().getStatus().getCode();
+        cachedHealthStatus = status;
+        cachedHealthStatusAt = now;
+        return status;
+    }
+
     public StreamMQActuatorEndpoint(
             StreamMQAdminEndpoint adminEndpoint,
             HealthIndicator healthIndicator,
@@ -281,11 +313,7 @@ public class StreamMQActuatorEndpoint {
             return denied;
         }
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put(
-                "status",
-                healthIndicator != null
-                        ? healthIndicator.health().getStatus().getCode()
-                        : "UNKNOWN");
+        result.put("status", cachedHealthStatus());
         result.put("groups", adminEndpoint.listGroups());
         result.put("topics", adminEndpoint.listTopics());
         // 广播消费组数量是容量规划级指标：它随实例重启累积，持续增长说明实例崩溃循环

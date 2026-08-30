@@ -187,7 +187,7 @@ public class RetryScheduler implements StreamMQScheduler {
         this.scanExecutor =
                 Executors.newSingleThreadScheduledExecutor(
                         r -> {
-                            Thread t = new Thread(r, "streammq-scheduler-daemon");
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_RETRY_SCHEDULER);
                             t.setDaemon(true);
                             return t;
                         });
@@ -238,7 +238,7 @@ public class RetryScheduler implements StreamMQScheduler {
         scanExecutor =
                 Executors.newSingleThreadScheduledExecutor(
                         r -> {
-                            Thread t = new Thread(r, "streammq-scheduler-daemon");
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_RETRY_SCHEDULER);
                             t.setDaemon(true);
                             return t;
                         });

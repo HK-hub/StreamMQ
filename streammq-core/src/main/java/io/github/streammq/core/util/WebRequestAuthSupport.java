@@ -11,7 +11,7 @@ import java.util.Base64;
 import lombok.experimental.UtilityClass;
 
 /**
- * Web 请求鉴权辅助工具，从当前请求上下文反射读取 {@code Authorization: Basic} 头。
+ * Web 请求鉴权辅助工具，从当前请求上下文反射读取 {@code Authorization: Basic} 头与客户端地址。
  *
  * <p>为避免对 Servlet API / Spring Web 的编译期依赖，通过反射访问 {@code RequestContextHolder}； 非 Web 环境或缺少
  * spring-web 时返回 null（凭据为空，默认拒绝）。
@@ -35,6 +35,9 @@ public class WebRequestAuthSupport {
     /** Basic 鉴权 scheme 前缀 */
     private static final String BASIC_AUTH_PREFIX = "Basic ";
 
+    /** X-Forwarded-For 请求头名称（反向代理场景下识别真实客户端地址） */
+    private static final String HEADER_X_FORWARDED_FOR = "X-Forwarded-For";
+
     /**
      * 从当前请求上下文中反射读取 {@code Authorization: Basic} 头，返回 {@code [user, pass]} 或 null。
      *
@@ -43,34 +46,39 @@ public class WebRequestAuthSupport {
      * @return 凭据数组 {@code [user, pass]}，无法获取时为 null
      */
     public static String[] parseBasicCredentialsFromRequest() {
-        Object attrs = null;
-        try {
-            Class<?> holder = Class.forName(REQUEST_CONTEXT_HOLDER_CLASS_NAME);
-            attrs = holder.getMethod("getRequestAttributes").invoke(null);
-        } catch (ReflectiveOperationException | LinkageError ex) {
-            // 非 Web 环境：无可用的请求上下文
-            return null;
-        }
-        if (attrs == null) {
-            return null;
-        }
-        Object request = null;
-        try {
-            request = attrs.getClass().getMethod("getRequest").invoke(attrs);
-        } catch (ReflectiveOperationException ex) {
-            return null;
-        }
+        Object request = currentRequest();
         if (request == null) {
             return null;
         }
-        String authorizationHeader = null;
+        String authorizationHeader = getHeader(request, HEADER_AUTHORIZATION);
+        return parseBasicCredentials(authorizationHeader);
+    }
+
+    /**
+     * 从当前请求上下文反射读取客户端地址，用于鉴权失败限流的来源聚合。
+     *
+     * <p>优先取 {@code X-Forwarded-For} 首值（反向代理透传真实 IP），其次取 {@code remoteAddr}； 非 Web 环境或读取失败时返回
+     * null（由调用方退化为全局计数）。
+     *
+     * @return 客户端地址，无法获取时为 null
+     */
+    public static String getClientAddressFromRequest() {
+        Object request = currentRequest();
+        if (request == null) {
+            return null;
+        }
+        String forwarded = getHeader(request, HEADER_X_FORWARDED_FOR);
+        if (StringUtils.isNotEmpty(forwarded)) {
+            int comma = forwarded.indexOf(',');
+            return comma < 0 ? forwarded.trim() : forwarded.substring(0, comma).trim();
+        }
         try {
-            Method getHeader = request.getClass().getMethod("getHeader", String.class);
-            authorizationHeader = (String) getHeader.invoke(request, HEADER_AUTHORIZATION);
+            Method getRemoteAddr = request.getClass().getMethod("getRemoteAddr");
+            Object addr = getRemoteAddr.invoke(request);
+            return addr instanceof String s && StringUtils.isNotEmpty(s) ? s : null;
         } catch (ReflectiveOperationException ex) {
             return null;
         }
-        return parseBasicCredentials(authorizationHeader);
     }
 
     /**
@@ -95,6 +103,47 @@ public class WebRequestAuthSupport {
             }
             return new String[] {decodedStr.substring(0, idx), decodedStr.substring(idx + 1)};
         } catch (IllegalArgumentException ex) {
+            return null;
+        }
+    }
+
+    /**
+     * 反射获取当前请求对象。
+     *
+     * @return 当前请求对象，非 Web 环境或缺少 spring-web 时为 null
+     */
+    private static Object currentRequest() {
+        Object attrs;
+        try {
+            Class<?> holder = Class.forName(REQUEST_CONTEXT_HOLDER_CLASS_NAME);
+            attrs = holder.getMethod("getRequestAttributes").invoke(null);
+        } catch (ReflectiveOperationException | LinkageError ex) {
+            // 非 Web 环境：无可用的请求上下文
+            return null;
+        }
+        if (attrs == null) {
+            return null;
+        }
+        try {
+            return attrs.getClass().getMethod("getRequest").invoke(attrs);
+        } catch (ReflectiveOperationException ex) {
+            return null;
+        }
+    }
+
+    /**
+     * 反射读取请求头。
+     *
+     * @param request 请求对象
+     * @param name 请求头名称
+     * @return 请求头值，读取失败时为 null
+     */
+    private static String getHeader(Object request, String name) {
+        try {
+            Method getHeader = request.getClass().getMethod("getHeader", String.class);
+            Object value = getHeader.invoke(request, name);
+            return value instanceof String s ? s : null;
+        } catch (ReflectiveOperationException ex) {
             return null;
         }
     }

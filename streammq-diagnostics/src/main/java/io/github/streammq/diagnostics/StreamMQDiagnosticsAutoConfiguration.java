@@ -7,6 +7,7 @@ package io.github.streammq.diagnostics;
 
 import io.github.streammq.core.listener.StreamMQListenerContainer;
 import io.github.streammq.core.policy.ManagementAuthenticator;
+import io.github.streammq.core.policy.RateLimitedAuthenticator;
 import io.github.streammq.core.trace.StreamMQTraceService;
 import io.github.streammq.diagnostics.endpoint.StreamMQDiagnosticsEndpoint;
 import io.github.streammq.diagnostics.spi.BacklogProbe;
@@ -207,6 +208,8 @@ public class StreamMQDiagnosticsAutoConfiguration {
             StreamMQDiagnosticsService diagnosticsService,
             MessageProfileService profileService,
             ManagementAuthenticator authenticator) {
-        return new StreamMQDiagnosticsEndpoint(diagnosticsService, profileService, authenticator);
+        // 包一层失败限流：即使启用 Basic/Token 弱凭据，也能抵御针对诊断端点的暴力破解
+        ManagementAuthenticator rateLimited = new RateLimitedAuthenticator(authenticator);
+        return new StreamMQDiagnosticsEndpoint(diagnosticsService, profileService, rateLimited);
     }
 }

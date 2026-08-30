@@ -17,6 +17,14 @@ public class DefaultConsumerTuning implements ConsumerTuning {
 
     private volatile long defaultPullIntervalMillis = StreamMQConstants.DEFAULT_PULL_INTERVAL_MS;
 
+    /**
+     * 全局顺序消费超时（毫秒），0 表示不启用。
+     *
+     * <p>来自 {@code streammq.consumer.orderly-consume-timeout}。仅作为注解未显式声明时的回落值—— 注解 {@code
+     * orderlyConsumeTimeout > 0} 时始终优先，保证 per-consumer 可覆盖全局。
+     */
+    private volatile long defaultOrderlyConsumeTimeoutMillis;
+
     private volatile int maxBatchSizeLimit = StreamMQConstants.MAX_BATCH_SIZE_LIMIT;
 
     private volatile int inflightCapacity;
@@ -71,6 +79,17 @@ public class DefaultConsumerTuning implements ConsumerTuning {
         }
     }
 
+    /**
+     * 注入全局顺序消费超时（毫秒），{@code >= 0} 才生效；0 表示不启用（默认）。
+     *
+     * @param millis 超时毫秒数
+     */
+    public void setDefaultOrderlyConsumeTimeoutMillis(long millis) {
+        if (millis >= 0) {
+            this.defaultOrderlyConsumeTimeoutMillis = millis;
+        }
+    }
+
     public void setMaxBatchSizeLimit(int limit) {
         if (limit > 0) {
             this.maxBatchSizeLimit = limit;
@@ -107,5 +126,10 @@ public class DefaultConsumerTuning implements ConsumerTuning {
     @Override
     public long effectivePullInterval(long annotationValue) {
         return annotationValue != 0 ? annotationValue : defaultPullIntervalMillis;
+    }
+
+    @Override
+    public long effectiveOrderlyConsumeTimeoutMillis(long annotationValue) {
+        return annotationValue > 0 ? annotationValue : defaultOrderlyConsumeTimeoutMillis;
     }
 }

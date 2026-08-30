@@ -499,6 +499,37 @@ Message<String> msg2 = MessageBuilder.<String>withTopic("delay-topic")
 > `RebalanceStrategy` 提供分片分配元数据（assignment Hash + REBALANCE 通知，供管理端点观测），
 > 手动重平衡见 `/actuator/streammq/rebalance/{group}`。
 
+**消费超时（可选，推荐开启）：** 顺序消费默认不设消费超时——卡死的 handler 会持有分片锁并阻塞消费循环，直到进程重启。
+通过 `@StreamMQConsumer(orderlyConsumeTimeout = 60000)`（毫秒）开启后，单次消费超过该时长即视为失败：
+框架取消任务并按 `RECONSUME_LATER` 重试，消费循环不再被卡死 handler 阻塞；重试在 `maxReconsumeTimes` 次数内进行，
+耗尽后消息进入 DLQ。注意：
+
+- 若业务 handler 不响应线程中断，原消费线程仍可能继续运行，其分片锁会在 handler 返回时由任务自身的 finally 释放；
+  该窗口内同分片的其它投递会被锁拒绝并重试，**不会破坏严格有序**；
+- 重试是严格串行的，设置过小的超时会把慢消息快速送入 DLQ，建议按业务最慢耗时的 2 倍以上配置；
+- 超时语义与并发消费一致：**业务层必须保证幂等**（原消费与重试副本可能并发执行）。
+
+**全局开启：** 逐个消费者写注解很繁琐，可通过 `streammq.consumer.orderly-consume-timeout-millis`
+一次性为所有顺序消费者设置默认值。优先级为「注解显式值（`> 0`）> 全局配置」，因此全局开启后
+无法用注解单独关闭某个消费者——需要对该消费者放松保护时，请设置一个足够大的值：
+
+```yaml
+streammq:
+  consumer:
+    orderly-consume-timeout-millis: 60000   # 全局默认；0=不启用（默认）
+```
+
+**为什么不使用 `consumeTimeout`：** 两者语义与默认值都不同，不能合并：
+
+| | `consumeTimeout`（并发） | `orderlyConsumeTimeout`（顺序） |
+|---|---|---|
+| 默认值 | 30000，**默认启用** | 0，**默认关闭** |
+| 超时后果 | 单条消息重投，不影响其它消息 | 串行重试＋分片挂起，耗尽 `maxReconsumeTimes` 后进 **DLQ** |
+| 保护目标 | 单消息吞吐 | 分片可用性 |
+
+若顺序消费复用 `consumeTimeout` 的非零默认值，等于把所有存量顺序消费者的慢消息系统性送入 DLQ
+（破坏性变更）。因此独立为 opt-in 属性，由业务按最慢耗时显式评估后开启。
+
 ```java
 @Component
 @StreamMQConsumer(
@@ -727,7 +758,8 @@ streammq:
 | `consumeThreadMin` | int | 1 | **并发消费循环数**（仅 CONCURRENT 集群消费生效；每循环独立 XREADGROUP 拉取，共享 consumer name 原子分配互不相交） |
 | `consumeThreadMax` | int | 64 | 并发消费循环数上限（夹取上界） |
 | `maxReconsumeTimes` | int | 16 | 最大重试次数 |
-| `consumeTimeout` | long | 30000 | 消费超时（毫秒） |
+| `consumeTimeout` | long | 30000 | 并发消费超时（毫秒）；超时后消息按 RECONSUME_LATER 重试（业务层需幂等） |
+| `orderlyConsumeTimeout` | long | 0 | 顺序消费超时（毫秒）；0=回落全局配置（全局默认同为 0，即不启用）。开启后卡死 handler 不再阻塞消费循环，语义见「顺序消息」 |
 | `pullBatchSize` | int | 32 | 单次拉取批量 |
 | `selectorExpression` | String | "*" | Tag/SQL92 过滤表达式 |
 | `selectorType` | SelectorType | TAG | 过滤类型：TAG / SQL92 |
@@ -853,6 +885,10 @@ public class CustomMessageSerializer implements MessageSerializer {
 | `/actuator/streammq/config/{group}` | POST | 更新消费组配置 |
 
 > 所有操作均需通过 `ManagementAuthenticator` 鉴权；默认 `DenyAllAuthenticator` 拒绝所有访问（返回 401），需注册 `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` Bean 后开放。管理端点可通过 `streammq.admin.enabled=false` 单独关闭。
+
+> **失败限流（内置）：** 管理/诊断端点在鉴权器外层统一包了失败限流（`RateLimitedAuthenticator`）：同一客户端
+> （按 `X-Forwarded-For` / `remoteAddr` 聚合）在 60s 窗口内鉴权失败超过 10 次即锁定 5 分钟，成功后复位。
+> 即使误用弱凭据，也难以被在线暴力破解。限流对默认的 `DenyAll` 与 `AllowAll` 无副作用。
 
 > ⚠️ **暴露面注意事项**：
 >

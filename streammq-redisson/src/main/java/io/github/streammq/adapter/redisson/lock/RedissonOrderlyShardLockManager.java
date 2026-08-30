@@ -141,8 +141,46 @@ public class RedissonOrderlyShardLockManager implements OrderlyShardLockManager 
         try {
             return orderly.onMessage(message, ctx);
         } finally {
+            releaseLockQuietly(lock, shardIndex, reg);
+        }
+    }
+
+    /**
+     * 释放分片锁，且<b>屏蔽中断对解锁的干扰</b>。
+     *
+     * <p><b>为什么必须清除中断标志：</b>顺序消费超时由 {@code Future.cancel(true)} 中断业务线程实现。若 handler
+     * 响应中断，其返回时线程已携带中断标志；此时 Redisson 的同步 {@code unlock()}（底层为网络 I/O）会<b>立即
+     * 失败</b>，锁被看门狗持续续期——后续重试全部阻塞在 {@code tryLock} 上、直到再次超时取消，表现为 「超时重试形同空转：handler 只被调用 1
+     * 次，重试次数空耗后直接进 DLQ」（集成测试实测复现）。
+     *
+     * <p>因此这里先读取并清除中断标志，保证解锁的网络调用不被打断；解锁完成后恢复中断标志， 不吞掉取消信号（调用方可据此感知中断语义）。
+     *
+     * @param lock 分片锁
+     * @param shardIndex 分片序号（日志用）
+     * @param reg 注册信息（日志用）
+     */
+    private void releaseLockQuietly(RLock lock, int shardIndex, ListenerRegistration reg) {
+        boolean interrupted = Thread.currentThread().isInterrupted();
+        if (interrupted) {
+            Thread.interrupted(); // 读取并清除中断标志
+        }
+        try {
             if (lock.isHeldByCurrentThread()) {
                 lock.unlock();
+            }
+        } catch (RuntimeException ex) {
+            // 解锁失败：锁最终会在 watchdog 租约到期后自动释放，但本分片会停摆到那时。
+            // 记录 ERROR 以便运维定位，不向上抛出以免掩盖 handler 的真实结果。
+            LOG.error(
+                    "Failed to unlock orderly shard lock: topic={}, group={}, shard={};"
+                            + " this shard stalls until the watchdog lease expires",
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    shardIndex,
+                    ex);
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt(); // 恢复中断语义
             }
         }
     }

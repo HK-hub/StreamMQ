@@ -6,9 +6,11 @@
 package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
+import io.github.streammq.adapter.redisson.listener.RedissonBroadcastGroupRegistry;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.DlqReason;
+import io.github.streammq.core.listener.BroadcastGroupRegistry;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
@@ -90,6 +92,26 @@ public class PelClaimScheduler implements StreamMQScheduler {
     private volatile ScheduledFuture<?> scanFuture;
 
     /**
+     * 广播组注册表（僵尸组回收）。
+     *
+     * <p>非 final：允许通过 {@link #setBroadcastGroupRegistry(BroadcastGroupRegistry)} 在装配后替换 （Spring
+     * 场景下注册表 Bean 可能晚于调度器构造）。
+     */
+    private volatile BroadcastGroupRegistry broadcastGroupRegistry;
+
+    /**
+     * 替换广播组注册表（僵尸组回收策略）。
+     *
+     * @param registry 注册表实现，null 表示回落默认 Redisson 实现
+     */
+    public void setBroadcastGroupRegistry(BroadcastGroupRegistry registry) {
+        this.broadcastGroupRegistry =
+                Objects.nonNull(registry)
+                        ? registry
+                        : new RedissonBroadcastGroupRegistry(redisson, namespace);
+    }
+
+    /**
      * 构造调度器。
      *
      * @param redisson Redisson 客户端
@@ -99,11 +121,49 @@ public class PelClaimScheduler implements StreamMQScheduler {
      */
     public PelClaimScheduler(
             RedissonClient redisson, String namespace, long scanIntervalMs, int batchSize) {
-        this(redisson, namespace, scanIntervalMs, batchSize, DEFAULT_MIN_IDLE_MS);
+        this(redisson, namespace, scanIntervalMs, batchSize, DEFAULT_MIN_IDLE_MS, null);
     }
 
     /**
-     * 构造调度器（可指定 PEL 空闲阈值）。
+     * 构造调度器（可指定 PEL 空闲阈值与广播组注册表）。
+     *
+     * <p><b>依赖倒置：</b>{@code broadcastGroupRegistry} 以接口 {@link BroadcastGroupRegistry} 注入，
+     * 用户可替换僵尸组回收策略（如接入外部监控、或提供空实现并自行承担 PEL 泄漏风险）。 传 {@code null} 时回落到默认 Redisson 实现。
+     *
+     * @param redisson Redisson 客户端
+     * @param namespace 命名空间
+     * @param scanIntervalMs 扫描间隔（毫秒）
+     * @param batchSize 单次扫描批量
+     * @param minIdleMs PEL 空闲阈值（毫秒）
+     * @param broadcastGroupRegistry 广播组注册表（可为 null，回落默认实现）
+     */
+    public PelClaimScheduler(
+            RedissonClient redisson,
+            String namespace,
+            long scanIntervalMs,
+            int batchSize,
+            long minIdleMs,
+            BroadcastGroupRegistry broadcastGroupRegistry) {
+        this.redisson = Objects.requireNonNull(redisson, "redisson");
+        this.namespace = Objects.isNull(namespace) ? "" : namespace;
+        this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
+        this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
+        this.minIdleMs = minIdleMs > 0 ? minIdleMs : DEFAULT_MIN_IDLE_MS;
+        this.broadcastGroupRegistry =
+                Objects.nonNull(broadcastGroupRegistry)
+                        ? broadcastGroupRegistry
+                        : new RedissonBroadcastGroupRegistry(redisson, this.namespace);
+        this.scanExecutor =
+                Executors.newSingleThreadScheduledExecutor(
+                        r -> {
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_PELCLAIM_SCHEDULER);
+                            t.setDaemon(true);
+                            return t;
+                        });
+    }
+
+    /**
+     * 构造调度器（可指定 PEL 空闲阈值），广播组注册表回落到默认 Redisson 实现。
      *
      * @param redisson Redisson 客户端
      * @param namespace 命名空间
@@ -117,18 +177,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
             long scanIntervalMs,
             int batchSize,
             long minIdleMs) {
-        this.redisson = Objects.requireNonNull(redisson, "redisson");
-        this.namespace = Objects.isNull(namespace) ? "" : namespace;
-        this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
-        this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
-        this.minIdleMs = minIdleMs > 0 ? minIdleMs : DEFAULT_MIN_IDLE_MS;
-        this.scanExecutor =
-                Executors.newSingleThreadScheduledExecutor(
-                        r -> {
-                            Thread t = new Thread(r, "streammq-scheduler-daemon");
-                            t.setDaemon(true);
-                            return t;
-                        });
+        this(redisson, namespace, scanIntervalMs, batchSize, minIdleMs, null);
     }
 
     /**
@@ -247,7 +296,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
         scanExecutor =
                 Executors.newSingleThreadScheduledExecutor(
                         r -> {
-                            Thread t = new Thread(r, "streammq-scheduler-daemon");
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_PELCLAIM_SCHEDULER);
                             t.setDaemon(true);
                             return t;
                         });
@@ -294,12 +343,10 @@ public class PelClaimScheduler implements StreamMQScheduler {
                         ex);
             }
         }
-        // 低频搭车任务：回收心跳超时的僵尸广播消费者组（见 RedissonStreamListener#sweepStaleBroadcastGroups）
+        // 低频搭车任务：回收心跳超时的僵尸广播消费者组（策略由注入的 BroadcastGroupRegistry 决定）
         if (Math.floorMod(scanCounter.incrementAndGet(), BROADCAST_SWEEP_EVERY_N_SCANS) == 0) {
             try {
-                int swept =
-                        io.github.streammq.adapter.redisson.listener.RedissonStreamListener
-                                .sweepStaleBroadcastGroups(redisson, namespace);
+                int swept = broadcastGroupRegistry.sweepStaleBroadcastGroups();
                 if (swept > 0) {
                     LOG.info("Swept {} stale broadcast group(s)", swept);
                 }

@@ -26,4 +26,16 @@ public interface ConsumerTuning {
 
     /** 解析生效的拉取间隔：注解显式指定优先，否则全局默认。 */
     long effectivePullInterval(long annotationValue);
+
+    /**
+     * 解析生效的顺序消费超时（毫秒）：注解显式指定优先，否则全局默认。
+     *
+     * <p><b>为什么需要全局默认值通道：</b>{@code @StreamMQConsumer#orderlyConsumeTimeout()} 注解默认 0（不启用），
+     * 是刻意为之的安全默认值——顺序消费超时后走串行重试，耗尽即进 DLQ，默认开启会把所有存量 顺序消费者的慢消息系统性误杀。但代价是用户若想全局开启，需在每一个消费者注解上重复声明。
+     * 本方法提供「注解显式值优先、否则回落全局默认」的解析通道，与 {@link #effectivePullInterval} 同构。
+     *
+     * @param annotationValue 注解声明值（0 表示未显式指定）
+     * @return 生效的超时毫秒数；0 表示不启用顺序消费超时
+     */
+    long effectiveOrderlyConsumeTimeoutMillis(long annotationValue);
 }

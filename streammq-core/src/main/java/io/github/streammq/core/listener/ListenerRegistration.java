@@ -50,6 +50,16 @@ public interface ListenerRegistration<T> {
     long getConsumeTimeoutMillis();
 
     /**
+     * 返回顺序消费单条消息消费超时（毫秒），0 表示不启用超时。
+     *
+     * <p>仅对顺序消费（{@link ListenerType#ORDERLY}）生效；超时后按 {@code RECONSUME_LATER} 重试， 耗尽 {@link
+     * #getMaxReconsumeTimes()} 次后进入 DLQ。业务 handler 不响应中断时原线程可能继续运行， 业务层必须保证幂等。
+     *
+     * @return 超时毫秒数，0 表示不启用（默认）
+     */
+    long getOrderlyConsumeTimeoutMillis();
+
+    /**
      * 返回顺序消费分片锁（不可修改视图；null 表示未设置）。
      *
      * @return 分片锁列表

@@ -58,6 +58,9 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
 
     private final long consumeTimeoutMillis;
 
+    /** 顺序消费单条消息消费超时（毫秒），0 表示不启用（仅对 ORDERLY 生效，默认关闭） */
+    private final long orderlyConsumeTimeoutMillis;
+
     /** 顺序消费分片锁（构造时防御性拷贝为不可变列表，null 表示未设置） */
     private final List<Lock> shardLocks;
 
@@ -106,6 +109,8 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         this.maxReconsumeTimes = (int) requireMin("maxReconsumeTimes", b.maxReconsumeTimes, 0);
         this.shardCount = Math.max(0, b.shardCount);
         this.consumeTimeoutMillis = requireMin("consumeTimeoutMillis", b.consumeTimeoutMillis, 0);
+        this.orderlyConsumeTimeoutMillis =
+                requireMin("orderlyConsumeTimeoutMillis", b.orderlyConsumeTimeoutMillis, 0);
         // 防御性拷贝为不可变列表，避免外部持有原引用在注册后被修改（容器注册后视为不可变）
         this.shardLocks = Objects.isNull(b.shardLocks) ? null : List.copyOf(b.shardLocks);
         this.pullBatchSize = (int) requireMin("pullBatchSize", b.pullBatchSize, 1);
@@ -150,6 +155,7 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         private int maxReconsumeTimes = StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
         private int shardCount;
         private long consumeTimeoutMillis = StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS;
+        private long orderlyConsumeTimeoutMillis;
         private List<Lock> shardLocks;
         private int pullBatchSize = StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE;
         private long pullBlockTimeoutMillis = StreamMQConstants.DEFAULT_PULL_BLOCK_TIMEOUT_MS;
@@ -212,6 +218,11 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
 
         public Builder<T> consumeTimeoutMillis(long v) {
             this.consumeTimeoutMillis = v;
+            return this;
+        }
+
+        public Builder<T> orderlyConsumeTimeoutMillis(long v) {
+            this.orderlyConsumeTimeoutMillis = v;
             return this;
         }
 

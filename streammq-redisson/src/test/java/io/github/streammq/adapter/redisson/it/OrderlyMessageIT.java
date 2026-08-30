@@ -76,9 +76,28 @@ class OrderlyMessageIT extends AbstractRedisIT {
      * @param maxReconsumeTimes 最大重试次数
      * @return 注解代理实例
      */
+    private static StreamMQConsumer mkOrderlyAnnotation(
+            String topic, String group, int maxReconsumeTimes) {
+        return mkOrderlyAnnotation(topic, group, maxReconsumeTimes, 0L, 1000L);
+    }
+
+    /**
+     * 通过动态代理构造 {@link StreamMQConsumer} 注解实例（messageModel=ORDERLY），可指定顺序消费超时与挂起时长。
+     *
+     * @param topic 主题
+     * @param group 消费者组
+     * @param maxReconsumeTimes 最大重试次数
+     * @param orderlyConsumeTimeout 顺序消费超时（毫秒），0 表示不启用
+     * @param suspendMillis 每次失败后的分片挂起时长（毫秒）
+     * @return 注解代理实例
+     */
     @SuppressWarnings("unchecked")
     private static StreamMQConsumer mkOrderlyAnnotation(
-            String topic, String group, int maxReconsumeTime) {
+            String topic,
+            String group,
+            int maxReconsumeTimes,
+            long orderlyConsumeTimeout,
+            long suspendMillis) {
         return (StreamMQConsumer)
                 Proxy.newProxyInstance(
                         StreamMQConsumer.class.getClassLoader(),
@@ -89,7 +108,7 @@ class OrderlyMessageIT extends AbstractRedisIT {
                                     case "consumerGroup" -> group;
                                     case "consumeMode" -> ConsumeMode.CLUSTERING;
                                     case "messageModel" -> MessageModel.ORDERLY;
-                                    case "maxReconsumeTimes" -> maxReconsumeTime;
+                                    case "maxReconsumeTimes" -> maxReconsumeTimes;
                                     case "consumeThreadMin" -> 1;
                                     case "consumeThreadMax" -> 1;
                                     case "consumeTimeout" -> 30000L;
@@ -106,7 +125,8 @@ class OrderlyMessageIT extends AbstractRedisIT {
                                     case "messageConverter" -> MessageConverter.class;
                                     case "rebalanceStrategy" -> RebalanceStrategy.class;
                                     case "pullInterval" -> 0L;
-                                    case "suspendCurrentQueueTimeMillis" -> 1000L;
+                                    case "orderlyConsumeTimeout" -> orderlyConsumeTimeout;
+                                    case "suspendCurrentQueueTimeMillis" -> suspendMillis;
                                     case "consumerName" -> "";
                                     case "annotationType" -> StreamMQConsumer.class;
                                     case "hashCode" -> (topic + group).hashCode();
@@ -422,6 +442,175 @@ class OrderlyMessageIT extends AbstractRedisIT {
             assertThat(i2First).isGreaterThan(i1);
             assertThat(i2Last).isLessThan(i3);
             assertThat(calls.get("k2").get()).isGreaterThanOrEqualTo(3);
+        } finally {
+            producer.close();
+            container.stop();
+        }
+    }
+
+    // ===================== 顺序消费超时（orderlyConsumeTimeout） =====================
+
+    @Test
+    @DisplayName("顺序消费超时:卡死 handler 不再阻塞分片,耗尽重试后进入 DLQ")
+    void orderlyListener_consumeTimeout_stuckHandlerRoutedToDlq() {
+        String topic = "orderly-timeout-topic";
+        String group = "orderly-timeout-group";
+
+        RetryPolicy retryPolicy = new FastRetryPolicy(100, 100);
+        RedissonStreamListenerFactory consumerFactory =
+                new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+                new DefaultStreamMQListenerContainer(
+                        redisson, consumerFactory, converter, retryPolicy, namespace);
+        // 压缩取消宽限期，加快「超时取消 → 重投」收敛，避免 IT 空等
+        container.setTimeoutCancelGraceMillis(100L);
+
+        AtomicInteger attempts = new AtomicInteger(0);
+        StreamMessageOrderlyConsumer<String> listener =
+                (msg, ctx) -> {
+                    attempts.incrementAndGet();
+                    try {
+                        // 卡死：远超超时阈值；响应中断，超时取消后立即退出
+                        Thread.sleep(30_000L);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return ConsumeAction.RECONSUME_LATER;
+                    }
+                    return ConsumeAction.SUCCESS;
+                };
+        // orderlyConsumeTimeout=300ms，maxReconsumeTimes=2 → 首投 1 次 + 重试 2 次后耗尽
+        container.registerOrderlyConsumer(
+                listener, mkOrderlyAnnotation(topic, group, 2, 300L, 50L));
+        createConsumerGroup(topic, group);
+        container.start();
+
+        RedissonStreamProducer producer =
+                new RedissonStreamProducer(
+                        redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
+        try {
+            producer.syncSend(MessageBuilder.<String>withTopic(topic).body("stuck-body").build());
+
+            String dlqKey = StreamMQKeys.dlqStream(namespace, group);
+            await().atMost(20, TimeUnit.SECONDS)
+                    .untilAsserted(
+                            () -> {
+                                RStream<String, String> dlq = redisson.getStream(dlqKey);
+                                assertThat(dlq.size()).as("耗尽重试后应进入 DLQ").isEqualTo(1L);
+                            });
+
+            // 核心断言：卡死 handler 被完整重试（首投 + 2 次重试）。这同时证明两件事：
+            // 1. 消费循环未被永久阻塞；2. 超时取消后分片锁已释放，重试真正调用了业务 handler
+            //    （而非空耗在 tryLock 上——该缺陷曾导致 handler 只被调用 1 次）
+            assertThat(attempts.get()).as("应触发首投 + 2 次重试").isGreaterThanOrEqualTo(3);
+        } finally {
+            producer.close();
+            container.stop();
+        }
+    }
+
+    @Test
+    @DisplayName("顺序消费超时:过小的超时会把慢但可完成的消息误杀进 DLQ（故默认不启用）")
+    void orderlyListener_tooSmallTimeout_slowHandlerMisroutedToDlq() {
+        String topic = "orderly-slow-topic";
+        String group = "orderly-slow-group";
+
+        RetryPolicy retryPolicy = new FastRetryPolicy(100, 100);
+        RedissonStreamListenerFactory consumerFactory =
+                new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+                new DefaultStreamMQListenerContainer(
+                        redisson, consumerFactory, converter, retryPolicy, namespace);
+        container.setTimeoutCancelGraceMillis(100L);
+
+        AtomicInteger attempts = new AtomicInteger(0);
+        StreamMessageOrderlyConsumer<String> listener =
+                (msg, ctx) -> {
+                    attempts.incrementAndGet();
+                    try {
+                        // 慢但能完成：600ms 后返回 SUCCESS，本应正常 ACK
+                        Thread.sleep(600L);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return ConsumeAction.RECONSUME_LATER;
+                    }
+                    return ConsumeAction.SUCCESS;
+                };
+        // 超时(300ms) < 实际耗时(600ms)：同一条慢消息每次尝试都被中断
+        container.registerOrderlyConsumer(
+                listener, mkOrderlyAnnotation(topic, group, 1, 300L, 50L));
+        createConsumerGroup(topic, group);
+        container.start();
+
+        RedissonStreamProducer producer =
+                new RedissonStreamProducer(
+                        redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
+        try {
+            producer.syncSend(MessageBuilder.<String>withTopic(topic).body("slow-body").build());
+
+            String dlqKey = StreamMQKeys.dlqStream(namespace, group);
+            await().atMost(20, TimeUnit.SECONDS)
+                    .untilAsserted(
+                            () -> {
+                                RStream<String, String> dlq = redisson.getStream(dlqKey);
+                                assertThat(dlq.size()).as("超时小于实际耗时，慢消息会被误杀进 DLQ").isEqualTo(1L);
+                            });
+            assertThat(attempts.get()).as("同一消息被多次尝试后才耗尽").isGreaterThanOrEqualTo(2);
+        } finally {
+            producer.close();
+            container.stop();
+        }
+    }
+
+    @Test
+    @DisplayName("顺序消费超时:注解未声明时回落到容器全局默认值")
+    void orderlyListener_globalDefaultTimeoutApplied() {
+        String topic = "orderly-timeout-default-topic";
+        String group = "orderly-timeout-default-group";
+
+        RetryPolicy retryPolicy = new FastRetryPolicy(100, 100);
+        RedissonStreamListenerFactory consumerFactory =
+                new RedissonStreamListenerFactory(redisson, converter);
+        DefaultStreamMQListenerContainer container =
+                new DefaultStreamMQListenerContainer(
+                        redisson, consumerFactory, converter, retryPolicy, namespace);
+        container.setTimeoutCancelGraceMillis(100L);
+        // 全局默认值：注解未显式声明（传 0）时回落到此值
+        container.setDefaultOrderlyConsumeTimeoutMillis(300L);
+
+        AtomicInteger attempts = new AtomicInteger(0);
+        StreamMessageOrderlyConsumer<String> listener =
+                (msg, ctx) -> {
+                    attempts.incrementAndGet();
+                    try {
+                        Thread.sleep(30_000L);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return ConsumeAction.RECONSUME_LATER;
+                    }
+                    return ConsumeAction.SUCCESS;
+                };
+        // 三参重载 → orderlyConsumeTimeout 为 0（未声明），应继承全局的 300ms
+        container.registerOrderlyConsumer(listener, mkOrderlyAnnotation(topic, group, 1));
+        createConsumerGroup(topic, group);
+        container.start();
+
+        RedissonStreamProducer producer =
+                new RedissonStreamProducer(
+                        redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
+        try {
+            producer.syncSend(MessageBuilder.<String>withTopic(topic).body("inherit-body").build());
+
+            String dlqKey = StreamMQKeys.dlqStream(namespace, group);
+            await().atMost(20, TimeUnit.SECONDS)
+                    .untilAsserted(
+                            () -> {
+                                RStream<String, String> dlq = redisson.getStream(dlqKey);
+                                assertThat(dlq.size())
+                                        .as("注解未声明时应继承全局超时，卡死消息最终进 DLQ")
+                                        .isEqualTo(1L);
+                            });
+            // maxReconsumeTimes=1 → 首投 1 次 + 重试 1 次
+            assertThat(attempts.get()).as("应触发首投 + 1 次重试").isGreaterThanOrEqualTo(2);
         } finally {
             producer.close();
             container.stop();

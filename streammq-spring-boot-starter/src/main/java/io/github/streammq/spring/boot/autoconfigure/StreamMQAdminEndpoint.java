@@ -7,8 +7,10 @@ package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.adapter.redisson.converter.MessageFields;
+import io.github.streammq.adapter.redisson.listener.RedissonBroadcastGroupRegistry;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.core.listener.BroadcastGroupRegistry;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
@@ -46,6 +48,13 @@ public class StreamMQAdminEndpoint {
     private final String namespace;
     private final FailureRetryLimiter failureRetryLimiter;
 
+    /**
+     * 广播组注册表（SPI 接口注入，依赖倒置）。
+     *
+     * <p>用户可注册自定义 {@link BroadcastGroupRegistry} Bean 覆盖广播组统计/回收策略。
+     */
+    private final BroadcastGroupRegistry broadcastGroupRegistry;
+
     /** Topic 占位消息字段：占位标记（写入 Stream 以创建 Stream） */
     private static final String FIELD_PLACEHOLDER = "__placeholder";
 
@@ -54,7 +63,12 @@ public class StreamMQAdminEndpoint {
 
     public StreamMQAdminEndpoint(
             RedissonClient redisson, DefaultStreamMQListenerContainer container, String namespace) {
-        this(redisson, container, namespace, FailureRetryLimiter.DEFAULT_COOLDOWN_MILLIS);
+        this(
+                redisson,
+                container,
+                namespace,
+                FailureRetryLimiter.DEFAULT_COOLDOWN_MILLIS,
+                new RedissonBroadcastGroupRegistry(redisson, namespace));
     }
 
     /**
@@ -64,16 +78,22 @@ public class StreamMQAdminEndpoint {
      * @param container 监听容器（可为 null，表示未装配）
      * @param namespace 命名空间
      * @param failureRetryCooldownMillis 写操作失败后的重试冷却期（毫秒）；0 表示禁用限流
+     * @param broadcastGroupRegistry 广播组注册表（依赖倒置：传 null 回落默认 Redisson 实现）
      */
     public StreamMQAdminEndpoint(
             RedissonClient redisson,
             DefaultStreamMQListenerContainer container,
             String namespace,
-            long failureRetryCooldownMillis) {
+            long failureRetryCooldownMillis,
+            BroadcastGroupRegistry broadcastGroupRegistry) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
         this.container = container;
         this.namespace = namespace == null ? "" : namespace;
         this.failureRetryLimiter = new FailureRetryLimiter(failureRetryCooldownMillis);
+        this.broadcastGroupRegistry =
+                Objects.nonNull(broadcastGroupRegistry)
+                        ? broadcastGroupRegistry
+                        : new RedissonBroadcastGroupRegistry(redisson, this.namespace);
     }
 
     /** pending 列表单次最大拉取条数，可通过 {@link #setMaxPendingQuerySize(int)} 覆盖 */
@@ -100,8 +120,7 @@ public class StreamMQAdminEndpoint {
      */
     public long countBroadcastGroups() {
         try {
-            return io.github.streammq.adapter.redisson.listener.RedissonStreamListener
-                    .countBroadcastGroups(redisson, namespace);
+            return broadcastGroupRegistry.countBroadcastGroups();
         } catch (RuntimeException ex) {
             LOG.debug("Failed to count broadcast groups: {}", ex.getMessage());
             return -1L;
@@ -583,8 +602,11 @@ public class StreamMQAdminEndpoint {
         result.put("success", false);
         result.put("rateLimited", true);
         result.put("retryAfterMs", remaining);
-        result.put("error", "该操作此前失败，处于冷却期（剩余 " + String.format("%.1f", remaining / 1000.0) + "s），请稍后重试");
-        LOG.debug("Admin write operation rate-limited: key={}, retryAfterMs={}", limitKey, remaining);
+        result.put(
+                "error",
+                "该操作此前失败，处于冷却期（剩余 " + String.format("%.1f", remaining / 1000.0) + "s），请稍后重试");
+        LOG.debug(
+                "Admin write operation rate-limited: key={}, retryAfterMs={}", limitKey, remaining);
         return true;
     }
 }

@@ -22,6 +22,7 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -56,8 +57,7 @@ import org.slf4j.LoggerFactory;
  * <p>本类为编排层，仅保留生命周期、注册表、扫描循环与状态机； 下列职责已委托给独立协作类：
  *
  * <ul>
- *   <li>{@link TransactionLockManager} - 事务执行权锁（崩溃安全 SETNX+TTL）
- *   <li>{@link TransactionCommitExecutor} - 半消息→目标 Stream 原子转投
+ *   <li>{@link TransactionCommitExecutor} - 半消息→目标 Stream 原子转投（单 Lua 脚本，天然去重，无需执行权锁）
  *   <li>{@link TransactionRetentionSweeper} - 终态保留期 + 孤儿 half 清理
  *   <li>{@link TransactionMetricsRecorder} - 事务指标（commit / rollback / check）
  * </ul>
@@ -92,8 +92,18 @@ public class TransactionScanner implements StreamMQScheduler {
 
     private static final Logger LOG = LoggerFactory.getLogger(TransactionScanner.class);
 
-    /** Class.forName 缓存，避免重复类加载查找 */
-    private static final ConcurrentMap<String, Class<?>> CLASS_CACHE = new ConcurrentHashMap<>();
+    /** Class.forName 缓存上限：bodyTypeName 来自外部可控的流字段，缓存必须有界，防止无界增长 */
+    private static final int CLASS_CACHE_MAX_SIZE = 256;
+
+    /** Class.forName 缓存，避免重复类加载查找（LRU 有界，超出上限淘汰最久未访问项） */
+    private static final Map<String, Class<?>> CLASS_CACHE =
+            Collections.synchronizedMap(
+                    new LinkedHashMap<String, Class<?>>(16, 0.75f, true) {
+                        @Override
+                        protected boolean removeEldestEntry(Map.Entry<String, Class<?>> eldest) {
+                            return size() > CLASS_CACHE_MAX_SIZE;
+                        }
+                    });
 
     /** 事务状态字段值（线上协议编码，委托给 {@link TransactionScanState} 枚举） */
     public static final String STATE_PREPARE = TransactionScanState.PREPARE.getCode();
@@ -187,10 +197,9 @@ public class TransactionScanner implements StreamMQScheduler {
     private final ConcurrentMap<String, TransactionChecker<?>> checkerRegistry =
             new ConcurrentHashMap<>();
 
-    /** 协作类：事务执行权锁、原子转投、保留期清理、指标记录 */
-    private final TransactionLockManager lockManager;
-
+    /** 协作类：原子转投、保留期清理、指标记录 */
     private final TransactionCommitExecutor commitExecutor;
+
     private final TransactionRetentionSweeper retentionSweeper;
 
     /** 指标 recorder 不为 final：通过 setter 重建以反映最新 metrics 引用（避免引入额外 setter 接口） */
@@ -212,9 +221,6 @@ public class TransactionScanner implements StreamMQScheduler {
 
     /** 指标收集器（可选注入，用于记录事务指标，null 时为 no-op） */
     private volatile io.github.streammq.core.metrics.StreamMQMetrics metrics;
-
-    /** 事务执行权锁 TTL（毫秒），可通过 {@link #setTxLockTtlMs} 覆盖 */
-    private volatile long txLockTtlMs = TransactionLockManager.DEFAULT_TX_LOCK_TTL_MS;
 
     /** 终态字段保留期（毫秒），超过后由维护任务清理 */
     @Setter private volatile long txStateRetentionMs = DEFAULT_TX_STATE_RETENTION_MS;
@@ -269,12 +275,11 @@ public class TransactionScanner implements StreamMQScheduler {
         this.scanExecutor =
                 Executors.newSingleThreadScheduledExecutor(
                         r -> {
-                            Thread t = new Thread(r, "streammq-tx-scanner");
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_TXCHECK_SCHEDULER);
                             t.setDaemon(true);
                             return t;
                         });
-        this.lockManager = new TransactionLockManager(redisson, namespace);
-        this.commitExecutor = new TransactionCommitExecutor(redisson, namespace, lockManager);
+        this.commitExecutor = new TransactionCommitExecutor(redisson, namespace);
         this.retentionSweeper = new TransactionRetentionSweeper(redisson, namespace);
         this.metricsRecorder = new TransactionMetricsRecorder(null);
     }
@@ -288,13 +293,6 @@ public class TransactionScanner implements StreamMQScheduler {
         this.metrics = newMetrics;
         // 重建 recorder 以反映最新指标引用（无 setter 接口的设计选择：明确可见性）
         this.metricsRecorder = new TransactionMetricsRecorder(newMetrics);
-    }
-
-    public void setTxLockTtlMs(long millis) {
-        if (millis > 0) {
-            this.txLockTtlMs = millis;
-            this.lockManager.setTxLockTtlMs(millis);
-        }
     }
 
     // ===================== 注册方法 =====================
@@ -450,7 +448,7 @@ public class TransactionScanner implements StreamMQScheduler {
         scanExecutor =
                 Executors.newSingleThreadScheduledExecutor(
                         r -> {
-                            Thread t = new Thread(r, "streammq-tx-scanner");
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_TXCHECK_SCHEDULER);
                             t.setDaemon(true);
                             return t;
                         });
@@ -524,8 +522,8 @@ public class TransactionScanner implements StreamMQScheduler {
                     oldState);
             return;
         }
-        // COMMITTING/ROLLBACKING 表示其它实例正在处理；发布临界区由事务执行权锁保护（见
-        // TransactionCommitExecutor），非持有者不会重复转投，等待其完成或锁 TTL 过期后接管。
+        // COMMITTING/ROLLBACKING 表示其它实例正在处理。转投由单 Lua 脚本原子完成且天然去重
+        // （先执行者已 XDEL 半消息，后执行者读到 HALF_MISSING），因此无需分布式锁，也不会重复转投。
 
         String targetTopic = stateMap.get(txId + FIELD_TARGET_SUFFIX);
         String halfIdStr = stateMap.get(txId + FIELD_HALF_ID_SUFFIX);
@@ -541,38 +539,31 @@ public class TransactionScanner implements StreamMQScheduler {
             return;
         }
 
-        // 转投半消息到目标 Stream + 原子标记 COMMIT（执行权锁内串行化）
+        // 转投半消息到目标 Stream + 原子标记 COMMIT（单 Lua 脚本，详见 TransactionCommitExecutor）
         TransactionCommitExecutor.Outcome outcome =
                 commitExecutor.publishHalfAndMarkCommit(txGroup, halfIdStr, targetTopic, txId);
         switch (outcome) {
             case PUBLISHED -> {
-                /* 终态已由原子批写入 */
+                /* 终态已由脚本写入 */
             }
             case HALF_MISSING -> {
-                // 半消息不存在：不能武断记为 COMMIT（可能什么都没投递，静默丢失），
-                // 也不能永久卡死。降级为 UNKNOWN 走有界回查：若为暂时性读取异常则下轮恢复；
-                // 连续失败超过 maxCheckTimes 后由 force-rollback 安全终结（此时必然未发布——
-                // 发布与状态置位在同一原子 MULTI/EXEC 中，状态非 COMMIT 即未投递）。
+                // 半消息不存在：可能已被其它实例的转投脚本转投（此时状态已被置为 COMMIT，degrade 不会覆盖），
+                // 也可能是注册期 XADD 失败遗留的孤儿元数据。降级为 UNKNOWN 走有界回查：
+                // 若为暂时性读取异常则下轮恢复；连续失败超过 maxCheckTimes 后由 force-rollback 安全终结
+                // （转投与状态置位在同一原子脚本中，状态非 COMMIT 即未投递）。
                 LOG.error(
-                        "Half message missing at commit time (never published by this"
-                                + " instance; publish+COMMIT are atomic), degrading to bounded"
+                        "Half message missing at commit time (either already published by a"
+                                + " concurrent instance, or never written), degrading to bounded"
                                 + " recheck: txId={}, txGroup={}, halfId={}",
                         txId,
                         txGroup,
                         halfIdStr);
                 degradeToUnknown(stateHashKey, stateMap, txId, txGroup);
-                commitExecutor.releaseLock(txGroup, txId);
-                return;
-            }
-            case LOCK_BUSY -> {
-                // 其它实例持有执行权：保持 COMMITTING 与回查条目，等待其完成或 TTL 过期后接管
-                LOG.debug("Publish skipped, another instance holds the tx lock: txId={}", txId);
                 return;
             }
         }
 
         // 终态收尾
-        commitExecutor.releaseLock(txGroup, txId);
         removeCheckEntry(txId, txGroup);
         markTerminalDone(stateMap, txId);
         cleanupTerminalState(stateMap, txId);
@@ -617,14 +608,8 @@ public class TransactionScanner implements StreamMQScheduler {
             return;
         }
 
-        // 执行权锁与 COMMIT 路径对称：防止回滚的 XDEL 与另一实例的转投 XADD 竞态
-        // （否则可能出现"用户要求回滚却已被发布"或半消息在读取后被删导致的幽灵终态）。
-        // LOCK_BUSY 时保持 ROLLBACKING 并重新调度，等待持有者完成或锁 TTL 过期后接管。
-        if (!lockManager.tryAcquire(txGroup, txId)) {
-            LOG.debug("Rollback skipped, another instance holds the tx lock: txId={}", txId);
-            rescheduleCheck(txId, txGroup);
-            return;
-        }
+        // 回滚的 XDEL 与另一实例的转投由状态机串行化：COMMITTING 时回滚直接忽略（见上方 CAS），
+        // 且 XDEL 幂等，因此无需分布式锁。XDEL 失败时保持 ROLLBACKING 并重新调度重试。
 
         String halfIdStr = stateMap.get(txId + FIELD_HALF_ID_SUFFIX);
         boolean halfRemoved = true;
@@ -658,14 +643,12 @@ public class TransactionScanner implements StreamMQScheduler {
                         halfIdStr);
             } else {
                 incrementCheckCount(txId, txGroup);
-                lockManager.release(txGroup, txId);
                 rescheduleCheck(txId, txGroup);
                 return;
             }
         }
 
         stateMap.put(txId, STATE_ROLLBACK);
-        lockManager.release(txGroup, txId);
         removeCheckEntry(txId, txGroup);
         markTerminalDone(stateMap, txId);
         cleanupTerminalState(stateMap, txId);
@@ -937,12 +920,23 @@ public class TransactionScanner implements StreamMQScheduler {
     private void degradeToUnknown(
             String stateHashKey, RMap<String, String> stateMap, String txId, String txGroup) {
         RScript script = redisson.getScript(StringCodec.INSTANCE);
-        script.eval(
-                RScript.Mode.READ_WRITE,
-                LUA_CAS_TO_UNKNOWN,
-                RScript.ReturnType.STATUS,
-                Collections.singletonList(stateHashKey),
-                txId);
+        String current =
+                script.eval(
+                        RScript.Mode.READ_WRITE,
+                        LUA_CAS_TO_UNKNOWN,
+                        RScript.ReturnType.STATUS,
+                        Collections.singletonList(stateHashKey),
+                        txId);
+        // 状态已被其它实例终态化（如并发转投脚本已置 COMMIT）：本轮无需计数或重新调度，
+        // 直接清理回查条目，避免对已终结事务的无谓重试与计数污染。
+        if (STATE_COMMIT.equals(current) || STATE_ROLLBACK.equals(current)) {
+            LOG.debug(
+                    "Degrade skipped, transaction already terminal: txId={}, state={}",
+                    txId,
+                    current);
+            removeCheckEntry(txId, txGroup);
+            return;
+        }
         int checkCount = getCheckCount(txId, txGroup);
         if (checkCount < maxCheckTimes) {
             incrementCheckCount(txId, txGroup);

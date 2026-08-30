@@ -179,6 +179,8 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
                 .maxReconsumeTimes(ann.maxReconsumeTimes())
                 .shardCount(shardCount)
                 .consumeTimeoutMillis(ann.consumeTimeout())
+                .orderlyConsumeTimeoutMillis(
+                        tuning.effectiveOrderlyConsumeTimeoutMillis(ann.orderlyConsumeTimeout()))
                 .shardLocks(shardLocks)
                 .pullBatchSize(tuning.effectivePullBatchSize(ann.pullBatchSize()))
                 .pullBlockTimeoutMillis(tuning.defaultPullBlockTimeoutMillis())

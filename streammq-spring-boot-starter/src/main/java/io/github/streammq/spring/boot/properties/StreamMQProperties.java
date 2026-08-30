@@ -175,6 +175,20 @@ public class StreamMQProperties {
          * StreamMQConstants#DEFAULT_TIMEOUT_CANCEL_GRACE_MS}。
          */
         private long timeoutCancelGraceMillis = StreamMQConstants.DEFAULT_TIMEOUT_CANCEL_GRACE_MS;
+
+        /**
+         * 全局顺序消费超时（毫秒），默认 0（不启用）。
+         *
+         * <p>仅作为 {@code @StreamMQConsumer#orderlyConsumeTimeout()} 未显式声明（为 0）时的回落值； 注解显式声明 {@code >
+         * 0} 时始终优先，per-consumer 可覆盖全局。
+         *
+         * <p><b>为什么默认关闭，而非复用 {@code consumeTimeout}：</b>{@code consumeTimeout} 默认 30000
+         * 且作用于并发消费——超时只是单条消息重投，不影响其它消息。顺序消费是「分片锁 + 串行重试」： 超时后原地在当前线程重试，每次失败挂起 {@code
+         * suspendCurrentQueueTimeMillis}，耗尽 {@code maxReconsumeTimes} 即进 DLQ。 若复用 {@code
+         * consumeTimeout} 的非零默认值，等于把所有存量顺序消费者的慢消息系统性送入 DLQ—— 这是破坏性变更。因此独立属性 + 默认关闭，
+         * 需要保护分片可用性时在此一次性全局开启，或在具体消费者注解上开启。
+         */
+        private long orderlyConsumeTimeoutMillis = 0L;
     }
 
     /** 消费者组管理配置（心跳与实例存活判定）。 */
@@ -485,6 +499,50 @@ public class StreamMQProperties {
             throw new IllegalArgumentException(
                     "streammq.admin.failure-retry-cooldown-ms must be >= 0, got: "
                             + admin.failureRetryCooldownMillis);
+        }
+        if (consumer.pollTimeout.toMillis() <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.consumer.poll-timeout must be > 0, got: " + consumer.pollTimeout);
+        }
+        if (consumer.inflightCapacity < 0) {
+            throw new IllegalArgumentException(
+                    "streammq.consumer.inflight-capacity must be >= 0, got: "
+                            + consumer.inflightCapacity);
+        }
+        if (consumer.orderlyConsumeTimeoutMillis < 0) {
+            throw new IllegalArgumentException(
+                    "streammq.consumer.orderly-consume-timeout-millis must be >= 0, got: "
+                            + consumer.orderlyConsumeTimeoutMillis);
+        }
+        if (retry.scanInterval.toMillis() <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.retry.scan-interval must be > 0, got: " + retry.scanInterval);
+        }
+        if (retry.pelClaimScanInterval.toMillis() <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.retry.pel-claim-scan-interval must be > 0, got: "
+                            + retry.pelClaimScanInterval);
+        }
+        if (retry.pelClaimMinIdleMs <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.retry.pel-claim-min-idle-ms must be > 0, got: "
+                            + retry.pelClaimMinIdleMs);
+        }
+        if (delay.scanInterval.toMillis() <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.delay.scan-interval must be > 0, got: " + delay.scanInterval);
+        }
+        if (transaction.checkInterval.toMillis() <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.transaction.check-interval must be > 0, got: "
+                            + transaction.checkInterval);
+        }
+        if (producer.retryTimes > StreamMQConstants.MAX_SYNC_RETRY_TIMES) {
+            throw new IllegalArgumentException(
+                    "streammq.producer.retry-times must be <= "
+                            + StreamMQConstants.MAX_SYNC_RETRY_TIMES
+                            + ", got: "
+                            + producer.retryTimes);
         }
     }
 }

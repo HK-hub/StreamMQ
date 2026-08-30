@@ -166,10 +166,8 @@ class TransactionBinaryCodecIT {
             scanner.markCommit(txId, TX_GROUP);
             assertThat(targetStreamSize(targetTopic)).isEqualTo(1);
 
-            // 验证锁可释放（tryAcquire 用 StringCodec 写、Lua compare-and-delete 可匹配）：
-            // 同一事务再次尝试获取必须成功，而非被永久占住直到 TTL 过期。
-            // 锁是 package-private 的 TransactionLockManager 能力，这里通过 commit 路径间接验证：
-            // 再次 markCommit（幂等，终态 COMMIT 应被忽略且不抛异常）。
+            // 验证转投幂等（提交为单 Lua 脚本原子执行，半消息被 XDEL 后重复提交读到 HALF_MISSING）：
+            // 再次 markCommit（幂等，终态 COMMIT 应被忽略且不抛异常，不会重复转投）。
             scanner.markCommit(txId, TX_GROUP);
             assertThat(targetStreamSize(targetTopic)).isEqualTo(1);
         } finally {

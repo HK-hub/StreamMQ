@@ -270,7 +270,13 @@ public class DefaultMessageProcessor implements MessageProcessor {
 
     // ===================== 超时控制 =====================
 
-    /** 使用 Future.get(timeout) 包裹 onMessage 调用，超时后取消并进入重试。 */
+    /**
+     * 使用 Future.get(timeout) 包裹 onMessage 调用，超时后取消并进入重试。
+     *
+     * <p><b>投递语义（at-least-once）：</b>超时取消只中断业务线程（{@code cancel(true)}）；若 handler 不响应 中断（阻塞式 DB/IO
+     * 调用通常如此），原始任务仍在后台运行，而消息已在宽限期（{@code timeoutCancelGraceMillis}） 后按 {@code RECONSUME_LATER}
+     * 重投——因此<b>原消费与重试副本可能并发执行，业务层必须实现幂等</b>。 超时重投计入 {@code maxReconsumeTimes}（默认 16 次），耗尽后进入 DLQ。
+     */
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void processWithTimeout(
             Message<?> message,
@@ -362,6 +368,9 @@ public class DefaultMessageProcessor implements MessageProcessor {
     /**
      * 顺序消费：失败时在当前线程内重试（最多 maxReconsumeTimes 次），每次失败后挂起
      * suspendCurrentQueueTimeMillis，保证同一分片不越过失败消息（严格有序）；耗尽后进 DLQ。
+     *
+     * <p>当 {@link ListenerRegistration#getOrderlyConsumeTimeoutMillis()} 大于 0 时，每次尝试由 {@link
+     * #attemptOrderlyConsume} 以消费超时保护：卡死 handler 不再永久阻塞消费循环。
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
     private ConsumeAction consumeOrderlyWithRetry(
@@ -374,7 +383,8 @@ public class DefaultMessageProcessor implements MessageProcessor {
             throws Exception {
         int maxRetries = Math.max(0, reg.getMaxReconsumeTimes());
         long suspendMillis = Math.max(0, reg.getSuspendCurrentQueueTimeMillis());
-        ConsumeAction action = shardLockManager.consumeWithShardLock(message, reg, ctx, orderly);
+        long orderlyTimeout = Math.max(0, reg.getOrderlyConsumeTimeoutMillis());
+        ConsumeAction action = attemptOrderlyConsume(message, reg, ctx, orderly, orderlyTimeout);
         int attempt = 0;
         while (!action.isSuccess() && attempt < maxRetries) {
             attempt++;
@@ -388,7 +398,7 @@ public class DefaultMessageProcessor implements MessageProcessor {
                     reg.getGroup(),
                     message.getMessageId());
             ContainerSupport.sleepQuietly(suspendMillis);
-            action = shardLockManager.consumeWithShardLock(message, reg, ctx, orderly);
+            action = attemptOrderlyConsume(message, reg, ctx, orderly, orderlyTimeout);
         }
         if (action.isSuccess()) {
             handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
@@ -412,6 +422,78 @@ public class DefaultMessageProcessor implements MessageProcessor {
                     message.getMessageId());
         }
         return ConsumeAction.RECONSUME_LATER;
+    }
+
+    /**
+     * 单次顺序消费尝试。
+     *
+     * <p>{@code timeoutMillis > 0} 时以 Future 包裹「获取分片锁 + onMessage + 释放分片锁」：
+     *
+     * <ul>
+     *   <li>超时后取消任务并等待宽限期，返回 {@code RECONSUME_LATER}——消费循环不再被卡死 handler 阻塞
+     *   <li>若 handler 不响应中断，分片锁会由任务自身的 finally 在 handler 返回时释放；该窗口内同分片的 其它投递会被 tryLock
+     *       拒绝并重试，不会破坏严格有序
+     *   <li>超时路径语义与 {@link #processWithTimeout} 一致：业务层必须保证幂等
+     * </ul>
+     */
+    private ConsumeAction attemptOrderlyConsume(
+            Message<?> message,
+            ListenerRegistration reg,
+            ConsumeOrderlyContext ctx,
+            StreamMessageOrderlyConsumer orderly,
+            long timeoutMillis)
+            throws Exception {
+        if (timeoutMillis <= 0) {
+            return shardLockManager.consumeWithShardLock(message, reg, ctx, orderly);
+        }
+        AtomicReference<Thread> taskThread = new AtomicReference<>();
+        Future<ConsumeAction> future =
+                executor.submit(
+                        () -> {
+                            taskThread.set(Thread.currentThread());
+                            try {
+                                ConsumeAction a =
+                                        shardLockManager.consumeWithShardLock(
+                                                message, reg, ctx, orderly);
+                                return Objects.isNull(a) ? ConsumeAction.RECONSUME_LATER : a;
+                            } catch (Exception ex) {
+                                // 异常按一次失败处理（与同步路径的 catch 语义一致），保证 Future 正常返回
+                                return ConsumeAction.RECONSUME_LATER;
+                            }
+                        });
+        try {
+            ConsumeAction action = future.get(timeoutMillis, TimeUnit.MILLISECONDS);
+            return Objects.isNull(action) ? ConsumeAction.RECONSUME_LATER : action;
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            // 等待业务线程真正终止（上限为宽限期）：缩小「原消费与重试副本并发执行」的窗口
+            Thread t = taskThread.get();
+            if (t != null && t != Thread.currentThread()) {
+                try {
+                    t.join(timeoutCancelGraceMillis);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+            }
+            LOG.warn(
+                    "Orderly consume timeout ({}ms), cancelling and retrying: topic={}, group={},"
+                            + " messageId={}",
+                    timeoutMillis,
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    message.getMessageId());
+            return ConsumeAction.RECONSUME_LATER;
+        } catch (ExecutionException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            LOG.warn(
+                    "Orderly consume attempt failed: topic={}, group={}, error={}",
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    e.getMessage());
+            return ConsumeAction.RECONSUME_LATER;
+        }
     }
 
     // ===================== 过滤与指标 =====================

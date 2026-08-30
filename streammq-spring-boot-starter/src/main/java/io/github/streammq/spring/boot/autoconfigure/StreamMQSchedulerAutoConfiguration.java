@@ -10,6 +10,7 @@ import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.listener.BroadcastGroupRegistry;
 import io.github.streammq.core.metrics.StreamMQMetrics;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
@@ -192,7 +193,9 @@ public class StreamMQSchedulerAutoConfiguration {
             havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
             matchIfMissing = true)
     public PelClaimScheduler streamMQPelClaimScheduler(
-            RedissonClient redisson, StreamMQProperties properties) {
+            RedissonClient redisson,
+            StreamMQProperties properties,
+            ObjectProvider<BroadcastGroupRegistry> registryProvider) {
         long intervalMs = properties.getRetry().getPelClaimScanInterval().toMillis();
         long minIdleMs = properties.getRetry().getPelClaimMinIdleMs();
         int batchSize = properties.getRetry().getBatchSize();
@@ -202,7 +205,12 @@ public class StreamMQSchedulerAutoConfiguration {
                 minIdleMs,
                 batchSize);
         return new PelClaimScheduler(
-                redisson, properties.getNamespace(), intervalMs, batchSize, minIdleMs);
+                redisson,
+                properties.getNamespace(),
+                intervalMs,
+                batchSize,
+                minIdleMs,
+                registryProvider.getIfAvailable());
     }
 
     /**
