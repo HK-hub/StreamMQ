@@ -89,11 +89,9 @@
                 <artifactId>streammq-spring-boot-starter</artifactId>
                 <version>${streammq.version}</version>
             </dependency>
-            <dependency>
-                <groupId>io.github.streammq</groupId>
-                <artifactId>streammq-kubernetes</artifactId>
-                <version>${streammq.version}</version>
-            </dependency>
+            <!-- 注意：streammq-kubernetes 处于实验性阶段，被 release 流程的 excludeArtifacts 排除、
+                 不会发布到 Maven Central。BOM 只管理实际发布的构件——若在此声明，使用方按版本号
+                 依赖该模块时会解析到中央仓库中不存在的构件。待其纳入发布清单后再加入。 -->
             <dependency>
                 <groupId>io.github.streammq</groupId>
                 <artifactId>streammq-tracing-opentelemetry</artifactId>

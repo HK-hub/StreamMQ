@@ -171,7 +171,7 @@ Single instance, 1KB payload. JMH forks=2, warmup=3, iter=5.
 > have been publicly retracted. Consumption throughput is the single most important capacity number
 > for an MQ; leaving it blank is better than misleading you.
 
-Run yourself: `mvn -B -Pbenchmark -pl streammq-benchmark exec:java@benchmark-template exec:java@benchmark-serialization exec:java@benchmark-consumer -Dstreammq.benchmark.allowFlush=true`
+Run yourself: `mvn -B -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-template exec:exec@benchmark-serialization exec:exec@benchmark-consumer -Dstreammq.benchmark.allowFlush=true`
 Or trigger the CI benchmark job defined in
 [`.github/workflows/benchmark.yml`](.github/workflows/benchmark.yml); results are published as JMH
 artifacts and back-filled into this table.

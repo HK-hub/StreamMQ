@@ -212,7 +212,7 @@ public class PassThroughMessageConverter extends AbstractMessageConverter {
      */
     @Override
     protected void encodeProperties(Message<?> message, Map<String, String> fields) {
-        writePropsJson(fields, FIELD_PROPS, message.getProperties(), message.getUserProperties());
+        PropsJsonCodec.write(fields, FIELD_PROPS, message.getProperties(), message.getUserProperties());
     }
 
     /**
@@ -223,7 +223,7 @@ public class PassThroughMessageConverter extends AbstractMessageConverter {
      */
     @Override
     protected <T> void decodeProperties(MessageDraft<T> draft, Map<String, String> fields) {
-        readPropsJson(fields, FIELD_PROPS, draft.userProperties::putAll);
+        PropsJsonCodec.read(fields, FIELD_PROPS, draft.userProperties::putAll);
     }
 
     /**

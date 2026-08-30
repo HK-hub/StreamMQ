@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    基准模块日志配置：
+    此前模块内没有任何 logback 配置，logback 缺省为 DEBUG 级别，Redisson/Netty 会刷屏输出
+    海量命令级日志（实测单次基准可达数 GB），既拖慢基准又难以阅读。这里将根级别设为 INFO，
+    并单独压低 Redisson/Netty 的内部日志。
+-->
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <logger name="org.redisson" level="INFO"/>
+    <logger name="io.netty" level="INFO"/>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>

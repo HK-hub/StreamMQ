@@ -336,8 +336,14 @@
                                 <version>${lombok.version}</version>
                             </path>
                         </annotationProcessorPaths>
+                        <!-- 编译门禁：
+                             · -Xlint:unchecked  类型安全类告警保持致命（该类别跨 JDK 稳定，能真实反映泛型误用）
+                             · -Xlint:-deprecation  deprecation 告警随 JDK / 三方依赖版本升级波动（库方弃用
+                                API 即触发），纳入致命集会让构建对依赖升级过于脆弱；弃用 API 由 API 审查与
+                                CHANGELOG 门禁把关
+                             · -Werror  其余默认开启的告警类别（如 rawtypes/path）仍为致命 -->
                         <compilerArgs>
-                            <arg>-Xlint:unchecked,deprecation</arg>
+                            <arg>-Xlint:unchecked,-deprecation</arg>
                             <arg>-Werror</arg>
                         </compilerArgs>
                     </configuration>

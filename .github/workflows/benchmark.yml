@@ -35,12 +35,14 @@ jobs:
 
       # 基准准备/清理含 flushdb（Testcontainers 独占实例 + 显式 allowFlush 授权）；
       # fork/iteration 参数由各 Benchmark 类注解决定，此处不调整。
+      # 必须用 exec:exec：JMH @Fork 依赖真实子进程的 java.class.path，exec:java 会导致
+      # fork 进程找不到 ForkedMain 而失败。
       - name: Run JMH benchmarks (template / serialization / consumer)
         run: >-
           mvn -B -Pbenchmark -pl streammq-benchmark
-          exec:java@benchmark-template
-          exec:java@benchmark-serialization
-          exec:java@benchmark-consumer
+          exec:exec@benchmark-template
+          exec:exec@benchmark-serialization
+          exec:exec@benchmark-consumer
           -Dstreammq.benchmark.allowFlush=true
 
       - name: Collect JMH result files

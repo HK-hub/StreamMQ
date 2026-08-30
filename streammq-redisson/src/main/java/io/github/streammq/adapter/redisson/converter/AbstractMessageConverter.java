@@ -5,9 +5,6 @@
  */
 package io.github.streammq.adapter.redisson.converter;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.message.Message;
@@ -71,9 +68,6 @@ import java.util.function.Consumer;
  * @since 0.1.0
  */
 public abstract class AbstractMessageConverter implements MessageConverter {
-
-    /** 属性 JSON 序列化器，子类通过 {@link #writePropsJson} / {@link #readPropsJson} 共用 */
-    protected final ObjectMapper propsMapper = new ObjectMapper();
 
     // ================================================================
     // 字段名 —— 子类覆写以定义各自 Stream Entry 字段名
@@ -247,7 +241,7 @@ public abstract class AbstractMessageConverter implements MessageConverter {
     /**
      * 将消息的系统属性和用户属性编码写入 Stream Entry 字段。
      *
-     * <p>典型实现：调用 {@link #writePropsJson(Map, String, Map, Map)} 合并写入单个 JSON 字段， 或分别写入两个独立字段。
+     * <p>典型实现：调用 {@link PropsJsonCodec#write(Map, String, Map, Map)} 合并写入单个 JSON 字段， 或分别写入两个独立字段。
      *
      * @param message 消息载体
      * @param fields 输出 Map，直接修改
@@ -257,7 +251,7 @@ public abstract class AbstractMessageConverter implements MessageConverter {
     /**
      * 从 Stream Entry 字段解码属性并写入装配草稿。
      *
-     * <p>典型实现：调用 {@link #readPropsJson(Map, String, Consumer)} 从 JSON 读取后合并进 {@code
+     * <p>典型实现：调用 {@link PropsJsonCodec#read(Map, String, Consumer)} 从 JSON 读取后合并进 {@code
      * draft.properties} / {@code draft.userProperties}。
      *
      * @param draft 装配草稿
@@ -472,60 +466,4 @@ public abstract class AbstractMessageConverter implements MessageConverter {
         }
     }
 
-    /**
-     * 将系统属性和用户属性合并序列化为单个 JSON 字段。
-     *
-     * <p>Default 和 PassThrough Converter 共用此方法。 两个 Map 均可能为空，合并后若为空则不做任何写入。
-     *
-     * <p><b>键冲突规则：</b>系统属性优先（后写入覆盖）——SDK 内部元数据（如 trace 上下文）不可被业务同名用户属性静默篡改。
-     *
-     * @param fields 目标 Map
-     * @param fieldName JSON 字段名（如 {@code "props"}）
-     * @param sysProps 系统属性 Map（可空，不可变视图）
-     * @param userProps 用户属性 Map（可空，防御性拷贝）
-     * @throws SerializationException 当 JSON 序列化失败时
-     */
-    protected void writePropsJson(
-            Map<String, String> fields,
-            String fieldName,
-            Map<String, String> sysProps,
-            Map<String, String> userProps) {
-        Map<String, String> merged = new HashMap<>(sysProps.size() + userProps.size());
-        merged.putAll(userProps);
-        merged.putAll(sysProps);
-        if (merged.isEmpty()) {
-            return;
-        }
-        try {
-            fields.put(fieldName, propsMapper.writeValueAsString(merged));
-        } catch (JsonProcessingException ex) {
-            throw new SerializationException("Failed to serialize message properties", ex);
-        }
-    }
-
-    /**
-     * 从单个 JSON 字段反序列化属性并写入 message。
-     *
-     * <p>Default 和 PassThrough Converter 共用此方法。 字段不存在或为空时不做任何操作。
-     *
-     * @param fields Stream Entry 全部字段
-     * @param fieldName JSON 字段名（如 {@code "props"}）
-     * @param consumer 接收反序列化后的属性 Map 的消费者（如 {@code message::setUserProperties}）
-     * @param <T> body 泛型类型
-     * @throws SerializationException 当 JSON 反序列化失败时
-     */
-    @SuppressWarnings("unchecked")
-    protected <T> void readPropsJson(
-            Map<String, String> fields, String fieldName, Consumer<Map<String, String>> consumer) {
-        String json = fields.get(fieldName);
-        if (StringUtils.isEmpty(json)) {
-            return;
-        }
-        try {
-            consumer.accept(
-                    propsMapper.readValue(json, new TypeReference<Map<String, String>>() {}));
-        } catch (JsonProcessingException ex) {
-            throw new SerializationException("Failed to deserialize message properties", ex);
-        }
-    }
 }

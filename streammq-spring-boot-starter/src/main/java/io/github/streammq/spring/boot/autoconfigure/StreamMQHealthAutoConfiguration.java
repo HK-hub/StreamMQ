@@ -96,7 +96,8 @@ public class StreamMQHealthAutoConfiguration {
                 new StreamMQAdminEndpoint(
                         redisson,
                         listenerContainerProvider.getIfAvailable(),
-                        properties.getNamespace());
+                        properties.getNamespace(),
+                        properties.getAdmin().getFailureRetryCooldownMillis());
         adminEndpoint.setMaxPendingQuerySize(properties.getAdmin().getMaxPendingQuerySize());
         return adminEndpoint;
     }

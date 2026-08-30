@@ -234,7 +234,7 @@ StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 > 我们**不会**在未实测的情况下填入数字——此前 README 曾引用过方法学破损的基准（死码消除、
 > 灌数耗尽、缺 ACK），已公开撤回。消费吞吐是 MQ 最关键的容量指标，宁可留空也不误导。
 >
-> 自行运行：`mvn -B -Pbenchmark -pl streammq-benchmark exec:java@benchmark-template exec:java@benchmark-serialization exec:java@benchmark-consumer -Dstreammq.benchmark.allowFlush=true`
+> 自行运行：`mvn -B -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-template exec:exec@benchmark-serialization exec:exec@benchmark-consumer -Dstreammq.benchmark.allowFlush=true`
 > 或按 [`.github/workflows/benchmark.yml`](.github/workflows/benchmark.yml) 手动触发 CI 基准任务，
 > 结果会以 JMH 产物形式回填。
 

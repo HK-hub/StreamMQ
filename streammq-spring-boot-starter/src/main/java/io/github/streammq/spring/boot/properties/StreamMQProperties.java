@@ -353,6 +353,11 @@ public class StreamMQProperties {
 
         /** pending 列表单次最大拉取条数 */
         private int maxPendingQuerySize = StreamMQSpringConstants.MAX_PENDING_QUERY_SIZE;
+
+        /** 写操作（重投/删除/ACK/重平衡/建删 Topic/改配置）失败后的重试冷却期（毫秒），0 表示禁用 */
+        private long failureRetryCooldownMillis =
+                io.github.streammq.spring.boot.autoconfigure.FailureRetryLimiter
+                        .DEFAULT_COOLDOWN_MILLIS;
     }
 
     /**
@@ -475,6 +480,11 @@ public class StreamMQProperties {
             throw new IllegalArgumentException(
                     "streammq.admin.max-pending-query-size must be > 0, got: "
                             + admin.maxPendingQuerySize);
+        }
+        if (admin.failureRetryCooldownMillis < 0) {
+            throw new IllegalArgumentException(
+                    "streammq.admin.failure-retry-cooldown-ms must be >= 0, got: "
+                            + admin.failureRetryCooldownMillis);
         }
     }
 }

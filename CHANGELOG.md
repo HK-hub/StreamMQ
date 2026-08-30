@@ -22,6 +22,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 >
 > `release.yml` 已增加门禁：若标签指向的提交与工作流检出的提交不一致，发布将直接失败。
 
+> **升级注意（数据兼容）**
+>
+> 0.1.1 是**第一个公开发布版本**，0.1.0 从未发布，因此不存在对外数据兼容义务。事务相关 Redis key
+> （`streammq:{ns}:half:*` / `txstate:*` / `txcheck:*` / `txlock:*`）的命名规则保持不变，本轮变更是
+> **编码一致性**：所有与 Lua 脚本交互的事务结构与执行权锁统一使用 `StringCodec`（此前依赖客户端
+> 默认 codec，非字符串编码下出现"只报成功、永不发布"的 P0 缺陷，见下文）。
+> 若你曾在未公开的 0.1.0 前缀版本上跑过本地数据（开发/测试环境），升级前建议清理残留的事务 key：
+>
+> ```bash
+> # 按实际 namespace 替换 {ns}；redis-cli 举例：
+> redis-cli --scan --pattern 'streammq:{ns}:half:*' | xargs redis-cli del
+> redis-cli --scan --pattern 'streammq:{ns}:txstate:*' | xargs redis-cli del
+> redis-cli --scan --pattern 'streammq:{ns}:txcheck:*' | xargs redis-cli del
+> redis-cli --scan --pattern 'streammq:{ns}:txlock:*' | xargs redis-cli del
+> ```
+>
+> 业务消息（`streammq:{ns}:msg:*`）与消费位点（`meta:offset:*`）等结构与编码均未变化，无需处理。
+>
+> **事务 key 结构与 Redis Cluster（hash tag）定型声明**
+>
+> - 事务相关 key（`streammq:{ns}:half:{txGroup}` / `txstate:{txGroup}` / `txcheck:{txGroup}` /
+>   `txlock:{txGroup}:{txId}`）的命名结构自 **0.1.1 定型**，此后不再变更。
+> - 该结构中**不含 `{...}` hash tag 定界符**：早期设计曾考虑用 `{txGroup}` hash tag 将同一事务组
+>   的 key 家族钉在同一 slot，但用户可控的 topic / group / txGroup 若包含 `{` `}` 会在 Redis Cluster
+>   下强制 key 家族同 slot 热点，因此 0.1.1 统一改为纯前缀结构，并在命名校验中**显式拒绝** `{` `}`
+>   字符（发送侧与事务半消息注册侧一致）。
+> - 正确性论证：事务状态机、执行权锁、回查计数等全部 Lua 脚本均为**单 key 原子执行**（`KEYS[1]`
+>   只含一个 key），不依赖跨 key 同 slot；移除 hash tag 不影响事务原子性与正确性。
+> - 兼容义务：0.1.1 为首个公开版本，此前未公开发布的前缀版本（0.1.0 标签及其前身）**无数据兼容
+>   义务**；若内部环境存在前缀版本残留数据，按上文清理命令处理即可。
+
 ### Fixed (P0)
 
 - **事务消息在非 StringCodec 默认编码下「只报成功、永不发布」**：新增

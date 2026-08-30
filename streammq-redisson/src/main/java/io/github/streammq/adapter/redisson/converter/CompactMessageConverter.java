@@ -233,11 +233,11 @@ public class CompactMessageConverter extends AbstractMessageConverter {
     protected void encodeProperties(Message<?> message, Map<String, String> fields) {
         Map<String, String> sysProps = message.getProperties();
         if (!sysProps.isEmpty()) {
-            writePropsJson(fields, FIELD_PROPS, sysProps, Collections.emptyMap());
+            PropsJsonCodec.write(fields, FIELD_PROPS, sysProps, Collections.emptyMap());
         }
         Map<String, String> userProps = message.getUserProperties();
         if (!userProps.isEmpty()) {
-            writePropsJson(fields, FIELD_USER_PROPS, Collections.emptyMap(), userProps);
+            PropsJsonCodec.write(fields, FIELD_USER_PROPS, Collections.emptyMap(), userProps);
         }
     }
 
@@ -249,8 +249,8 @@ public class CompactMessageConverter extends AbstractMessageConverter {
      */
     @Override
     protected <T> void decodeProperties(MessageDraft<T> draft, Map<String, String> fields) {
-        readPropsJson(fields, FIELD_PROPS, draft.properties::putAll);
-        readPropsJson(fields, FIELD_USER_PROPS, draft.userProperties::putAll);
+        PropsJsonCodec.read(fields, FIELD_PROPS, draft.properties::putAll);
+        PropsJsonCodec.read(fields, FIELD_USER_PROPS, draft.userProperties::putAll);
     }
 
     // ================================================================

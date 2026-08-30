@@ -44,6 +44,7 @@ public class StreamMQAdminEndpoint {
     private final RedissonClient redisson;
     private final DefaultStreamMQListenerContainer container;
     private final String namespace;
+    private final FailureRetryLimiter failureRetryLimiter;
 
     /** Topic 占位消息字段：占位标记（写入 Stream 以创建 Stream） */
     private static final String FIELD_PLACEHOLDER = "__placeholder";
@@ -53,9 +54,26 @@ public class StreamMQAdminEndpoint {
 
     public StreamMQAdminEndpoint(
             RedissonClient redisson, DefaultStreamMQListenerContainer container, String namespace) {
+        this(redisson, container, namespace, FailureRetryLimiter.DEFAULT_COOLDOWN_MILLIS);
+    }
+
+    /**
+     * 构造管理端点。
+     *
+     * @param redisson Redis 客户端
+     * @param container 监听容器（可为 null，表示未装配）
+     * @param namespace 命名空间
+     * @param failureRetryCooldownMillis 写操作失败后的重试冷却期（毫秒）；0 表示禁用限流
+     */
+    public StreamMQAdminEndpoint(
+            RedissonClient redisson,
+            DefaultStreamMQListenerContainer container,
+            String namespace,
+            long failureRetryCooldownMillis) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
         this.container = container;
         this.namespace = namespace == null ? "" : namespace;
+        this.failureRetryLimiter = new FailureRetryLimiter(failureRetryCooldownMillis);
     }
 
     /** pending 列表单次最大拉取条数，可通过 {@link #setMaxPendingQuerySize(int)} 覆盖 */
@@ -207,6 +225,10 @@ public class StreamMQAdminEndpoint {
      */
     public Map<String, Object> requeueDlq(String group, String msgId, String targetTopic) {
         Map<String, Object> result = new LinkedHashMap<>();
+        String limitKey = "requeueDlq:" + group + ":" + msgId;
+        if (isFailureCooldown(result, limitKey)) {
+            return result;
+        }
         String dlqKey = StreamMQKeys.dlqStream(namespace, group);
         try {
             RStream<String, String> dlqStream = redisson.getStream(dlqKey);
@@ -252,6 +274,7 @@ public class StreamMQAdminEndpoint {
             }
             result.put("success", true);
             result.put("targetTopic", targetTopic);
+            failureRetryLimiter.recordSuccess(limitKey);
             LOG.info(
                     "DLQ message requeued atomically: group={}, oldId={}, targetTopic={}",
                     group,
@@ -260,6 +283,7 @@ public class StreamMQAdminEndpoint {
         } catch (RuntimeException ex) {
             result.put("success", false);
             result.put("error", ex.getMessage());
+            failureRetryLimiter.recordFailure(limitKey);
             LOG.warn("DLQ requeue failed: group={}, msgId={}: {}", group, msgId, ex.getMessage());
         }
         return result;
@@ -281,6 +305,10 @@ public class StreamMQAdminEndpoint {
     /** 删除指定 DLQ 消息。 */
     public Map<String, Object> deleteDlq(String group, String msgId) {
         Map<String, Object> result = new LinkedHashMap<>();
+        String limitKey = "deleteDlq:" + group + ":" + msgId;
+        if (isFailureCooldown(result, limitKey)) {
+            return result;
+        }
         String dlqKey = StreamMQKeys.dlqStream(namespace, group);
         try {
             RStream<String, String> dlqStream = redisson.getStream(dlqKey);
@@ -288,9 +316,11 @@ public class StreamMQAdminEndpoint {
             long deleted = dlqStream.remove(streamMsgId);
             result.put("success", deleted > 0);
             result.put("deleted", deleted);
+            failureRetryLimiter.recordSuccess(limitKey);
         } catch (RuntimeException ex) {
             result.put("success", false);
             result.put("error", ex.getMessage());
+            failureRetryLimiter.recordFailure(limitKey);
         }
         return result;
     }
@@ -335,6 +365,10 @@ public class StreamMQAdminEndpoint {
      */
     public Map<String, Object> ackPending(String group, String topic, String msgId) {
         Map<String, Object> result = new LinkedHashMap<>();
+        String limitKey = "ackPending:" + group + ":" + topic + ":" + msgId;
+        if (isFailureCooldown(result, limitKey)) {
+            return result;
+        }
         String streamKey = StreamMQKeys.topicStream(namespace, topic);
         try {
             RStream<String, String> stream = redisson.getStream(streamKey);
@@ -342,10 +376,12 @@ public class StreamMQAdminEndpoint {
             long acked = stream.ack(group, streamMsgId);
             result.put("success", acked > 0);
             result.put("acked", acked);
+            failureRetryLimiter.recordSuccess(limitKey);
             LOG.info("Pending message acked: group={}, topic={}, msgId={}", group, topic, msgId);
         } catch (RuntimeException ex) {
             result.put("success", false);
             result.put("error", ex.getMessage());
+            failureRetryLimiter.recordFailure(limitKey);
             LOG.warn(
                     "Ack pending failed: group={}, topic={}, msgId={}: {}",
                     group,
@@ -367,6 +403,10 @@ public class StreamMQAdminEndpoint {
      */
     public Map<String, Object> triggerRebalance(String group) {
         Map<String, Object> result = new LinkedHashMap<>();
+        String limitKey = "triggerRebalance:" + group;
+        if (isFailureCooldown(result, limitKey)) {
+            return result;
+        }
         String instancesKey = StreamMQKeys.consumerGroupInstances(namespace, group);
         try {
             RMap<String, Long> instances = redisson.getMap(instancesKey);
@@ -379,6 +419,7 @@ public class StreamMQAdminEndpoint {
             }
             result.put("success", true);
             result.put("rebalanceExecuted", rebalanced);
+            failureRetryLimiter.recordSuccess(limitKey);
             LOG.info(
                     "Rebalance triggered: group={}, clearedInstances={}, rebalanceExecuted={}",
                     group,
@@ -387,6 +428,7 @@ public class StreamMQAdminEndpoint {
         } catch (RuntimeException ex) {
             result.put("success", false);
             result.put("error", ex.getMessage());
+            failureRetryLimiter.recordFailure(limitKey);
             LOG.warn("Trigger rebalance failed: group={}: {}", group, ex.getMessage());
         }
         return result;
@@ -402,6 +444,10 @@ public class StreamMQAdminEndpoint {
      */
     public Map<String, Object> createTopic(String topic) {
         Map<String, Object> result = new LinkedHashMap<>();
+        String limitKey = "createTopic:" + topic;
+        if (isFailureCooldown(result, limitKey)) {
+            return result;
+        }
         String streamKey = StreamMQKeys.topicStream(namespace, topic);
         try {
             RStream<String, String> stream = redisson.getStream(streamKey);
@@ -413,6 +459,7 @@ public class StreamMQAdminEndpoint {
             result.put("topic", topic);
             result.put("streamKey", streamKey);
             result.put("placeholderId", id.toString());
+            failureRetryLimiter.recordSuccess(limitKey);
             LOG.info(
                     "Topic created: topic={}, streamKey={}, placeholderId={}",
                     topic,
@@ -421,6 +468,7 @@ public class StreamMQAdminEndpoint {
         } catch (RuntimeException ex) {
             result.put("success", false);
             result.put("error", ex.getMessage());
+            failureRetryLimiter.recordFailure(limitKey);
             LOG.warn("Create topic failed: topic={}: {}", topic, ex.getMessage());
         }
         return result;
@@ -436,6 +484,10 @@ public class StreamMQAdminEndpoint {
      */
     public Map<String, Object> deleteTopic(String topic) {
         Map<String, Object> result = new LinkedHashMap<>();
+        String limitKey = "deleteTopic:" + topic;
+        if (isFailureCooldown(result, limitKey)) {
+            return result;
+        }
         String streamKey = StreamMQKeys.topicStream(namespace, topic);
         try {
             RStream<String, String> stream = redisson.getStream(streamKey);
@@ -443,10 +495,12 @@ public class StreamMQAdminEndpoint {
             result.put("success", true);
             result.put("topic", topic);
             result.put("deleted", deleted);
+            failureRetryLimiter.recordSuccess(limitKey);
             LOG.info("Topic deleted: topic={}, deleted={}", topic, deleted);
         } catch (RuntimeException ex) {
             result.put("success", false);
             result.put("error", ex.getMessage());
+            failureRetryLimiter.recordFailure(limitKey);
             LOG.warn("Delete topic failed: topic={}: {}", topic, ex.getMessage());
         }
         return result;
@@ -468,6 +522,10 @@ public class StreamMQAdminEndpoint {
             result.put("error", "config must not be null or empty");
             return result;
         }
+        String limitKey = "updateGroupConfig:" + group;
+        if (isFailureCooldown(result, limitKey)) {
+            return result;
+        }
         String configKey = StreamMQKeys.metaConfig(namespace, group);
         try {
             RMap<String, String> configMap = redisson.getMap(configKey);
@@ -475,10 +533,12 @@ public class StreamMQAdminEndpoint {
             result.put("success", true);
             result.put("group", group);
             result.put("updatedKeys", config.keySet());
+            failureRetryLimiter.recordSuccess(limitKey);
             LOG.info("Group config updated: group={}, keys={}", group, config.keySet());
         } catch (RuntimeException ex) {
             result.put("success", false);
             result.put("error", ex.getMessage());
+            failureRetryLimiter.recordFailure(limitKey);
             LOG.warn("Update group config failed: group={}: {}", group, ex.getMessage());
         }
         return result;
@@ -504,5 +564,27 @@ public class StreamMQAdminEndpoint {
         long ts = Long.parseLong(msgId.substring(0, dashIdx));
         long seq = Long.parseLong(msgId.substring(dashIdx + 1));
         return new StreamMessageId(ts, seq);
+    }
+
+    /**
+     * 写操作统一守卫：目标处于失败冷却期时写入限流响应并返回 true（调用方应直接返回该 result）。
+     *
+     * <p>冷却期内不触碰 Redis，避免对失效目标反复重试放大故障负载。
+     *
+     * @param result 待填充的操作结果
+     * @param limitKey 限流标识（操作名 + 目标）
+     * @return true 表示已写入限流响应，调用方应终止本次操作
+     */
+    private boolean isFailureCooldown(Map<String, Object> result, String limitKey) {
+        long remaining = failureRetryLimiter.remainingCooldownMillis(limitKey);
+        if (remaining <= 0) {
+            return false;
+        }
+        result.put("success", false);
+        result.put("rateLimited", true);
+        result.put("retryAfterMs", remaining);
+        result.put("error", "该操作此前失败，处于冷却期（剩余 " + String.format("%.1f", remaining / 1000.0) + "s），请稍后重试");
+        LOG.debug("Admin write operation rate-limited: key={}, retryAfterMs={}", limitKey, remaining);
+        return true;
     }
 }

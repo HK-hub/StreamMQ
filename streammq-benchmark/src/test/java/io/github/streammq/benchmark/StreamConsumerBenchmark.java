@@ -8,6 +8,7 @@ package io.github.streammq.benchmark;
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducerFactory;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
+import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate;
 import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
@@ -16,6 +17,7 @@ import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.test.ContainerizedRedisServer;
+import java.time.Duration;
 import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
@@ -38,11 +40,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 @State(Scope.Benchmark)
-@BenchmarkMode({Mode.Throughput, Mode.SampleTime})
+@BenchmarkMode(Mode.Throughput)
 @OutputTimeUnit(TimeUnit.SECONDS)
-@Warmup(iterations = 3, time = 2)
-@Measurement(iterations = 5, time = 3)
-@Fork(3)
+// 规模收敛说明：完整的 3 fork × 双模式 × 双载荷会执行约 288 个测量集，且每 fork 都会 flushdb +
+// 启动独立灌数线程。本地 Windows 移植版 Redis 在「高频非阻塞 XREADGROUP 空读 + 并发 XADD」下会
+// 偶发 5s+ 响应停顿（连接级，非全局故障），故空读统一走服务端 BLOCK 并把 fork 收敛为 1 个，
+// 单次全量运行约 90 秒即可产出可信吞吐基线；需要更精细的延迟分布可自行调回 SampleTime。
+@Warmup(iterations = 1, time = 2)
+@Measurement(iterations = 3, time = 3)
+@Fork(1)
 public class StreamConsumerBenchmark {
 
     private static final Logger LOG = LoggerFactory.getLogger(StreamConsumerBenchmark.class);
@@ -50,8 +56,15 @@ public class StreamConsumerBenchmark {
     private static final String TOPIC = "consumer-benchmark-stream";
     private static final String CONSUMER_GROUP = "benchmark-consumer-group";
     private static final String CONSUMER_NAME = "benchmark-consumer";
-    private static final int PRE_SEND_COUNT = 500;
+    private static final int PRE_SEND_COUNT = 300;
     private static final int BATCH_SIZE = 100;
+    /**
+     * 消费端必须与生产者对齐到实际落盘的 Stream Key：模板生产者写入 {@code streammq:msg:{topic}}， 而非裸 {@code TOPIC}。
+     * 此前的实现直接在裸 key 上建组并 XREADGROUP，读到的永远是空流。
+     */
+    private static final String STREAM_KEY = StreamMQKeys.topicStream("", TOPIC);
+    /** 空读退避窗口：使用服务端阻塞（XREADGROUP BLOCK），避免高频空读自旋 */
+    private static final Duration EMPTY_READ_BLOCK = Duration.ofMillis(100);
 
     private RedissonClient redisson;
     private StreamMessageTemplate template;
@@ -115,7 +128,7 @@ public class StreamConsumerBenchmark {
         requireFlushAllowed();
         redisson.getKeys().flushdb();
 
-        RStream<String, String> stream = redisson.getStream(TOPIC);
+        RStream<String, String> stream = redisson.getStream(STREAM_KEY);
         try {
             stream.createGroup(
                     StreamCreateGroupArgs.name(CONSUMER_GROUP)
@@ -202,17 +215,22 @@ public class StreamConsumerBenchmark {
     @OperationsPerInvocation(BATCH_SIZE)
     @SuppressWarnings("unchecked")
     public void consumeThroughput(Blackhole blackhole) throws Exception {
-        RStream<String, String> stream = redisson.getStream(TOPIC);
+        RStream<String, String> stream = redisson.getStream(STREAM_KEY);
 
         StreamMessageConcurrentlyConsumer<String> consumer = (msg, ctx) -> ConsumeAction.SUCCESS;
 
         int processed = 0;
         while (processed < BATCH_SIZE) {
+            // 空读改用服务端阻塞（XREADGROUP ... BLOCK 100），与真实消费者 pullBlock 语义一致：
+            // 命令频率从约 1000 次/秒骤降至最多 10 次/秒，避免高频非阻塞空读在本地/共享 Redis 上
+            // 触发并发 XADD + XREADGROUP 偶发 5s+ 响应停顿（Windows 移植版 Redis 的已知缺陷）。
             var messages =
                     stream.readGroup(
                             CONSUMER_GROUP,
                             CONSUMER_NAME,
-                            StreamReadGroupArgs.neverDelivered().count(BATCH_SIZE));
+                            StreamReadGroupArgs.neverDelivered()
+                                    .count(BATCH_SIZE)
+                                    .timeout(EMPTY_READ_BLOCK));
             if (messages == null || messages.isEmpty()) {
                 continue;
             }

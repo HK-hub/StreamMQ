@@ -19,6 +19,12 @@
     <properties>
         <maven.deploy.skip>true</maven.deploy.skip>
         <jmh.version>1.37</jmh.version>
+        <!-- 基准运行时属性默认值：exec:exec 的子进程不会自动继承 mvn -D 参数，
+             通过下方 <systemProperties> 插值透传；命令行 -D 可覆盖这些默认值 -->
+        <streammq.redis.mode>docker</streammq.redis.mode>
+        <streammq.redis.host>localhost</streammq.redis.host>
+        <streammq.redis.port>6379</streammq.redis.port>
+        <streammq.benchmark.allowFlush>false</streammq.benchmark.allowFlush>
     </properties>
 
     <dependencies>
@@ -152,12 +158,19 @@
             因此不绑定到默认生命周期，避免 mvn test / mvn verify 被劫持。
 
             也可单独触发某一组基准（CI benchmark.yml 采用此方式）：
-            mvn -Pbenchmark -pl streammq-benchmark exec:java@benchmark-template
-            mvn -Pbenchmark -pl streammq-benchmark exec:java@benchmark-serialization
-            mvn -Pbenchmark -pl streammq-benchmark exec:java@benchmark-consumer
+            mvn -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-template
+            mvn -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-serialization
+            mvn -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-consumer
 
-            注意：基准准备/清理阶段含 flushdb，直连非独占 Redis 时必须追加
-            -Dstreammq.benchmark.allowFlush=true 显式授权。
+            注意：
+            1. 必须用 exec:exec（真实子进程）而非 exec:java：JMH 的 @Fork 会基于
+               java.class.path 启动 fork 进程，而 exec:java 在 Maven 进程内运行，
+               fork 拿到的 classpath 不含 jmh-core，会报 ForkedMain 类找不到。
+            2. exec:exec 不会自动继承 mvn 命令行 -D 参数，因此子进程的命令行参数里
+               显式透传了基准运行时属性（默认值见 pom <properties>，命令行 -D 可覆盖）：
+               包括 streammq.redis.mode/host/port 与 streammq.benchmark.allowFlush。
+            3. 基准准备/清理阶段含 flushdb，直连非独占 Redis 时必须追加
+               -Dstreammq.benchmark.allowFlush=true 显式授权。
         -->
         <profile>
             <id>benchmark</id>
@@ -175,12 +188,19 @@
                                 <id>benchmark-template</id>
                                 <phase>test</phase>
                                 <goals>
-                                    <goal>java</goal>
+                                    <goal>exec</goal>
                                 </goals>
                                 <configuration>
-                                    <mainClass>io.github.streammq.benchmark.StreamMessageTemplateBenchmark</mainClass>
+                                    <executable>java</executable>
                                     <arguments>
                                         <argument>-Djdk.attach.allowAttachSelf=true</argument>
+                                        <argument>-Dstreammq.redis.mode=${streammq.redis.mode}</argument>
+                                        <argument>-Dstreammq.redis.host=${streammq.redis.host}</argument>
+                                        <argument>-Dstreammq.redis.port=${streammq.redis.port}</argument>
+                                        <argument>-Dstreammq.benchmark.allowFlush=${streammq.benchmark.allowFlush}</argument>
+                                        <argument>-classpath</argument>
+                                        <classpath/>
+                                        <argument>io.github.streammq.benchmark.StreamMessageTemplateBenchmark</argument>
                                     </arguments>
                                 </configuration>
                             </execution>
@@ -188,20 +208,38 @@
                                 <id>benchmark-serialization</id>
                                 <phase>test</phase>
                                 <goals>
-                                    <goal>java</goal>
+                                    <goal>exec</goal>
                                 </goals>
                                 <configuration>
-                                    <mainClass>io.github.streammq.benchmark.SerializationBenchmark</mainClass>
+                                    <executable>java</executable>
+                                    <arguments>
+                                        <argument>-Dstreammq.redis.mode=${streammq.redis.mode}</argument>
+                                        <argument>-Dstreammq.redis.host=${streammq.redis.host}</argument>
+                                        <argument>-Dstreammq.redis.port=${streammq.redis.port}</argument>
+                                        <argument>-Dstreammq.benchmark.allowFlush=${streammq.benchmark.allowFlush}</argument>
+                                        <argument>-classpath</argument>
+                                        <classpath/>
+                                        <argument>io.github.streammq.benchmark.SerializationBenchmark</argument>
+                                    </arguments>
                                 </configuration>
                             </execution>
                             <execution>
                                 <id>benchmark-consumer</id>
                                 <phase>test</phase>
                                 <goals>
-                                    <goal>java</goal>
+                                    <goal>exec</goal>
                                 </goals>
                                 <configuration>
-                                    <mainClass>io.github.streammq.benchmark.StreamConsumerBenchmark</mainClass>
+                                    <executable>java</executable>
+                                    <arguments>
+                                        <argument>-Dstreammq.redis.mode=${streammq.redis.mode}</argument>
+                                        <argument>-Dstreammq.redis.host=${streammq.redis.host}</argument>
+                                        <argument>-Dstreammq.redis.port=${streammq.redis.port}</argument>
+                                        <argument>-Dstreammq.benchmark.allowFlush=${streammq.benchmark.allowFlush}</argument>
+                                        <argument>-classpath</argument>
+                                        <classpath/>
+                                        <argument>io.github.streammq.benchmark.StreamConsumerBenchmark</argument>
+                                    </arguments>
                                 </configuration>
                             </execution>
                         </executions>
