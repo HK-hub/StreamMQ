@@ -144,6 +144,20 @@
                     <skip>true</skip>
                 </configuration>
             </plugin>
+            <!-- P0-1：显式声明 Central Portal 发布插件，确保独立 BOM 被发布（见上方说明） -->
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <version>0.11.0</version>
+                <extensions>true</extensions>
+                <configuration>
+                    <publishingServerId>central</publishingServerId>
+                    <deploymentName>StreamMQ-BOM-${project.version}</deploymentName>
+                    <!-- 与根 POM 保持一致：首个版本先人工在 Portal 点 Publish -->
+                    <autoPublish>false</autoPublish>
+                    <waitUntil>validated</waitUntil>
+                </configuration>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-enforcer-plugin</artifactId>
@@ -171,7 +185,16 @@
             </plugin>
         </plugins>
     </build>
-    <!-- 发布走根 POM 的 central-publishing-maven-plugin（Central Portal），不再使用已停用的 OSSRH -->
+    <!--
+      发布说明（P0-1 修复）：本 BOM 独立于 streammq-parent（见 L7），不会继承根 POM `<build><plugins>`
+      中的 central-publishing-maven-plugin（它只在继承链上对子模块生效）。若不在本 POM 显式声明，
+      `mvn clean deploy` 时 BOM 会被 Maven 当普通 pom 构件处理、直接跳过 Central Portal 上传，
+      使用方 import 本 BOM 将解析失败。因此此处显式声明同一发布插件并保持配置一致：
+      · publishingServerId=central（对应 settings.xml / CI 凭据条目）
+      · excludeArtifacts 无需复制——本模块只发布自身（packaging=pom），不涉及排除清单
+      · autoPublish=false 与根 POM 保持一致（首个版本先人工在 Portal 点 Publish）
+    -->
+
 
     <!-- ========== 发布 Profile：GPG 签名 ========== -->
     <profiles>

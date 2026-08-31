@@ -372,6 +372,23 @@ public class StreamMQProperties {
         private long failureRetryCooldownMillis =
                 io.github.streammq.spring.boot.autoconfigure.FailureRetryLimiter
                         .DEFAULT_COOLDOWN_MILLIS;
+
+        /**
+         * 是否信任 {@code X-Forwarded-For} 请求头用于鉴权失败限流的来源聚合。
+         *
+         * <p><b>安全默认值 {@code false}：</b>XFF 完全由客户端可控，未经校验直接采用会让"失败 N 次锁定"的
+         * 限流被一行请求头绕过。仅当管理/诊断端点部署在<b>受控代理</b>之后时才应开启，且必须同时配置 {@link #getTrustedProxies()} 声明可信代理
+         * CIDR。
+         */
+        private boolean trustForwardedHeaders = false;
+
+        /**
+         * 可信代理 CIDR 列表（IPv4/IPv6，如 {@code 10.0.0.0/8}、{@code 192.168.1.0/24}）。
+         *
+         * <p>仅当 {@link #isTrustForwardedHeaders()} 为 true 时生效；留空表示只信任回环地址（{@code 127.0.0.1} /
+         * {@code ::1}）。直连对端命中该列表时，才采用 XFF 首值作为真实客户端地址。
+         */
+        private java.util.List<String> trustedProxies = java.util.List.of();
     }
 
     /**
@@ -499,6 +516,17 @@ public class StreamMQProperties {
             throw new IllegalArgumentException(
                     "streammq.admin.failure-retry-cooldown-ms must be >= 0, got: "
                             + admin.failureRetryCooldownMillis);
+        }
+        if (admin.trustedProxies != null) {
+            for (String cidr : admin.trustedProxies) {
+                if (!io.github.streammq.core.util.WebRequestAuthSupport.isValidCidr(cidr)) {
+                    throw new IllegalArgumentException(
+                            "streammq.admin.trusted-proxies contains invalid CIDR: '"
+                                    + cidr
+                                    + "' (expected IPv4/IPv6 CIDR like 10.0.0.0/8 or"
+                                    + " 2001:db8::/32)");
+                }
+            }
         }
         if (consumer.pollTimeout.toMillis() <= 0) {
             throw new IllegalArgumentException(

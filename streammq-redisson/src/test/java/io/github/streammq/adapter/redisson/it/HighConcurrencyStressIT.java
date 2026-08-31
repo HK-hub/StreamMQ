@@ -17,7 +17,6 @@ import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
 import io.github.streammq.core.enums.SelectorType;
-import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
 import java.lang.reflect.Proxy;
 import java.util.Map;
@@ -34,10 +33,8 @@ import org.junit.jupiter.api.Test;
  * <p>覆盖「并发压力测试」与「故障注入-客户端重启恢复」两类此前缺失的场景：
  *
  * <ol>
- *   <li>{@link #highConcurrencyExactlyOnce()}：2 个并发生产者共 3000 条消息，消费并发度 8，
- *       验证高压下不丢不重（恰好一次投递语义）。
- *   <li>{@link #containerRestartRecovers()}：消费端停止后再启动（模拟客户端重启），
- *       期间积压的消息在恢复后全部被消费，不丢不重。
+ *   <li>{@link #highConcurrencyExactlyOnce()}：2 个并发生产者共 3000 条消息，消费并发度 8， 验证高压下不丢不重（恰好一次投递语义）。
+ *   <li>{@link #containerRestartRecovers()}：消费端停止后再启动（模拟客户端重启）， 期间积压的消息在恢复后全部被消费，不丢不重。
  * </ol>
  *
  * <p>沿用 {@link RetryAndDlqIT} 的注解代理模式，避免重复实现。
@@ -99,8 +96,7 @@ class HighConcurrencyStressIT extends AbstractRedisIT {
         AtomicInteger processed = new AtomicInteger();
         StreamMessageConcurrentlyConsumer<String> listener =
                 (msg, ctx) -> {
-                    seen.computeIfAbsent(msg.getBody(), k -> new AtomicInteger())
-                            .incrementAndGet();
+                    seen.computeIfAbsent(msg.getBody(), k -> new AtomicInteger()).incrementAndGet();
                     processed.incrementAndGet();
                     return ConsumeAction.SUCCESS;
                 };
@@ -143,13 +139,10 @@ class HighConcurrencyStressIT extends AbstractRedisIT {
                                 producerName)
                         .start();
             }
-            assertThat(producersDone.await(60, TimeUnit.SECONDS))
-                    .as("两个生产者应在 60s 内完成投递")
-                    .isTrue();
+            assertThat(producersDone.await(60, TimeUnit.SECONDS)).as("两个生产者应在 60s 内完成投递").isTrue();
 
             // 不丢：全部送达
-            await().atMost(60, TimeUnit.SECONDS)
-                    .until(() -> processed.get() >= TOTAL);
+            await().atMost(60, TimeUnit.SECONDS).until(() -> processed.get() >= TOTAL);
 
             // 不重：观察窗口内无额外消息进入（重复投递会先 >= 后 >）
             await().pollDelay(2, TimeUnit.SECONDS)
@@ -182,8 +175,7 @@ class HighConcurrencyStressIT extends AbstractRedisIT {
         Map<String, AtomicInteger> seen = new ConcurrentHashMap<>();
         StreamMessageConcurrentlyConsumer<String> listener =
                 (msg, ctx) -> {
-                    seen.computeIfAbsent(msg.getBody(), k -> new AtomicInteger())
-                            .incrementAndGet();
+                    seen.computeIfAbsent(msg.getBody(), k -> new AtomicInteger()).incrementAndGet();
                     return ConsumeAction.SUCCESS;
                 };
         container.registerConsumer(listener, mkAnnotation(topic, group, CONCURRENCY));
@@ -195,16 +187,17 @@ class HighConcurrencyStressIT extends AbstractRedisIT {
         try {
             // 第一阶段：1000 条
             for (int i = 0; i < 1000; i++) {
-                producer.syncSend(MessageBuilder.<String>withTopic(topic).body("phase1-" + i).build());
+                producer.syncSend(
+                        MessageBuilder.<String>withTopic(topic).body("phase1-" + i).build());
             }
             container.start();
-            await().atMost(30, TimeUnit.SECONDS)
-                    .until(() -> seen.size() >= 1000);
+            await().atMost(30, TimeUnit.SECONDS).until(() -> seen.size() >= 1000);
 
             // 第二阶段：停掉容器（模拟客户端重启），期间再投 500 条
             container.stop();
             for (int i = 0; i < 500; i++) {
-                producer.syncSend(MessageBuilder.<String>withTopic(topic).body("phase2-" + i).build());
+                producer.syncSend(
+                        MessageBuilder.<String>withTopic(topic).body("phase2-" + i).build());
             }
 
             // 重启容器：积压消息应全部被消费

@@ -197,6 +197,128 @@ jobs:
             **/target/site/
           if-no-files-found: warn
 
+  coverage:
+    # P3-13：JaCoCo 覆盖率门禁——仅针对"已发布模块"启用 check（core/redisson/starter 等），
+    # 未发布模块（samples/benchmark/kubernetes）不参与门禁。阈值见根 POM jacoco check 配置。
+    name: Coverage gate (published modules)
+    needs: build
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      # verify 阶段：单测 + 集成测试（需上方 Redis service）一并执行并收集 jacoco 数据，
+      # jacoco:report / jacoco:check 已绑定在 verify 阶段（见根 POM），-Djacoco.check.skip=false 启用门禁。
+      # 集成测试对覆盖率的贡献不可或缺（redisson 实测：仅单测约 33% 行覆盖，含 IT 达 90%+），
+      # 因此必须提供 Redis 并运行 verify，而非仅 test。
+      # -am 自动带上所选模块的 reactor 依赖（如 core），确保闭环可解析。
+      - name: Coverage check on published modules
+        run: >-
+          mvn -pl streammq-core,streammq-redisson,streammq-spring-boot-starter,
+          streammq-tracing-opentelemetry,streammq-diagnostics,
+          streammq-spring-cloud-stream-binder,streammq-test,streammq-test-support
+          -am verify -Djacoco.check.skip=false -Dspotless.check.skip=true
+
+  staging-smoke:
+    # P2-8：发布预检——把全部模块 install 到本地仓库（模拟 staging），
+    # 再从"使用方视角"用一个最小消费工程 import streammq-bom 并编译引用核心 API，
+    # 直接验证 BOM 与各发布构件可解析（覆盖 P0-1：BOM 是否真正可用）。
+    name: Staging smoke (consumer-side resolve)
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      - name: Install modules to local repo (simulate staging)
+        run: mvn install -DskipTests -Dspotless.check.skip=true -Djacoco.check.skip=true
+
+      - name: Compile a consumer app against the BOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)"
+          mkdir -p /tmp/streammq-smoke/src/main/java/com/example
+          cat > /tmp/streammq-smoke/pom.xml <<'EOF'
+          <project xmlns="http://maven.apache.org/POM/4.0.0"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+            <modelVersion>4.0.0</modelVersion>
+            <groupId>com.example</groupId>
+            <artifactId>streammq-smoke-consumer</artifactId>
+            <version>1.0.0</version>
+            <properties>
+              <maven.compiler.release>21</maven.compiler.release>
+            </properties>
+            <dependencyManagement>
+              <dependencies>
+                <dependency>
+                  <groupId>io.github.streammq</groupId>
+                  <artifactId>streammq-bom</artifactId>
+                  <version>__SMQ_VER__</version>
+                  <type>pom</type>
+                  <scope>import</scope>
+                </dependency>
+              </dependencies>
+            </dependencyManagement>
+            <dependencies>
+              <dependency>
+                <groupId>io.github.streammq</groupId>
+                <artifactId>streammq-spring-boot-starter</artifactId>
+              </dependency>
+              <dependency>
+                <groupId>io.github.streammq</groupId>
+                <artifactId>streammq-core</artifactId>
+              </dependency>
+            </dependencies>
+          </project>
+          EOF
+          sed -i "s/__SMQ_VER__/${VER}/" /tmp/streammq-smoke/pom.xml
+          cat > /tmp/streammq-smoke/src/main/java/com/example/Smoke.java <<'EOF'
+          package com.example;
+
+          import io.github.streammq.core.message.Message;
+          import io.github.streammq.core.message.MessageBuilder;
+          import java.util.Map;
+
+          /** 仅验证使用方视角下 BOM 可解析、公开 API 可编译引用。 */
+          public final class Smoke {
+              public static void main(String[] args) {
+                  Message<Map<String, Object>> msg =
+                          MessageBuilder.<Map<String, Object>>withTopic("smoke")
+                                  .body(Map.of("ok", true))
+                                  .withUserProperty("traceId", "t-001")
+                                  .build();
+                  System.out.println(msg.getTopic());
+              }
+          }
+          EOF
+          mvn -q -f /tmp/streammq-smoke/pom.xml clean compile
+
   security:
     name: Dependency vulnerability scan (OWASP)
     needs: [test]

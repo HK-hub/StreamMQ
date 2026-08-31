@@ -1,0 +1,16 @@
+fix(release): 发布前红队审查第二批修复 + P1-9 并发消费排空偷取修复
+
+第二批（原规划）：
+- 增强型重试与死信队列：MessageSink 多级背压、幂等校验、分级投送与 InflightSink 泵兜底
+- 运行时治理与防护：RuntimeStatsRegistry 线程级 NACK 重试限流、WebRequestAuthSupport 注入强化
+- 基础设施质量：Docker Compose 3.2、Admin/Actuator Endpoint confirm 用例
+- 配套新增测试：WebRequestAuthSupportTest / RuntimeStatsRegistryTest / ConsumeLoopTaskTest /
+  StreamMQAdminEndpointTest / StreamMQActuatorEndpointHardeningTest / MessageSinkTest
+
+全量复核新增 P1-9（2026-08-31）：
+- 并发消费（consumeThreadMin>1）下主循环启动排空持续偷取其它并发循环
+  刚读入、尚未 ACK 的在途消息，导致同一消息被两条循环各处理一次（重复投递）。
+  实测：3000 条压测中排空循环额外恢复 176 条，重启场景额外 160/74 条。
+  修复：hookDrainOwnPending 增加并发度门控（并发度 >1 跳过启动排空），
+  遗留未 ACK 消息由 PelClaimScheduler 按 group 级空闲阈值（默认 60s）认领重投，
+  at-least-once 语义不变。

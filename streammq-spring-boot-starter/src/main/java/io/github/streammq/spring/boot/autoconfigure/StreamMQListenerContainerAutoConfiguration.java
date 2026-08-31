@@ -100,7 +100,8 @@ public class StreamMQListenerContainerAutoConfiguration {
                         retryPolicy,
                         dlqFailureStrategy,
                         dlqConfig,
-                        namespace);
+                        namespace,
+                        properties.getConsumer().getInflightCapacity());
 
         // 消费者全局默认配置：注解未显式指定时生效（streammq.consumer.* / streammq.rebalance.*）
         container.setDefaultPullBatchSize(properties.getConsumer().getBatchSize());
@@ -108,7 +109,6 @@ public class StreamMQListenerContainerAutoConfiguration {
                 properties.getConsumer().getPollTimeout().toMillis());
         container.setDefaultPullIntervalMillis(properties.getConsumer().getPullInterval());
         container.setMaxBatchSizeLimit(properties.getConsumer().getMaxBatchSizeLimit());
-        container.setInflightCapacity(properties.getConsumer().getInflightCapacity());
         container.setPausedSleepMillis(properties.getConsumer().getPausedSleepMillis());
         container.setBrokerErrorBackoffMillis(
                 properties.getConsumer().getBrokerErrorBackoffMillis());

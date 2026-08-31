@@ -56,6 +56,94 @@ jobs:
       - name: Run full verify (unit + integration)
         run: mvn clean verify -B
 
+      # P2-13 门禁：API 兼容性检查（japicmp）。
+      # 探测 Maven Central 上已发布的上一版本；若存在（即非首个版本），
+      # 对比当前源码构建产物与上一版本的二进制/源码兼容性，发现破坏性变更则阻断发布。
+      # 首个公开版本（Central 无历史）时自动跳过。
+      - name: API compatibility gate (japicmp vs previous release)
+        shell: bash
+        run: |
+          set -euo pipefail
+          metadata_url="https://repo1.maven.org/maven2/io/github/streammq/streammq-core/maven-metadata.xml"
+          prev="$(curl -fsSL "${metadata_url}" 2>/dev/null | grep -oP '(?<=<release>)[^<]+' | head -1 || true)"
+          if [[ -z "${prev}" ]]; then
+            echo "No previous release on Maven Central — first public release, API compatibility gate skipped."
+            exit 0
+          fi
+          echo "Comparing API compatibility against previous release: ${prev}"
+          mvn -pl streammq-core,streammq-redisson,streammq-spring-boot-starter,\
+          streammq-tracing-opentelemetry,streammq-diagnostics,streammq-spring-cloud-stream-binder,\
+          streammq-test,streammq-test-support \
+              -am verify \
+              -Djapicmp.skip=false -Djapicmp.oldVersion="${prev}" \
+              -DskipTests -Dspotless.check.skip=true -Djacoco.check.skip=true -B
+
+      # P2-8 门禁：发布预检（staging smoke）——将全部构件 install 到本地仓库（模拟 staging），
+      # 再以"使用方视角"最小工程 import streammq-bom 并编译引用公开 API，
+      # 验证 BOM 与各发布构件在真实消费场景下可解析（覆盖 P0-1：BOM 必须被发布）。
+      - name: Staging smoke (consumer-side resolve)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mvn install -DskipTests -Dspotless.check.skip=true -Djacoco.check.skip=true -q
+          VER="$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)"
+          mkdir -p /tmp/streammq-smoke/src/main/java/com/example
+          cat > /tmp/streammq-smoke/pom.xml <<'EOF'
+          <project xmlns="http://maven.apache.org/POM/4.0.0"
+                   xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                   xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+            <modelVersion>4.0.0</modelVersion>
+            <groupId>com.example</groupId>
+            <artifactId>streammq-smoke-consumer</artifactId>
+            <version>1.0.0</version>
+            <properties>
+              <maven.compiler.release>21</maven.compiler.release>
+            </properties>
+            <dependencyManagement>
+              <dependencies>
+                <dependency>
+                  <groupId>io.github.streammq</groupId>
+                  <artifactId>streammq-bom</artifactId>
+                  <version>__SMQ_VER__</version>
+                  <type>pom</type>
+                  <scope>import</scope>
+                </dependency>
+              </dependencies>
+            </dependencyManagement>
+            <dependencies>
+              <dependency>
+                <groupId>io.github.streammq</groupId>
+                <artifactId>streammq-spring-boot-starter</artifactId>
+              </dependency>
+              <dependency>
+                <groupId>io.github.streammq</groupId>
+                <artifactId>streammq-core</artifactId>
+              </dependency>
+            </dependencies>
+          </project>
+          EOF
+          sed -i "s/__SMQ_VER__/${VER}/" /tmp/streammq-smoke/pom.xml
+          cat > /tmp/streammq-smoke/src/main/java/com/example/Smoke.java <<'EOF'
+          package com.example;
+
+          import io.github.streammq.core.message.Message;
+          import io.github.streammq.core.message.MessageBuilder;
+          import java.util.Map;
+
+          /** 仅验证使用方视角下 BOM 可解析、公开 API 可编译引用。 */
+          public final class Smoke {
+              public static void main(String[] args) {
+                  Message<Map<String, Object>> msg =
+                          MessageBuilder.<Map<String, Object>>withTopic("smoke")
+                                  .body(Map.of("ok", true))
+                                  .withUserProperty("traceId", "t-001")
+                                  .build();
+                  System.out.println(msg.getTopic());
+              }
+          }
+          EOF
+          mvn -q -f /tmp/streammq-smoke/pom.xml clean compile
+
   publish:
     name: Publish to Maven Central
     needs: test

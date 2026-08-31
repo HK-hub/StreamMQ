@@ -70,13 +70,40 @@ class StreamMQActuatorEndpointHardeningTest {
     @Test
     @DisplayName("DELETE dlq - messageId 非 ts-seq 格式返回 400")
     void deleteDlq_invalidMessageId_returns400() {
-        Object result = endpoint.deleteDispatch(new String[] {"dlq", "order-group", "abc"});
+        Object result = endpoint.deleteDispatch(new String[] {"dlq", "order-group", "abc"}, null);
 
         assertThat(((WebEndpointResponse<?>) result).getStatus()).isEqualTo(400);
 
-        Object ok = endpoint.deleteDispatch(new String[] {"dlq", "order-group", "123-456"});
+        Object ok = endpoint.deleteDispatch(new String[] {"dlq", "order-group", "123-456"}, null);
         verify(adminEndpoint).deleteDlq("order-group", "123-456");
         assertThat(ok).isNotInstanceOf(WebEndpointResponse.class);
+    }
+
+    @Test
+    @DisplayName("DELETE topics - confirm 缺失/不匹配返回 400 且不下探后端")
+    void deleteTopic_missingOrWrongConfirm_returns400() {
+        // confirm 缺失（null）
+        Object nullConfirm = endpoint.deleteDispatch(new String[] {"topics", "order-topic"}, null);
+        assertThat(((WebEndpointResponse<?>) nullConfirm).getStatus()).isEqualTo(400);
+
+        // confirm 与 topic 不匹配
+        Object wrongConfirm =
+                endpoint.deleteDispatch(new String[] {"topics", "order-topic"}, "other-topic");
+        assertThat(((WebEndpointResponse<?>) wrongConfirm).getStatus()).isEqualTo(400);
+
+        verify(adminEndpoint, never()).deleteTopic(anyString(), anyString());
+    }
+
+    @Test
+    @DisplayName("DELETE topics - confirm 与 topic 一致时才执行删除")
+    void deleteTopic_matchingConfirm_delegates() {
+        org.mockito.Mockito.when(adminEndpoint.deleteTopic("order-topic", "order-topic"))
+                .thenReturn(java.util.Map.of("success", true));
+        Object result =
+                endpoint.deleteDispatch(new String[] {"topics", "order-topic"}, "order-topic");
+
+        verify(adminEndpoint).deleteTopic("order-topic", "order-topic");
+        assertThat(result).isNotInstanceOf(WebEndpointResponse.class);
     }
 
     @Test

@@ -108,6 +108,24 @@ public class StreamMQCoreAutoConfiguration {
     }
 
     /**
+     * 将 admin 端点配置的客户端地址可信策略同步到 {@link WebRequestAuthSupport}（限流按此聚合来源）。
+     *
+     * <p>安全默认值：不信任 {@code X-Forwarded-For}，仅按不可伪造的 {@code remoteAddr} 聚合——防止客户端 伪造 XFF
+     * 绕过失败限流。必须在任何端点请求之前执行，故放在上下文刷新期（@PostConstruct）。
+     */
+    @PostConstruct
+    void configureWebRequestAuthSupport() {
+        io.github.streammq.core.util.WebRequestAuthSupport.configure(
+                properties.getAdmin().isTrustForwardedHeaders(),
+                properties.getAdmin().getTrustedProxies());
+        LOG.info(
+                "StreamMQ web auth client-address policy: trustForwardedHeaders={},"
+                        + " trustedProxies={}",
+                properties.getAdmin().isTrustForwardedHeaders(),
+                properties.getAdmin().getTrustedProxies());
+    }
+
+    /**
      * 输出追踪相关开关的启动期摘要（单条 INFO），便于运维确认实际生效的追踪姿态。
      *
      * <p>内容：日志级追踪（{@code streammq.tracing.enabled}）、存储级追踪（{@code streammq.trace.enabled} 与 {@code

@@ -5,6 +5,7 @@
  */
 package io.github.streammq.adapter.redisson.container;
 
+import io.github.streammq.adapter.redisson.metrics.RuntimeStatsRegistry;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.consumer.ConsumeOrderlyContext;
@@ -76,6 +77,13 @@ public class DefaultMessageProcessor implements MessageProcessor {
     /** 指标收集器（可选注入，null 时为 no-op） */
     private volatile StreamMQMetrics metrics;
 
+    /**
+     * 进程内运行时统计登记表（可选注入，null 时不上报）。
+     *
+     * <p>发布前修复 P1-3：为 {@code /actuator/streammq/stats} 提供真实的消费计数来源。
+     */
+    private volatile RuntimeStatsRegistry runtimeStats;
+
     /** 消费超时取消后的宽限期（毫秒） */
     private volatile long timeoutCancelGraceMillis = DEFAULT_TIMEOUT_CANCEL_GRACE_MILLIS;
 
@@ -105,6 +113,12 @@ public class DefaultMessageProcessor implements MessageProcessor {
         this.metrics = metrics;
     }
 
+    /** {@inheritDoc} */
+    @Override
+    public void setRuntimeStats(RuntimeStatsRegistry runtimeStats) {
+        this.runtimeStats = runtimeStats;
+    }
+
     StreamMQMetrics metrics() {
         return metrics;
     }
@@ -118,10 +132,63 @@ public class DefaultMessageProcessor implements MessageProcessor {
 
     // ===================== 主入口 =====================
 
-    /** 处理单条消息：支持消费超时取消，以 {@code onMessage} 返回值为路由标准。 */
-    @SuppressWarnings({"rawtypes", "unchecked"})
+    /**
+     * 处理单条消息：支持消费超时取消，以 {@code onMessage} 返回值为路由标准。
+     *
+     * <p><b>Throwable 兜底（发布前修复 P1-6/P1-8）：</b>{@link #doProcessMessage} 内部已捕获业务 {@code Exception}
+     * 并路由重试/DLQ；此处再拦截逃逸的 {@code Error}（OOM / StackOverflowError）与 handler 二次故障（如 Redis
+     * 彻底不可用导致路由本身再抛）。捕获后统一按 {@code RECONSUME_LATER} 路由——消息要么进入重试 ZSet、要么留在 PEL，绝不因为一次异常
+     * 就从内存队列消失且无人认领（旧行为：背压泵吞掉异常，消息静默停滞至 PEL 认领超时）。
+     */
     @Override
     public void processMessage(
+            Message<?> message, ListenerRegistration<?> reg, StreamMQListener listener) {
+        try {
+            doProcessMessage(message, reg, listener);
+        } catch (Throwable t) {
+            handleFailure(message, reg, listener, t);
+        }
+    }
+
+    /**
+     * 处理失败后的兜底路由：按 {@code RECONSUME_LATER} 交给 {@link RetryAndDlqHandler}。
+     *
+     * <p>路由本身再次失败时只记录 ERROR——此时消息仍留在 PEL 中，由 {@code PelClaimScheduler} 在空闲阈值后重投（at-least-once
+     * 的最后一道防线）。
+     */
+    @Override
+    public void handleFailure(
+            Message<?> message,
+            ListenerRegistration<?> reg,
+            StreamMQListener listener,
+            Throwable cause) {
+        LOG.error(
+                "Unrecoverable consume failure, routing to retry/DLQ (topic={}, group={},"
+                        + " messageId={}): {}",
+                reg.getTopic(),
+                reg.getGroup(),
+                message.getMessageId(),
+                cause.toString(),
+                cause);
+        try {
+            resolveHandler(reg)
+                    .handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener, cause);
+        } catch (RuntimeException routeEx) {
+            LOG.error(
+                    "Failure routing also failed, message stays in PEL for PelClaimScheduler"
+                            + " redelivery (topic={}, group={}, messageId={}): {}",
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    message.getMessageId(),
+                    routeEx.toString());
+        } finally {
+            ConsumerMdcTrace.clear();
+        }
+    }
+
+    /** 单条消息消费管线的真实实现（由 {@link #processMessage} 包裹 Throwable 兜底）。 */
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    private void doProcessMessage(
             Message<?> message, ListenerRegistration<?> reg, StreamMQListener listener) {
         ConsumeContext ctx = new DefaultConsumeContextConsume(message, reg, ctxConsumerName(reg));
         ConsumerMdcTrace.inject(message, reg);
@@ -518,16 +585,19 @@ public class DefaultMessageProcessor implements MessageProcessor {
 
     private void recordConsumeMetrics(
             ListenerRegistration<?> reg, long startNanos, boolean success) {
+        long elapsedNanos = System.nanoTime() - startNanos;
         if (Objects.nonNull(metrics)) {
             try {
                 metrics.recordConsume(
-                        reg.getTopic(),
-                        reg.getGroup(),
-                        success,
-                        Duration.ofNanos(System.nanoTime() - startNanos));
+                        reg.getTopic(), reg.getGroup(), success, Duration.ofNanos(elapsedNanos));
             } catch (Exception ignored) {
                 LOG.debug("Metrics collection failed", ignored);
             }
+        }
+        // P1-3：进程内统计始终上报（不依赖 Actuator/Micrometer 是否在 classpath）
+        RuntimeStatsRegistry stats = runtimeStats;
+        if (Objects.nonNull(stats)) {
+            stats.recordConsume(reg.getGroup(), reg.getTopic(), success, elapsedNanos);
         }
     }
 }

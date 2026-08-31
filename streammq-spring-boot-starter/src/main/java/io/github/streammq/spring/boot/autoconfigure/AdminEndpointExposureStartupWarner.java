@@ -20,13 +20,18 @@ import org.springframework.stereotype.Component;
  * ApplicationReadyEvent} 阶段发出 WARN 级别的安全提醒，提示运维方：
  *
  * <ul>
- *   <li>管理端点通过 MVC 暴露，路径 {@code /actuator/streammq/**}，与主业务接口同端口； 不会被 {@code
- *       management.endpoints.web.exposure.*} 控制。
+ *   <li>管理端点是标准 Actuator Web 端点（{@code @WebEndpoint(id="streammq")}），路径 {@code
+ *       /actuator/streammq/**}，<b>受 {@code management.endpoints.web.exposure.*} 治理</b>——必须在 {@code
+ *       exposure.include} 中加入 {@code streammq} 才能访问（Spring Boot 默认仅暴露 {@code health} / {@code
+ *       info}）。
  *   <li>默认鉴权器 {@code DenyAllAuthenticator} 拒绝一切访问； 若显式注册了 {@code AllowAllAuthenticator} 或 弱 Token
  *       策略， 该端点会暴露在公网/内网。
  *   <li>关闭方式：{@code streammq.admin.enabled=false}；或将其路由到独立 management 端口（{@code
  *       management.server.port}）。
  * </ul>
+ *
+ * <p>另请注意：{@code streammq-diagnostics} 的 {@code /streammq/diagnostics/**} 是普通 MVC Controller（挂主端口、
+ * <b>不</b>受 Actuator 治理），若引入该模块，请通过网络层（安全组 / Ingress）单独限制其访问。
  *
  * <p>此组件零行为影响——仅日志输出。可在测试环境通过 {@code -Dstreammq.admin.startup-warn=false} 关闭提醒。
  *
@@ -75,9 +80,12 @@ public class AdminEndpointExposureStartupWarner {
             return;
         }
         LOG.warn(
-                "StreamMQ admin endpoint registered on the MAIN application port ({}). Path:"
-                    + " /actuator/streammq/** — NOT governed by management.endpoints.web.exposure.*"
-                    + " — recommend either: (a) set management.server.port to isolate the endpoint,"
+                "StreamMQ admin endpoint (WebEndpoint id=streammq) registered on the MAIN"
+                    + " application port ({}). Path: /actuator/streammq/** — governed by"
+                    + " management.endpoints.web.exposure.*: make sure \"streammq\" is included in"
+                    + " management.endpoints.web.exposure.include (Spring Boot default exposes only"
+                    + " health/info, so /actuator/streammq/** is NOT reachable until added)."
+                    + " Recommend either: (a) set management.server.port to isolate the endpoint,"
                     + " (b) restrict access at network level (firewall / Ingress), (c) keep"
                     + " DenyAllAuthenticator and only open via custom SPI registration. To suppress"
                     + " this warning, set -Dstreammq.admin.startup-warn=false.",

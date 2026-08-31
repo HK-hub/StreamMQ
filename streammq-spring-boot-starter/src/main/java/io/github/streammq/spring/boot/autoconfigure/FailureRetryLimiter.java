@@ -11,9 +11,8 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 管理端点的「失败重试限流」。
  *
- * <p>当一个写操作（重投 / 删除 / ACK / 重平衡 / 建删 Topic / 改配置）在 Redis 侧失败后，该操作
- * + 目标进入冷却期；冷却期内对相同目标的重复请求直接拒绝（返回 {@code rateLimited} 响应），
- * 不触碰 Redis。目的是避免脚本或误操作对失效目标（如 Redis 短暂不可用、目标 Stream 被误删）反复
+ * <p>当一个写操作（重投 / 删除 / ACK / 重平衡 / 建删 Topic / 改配置）在 Redis 侧失败后，该操作 + 目标进入冷却期；冷却期内对相同目标的重复请求直接拒绝（返回
+ * {@code rateLimited} 响应）， 不触碰 Redis。目的是避免脚本或误操作对失效目标（如 Redis 短暂不可用、目标 Stream 被误删）反复
  * 重试，放大故障期间的负载；同时给运维一个确定性的「稍后重试」信号。
  *
  * <p>实现要点：
@@ -21,8 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <ul>
  *   <li>只在失败后冷却——成功即清除，正常运行无任何额外开销（一次 {@code ConcurrentHashMap} 查询）。
  *   <li>冷却期为 0 时整体禁用（便于测试与需要高频重试的运维场景）。
- *   <li>{@link #recordFailure(String)} 在条目数超限时先清理过期条目，防止 key 空间无限增长
- *       （恶意/异常输入构造大量不同的 key 时）。
+ *   <li>{@link #recordFailure(String)} 在条目数超限时先清理过期条目，防止 key 空间无限增长 （恶意/异常输入构造大量不同的 key 时）。
  * </ul>
  *
  * <p>线程安全：{@link ConcurrentHashMap} + 单调时间比较，所有方法可并发调用。
@@ -50,7 +48,8 @@ public final class FailureRetryLimiter {
      */
     public FailureRetryLimiter(long cooldownMillis) {
         if (cooldownMillis < 0) {
-            throw new IllegalArgumentException("cooldownMillis must be >= 0, got: " + cooldownMillis);
+            throw new IllegalArgumentException(
+                    "cooldownMillis must be >= 0, got: " + cooldownMillis);
         }
         this.cooldownMillis = cooldownMillis;
     }

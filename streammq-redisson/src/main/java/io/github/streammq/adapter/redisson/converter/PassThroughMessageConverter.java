@@ -212,7 +212,8 @@ public class PassThroughMessageConverter extends AbstractMessageConverter {
      */
     @Override
     protected void encodeProperties(Message<?> message, Map<String, String> fields) {
-        PropsJsonCodec.write(fields, FIELD_PROPS, message.getProperties(), message.getUserProperties());
+        PropsJsonCodec.write(
+                fields, FIELD_PROPS, message.getProperties(), message.getUserProperties());
     }
 
     /**

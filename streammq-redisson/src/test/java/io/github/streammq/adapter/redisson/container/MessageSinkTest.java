@@ -50,7 +50,11 @@ class MessageSinkTest {
         void handle(Message<?> message) throws Exception;
     }
 
-    private static MessageProcessor processorOf(MsgHandler handler) {
+    /** 记录 {@link MessageProcessor#handleFailure} 收到的失败消息（用于断言消息未被静默丢弃）。 */
+    private final java.util.List<Message<?>> routedFailures =
+            java.util.Collections.synchronizedList(new java.util.ArrayList<>());
+
+    private MessageProcessor processorOf(MsgHandler handler) {
         return new MessageProcessor() {
             @Override
             public void processMessage(
@@ -65,7 +69,21 @@ class MessageSinkTest {
             }
 
             @Override
+            public void handleFailure(
+                    Message<?> message,
+                    ListenerRegistration<?> reg,
+                    StreamMQListener listener,
+                    Throwable cause) {
+                routedFailures.add(message);
+            }
+
+            @Override
             public void setMetrics(io.github.streammq.core.metrics.StreamMQMetrics metrics) {}
+
+            @Override
+            public void setRuntimeStats(
+                    io.github.streammq.adapter.redisson.metrics.RuntimeStatsRegistry
+                            runtimeStats) {}
 
             @Override
             public void setTimeoutCancelGraceMillis(long millis) {}
@@ -121,6 +139,66 @@ class MessageSinkTest {
         assertThat(invocations.get()).isEqualTo(total);
         await().atMost(5, TimeUnit.SECONDS).until(() -> sink.dispatchQueueEmpty());
 
+        running.set(false);
+    }
+
+    @Test
+    @DisplayName("P1-8 回归：处理失败的消息必须被交回 handleFailure 路由，不得静默丢弃")
+    void failedMessagesAreRoutedBackInsteadOfDropped() throws Exception {
+        int total = 4;
+        CountDownLatch allRouted = new CountDownLatch(total);
+        AtomicBoolean running = new AtomicBoolean(true);
+
+        InflightSink sink =
+                newSink(
+                        16,
+                        new MessageProcessor() {
+                            @Override
+                            public void processMessage(
+                                    Message<?> message,
+                                    ListenerRegistration<?> reg,
+                                    StreamMQListener listener) {
+                                throw new StackOverflowError("simulated Error, not Exception");
+                            }
+
+                            @Override
+                            public void handleFailure(
+                                    Message<?> message,
+                                    ListenerRegistration<?> reg,
+                                    StreamMQListener listener,
+                                    Throwable cause) {
+                                routedFailures.add(message);
+                                allRouted.countDown();
+                            }
+
+                            @Override
+                            public void setMetrics(
+                                    io.github.streammq.core.metrics.StreamMQMetrics metrics) {}
+
+                            @Override
+                            public void setRuntimeStats(
+                                    io.github.streammq.adapter.redisson.metrics.RuntimeStatsRegistry
+                                            runtimeStats) {}
+
+                            @Override
+                            public void setTimeoutCancelGraceMillis(long millis) {}
+
+                            @Override
+                            public void setExecutor(
+                                    java.util.concurrent.ExecutorService executor) {}
+                        },
+                        running);
+
+        for (int i = 0; i < total; i++) {
+            sink.dispatch(msg("m" + i));
+        }
+
+        // 关键断言：每条失败消息都被显式路由（旧实现仅 LOG.error 后丢弃，消息既不在内存队列
+        // 也不在重试 ZSet，只能等 PelClaimScheduler 空闲阈值才恢复）
+        await().atMost(10, TimeUnit.SECONDS).until(() -> allRouted.getCount() == 0);
+        assertThat(routedFailures).hasSize(total);
+
+        // Error 也必须存活泵线程：后续消息继续被处理
         running.set(false);
     }
 

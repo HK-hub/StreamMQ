@@ -112,6 +112,28 @@
 
         <!-- Central Portal 发布插件 -->
         <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
+
+        <!-- API 兼容性检查（japicmp）：
+             0.1.1 是首个公开版本、无 previous 基线，默认跳过（japicmp.skip=true）；
+             发布流程中由 release.yml 自动探测 Central 上的上一版本并临时覆盖启用 -->
+        <japicmp-maven-plugin.version>0.26.1</japicmp-maven-plugin.version>
+        <japicmp.skip>true</japicmp.skip>
+        <japicmp.oldVersion/>
+
+        <!-- JaCoCo 覆盖率门禁：默认跳过（避免本地开发/分支构建被覆盖率卡住），
+             CI 的 coverage job 显式 -Djacoco.check.skip=false 启用（仅针对发布模块） -->
+        <jacoco.check.skip>true</jacoco.check.skip>
+
+        <!-- P0：@{} 占位符兜底（发布前必修）。
+             surefire / failsafe 的 argLine 通过 @{jacoco.argLine} 做「延迟绑定」：
+             该语法在 fork JVM 前才从 Maven 属性求值，且**未定义时不报错、原样透传**。
+             jacoco 插件只声明在 pluginManagement、由各子模块按需引入，
+             因此 streammq-test / streammq-samples/* / streammq-benchmark 等未引入 jacoco 的模块
+             会把字面量 "@{jacoco.argLine}" 当作 JVM 参数传给 java，导致：
+                 The forked VM terminated without properly saying goodbye（Tests run: 0，BUILD FAILURE）
+             在此声明空默认值即可让未启用 jacoco 的模块解析为空串；启用 jacoco 的模块由
+             prepare-agent 在运行时覆盖该属性（propertyName=jacoco.argLine），两者不冲突。 -->
+        <jacoco.argLine/>
     </properties>
 
     <!-- ========== 依赖统一管理（默认 provided，子模块按需引入）========== -->
@@ -387,13 +409,21 @@
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>${maven-surefire-plugin.version}</version>
                     <configuration>
-                        <argLine>-Xshare:off -XX:+EnableDynamicAgentLoading</argLine>
+                        <!-- @{jacoco.argLine} 由 jacoco prepare-agent 注入（见下方 jacoco 插件
+                             propertyName 配置）；若直接写死字面量会覆盖 jacoco agent，
+                             导致覆盖率数据永远为空。 -->
+                        <argLine>@{jacoco.argLine} -Xshare:off -XX:+EnableDynamicAgentLoading</argLine>
                     </configuration>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-failsafe-plugin</artifactId>
                     <version>${maven-failsafe-plugin.version}</version>
+                    <!-- 集成测试同样需要加载 jacoco agent（@{jacoco.argLine} 由 prepare-agent 注入），
+                         否则 IT 全部不产生覆盖率数据，仅单测数据会低估真实覆盖。 -->
+                    <configuration>
+                        <argLine>@{jacoco.argLine} -Xshare:off -XX:+EnableDynamicAgentLoading</argLine>
+                    </configuration>
                     <executions>
                         <execution>
                             <goals>
@@ -430,17 +460,89 @@
                     <groupId>org.jacoco</groupId>
                     <artifactId>jacoco-maven-plugin</artifactId>
                     <version>${jacoco-maven-plugin.version}</version>
+                    <!-- P3-13：覆盖率门禁。
+                         注意：rules 放在 plugin 级 <configuration>（而非 check execution 内），
+                         否则 CI 中 `mvn ... jacoco:check`（default-cli 直调）读不到 rules 会报
+                         "parameters 'rules' are missing or invalid"。
+                         skip 使用专用属性 jacoco.check.skip（默认 true 即本地/普通构建不设卡），
+                         prepare-agent/report 各自显式 skip=false 保证覆盖率数据与报告始终产出。 -->
+                    <configuration>
+                        <skip>${jacoco.check.skip}</skip>
+                        <rules>
+                            <rule>
+                                <element>BUNDLE</element>
+                                <limits>
+                                    <!-- 阈值按"防明显回退"设定（非严格考核线）：
+                                         已发布的 streammq-redisson 实测 INSTR 93% / LINE 92%，
+                                         streammq-spring-boot-starter 实测 INSTR 45% / LINE 50%，
+                                         故 30% 行覆盖既不会误伤现有水平，又能拦住灾难性回退。 -->
+                                    <limit>
+                                        <counter>LINE</counter>
+                                        <value>COVEREDRATIO</value>
+                                        <minimum>0.30</minimum>
+                                    </limit>
+                                    <limit>
+                                        <counter>BRANCH</counter>
+                                        <value>COVEREDRATIO</value>
+                                        <minimum>0.15</minimum>
+                                    </limit>
+                                </limits>
+                            </rule>
+                        </rules>
+                    </configuration>
                     <executions>
                         <execution>
                             <id>prepare-agent</id>
                             <goals><goal>prepare-agent</goal></goals>
+                            <configuration>
+                                <skip>false</skip>
+                                <!-- 注入到独立属性 jacoco.argLine，surefire 通过
+                                     @{jacoco.argLine} 引用（见 surefire 配置），
+                                     避免与 -Xshare:off 等 JVM 参数互相覆盖。 -->
+                                <propertyName>jacoco.argLine</propertyName>
+                            </configuration>
                         </execution>
                         <execution>
                             <id>report</id>
                             <phase>verify</phase>
                             <goals><goal>report</goal></goals>
+                            <configuration>
+                                <skip>false</skip>
+                            </configuration>
+                        </execution>
+                        <execution>
+                            <id>check</id>
+                            <phase>verify</phase>
+                            <goals><goal>check</goal></goals>
                         </execution>
                     </executions>
+                </plugin>
+                <!-- P2-13：API 兼容性检查（japicmp）。默认跳过；release.yml 在探测到上一发布
+                     版本时覆盖 japicmp.skip=false 与 japicmp.oldVersion，对已发布模块做
+                     二进制/源码兼容门禁。 -->
+                <plugin>
+                    <groupId>com.github.siom79.japicmp</groupId>
+                    <artifactId>japicmp-maven-plugin</artifactId>
+                    <version>${japicmp-maven-plugin.version}</version>
+                    <configuration>
+                        <skip>${japicmp.skip}</skip>
+                        <oldVersion>
+                            <dependency>
+                                <groupId>io.github.streammq</groupId>
+                                <artifactId>${project.artifactId}</artifactId>
+                                <version>${japicmp.oldVersion}</version>
+                            </dependency>
+                        </oldVersion>
+                        <parameter>
+                            <onlyModified>true</onlyModified>
+                            <breakBuildOnBinaryIncompatibleModifications>true</breakBuildOnBinaryIncompatibleModifications>
+                            <breakBuildOnSourceIncompatibleModifications>true</breakBuildOnSourceIncompatibleModifications>
+                            <ignoreMissingClasses>true</ignoreMissingClasses>
+                            <excludes>
+                                <exclude>io.github.streammq.internal.*</exclude>
+                            </excludes>
+                        </parameter>
+                    </configuration>
                 </plugin>
                 <plugin>
                     <groupId>org.apache.maven.plugins</groupId>
@@ -486,6 +588,19 @@
                         <dependencyConvergence/>
                     </rules>
                 </configuration>
+            </plugin>
+            <plugin>
+                <groupId>com.github.siom79.japicmp</groupId>
+                <artifactId>japicmp-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>api-compat-check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>cmp</goal>
+                        </goals>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>com.diffplug.spotless</groupId>

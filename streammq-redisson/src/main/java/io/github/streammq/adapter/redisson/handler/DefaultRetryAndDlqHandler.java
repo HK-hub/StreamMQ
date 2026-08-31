@@ -80,6 +80,14 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
     /** 指标收集器（可选注入，用于记录重试 / 死信指标，null 时为 no-op） */
     @Setter private volatile StreamMQMetrics metrics;
 
+    /**
+     * 进程内运行时统计登记表（可选注入）。
+     *
+     * <p>发布前修复 P1-3：为 {@code /actuator/streammq/stats} 提供真实的重试/死信计数来源。
+     */
+    @Setter
+    private volatile io.github.streammq.adapter.redisson.metrics.RuntimeStatsRegistry runtimeStats;
+
     @Override
     public void handleAction(
             ConsumeAction action,
@@ -585,6 +593,10 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                 LOG.debug("Metrics collection failed", ignored);
             }
         }
+        var stats = runtimeStats;
+        if (Objects.nonNull(stats)) {
+            stats.recordRetry(group, topic);
+        }
     }
 
     /**
@@ -601,6 +613,10 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                 // 指标收集失败不得影响业务主流程
                 LOG.debug("Metrics collection failed", ignored);
             }
+        }
+        var stats = runtimeStats;
+        if (Objects.nonNull(stats)) {
+            stats.recordDlq(group, topic);
         }
     }
 }

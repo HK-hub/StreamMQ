@@ -40,8 +40,9 @@ import org.springframework.context.annotation.Import;
  * <p>触发方式：
  *
  * <ul>
- *   <li>Starter 在 classpath 时自动生效（推荐）
- *   <li>或通过 {@link EnableStreamMQ} 注解显式开启（向后兼容）
+ *   <li>Starter 在 classpath 时经 {@code AutoConfiguration.imports} 自动生效（推荐，无需任何注解）
+ *   <li>{@link EnableStreamMQ} 为<b>空标记注解</b>（不含 {@code @Import}），不参与装配决策——仅用于向 StreamMQ
+ *       团队声明"本应用有意使用 StreamMQ"；装配由自动配置独立完成
  * </ul>
  *
  * @author StreamMQ Contributors

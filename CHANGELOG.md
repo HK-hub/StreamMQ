@@ -53,6 +53,84 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > - 兼容义务：0.1.1 为首个公开版本，此前未公开发布的前缀版本（0.1.0 标签及其前身）**无数据兼容
 >   义务**；若内部环境存在前缀版本残留数据，按上文清理命令处理即可。
 
+> **发布前红队审查（第二批）修复** — 以下为本轮针对发布就绪性的审查结果，全部在 0.1.1 发布前落地。
+
+### Fixed (P0)
+
+- **BOM 构件缺失发布声明（使用方 import 即失败）**：`streammq-bom` 此前未声明任何发布插件，
+  `excludeArtifacts` 排除清单也不含它——发布流水线不会上传 BOM，使用方 `import` BOM 时
+  Central 上根本不存在该坐标。本轮为 BOM 显式声明发布插件并纳入发布清单（P0-1）。
+- **`@{jacoco.argLine}` 字面量透传致 fork VM 崩溃**：surefire/failsafe 的 `argLine` 采用
+  `@{jacoco.argLine}` 延迟绑定，但未引入 jacoco 的模块（`streammq-test`、`streammq-samples/*`、
+  `streammq-benchmark`）会将该字面量原样当作 JVM 参数传给 java，触发
+  `The forked VM terminated without properly saying goodbye`（Tests run: 0，BUILD FAILURE）。
+  本轮在根 POM 声明空默认值 `<jacoco.argLine/>`，启用 jacoco 的模块由 prepare-agent 运行时覆盖。
+
+### Fixed (P1)
+
+- **创建 Topic 会向消费者投递一条 `body == null` 的占位消息**：`createTopic` 旧实现通过向业务 Stream
+  XADD 一条 `__placeholder` 消息（依赖"Stream 首次写入自动创建"副作用）实现——该占位消息被所有消费者
+  当作真实消息投递，业务 handler 中直接 NPE。本轮改为独立注册表 Set（`streammq:{ns}:meta:topics`）登记
+  Topic 元数据，业务 Stream 仍由首次真实发送自然创建，两者解耦（P1-1）。
+- **`/actuator/streammq/stats/{group}/{topic}` 是"永为空 map 的死端点"**：旧实现只查询 Redis 中不存在的
+  统计 key，任何环境都返回空。本轮新增进程内统计登记表 `RuntimeStatsRegistry`，消费成功/失败
+  （`DefaultMessageProcessor`）与重试/死信（`DefaultRetryAndDlqHandler`）真实上报，管理端点聚合
+  consumeTotal / avgConsumeMillis / retried / dlq / pendingCount 等字段（P1-3）。
+- **`updateGroupConfig` 只写配置、不作用于运行态**：旧实现把组配置写入 Redis Hash 即返回成功，但容器
+  运行态从不读取——运维以为已暂停/扩容，实际毫无效果。本轮改为逐 key 真实运行时变更
+  （paused → 暂停/恢复容器、inflightCapacity / pausedSleepMillis 等 → 调用对应 setter），
+  不支持或非法 key 显式拒绝并报告（P1-4）。
+- **消费循环运行期持续失败对健康检查失明**：启动期失败已在上轮上报，但运行期连续失败（如 Redis 持续
+  不可用）仍只打 ERROR 日志，健康检查一直 UP。本轮在 `ConsumeLoopTask` 增加连续失败计数：达到
+  `RUNTIME_FAILURE_REPORT_THRESHOLD`（10 次）后经 `LoopFailureReporter` 上报（HealthIndicator DOWN），
+  任一成功拉取即复位并调用 `LoopFailureCleaner` 清除健康条目——"持续失败 → DOWN、恢复 → UP"闭环（P1-6）。
+- **`DefaultMessageProcessor.processMessage` 补 Throwable 兜底**：业务 `Exception` 已由内部管线路由，
+  但逃逸的 `Error`（OOM / StackOverflowError）与路由本身二次故障（Redis 彻底不可用）此前会使消息
+  从内存队列消失且无人认领。本轮新增 `handleFailure` 统一按 `RECONSUME_LATER` 路由，路由再次失败时
+  消息留在 PEL 由 `PelClaimScheduler` 重投（P1-6/P1-8）。
+- **InflightSink 泵捕获处理器异常后不再静默吞掉消息**：异常已 `poll` 出队，若只记日志，消息既不在内存
+  队列也不在重试 ZSet，只能等 PEL 空闲阈值（默认 30s+）重投。本轮在泵的兜底分支显式调用
+  `processor.handleFailure` 把消息交回重试/DLQ 路由（P1-8）。
+- **并发消费启动排空"偷取"在途消息致重复投递**：并发消费（`consumeThreadMin>1`）时所有循环共享同一
+  消费者名（`{group}-{instanceToken}`），主循环启动排空（`XREADGROUP id=0` 按消费者名读取整段 PEL）
+  会持续读取其它并发循环刚读入、尚未 ACK 的在途消息——同一消息被两条循环各处理一次。全量复核实测：
+  一次 3000 条压测中排空循环额外"恢复" 176 条，重启场景额外 160/74 条。本轮在 `hookDrainOwnPending`
+  增加并发度门控：并发度 &gt; 1 时跳过启动排空，遗留未 ACK 消息由 `PelClaimScheduler` 按 group 级
+  空闲阈值（默认 60s）认领重投，at-least-once 语义不变（P1-9，随 0.1.1 复核发现）。
+
+### Fixed (P2)
+
+- **`DELETE /actuator/streammq/topics/{topic}` 无防误删保护**：删除 Topic 是不可逆操作，任何持有
+  admin 权限的调用方传错 topic 即永久销毁数据。本轮要求显式 `confirm={topic}` 匹配才执行删除，
+  confirm 缺失或不匹配返回 400 且不下探后端（P2）。
+- **管理端点暴露面说明修正**：`AdminEndpointExposureStartupWarner` 此前声称管理端点"不受
+  `management.endpoints.web.exposure.*` 治理"，实际它是标准 Actuator `@WebEndpoint`——默认配置
+  （仅暴露 health/info）下 `/actuator/streammq/**` 根本不可达，运维照旧文档配置会永久 404。
+  本轮修正提示文案并补充 diagnostics MVC 端点（挂主端口、不受 Actuator 治理）的网络层限制建议。
+- **默认 SPI 实现移除 `@Component`**：`LoggingProducerFilter` / `LoggingConsumerInterceptor` 不再依赖
+  框架注解，可在纯 Java 应用直接 `new` 使用；Spring 应用中仍可注册为 Bean（Javadoc 同步更新）。
+
+### Added
+
+- **`RuntimeStatsRegistry`**：进程内运行时统计登记表（按 group/topic 维度），为
+  `/actuator/streammq/stats` 提供真实数据源；随带并发安全（`LongAdder` 累加 + `AtomicLong` 耗时汇总）。
+- **`streammq.admin.trust-forwarded-headers` / `streammq.admin.trusted-proxies` 配置项**：客户端地址可信
+  策略——默认**不信任** `X-Forwarded-For`（该头完全由客户端可控，直接采用会让失败限流被一行请求头绕过），
+  仅当端点部署在受控代理之后、且配置可信代理 CIDR 白名单时才解析 XFF 首值；`StreamMQProperties` 启动时
+  校验 CIDR 合法性。`WebRequestAuthSupport` 相应新增 CIDR 校验/匹配与 Basic 凭据解析工具函数（安全默认值：
+  fail-closed）。
+- **CI 新增 `coverage` job（P3-13）**：仅针对已发布模块启用 JaCoCo 覆盖率门禁（LINE ≥ 30% / BRANCH ≥
+  15%，防灾难性回退而非考核线）；提供 Redis service 运行 verify，让集成测试贡献覆盖率
+  （redisson 实测：仅单测约 33% 行覆盖，含 IT 达 90%+）。
+- **CI 新增 `staging-smoke` job（P2-8）**：发布预检——全部构件 install 到本地仓库（模拟 staging）后，
+  以"使用方视角"最小工程 import `streammq-bom` 并编译引用公开 API，直接验证 BOM 与发布构件可解析。
+- **发布流水线新增 japicmp API 兼容性门禁（P2-13）**：探测 Central 上一发布版本，非首个版本时对已发布
+  模块做二进制/源码兼容对比，发现破坏性变更阻断发布（首个公开版本自动跳过）。
+- 新增测试：`WebRequestAuthSupportTest`（CIDR 校验/匹配、Basic 解析、XFF 默认 fail-closed）、
+  `RuntimeStatsRegistryTest`（维度隔离、平均耗时、并发上报）、`ConsumeLoopTaskTest`（持续失败上报阈值 /
+  恢复清除闭环）、`StreamMQAdminEndpointTest`（Topic 注册表、delete confirm、运行时统计、组配置运行时应用）、
+  `StreamMQActuatorEndpointHardeningTest` 新增 delete confirm 用例、`MessageSinkTest` P1-8 失败路由回归。
+
 ### Fixed (P0)
 
 - **事务消息在非 StringCodec 默认编码下「只报成功、永不发布」**：新增

@@ -12,15 +12,14 @@ import io.github.streammq.core.message.Message;
 import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
 /**
  * 日志消费者拦截器（默认实现）：在消费前/后/异常时输出 INFO/WARN/ERROR 日志， 全部放行（{@code beforeConsume} 始终返回 {@code
  * true}），仅用于审计与问题排查。
  *
- * <p>本类是 {@link ConsumerInterceptor} SPI 的默认空操作+日志记录实现， 业务方可注册自定义 {@link ConsumerInterceptor} Bean
- * 覆盖本默认（例如注入 traceId、限流、解密等）。 若同时存在多个同类型 Bean，Spring 依赖 {@link
- * org.springframework.core.annotation.Order} / {@link ConsumerInterceptor#order()} 决定执行顺序。
+ * <p>本类是 {@link ConsumerInterceptor} SPI 的默认空操作+日志记录实现，业务方可注册自定义 {@link ConsumerInterceptor}
+ * 覆盖本默认（例如注入 traceId、限流、解密等）。本类<b>不依赖任何框架注解</b>，可在纯 Java 应用中直接 {@code new} 使用，也可在 Spring 应用中注册为
+ * Bean（与多个拦截器共存时按 {@link ConsumerInterceptor#order()} 决定执行顺序）。
  *
  * <p>日志格式：
  *
@@ -38,7 +37,6 @@ import org.springframework.stereotype.Component;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-@Component
 public class LoggingConsumerInterceptor implements ConsumerInterceptor {
 
     private static final Logger LOG = LoggerFactory.getLogger(LoggingConsumerInterceptor.class);

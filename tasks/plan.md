@@ -7,6 +7,20 @@
 > - 测试：**835 单元测试 + 202 集成测试 = 1021**，0 失败 / 0 错误 / **0 跳过**（0 跳过即证明所有
 >   Redis IT 真实执行，未像此前无 Redis 时那样静默跳过）。
 >
+> **📌 发布前红队审查（第二批）修复：2026-08-31 追加完成**（工作区待提交）
+>
+> - 涉及 P0-1（BOM 发布插件）、P1-1（Topic 注册表）、P1-3（stats 死端点 → 真实统计）、
+>   P1-4（组配置运行时生效）、P1-6（运行期失败健康上报）、P1-8（泵异常显式路由）、
+>   P2（DELETE topic confirm）、P2-8（staging-smoke 发布预检）、P2-13（japicmp API 兼容门禁）、
+>   P3-13（JaCoCo 覆盖率门禁）以及 XFF 可信代理安全模型（默认不信任）。
+> - 配套新增测试：`WebRequestAuthSupportTest` / `RuntimeStatsRegistryTest` / `ConsumeLoopTaskTest` /
+>   `StreamMQAdminEndpointTest` / `StreamMQActuatorEndpointHardeningTest`（confirm 用例）/
+>   `MessageSinkTest`（P1-8 回归）。
+> - **复核发现并修复 P1-9**：并发消费（`consumeThreadMin>1`）下主循环启动排空持续"偷取"其它并发
+>   循环刚读入、尚未 ACK 的在途消息，同一消息被两条循环各处理一次（重复投递）。修复：
+>   `hookDrainOwnPending` 增加并发度门控（并发度 > 1 跳过启动排空，遗留未 ACK 由 `PelClaimScheduler`
+>   按 group 级空闲阈值认领重投，at-least-once 不变）。详见「验证记录（2026-08-31）」。
+>
 > ⚠️ 本计划完成 ≠ 可以发布。下方「后续待办」与「发布前决策（含 1 项阻断项）」仍需处理。
 
 ## Overview
@@ -104,7 +118,7 @@
 
 ## 后续待办（已知、已排期）
 
-> 以下条目已于 2026-08-29 逐条复核，行数为实测值。
+> 以下条目已于 2026-08-29 逐条复核，行数为实测值；**2026-08-31 复核并勾销本批已解决项**。
 
 - God class 二次拆分（**实测行数，原记录已过期**）：
   `TransactionScanner`(1082) / `DefaultStreamMQListenerContainer`(992) /
@@ -114,15 +128,18 @@
   （行数已复核无误）。
 - **基准占位回填（原记录不全）**：README 中 `consumeThroughput` 与 `messageCreateAndConsume`
   **两行**均为占位，需在有 Redis 环境实测回填（中英文 README 同步）。
-- **事务 key hash tag 变更缺迁移/升级说明**：风险表曾承诺"提供兼容读取/迁移说明"，
-  但 `docs/`、README、CHANGELOG 中均未落地（见风险表）。
-- **BOM 与发布清单不一致（新发现）**：`streammq-kubernetes` 仍在 BOM 中（L94），却被
-  `excludeArtifacts` 排除发布（pom.xml L558）。这与架构决策"BOM 只暴露实际发布的 artifact"矛盾，
-  会让使用方在依赖该模块时解析到中央仓库中并不存在的版本。需在发布前二选一：
-  从 BOM 移除，或将其纳入发布。
+  现状：README 已声明"不会填入未实测的数字"，发布后由 CI `benchmark.yml` 生成。
+- ~~**事务 key hash tag 变更缺迁移/升级说明**~~：✅ 已落地——CHANGELOG 0.1.1 含「事务 key 结构
+  与 Redis Cluster（hash tag）定型声明」完整段落（命名结构定型、拒绝 `{` `}` 字符、兼容义务说明）。
+- ~~**BOM 与发布清单不一致（streammq-kubernetes）**~~：✅ 已解决——BOM 已移除 kubernetes 条目
+  （仅保留注释说明"待其纳入发布清单后再加入"），与"BOM 只管理实际发布的构件"决策一致；
+  并补充 P0-1：BOM 显式声明发布插件，纳入发布清单。
 - 缺少并发压力测试与故障注入测试（Redis 超时 / 断连 / kill -9 恢复）——全仓无相关测试。
+  （本批新增 `ConsumeLoopTaskTest` 覆盖"持续失败上报 / 恢复清除"闭环，但仍非分布式故障注入。）
 - `-Werror` + `-Xlint:unchecked,deprecation`（pom.xml L340-341）使 JDK 升级脆弱。
-- 管理端点缺少失败重试限流（starter 主代码中无相关实现）。
+- ~~**管理端点缺少失败重试限流**~~：✅ 已解决——`FailureRetryLimiter`（冷却期可配、成功即清除）
+  已覆盖全部写操作（重投/删除/ACK/重平衡/建删 Topic/改配置）；本批追加 XFF 可信代理模型
+  （默认不信任 `X-Forwarded-For`，仅受控代理 + CIDR 白名单才解析首值），防止伪造 XFF 绕过限流。
 
 ## Risks and Mitigations（附复核状态）
 

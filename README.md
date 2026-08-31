@@ -87,13 +87,17 @@ StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 自动装配、配置绑定、Actuator 端点、Micrometer 指标——与 Spring 生态无缝衔接，`@EnableStreamMQ` 一键开启。
 
-### 16 个 SPI 扩展点
+### 深度可扩展
 
-序列化器、转换器、过滤器、拦截器、重试策略、重平衡策略、压缩编解码器、死信失败策略、管理鉴权器、链路追踪采集器——几乎一切可扩展。
+序列化器、转换器、过滤器、拦截器、重试策略、重平衡策略、压缩编解码器、死信失败策略、管理鉴权器、链路追踪采集器——几乎一切可替换。0.1.1 提供 **10 个面向用户的扩展点**（外加 6 个内部装配点，总计 16 个可覆盖 Bean，详见 [SPI 扩展机制](#spi-扩展机制)）。
 
-### 生产就绪
+### 质量与发布姿态
 
 单元测试 ≥ 780 个（由 `mvn test` 实际产生，surefire 报告可逐文件复现）， 集成测试 ≥ 80 个（由 `mvn verify` 在 Redis 可用时执行，CI 集成 tripwire 保证数量下限）—— surefire/failsafe 报告可逐文件复现。 覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理、PEL 认领、广播消费等场景。
+
+> **版本姿态（诚实声明）**：0.1.x 为**功能预览版**——核心能力、测试体系、文档齐全，但**端到端消费吞吐基线仍在建设中**
+> （见「性能基线」章节，我们不会填入未实测的数字）。生产容量规划请以自己环境的实测为准，并在试点期保持
+> 可回退（消息总线建议从非核心链路灰度）。
 
 ---
 
@@ -240,7 +244,8 @@ StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 ### 性能优化建议
 
-1. **序列化选择**: 默认 Jackson；对吞吐有要求的场景可配置为 Fury（`streammq.producer.serializer` 指定 `FurySerializer`），其吞吐量是 Jackson 的 7 倍以上
+1. **序列化选择**: 默认 Jackson；对吞吐有要求的场景可配置为 Fury（`streammq.producer.serializer` 需指定**全限定类名**
+   `io.github.streammq.adapter.redisson.serializer.FurySerializer`，该属性类型为 `Class<? extends MessageSerializer>`），其吞吐量是 Jackson 的 7 倍以上
 2. **发送策略**: 高吞吐场景使用 `asyncSend`，可提升 4~5 倍性能
 3. **负载大小**: 10KB 大消息建议启用 GZIP 压缩（`MessageCompressor` SPI）
 4. **连接池**: 默认 16 连接可满足多数场景，高并发可调至 32~64。**Sizing 经验**：
@@ -696,7 +701,7 @@ Redis 的消费者组天然是"组内竞争消费"。要实现广播（每条消
 | **streammq-kubernetes** | K8s 健康检查、HPA、优雅停机、CRD Operator。**实验性预览**：默认关闭，且当前**不发布**到 Maven Central（`ConfigMapConfigRefresher` 默认实现为 no-op）。待功能完整后再纳入发布 |
 | **streammq-spring-cloud-stream-binder** | Spring Cloud Stream Binder 实现（分区生产不支持） |
 | **streammq-benchmark** | JMH 基准测试 |
-| **streammq-test** | 测试工具包：容器化 Redis（基于 Testcontainers，**需要 Docker daemon**）、Redis 可用性探测、断言工具、Mock 工具。请以 `test` scope 引入 |
+| **streammq-test** | 测试工具包：容器化 Redis（基于 Testcontainers，**需要 Docker daemon**）、Redis 可用性探测、断言工具、Mock 工具。请以 `test` scope 引入。注意 `testcontainers` 与 `com.redis:testcontainers-redis` 为 optional 依赖，需自行显式引入 |
 | **streammq-test-support** | 测试基础设施公共件（Redis 可用性探测）。本身零依赖，作为 `streammq-test` 的可传递依赖一同发布 |
 | **streammq-samples** | 示例工程集合，覆盖快速开始、事务、延时、顺序、DLQ、拦截器、诊断、链路追踪 |
 
@@ -708,44 +713,109 @@ Redis 的消费者组天然是"组内竞争消费"。要实现广播（每条消
 
 ```yaml
 streammq:
-  enabled: true
-  namespace: streammq
+  enabled: true                        # 总开关
+  namespace: streammq                  # Redis key 前缀命名空间
 
-  # 生产者配置
+  # ── 生产者 ──────────────────────────────────────────────
   producer:
     group: default-producer
-    send-message-timeout: 3000        # 发送超时（毫秒）
-    retry-times: 2                    # 同步发送重试次数
-    compress-threshold: 0             # 0=不压缩，>0 时超过阈值自动压缩
+    send-message-timeout: 3000         # 同步发送超时（毫秒）
+    retry-times: 2                     # 同步发送重试次数（0~MAX_SYNC_RETRY_TIMES）
+    compress-threshold: 0              # 0=不压缩，>0 时超过该字节数的消息自动压缩
+    serializer: io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer  # 序列化器（全限定类名）
+    stream-max-len: 0                  # Stream 最大长度（0=不限制）
+    max-message-size: 10485760         # 单条消息最大字节数
 
-  # 消费者配置（并发度由虚拟线程按需调度，无需线程池配置）
+  # ── 消费者 ──────────────────────────────────────────────
   consumer:
-    batch-size: 32                    # 单次拉取批量大小
-    pull-interval: 0                  # 拉取间隔（毫秒）
-    inflight-capacity: 0              # 背压队列容量（0=禁用；>0 时拉取与处理解耦，队列满则拉取阻塞）
+    batch-size: 32                     # 单次拉取批量大小（1~max-batch-size-limit）
+    poll-timeout: 2000ms               # 单次拉取阻塞超时（Duration 格式）
+    pull-interval: 0                   # 拉取间隔（毫秒），0=不间隔
+    max-batch-size-limit: 256          # 拉取批量上界（注解/配置均不可超过）
+    inflight-capacity: 0               # 背压队列容量（0=禁用；>0 时拉取与处理解耦，队列满则拉取阻塞）
+    paused-sleep-millis: 100           # 暂停状态下的休眠间隔（毫秒）
+    broker-error-backoff-millis: 1000  # Broker 异常退避间隔（毫秒）
+    timeout-cancel-grace-millis: 100   # 消费超时取消宽限期（毫秒），缩小与重试副本的重叠窗口
+    orderly-consume-timeout-millis: 0  # 全局顺序消费超时（毫秒），0=不启用（注解可 per-consumer 覆盖）
 
-  # 重试配置
+  # ── 重试 ────────────────────────────────────────────────
   retry:
-    max-reconsume-times: 16           # 消费失败最大重试次数
+    enabled: true
+    policy: io.github.streammq.adapter.redisson.policy.FixedArrayRetryPolicy   # 重试策略（全限定类名）
+    max-reconsume-times: 16            # 消费失败最大重试次数
+    scan-interval: 5s                  # 重试 ZSet 扫描间隔
+    batch-size: 100                    # 单次扫描批量
+    delay-array: ""                    # 自定义重试延时数组（逗号分隔毫秒，如 1000,5000,10000）
+    stream-max-len: 0                  # retry Stream 最大长度（0=不限制）
+    pel-claim-scan-interval: 5s        # PEL 认领扫描间隔（顺序消费专用）
+    pel-claim-min-idle-ms: 30000       # PEL 认领空闲阈值（顺序消费专用）
+    failure-requeue-backoff-ms: 5000   # 转移失败后的回写退避间隔（毫秒）
 
-  # 事务配置
+  # ── 延时 ────────────────────────────────────────────────
+  delay:
+    enabled: true
+    scan-interval: 5s                  # 延时 ZSet 扫描间隔
+    batch-size: 100                    # 单次扫描批量
+    failure-requeue-backoff-ms: 5000   # 转移失败后的回写退避间隔（毫秒）
+
+  # ── 事务 ────────────────────────────────────────────────
   transaction:
+    enabled: true
+    default-group: streammq-tx        # 默认事务组名
     check-interval: 60s               # 回查间隔
     max-check-times: 15               # 最大回查次数
 
-  # 死信队列配置
+  # ── 死信队列 ────────────────────────────────────────────
   dlq:
     max-dlq-retry-attempts: 3         # DLQ 消费失败最大重试次数
-    # failure-strategy: io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy  # 可选：DLQ 失败策略
+    dlq-retry-delay-ms: 1000          # DLQ 重试间隔（毫秒）
+    retry-max-delay-ms: 300000        # DLQ 重试最大退避（毫秒）
+    min-retry-delay-ms: 1000          # DLQ 重试最小退避（毫秒）
+    secondary-dlq-enabled: false      # 是否启用二级 DLQ（DLQ 再次失败时）
+    secondary-dlq-key-prefix: streammq:dlq2   # 二级 DLQ key 前缀
+    alert-threshold: 3                # DLQ 告警阈值
+    # failure-strategy: io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy  # DLQ 失败策略（全限定类名）
 
-  # 管理端点开关（与 health.enabled 解耦；false 时仅关闭管理 REST 端点，健康检查不受影响）
+  # ── 消费者组（心跳与实例存活判定）────────────────────
+  group:
+    heartbeat-interval-ms: 10000      # 心跳上报间隔（毫秒）
+    instance-timeout-ms: 30000        # 实例超时判定（毫秒，须 >= heartbeat-interval-ms）
+
+  # ── 重平衡 ──────────────────────────────────────────────
+  rebalance:
+    strategy: io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy  # 策略（全限定类名）
+    virtual-nodes: 200                # 虚拟节点数（仅一致性哈希生效）
+
+  # ── 管理端点（Actuator 运维接口）──────────────────────
   admin:
-    enabled: true
+    enabled: true                     # 与 health.enabled 解耦；false 时仅关闭管理 REST 端点
+    list-page-size: 20                # 列表默认页大小
+    max-pending-query-size: 1000      # pending 单次最大拉取条数
+    failure-retry-cooldown-ms: 30000  # 写操作失败重试冷却期（毫秒），0=禁用
+    startup-warn: true                # 启动暴露面提醒（-Dstreammq.admin.startup-warn=false 可关）
+    trust-forwarded-headers: false    # 是否信任 X-Forwarded-For 用于失败限流来源聚合（安全默认 false）
+    trusted-proxies:                  # 可信代理 CIDR（仅 trust-forwarded-headers=true 时生效）
+      # - 10.0.0.0/8
+      # - 192.168.1.0/24
 
-  # 可观测性配置（指标开关由 streammq.enabled 控制）
+  # ── 追踪（日志级别输出，默认关闭）─────────────────────
   tracing:
     enabled: false
+
+  # ── 追踪存储与查询（v1.0+，默认关闭）──────────────────
+  trace:
+    enabled: false
+    storage: none                     # REDIS=启用 Redis Stream 存储，其他值禁用
+    max-read-count: 1000              # 单次追踪查询最大读取条数
+
+  # ── 健康检查 ────────────────────────────────────────────
+  health:
+    enabled: true                     # 仅在 Actuator 在 classpath 时生效
 ```
+
+> **说明**：`Class` 类型的配置项（`producer.serializer`、`retry.policy`、`dlq.failure-strategy`、`rebalance.strategy`）
+> 一律填写**全限定类名**。全部键与校验规则以 `StreamMQProperties` 与
+> `META-INF/spring-configuration-metadata.json` 为准（IDE 自动补全会给出描述与校验）。
 
 ### @StreamMQConsumer 属性速查
 
@@ -781,26 +851,31 @@ streammq:
 
 ## SPI 扩展机制
 
-StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换。0.1.1 共 **16 个 SPI 接口**：
+StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换。0.1.1 提供 **16 个可覆盖点**，分两类：
 
-| SPI 接口 | 作用 | 默认实现 |
-|----------|------|----------|
-| `MessageSerializer` | 消息序列化/反序列化 | `JacksonJsonSerializer` / `JdkSerializer` / `FurySerializer` / `ProtostuffSerializer` / `ByteArraySerializer` / `StringSerializer` |
-| `MessageConverter` | 消息体与业务对象转换 | `DefaultMessageConverter` / `CompactMessageConverter` / `PassThroughMessageConverter` |
-| `ProducerFilter` | 生产者过滤器（过滤链） | `NoopProducerFilter` / `LoggingProducerFilter` |
-| `ConsumerFilter` | 消费者过滤器（全局+per-consumer） | `TagSelectorFilter` / `SqlSelectorFilter` |
-| `ProducerInterceptor` | 生产者拦截器（拦截链） | `LoggingProducerInterceptor` |
-| `ConsumerInterceptor` | 消费者拦截器（拦截链） | `LoggingConsumerInterceptor` |
-| `RetryPolicy` | 重试策略 | `FixedArrayRetryPolicy` / `FixedIntervalRetryPolicy` / `ExponentialBackoffRetryPolicy` / `DecorrelatedJitterRetryPolicy` / `NoRetryPolicy` |
-| `RebalanceStrategy` | 消费者重平衡策略 | `AverageRebalanceStrategy` / `ConsistentHashRebalanceStrategy` / `RangeRebalanceStrategy` |
-| `CompressionCodec` | 消息压缩编解码 | `GzipCompressionCodec` / `Lz4CompressionCodec`（classpath 探测） |
-| `TraceCollector` | 链路追踪上下文采集 | `NoopTraceCollector` / `Slf4jTraceCollector` / `RedisTraceCollector` |
-| `ManagementAuthenticator` | 管理接口鉴权 | `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` / `DenyAllAuthenticator` |
-| `DlqFailureStrategy` | 死信消费失败策略 | `LogAndDropDlqFailureStrategy` / `LimitedRetryDlqFailureStrategy` / `SecondaryDlqFailureStrategy` |
-| `ExpressionSelectorFilter` | 消息过滤表达式（Tag/SQL92 共享接口） | `TagSelectorFilter` / `SqlSelectorFilter` |
-| `ConsumerFilterResolver` | per-consumer 过滤器解析器 | `ReflectiveConsumerFilterResolver`（默认反射）/ Spring 容器解析 |
-| `OrderlyShardLockManager` | 顺序消费分片分布式锁 | `RedissonOrderlyShardLockManager` |
-| `ConsumerGroupManager` | 消费组实例管理 | `RedissonConsumerGroupManager` |
+- **10 个面向用户的扩展点**（业务方最常实现/替换）
+- **6 个内部装配点**（容器内部组件，技术集成方按需覆盖）
+
+| 类别 | SPI/可覆盖接口 | 作用 | 默认实现 |
+|------|------|------|----------|
+| 用户扩展 | `MessageSerializer` | 消息序列化/反序列化 | `JacksonJsonSerializer` / `JdkSerializer` / `FurySerializer` / `ProtostuffSerializer` / `ByteArraySerializer` / `StringSerializer` |
+| 用户扩展 | `MessageConverter` | 消息体与业务对象转换 | `DefaultMessageConverter` / `CompactMessageConverter` / `PassThroughMessageConverter` |
+| 用户扩展 | `ProducerFilter` | 生产者过滤器（过滤链） | `NoopProducerFilter` / `LoggingProducerFilter` |
+| 用户扩展 | `ConsumerFilter` | 消费者过滤器（全局+per-consumer） | `TagSelectorFilter` / `SqlSelectorFilter`（共享接口 `ExpressionSelectorFilter`） |
+| 用户扩展 | `ProducerInterceptor` | 生产者拦截器（拦截链） | `LoggingProducerInterceptor` |
+| 用户扩展 | `ConsumerInterceptor` | 消费者拦截器（拦截链） | `LoggingConsumerInterceptor` |
+| 用户扩展 | `RetryPolicy` | 重试策略 | `FixedArrayRetryPolicy` / `FixedIntervalRetryPolicy` / `ExponentialBackoffRetryPolicy` / `DecorrelatedJitterRetryPolicy` / `NoRetryPolicy` |
+| 用户扩展 | `RebalanceStrategy` | 消费者重平衡策略 | `AverageRebalanceStrategy` / `ConsistentHashRebalanceStrategy` / `RangeRebalanceStrategy` |
+| 用户扩展 | `CompressionCodec` | 消息压缩编解码 | `GzipCompressionCodec` / `Lz4CompressionCodec`（classpath 探测） |
+| 用户扩展 | `ManagementAuthenticator` | 管理/诊断接口鉴权 | `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` / `DenyAllAuthenticator` |
+| 用户扩展 | `DlqFailureStrategy` | 死信消费失败策略 | `LogAndDropDlqFailureStrategy` / `LimitedRetryDlqFailureStrategy` / `SecondaryDlqFailureStrategy` |
+| 内部装配 | `TraceCollector` | 链路追踪上下文采集（默认关闭） | `NoopTraceCollector` / `Slf4jTraceCollector` / `RedisTraceCollector` |
+| 内部装配 | `ConsumerFilterResolver` | per-consumer 过滤器解析器 | `ReflectiveConsumerFilterResolver`（默认反射）/ Spring 容器解析 |
+| 内部装配 | `OrderlyShardLockManager` | 顺序消费分片分布式锁 | `RedissonOrderlyShardLockManager` |
+| 内部装配 | `ConsumerGroupManager` | 消费组实例管理 | `RedissonConsumerGroupManager` |
+
+> 说明：0.1.x 阶段 core 的 SPI 接口仍可能演进（多后端抽象将在 1.0 前定型），自定义 SPI 实现的
+> 用户请以 0.2.x 版本为前提评估接口稳定性。
 
 ### 自定义 SPI 示例
 
@@ -886,13 +961,43 @@ public class CustomMessageSerializer implements MessageSerializer {
 
 > 所有操作均需通过 `ManagementAuthenticator` 鉴权；默认 `DenyAllAuthenticator` 拒绝所有访问（返回 401），需注册 `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` Bean 后开放。管理端点可通过 `streammq.admin.enabled=false` 单独关闭。
 
+> **访问前提（重要）：** `/actuator/streammq/**` 是标准 Actuator Web 端点，**受 `management.endpoints.web.exposure.*`
+> 治理**——Spring Boot 默认仅暴露 `health` / `info`，因此必须显式放行才能访问：
+>
+>   ```yaml
+>   management:
+>     endpoints:
+>       web:
+>         exposure:
+>           include: "health,info,metrics,prometheus,streammq"
+>   ```
+
 > **失败限流（内置）：** 管理/诊断端点在鉴权器外层统一包了失败限流（`RateLimitedAuthenticator`）：同一客户端
-> （按 `X-Forwarded-For` / `remoteAddr` 聚合）在 60s 窗口内鉴权失败超过 10 次即锁定 5 分钟，成功后复位。
-> 即使误用弱凭据，也难以被在线暴力破解。限流对默认的 `DenyAll` 与 `AllowAll` 无副作用。
+> 在 60s 窗口内鉴权失败超过 10 次即锁定 5 分钟，成功后复位。即使误用弱凭据，也难以被在线暴力破解。
+> 限流对默认的 `DenyAll` 与 `AllowAll` 无副作用。
+>
+> **来源地址可信模型（安全关键）：** 客户端地址默认**仅取不可伪造的 `remoteAddr`** 聚合——`X-Forwarded-For`
+> 完全由客户端可控，未经校验就采用它会让限流被一行请求头绕过。仅当端点部署在**受控反向代理**之后，才应开启
+> `streammq.admin.trust-forwarded-headers=true`，并配合 `streammq.admin.trusted-proxies` 声明可信代理
+> CIDR（直连对端命中该列表或为回环地址时，才采用 XFF 首值）：
+
+>   ```yaml
+>   streammq:
+>     admin:
+>       trust-forwarded-headers: true     # 默认 false：仅按 remoteAddr 聚合
+>       trusted-proxies:                  # 受控代理 CIDR，直连对端需命中
+>         - 10.0.0.0/8
+>         - 192.168.1.0/24
+>   ```
+>
+> 若代理网络不可信，XFF 仍可被伪造，请保持默认配置（限流按代理 IP 聚合，宁可误伤不可绕过）。
 
 > ⚠️ **暴露面注意事项**：
 >
-> - diagnostics 端点挂载在应用**主端口**（MVC 端点实现），不受 `management.endpoints.web.exposure.*` 治理——即使 Actuator 仅暴露 health，`/actuator/streammq/**` 仍随主端口可达，请通过网络层（安全组/Ingress）限制其访问来源；
+> - `/actuator/streammq/**` 受 Actuator exposure 治理，`/streammq/diagnostics/**`（`streammq-diagnostics` 模块）
+>   则是挂载在应用**主端口**的普通 MVC 端点，**不受** `management.endpoints.web.exposure.*` 治理——引入该模块后，
+>   即使 Actuator 仅暴露 health，诊断端点仍随主端口可达。两类端点都请通过网络层（安全组/Ingress）限制访问来源，
+>   并保持默认 `DenyAllAuthenticator`；
 > - 若启用了 JMX 暴露，建议将 StreamMQ 端点从 JMX 排除，避免管理能力被二次暴露：
 >
 >   ```yaml
@@ -976,7 +1081,7 @@ template.syncSend(message);  // traceId 自动透传到消费者
 - [x] Micrometer 指标 + MDC 日志
 - [x] 链路追踪（TraceCollector SPI）
 - [x] 管理 REST API
-- [x] 16 个 SPI 扩展点
+- [x] 16 个可覆盖点（10 个用户扩展点 + 6 个内部装配点）
 - [x] Spring Boot 3 自动装配 + Actuator 集成
 - [x] Spring Cloud Stream Binder（实现 Spring Cloud Stream Binder SPI）
 - [x] Kubernetes 集成（实验性预览：CRD 控制器 / HPA / 配置热更新，默认关闭；需显式开启 `streammq.cloud.k8s.enabled=true`）

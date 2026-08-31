@@ -95,6 +95,10 @@ final class InflightSink implements MessageSink {
      *
      * <p><b>脆弱性修复：</b>整个循环体包裹在兜底异常处理中——用户过滤器/处理器抛出的任何 {@code Throwable}（除中断）只记录 ERROR
      * 并退避重试，绝不杀死泵线程（旧实现一条消息的处理异常即令 该注册的全部后续消息永久滞留队列）。
+     *
+     * <p><b>消息不丢失（发布前修复 P1-8）：</b>{@code processMessage} 已在内部兜底，但一旦仍有异常逃逸到 此处，消息已经 {@code poll}
+     * 出队——若仅记录日志，它就既不在内存队列、也不在重试 ZSet 中， 只能等 {@code PelClaimScheduler} 的空闲阈值（默认
+     * 30s+）才被重投，表现为长时间静默停顿。 因此这里显式调用 {@link MessageProcessor#handleFailure} 把消息交回重试/DLQ 路由。
      */
     private void pumpLoop(
             ListenerRegistration<?> reg, StreamMQListener listener, MessageProcessor processor) {
@@ -110,13 +114,24 @@ final class InflightSink implements MessageSink {
                 return;
             } catch (Throwable t) {
                 LOG.error(
-                        "Inflight pump swallowed processor error, backing off {}ms:"
-                                + " topic={}, group={}, messageId={}",
+                        "Inflight pump caught processor error, routing message to retry/DLQ and"
+                                + " backing off {}ms: topic={}, group={}, messageId={}",
                         PUMP_ERROR_BACKOFF_MILLIS,
                         reg != null ? reg.getTopic() : "?",
                         reg != null ? reg.getGroup() : "?",
                         message != null ? message.getMessageId() : "?",
                         t);
+                if (message != null) {
+                    try {
+                        processor.handleFailure(message, reg, listener, t);
+                    } catch (RuntimeException routeEx) {
+                        LOG.error(
+                                "Failure routing rejected the message, it stays in PEL for"
+                                        + " PelClaimScheduler redelivery (messageId={}): {}",
+                                message.getMessageId(),
+                                routeEx.toString());
+                    }
+                }
                 io.github.streammq.adapter.redisson.container.ContainerSupport.sleepQuietly(
                         PUMP_ERROR_BACKOFF_MILLIS);
             }

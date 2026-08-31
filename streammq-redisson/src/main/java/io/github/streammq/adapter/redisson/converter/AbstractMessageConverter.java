@@ -465,5 +465,4 @@ public abstract class AbstractMessageConverter implements MessageConverter {
             setter.accept(fields.get(name));
         }
     }
-
 }

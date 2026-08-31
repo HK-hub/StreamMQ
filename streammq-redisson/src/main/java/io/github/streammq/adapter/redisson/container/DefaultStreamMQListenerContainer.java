@@ -11,6 +11,7 @@ import io.github.streammq.adapter.redisson.handler.DefaultRetryAndDlqHandler;
 import io.github.streammq.adapter.redisson.interceptor.DefaultConsumerInterceptorChain;
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
 import io.github.streammq.adapter.redisson.lock.RedissonOrderlyShardLockManager;
+import io.github.streammq.adapter.redisson.metrics.RuntimeStatsRegistry;
 import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.core.StreamMQConstants;
@@ -180,9 +181,14 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         return java.util.Map.copyOf(consumeLoopFailures);
     }
 
-    /** 是否存在消费循环启动失败（纳入健康检查，避免"静默不消费"）。 */
+    /** 是否存在消费循环启动/运行期失败（纳入健康检查，避免"静默不消费"）。 */
     public boolean isConsumeLoopsHealthy() {
         return consumeLoopFailures.isEmpty();
+    }
+
+    /** 清除指定循环键的健康失败条目（运行期故障恢复时由消费循环回调）。 */
+    private void clearConsumeLoopFailure(String loopKey) {
+        consumeLoopFailures.remove(loopKey);
     }
 
     private void assertInitState(String what) {
@@ -239,6 +245,24 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 指标收集器（可选注入，用于记录消费指标，null 时为 no-op） */
     private volatile StreamMQMetrics metrics;
 
+    /**
+     * 进程内运行时统计登记表（发布前修复 P1-3）。
+     *
+     * <p>为 {@code GET /actuator/streammq/stats/{group}/{topic}} 提供真实数据源——此前该端点读取的 Redis key
+     * 无任何写入方，永远返回空 map。本登记表与 {@link StreamMQMetrics} 正交： metrics 面向 Micrometer（需要 Actuator +
+     * MeterRegistry），登记表始终可用。
+     */
+    private final RuntimeStatsRegistry runtimeStats = new RuntimeStatsRegistry();
+
+    /**
+     * 返回进程内运行时统计登记表（供管理端点读取真实统计）。
+     *
+     * @return 统计登记表，永不为 null
+     */
+    public RuntimeStatsRegistry runtimeStats() {
+        return runtimeStats;
+    }
+
     /** 策略类：拦截器链 */
     private final ConsumerInterceptorChain interceptorChain;
 
@@ -283,6 +307,22 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         for (RetryAndDlqHandler handler : store.handlers()) {
             if (handler instanceof DefaultRetryAndDlqHandler drh) {
                 drh.setMetrics(metrics);
+            }
+        }
+    }
+
+    /**
+     * 把进程内运行时统计登记表传播到共享 handler 与所有已创建的 per-consumer handler。
+     *
+     * <p>必须在容器构造后立即调用（自动装配阶段），确保重试/死信计数能被 {@code /actuator/streammq/stats} 读取到（发布前修复 P1-3）。
+     */
+    public void propagateRuntimeStats() {
+        if (sharedRetryDlqHandler instanceof DefaultRetryAndDlqHandler drh) {
+            drh.setRuntimeStats(runtimeStats);
+        }
+        for (RetryAndDlqHandler handler : store.handlers()) {
+            if (handler instanceof DefaultRetryAndDlqHandler drh) {
+                drh.setRuntimeStats(runtimeStats);
             }
         }
     }
@@ -452,7 +492,15 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         }
     }
 
-    /** 构造容器（向后兼容：内部创建默认策略实现，per-consumer 启用）。 */
+    /**
+     * 构造容器（向后兼容：内部创建默认策略实现，per-consumer 启用）。
+     *
+     * @deprecated 兼容重载，默认值分散在多个重载间，易产生语义漂移。请使用全参构造 {@link
+     *     #DefaultStreamMQListenerContainer(RedissonClient, StreamMQListenerFactory,
+     *     MessageConverter, RetryPolicy, DlqFailureStrategy, DlqConfig, String, int)}（DLQ
+     *     失败策略与配置按需显式传入）， 计划在 0.2.0 移除。
+     */
+    @Deprecated(since = "0.1.1")
     public DefaultStreamMQListenerContainer(
             RedissonClient redisson,
             StreamMQListenerFactory consumerFactory,
@@ -469,7 +517,14 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 defaultNamespace);
     }
 
-    /** 构造容器并注入全局死信消费失败策略（per-consumer 启用）。 */
+    /**
+     * 构造容器并注入全局死信消费失败策略（per-consumer 启用）。
+     *
+     * @deprecated 兼容重载，请使用全参构造 {@link #DefaultStreamMQListenerContainer(RedissonClient,
+     *     StreamMQListenerFactory, MessageConverter, RetryPolicy, DlqFailureStrategy, DlqConfig,
+     *     String, int)}，计划在 0.2.0 移除。
+     */
+    @Deprecated(since = "0.1.1")
     public DefaultStreamMQListenerContainer(
             RedissonClient redisson,
             StreamMQListenerFactory consumerFactory,
@@ -487,7 +542,14 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 defaultNamespace);
     }
 
-    /** 构造容器并注入全局 DLQ 策略与配置（per-consumer 启用）。 */
+    /**
+     * 构造容器并注入全局 DLQ 策略与配置（per-consumer 启用）。
+     *
+     * @deprecated 兼容重载，背压容量默认值由本重载硬编码、与全参构造的显式传参并存，改默认值易漏改。 请使用全参构造 {@link
+     *     #DefaultStreamMQListenerContainer(RedissonClient, StreamMQListenerFactory,
+     *     MessageConverter, RetryPolicy, DlqFailureStrategy, DlqConfig, String, int)}，计划在 0.2.0 移除。
+     */
+    @Deprecated(since = "0.1.1", forRemoval = true)
     public DefaultStreamMQListenerContainer(
             RedissonClient redisson,
             StreamMQListenerFactory consumerFactory,
@@ -547,6 +609,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         this.sharedRetryDlqHandler,
                         true,
                         consumeExecutor);
+        this.messageProcessor.setRuntimeStats(runtimeStats);
     }
 
     /**
@@ -598,6 +661,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         this.sharedRetryDlqHandler,
                         false,
                         consumeExecutor);
+        this.messageProcessor.setRuntimeStats(runtimeStats);
     }
 
     /**
@@ -770,6 +834,10 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                 + " setConsumeExecutor again before restart");
             }
             consumeExecutor = Executors.newVirtualThreadPerTaskExecutor();
+            // 必须把新执行器同步给所有"构造时捕获了执行器引用"的协作类（与 setConsumeExecutor 一致）：
+            // 否则 restart 后 messageProcessor 仍持有已 shutdown 的旧执行器，消费回调抛
+            // RejectedExecutionException——表现为"消费者静默不消费"，极难定位。
+            messageProcessor.setExecutor(consumeExecutor);
             LOG.info("Recreated internal consume executor for container restart");
         }
         if (consumerFactory instanceof RedissonStreamListenerFactory redissonFactory) {
@@ -885,7 +953,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         () -> paused,
                         tuning::inflightCapacity,
                         this::createConsumerFor,
-                        this::reportConsumeLoopFailure);
+                        this::reportConsumeLoopFailure,
+                        this::clearConsumeLoopFailure);
         return consumeExecutor.submit(
                 new ConsumeLoopTask(
                         ctx, tuning.getPausedSleepMillis(), tuning.getBrokerErrorBackoffMillis()));
@@ -934,64 +1003,97 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
 
     // ===================== 协作类懒构建与覆盖点（仅 INIT 状态可覆盖） =====================
 
+    /**
+     * 懒构建协作类统一采用 double-checked locking（与 {@link #ensureFilterCoordinator} / {@link
+     * #ensureMetadata} 保持一致）：并发注册消费者 / 并发 start 时保证单例，避免创建出多个不等价实例（此前 4 个懒加载点无同步， 多线程同时注册可能创建多个
+     * {@link DefaultListenerRegistrar} / 组管理器工厂）。
+     */
     private PerConsumerSpiResolver spiResolver() {
-        if (spiResolver == null) {
-            spiResolver =
-                    new DefaultPerConsumerSpiResolver(
-                            redisson,
-                            messageConverter,
-                            retryPolicy,
-                            globalDlqFailureStrategy,
-                            dlqConfig,
-                            interceptorChain,
-                            consumerFilterChain,
-                            () -> filterResolver,
-                            () -> defaultVirtualNodes,
-                            () -> metrics,
-                            defaultRebalanceStrategy,
-                            perConsumerEnabled);
+        PerConsumerSpiResolver current = spiResolver;
+        if (current == null) {
+            synchronized (this) {
+                current = spiResolver;
+                if (current == null) {
+                    current =
+                            new DefaultPerConsumerSpiResolver(
+                                    redisson,
+                                    messageConverter,
+                                    retryPolicy,
+                                    globalDlqFailureStrategy,
+                                    dlqConfig,
+                                    interceptorChain,
+                                    consumerFilterChain,
+                                    () -> filterResolver,
+                                    () -> defaultVirtualNodes,
+                                    () -> metrics,
+                                    defaultRebalanceStrategy,
+                                    perConsumerEnabled);
+                    spiResolver = current;
+                }
+            }
         }
-        return spiResolver;
+        return current;
     }
 
     private ConsumerGroupManagerFactory groupManagerFactory() {
-        if (groupManagerFactory == null) {
-            groupManagerFactory =
-                    new DefaultConsumerGroupManagerFactory(
-                            redisson,
-                            spiResolver(),
-                            () -> heartbeatIntervalMs,
-                            () -> instanceTimeoutMs);
+        ConsumerGroupManagerFactory current = groupManagerFactory;
+        if (current == null) {
+            synchronized (this) {
+                current = groupManagerFactory;
+                if (current == null) {
+                    current =
+                            new DefaultConsumerGroupManagerFactory(
+                                    redisson,
+                                    spiResolver(),
+                                    () -> heartbeatIntervalMs,
+                                    () -> instanceTimeoutMs);
+                    groupManagerFactory = current;
+                }
+            }
         }
-        return groupManagerFactory;
+        return current;
     }
 
     private ListenerRegistrar registrar() {
-        if (registrar == null) {
-            registrar =
-                    new DefaultListenerRegistrar(
-                            lifecycle,
-                            store,
-                            spiResolver(),
-                            tuning,
-                            defaultNamespace,
-                            instanceToken,
-                            (defaultNs, topic, group, ns, shardCount) -> {
-                                Lock[] array =
-                                        shardLockManager.createShardLocks(
-                                                defaultNs, topic, group, ns, shardCount);
-                                return Objects.nonNull(array) ? Arrays.asList(array) : null;
-                            },
-                            this::wireRegistrationIfRunning);
+        ListenerRegistrar current = registrar;
+        if (current == null) {
+            synchronized (this) {
+                current = registrar;
+                if (current == null) {
+                    current =
+                            new DefaultListenerRegistrar(
+                                    lifecycle,
+                                    store,
+                                    spiResolver(),
+                                    tuning,
+                                    defaultNamespace,
+                                    instanceToken,
+                                    (defaultNs, topic, group, ns, shardCount) -> {
+                                        Lock[] array =
+                                                shardLockManager.createShardLocks(
+                                                        defaultNs, topic, group, ns, shardCount);
+                                        return Objects.nonNull(array) ? Arrays.asList(array) : null;
+                                    },
+                                    this::wireRegistrationIfRunning);
+                    registrar = current;
+                }
+            }
         }
-        return registrar;
+        return current;
     }
 
     private SchedulerTargetBinder schedulerBinder() {
-        if (schedulerBinder == null) {
-            schedulerBinder = new DefaultSchedulerTargetBinder(store);
+        SchedulerTargetBinder current = schedulerBinder;
+        if (current == null) {
+            synchronized (this) {
+                current = schedulerBinder;
+                if (current == null) {
+                    current = new DefaultSchedulerTargetBinder(store);
+                    schedulerBinder = current;
+                }
+            }
         }
-        return schedulerBinder;
+        return current;
     }
 
     private static void sleepQuietly(long millis) {

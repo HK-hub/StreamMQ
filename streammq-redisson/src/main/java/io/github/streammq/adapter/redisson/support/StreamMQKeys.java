@@ -157,6 +157,28 @@ public class StreamMQKeys {
     public static final String SEG_CUSTOM = "custom";
 
     /**
+     * Topic 注册表段（Set）。
+     *
+     * <p>发布前修复 P1-1：Topic 的"创建"此前通过向业务 Stream 写入一条 {@code __placeholder} 占位消息实现（依赖"Stream 在首次 XADD
+     * 时自动创建"这一副作用）。该占位消息会被所有消费者 当作真实消息投递，携带 {@code body == null}，在业务 handler 中直接 NPE。
+     *
+     * <p>现改为：Topic 元数据登记在独立的 Set 中，业务 Stream 仍由首次真实发送自然创建， 两者解耦 —— 创建 Topic 不再产生任何会被消费的条目。
+     */
+    public static final String SEG_TOPICS = "topics";
+
+    /**
+     * Topic 注册 Set Key：{@code streammq:{ns}:meta:topics}。
+     *
+     * <p>记录由管理端点显式创建的 Topic 名（与"发送时自然出现"的 Topic 互补）。
+     *
+     * @param namespace 命名空间
+     * @return Topic 注册 Set Key
+     */
+    public static String topicRegistry(String namespace) {
+        return prefix(namespace) + SEP + TYPE_META + SEP + SEG_TOPICS;
+    }
+
+    /**
      * 拼接命名空间前缀段：{@code streammq:{ns}}。 当 ns 为空时返回 {@code streammq}。
      *
      * @param namespace 命名空间，可为 null 或空字符串

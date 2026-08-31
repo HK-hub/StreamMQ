@@ -277,7 +277,8 @@ public class StreamMQActuatorEndpoint {
      * @param path 端点基础路径之后的剩余段
      */
     @DeleteOperation
-    public Object deleteDispatch(@Selector(match = Selector.Match.ALL_REMAINING) String[] path) {
+    public Object deleteDispatch(
+            @Selector(match = Selector.Match.ALL_REMAINING) String[] path, String confirm) {
         WebEndpointResponse<?> missingPath = requireNonNullPath(path);
         if (missingPath != null) {
             return missingPath;
@@ -293,11 +294,12 @@ public class StreamMQActuatorEndpoint {
             }
             case "topics" -> {
                 WebEndpointResponse<?> missing =
-                        requireSegments(path, 2, "/streammq/topics/{topic} (DELETE)");
+                        requireSegments(
+                                path, 2, "/streammq/topics/{topic}?confirm={topic} (DELETE)");
                 if (missing != null) {
                     return missing;
                 }
-                return deleteTopic(path[1]);
+                return deleteTopic(path[1], confirm);
             }
             default -> {
                 return unknownPath("DELETE", path);
@@ -457,7 +459,13 @@ public class StreamMQActuatorEndpoint {
         return adminEndpoint.createTopic(topic);
     }
 
-    private Object deleteTopic(String topic) {
+    /**
+     * 删除 Topic（不可逆，需 {@code confirm} 确认）。
+     *
+     * <p>发布前修复 P2：删除 Topic 会销毁整条 Stream 及其全部数据。要求调用方回传 {@code confirm=<topic>} 以确认意图，避免路径参数被误构造 /
+     * 误触发时直接造成不可逆损失。
+     */
+    private Object deleteTopic(String topic, String confirm) {
         WebEndpointResponse<?> denied = checkPermission(StreamMQSpringConstants.RES_TOPICS);
         if (denied != null) {
             return denied;
@@ -466,7 +474,14 @@ public class StreamMQActuatorEndpoint {
         if (invalid != null) {
             return invalid;
         }
-        return adminEndpoint.deleteTopic(topic);
+        if (!Objects.equals(topic, confirm)) {
+            return badRequest(
+                    "Refusing to delete topic '"
+                            + topic
+                            + "': irreversible operation requires confirm="
+                            + topic);
+        }
+        return adminEndpoint.deleteTopic(topic, confirm);
     }
 
     private Object updateGroupConfig(String group, Map<String, String> config) {

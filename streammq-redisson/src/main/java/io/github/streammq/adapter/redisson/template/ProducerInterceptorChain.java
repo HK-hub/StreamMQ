@@ -22,11 +22,11 @@ import org.slf4j.MDC;
 /**
  * 生产者拦截器链与发送侧 MDC 上下文管理。
  *
- * <p>原为 {@link DefaultStreamMessageTemplate} 的拦截器字段 + 一组私有方法（before/after 链、异常
- * 通知、MDC 注入/清理），横切关注点聚合于此，模板类只保留对外的拦截器注册 API 与发送编排。
+ * <p>原为 {@link DefaultStreamMessageTemplate} 的拦截器字段 + 一组私有方法（before/after 链、异常 通知、MDC
+ * 注入/清理），横切关注点聚合于此，模板类只保留对外的拦截器注册 API 与发送编排。
  *
- * <p>线程安全：{@link CopyOnWriteArrayList} 支持并发注册与遍历；MDC 为 {@link ThreadLocal} 语义，
- * 必须在同一线程的 finally 中配对清理。
+ * <p>线程安全：{@link CopyOnWriteArrayList} 支持并发注册与遍历；MDC 为 {@link ThreadLocal} 语义， 必须在同一线程的 finally
+ * 中配对清理。
  *
  * @author StreamMQ Contributors
  * @since 0.1.1
@@ -42,7 +42,9 @@ final class ProducerInterceptorChain {
         this.defaultGroup = Objects.requireNonNull(defaultGroup, "defaultGroup");
     }
 
-    /** @return 当前拦截器不可变快照 */
+    /**
+     * @return 当前拦截器不可变快照
+     */
     List<ProducerInterceptor> snapshot() {
         return Collections.unmodifiableList(interceptors);
     }

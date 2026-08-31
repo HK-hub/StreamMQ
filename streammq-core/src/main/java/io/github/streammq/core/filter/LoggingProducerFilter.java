@@ -9,14 +9,13 @@ import io.github.streammq.core.message.Message;
 import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
 /**
  * 日志生产者过滤器（默认实现）：在 {@link ProducerFilter} 命中时记录 INFO 级别日志， 所有消息均放行（返回 {@code true}），仅用于审计与问题排查。
  *
- * <p>本类是 {@link ProducerFilter} SPI 的默认空操作+日志记录实现， 业务方可注册自定义 {@link ProducerFilter} Bean 覆盖本默认。
- * 若同时存在多个同类型 Bean，Spring 依赖 {@link org.springframework.core.annotation.Order} / {@link
- * ProducerFilter#order()} 决定执行顺序。
+ * <p>本类是 {@link ProducerFilter} SPI 的默认空操作+日志记录实现，业务方可注册自定义 {@link ProducerFilter}
+ * 覆盖本默认。本类<b>不依赖任何框架注解</b>，可在纯 Java 应用中直接 {@code new} 使用，也可在 Spring 应用中 注册为 Bean（与多个过滤器共存时按 {@link
+ * ProducerFilter#order()} 决定执行顺序）。
  *
  * <p>日志格式：
  *
@@ -31,7 +30,6 @@ import org.springframework.stereotype.Component;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-@Component
 public class LoggingProducerFilter implements ProducerFilter {
 
     private static final Logger LOG = LoggerFactory.getLogger(LoggingProducerFilter.class);

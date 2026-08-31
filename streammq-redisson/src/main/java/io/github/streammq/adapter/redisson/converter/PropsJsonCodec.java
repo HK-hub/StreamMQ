@@ -17,14 +17,12 @@ import java.util.function.Consumer;
 /**
  * 属性 JSON 编解码工具（包内共享）。
  *
- * <p>属性 JSON 序列化是三个具体转换器（{@link DefaultMessageConverter} / {@link
- * CompactMessageConverter} / {@link PassThroughMessageConverter}）共用的能力——Default 与 PassThrough
- * 将 sys + user 合并为单个字段，Compact 则按字段分开存储——但都不属于模板方法契约本身。此前该方法
- * 挂在 {@link AbstractMessageConverter} 上，扩大了抽象类的受保护面——提取为本工具类后，抽象类只保留
+ * <p>属性 JSON 序列化是三个具体转换器（{@link DefaultMessageConverter} / {@link CompactMessageConverter} / {@link
+ * PassThroughMessageConverter}）共用的能力——Default 与 PassThrough 将 sys + user 合并为单个字段，Compact
+ * 则按字段分开存储——但都不属于模板方法契约本身。此前该方法 挂在 {@link AbstractMessageConverter} 上，扩大了抽象类的受保护面——提取为本工具类后，抽象类只保留
  * 模板契约。
  *
- * <p><b>键冲突规则：</b>系统属性优先（后写入覆盖）——SDK 内部元数据（如 trace 上下文）不可被业务
- * 同名用户属性静默篡改。
+ * <p><b>键冲突规则：</b>系统属性优先（后写入覆盖）——SDK 内部元数据（如 trace 上下文）不可被业务 同名用户属性静默篡改。
  *
  * @author StreamMQ Contributors
  * @since 0.1.1
@@ -75,7 +73,8 @@ final class PropsJsonCodec {
      * @throws SerializationException 当 JSON 反序列化失败时
      */
     @SuppressWarnings("unchecked")
-    static void read(Map<String, String> fields, String fieldName, Consumer<Map<String, String>> consumer) {
+    static void read(
+            Map<String, String> fields, String fieldName, Consumer<Map<String, String>> consumer) {
         String json = fields.get(fieldName);
         if (StringUtils.isEmpty(json)) {
             return;

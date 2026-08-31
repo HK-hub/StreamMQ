@@ -5,9 +5,9 @@
  */
 package io.github.streammq.adapter.redisson.template;
 
+import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.exception.StreamMQClientException;
 import io.github.streammq.core.exception.StreamMQException;
-import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.message.SendResult;
@@ -18,8 +18,7 @@ import java.util.UUID;
 /**
  * 发送重试安全判定与失败结果构造（发送管线专用策略）。
  *
- * <p>原为 {@link DefaultStreamMessageTemplate} 的私有静态方法，被同步发送与批量发送两条路径共用，
- * 提取为独立策略类以缩小模板类的私有面。
+ * <p>原为 {@link DefaultStreamMessageTemplate} 的私有静态方法，被同步发送与批量发送两条路径共用， 提取为独立策略类以缩小模板类的私有面。
  *
  * @author StreamMQ Contributors
  * @since 0.1.1

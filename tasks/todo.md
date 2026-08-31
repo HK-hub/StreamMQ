@@ -15,3 +15,22 @@
 - [x] `setConsumeExecutor` 执行器传播回归 + 单测
 - [x] 安全令牌认证（SecureCredentialMatcher/TokenAuthenticator）与 Redisson 缺失 FailureAnalyzer
 - [x] 事务示例 2/2 通过、提交并推送
+
+发布前红队审查（第二批）修复（2026-08-31，工作区待提交）：
+- [x] P0-1 BOM 发布插件显式声明（BOM 纳入发布清单，消除使用方 import 失败）
+- [x] P1-1 Topic 注册表（createTopic 不再写 `__placeholder` 占位消息；listTopics 合并注册表与消费者）
+- [x] P1-3 `/actuator/streammq/stats` 从死端点变为真实统计（RuntimeStatsRegistry + 消费/重试/DLQ 上报）
+- [x] P1-4 `updateGroupConfig` 逐 key 运行时真实生效（paused/resume/inflightCapacity 等），不支持 key 显式拒绝
+- [x] P1-6 消费循环运行期持续失败健康上报（10 次阈值 → DOWN；成功拉取复位 → UP）+ processor Throwable 兜底
+- [x] P1-8 InflightSink 泵异常显式路由 handleFailure（消息出队后不再静默停滞）
+- [x] P2 DELETE topics 要求 confirm={topic} 显式确认（防误删，缺失/不匹配 400）
+- [x] P2-8 staging-smoke 发布预检 job（使用方视角 import BOM 编译验证）
+- [x] P2-13 japicmp API 兼容性门禁（release.yml 探测上一版本，破坏性变更阻断发布）
+- [x] P3-13 JaCoCo 覆盖率门禁（CI coverage job，LINE ≥30% / BRANCH ≥15%，防灾难性回退）+ `@{jacoco.argLine}` 空默认值修复
+- [x] XFF 可信代理安全模型（`streammq.admin.trust-forwarded-headers` 默认 false + `trusted-proxies` CIDR 白名单）
+- [x] 管理端点暴露面说明修正（WebEndpoint 受 exposure.* 治理）、默认 SPI 实现去 `@Component`
+- [x] 新增测试：WebRequestAuthSupportTest / RuntimeStatsRegistryTest / ConsumeLoopTaskTest /
+      StreamMQAdminEndpointTest / HardeningTest confirm 用例 / MessageSinkTest P1-8 回归
+- [x] P1-9 并发消费启动排空"偷取"在途消息致重复投递（hookDrainOwnPending 并发度门控：
+      并发度 >1 跳过启动排空，遗留未 ACK 由 PelClaimScheduler 认领）—— 全量复核发现并修复
+- [ ] 全量 `mvn clean verify` 复核并提交（含 CHANGELOG 与任务文档更新）

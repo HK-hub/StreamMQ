@@ -58,11 +58,13 @@ public class StreamConsumerBenchmark {
     private static final String CONSUMER_NAME = "benchmark-consumer";
     private static final int PRE_SEND_COUNT = 300;
     private static final int BATCH_SIZE = 100;
+
     /**
      * 消费端必须与生产者对齐到实际落盘的 Stream Key：模板生产者写入 {@code streammq:msg:{topic}}， 而非裸 {@code TOPIC}。
      * 此前的实现直接在裸 key 上建组并 XREADGROUP，读到的永远是空流。
      */
     private static final String STREAM_KEY = StreamMQKeys.topicStream("", TOPIC);
+
     /** 空读退避窗口：使用服务端阻塞（XREADGROUP BLOCK），避免高频空读自旋 */
     private static final Duration EMPTY_READ_BLOCK = Duration.ofMillis(100);
 

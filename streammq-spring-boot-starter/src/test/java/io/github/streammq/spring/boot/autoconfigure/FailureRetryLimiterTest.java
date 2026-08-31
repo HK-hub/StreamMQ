@@ -26,8 +26,7 @@ class FailureRetryLimiterTest {
         limiter.recordFailure("requeueDlq:g:1");
 
         assertThat(limiter.isBlocked("requeueDlq:g:1")).isTrue();
-        assertThat(limiter.remainingCooldownMillis("requeueDlq:g:1"))
-                .isBetween(1L, 100L);
+        assertThat(limiter.remainingCooldownMillis("requeueDlq:g:1")).isBetween(1L, 100L);
 
         Thread.sleep(150L);
         assertThat(limiter.isBlocked("requeueDlq:g:1")).isFalse();

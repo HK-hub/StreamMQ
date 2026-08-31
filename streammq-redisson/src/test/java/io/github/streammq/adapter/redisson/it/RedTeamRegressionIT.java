@@ -17,12 +17,14 @@ import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.transaction.TransactionChecker;
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.redisson.api.RBucket;
 import org.redisson.api.RLock;
+import org.redisson.api.RMap;
 import org.redisson.api.RStream;
+import org.redisson.client.codec.StringCodec;
 
 /**
  * 发布前红队审查修复的回归测试。
@@ -55,38 +57,46 @@ class RedTeamRegressionIT extends AbstractRedisIT {
     }
 
     @Test
-    @DisplayName("P0 回归：执行权锁被外部持有且 TTL 到期后，其它实例可接管并完成提交")
-    void txLock_takenOverAfterTtlExpiry() {
-        String txGroup = "tx-lock-group";
-        String txId = "tx-lock-tx-1";
-        String targetTopic = "tx-lock-target";
+    @DisplayName("P0 回归：并发 markCommit 原子去重，恰好投递一次、无重复窗口")
+    void concurrentCommit_noDuplicateDelivery() throws Exception {
+        String txGroup = "tx-concurrent-group";
+        String txId = "tx-concurrent-1";
+        String targetTopic = "tx-concurrent-target";
         TransactionScanner scanner = newScanner(150, 10);
-        // 回查扫描按 checkerRegistry 的组键执行，必须覆盖本测试的 txGroup
-        scanner.registerChecker(
-                txGroup,
-                (io.github.streammq.core.transaction.TransactionChecker<Object>)
-                        (message, ctx) ->
-                                io.github.streammq.core.enums.LocalTransactionState.UNKNOWN);
-        scanner.start();
         try {
-            scanner.registerHalfMessage(txId, txGroup, targetTopic, fieldsOf("lock-payload"));
+            scanner.registerHalfMessage(txId, txGroup, targetTopic, fieldsOf("race"));
 
-            // 模拟另一实例持锁后崩溃：外部写入锁值 + 短 TTL（旧实现无 TTL 则此处永不接管）
-            RBucket<String> lockBucket =
-                    redisson.getBucket(StreamMQKeys.transactionLock(namespace, txGroup, txId));
-            lockBucket.set("crashed-holder", Duration.ofMillis(400));
+            // 两个线程同时提交。旧实现依赖执行权锁 + TTL，锁在原子批执行期间过期时另一实例
+            // 会重复转投（已知缺陷）；新实现单 Lua 脚本原子完成 XRANGE+XADD+XDEL+HSET COMMIT，
+            // 后执行者读到 HALF_MISSING 且不覆盖终态，天然去重——此即去锁化的回归防护。
+            CountDownLatch start = new CountDownLatch(1);
+            int contenders = 2;
+            CountDownLatch done = new CountDownLatch(contenders);
+            for (int i = 0; i < contenders; i++) {
+                new Thread(
+                                () -> {
+                                    try {
+                                        start.await();
+                                        scanner.markCommit(txId, txGroup);
+                                    } catch (InterruptedException e) {
+                                        Thread.currentThread().interrupt();
+                                    } finally {
+                                        done.countDown();
+                                    }
+                                },
+                                "tx-commit-contender-" + i)
+                        .start();
+            }
+            start.countDown();
+            assertThat(done.await(10, TimeUnit.SECONDS)).as("并发提交应在 10s 内完成").isTrue();
 
-            // 本实例尝试提交：应 LOCK_BUSY 早退，状态停在中间态，目标流为空
-            scanner.markCommit(txId, txGroup);
-            assertThat(stateOf(txGroup, txId)).isEqualTo(TransactionScanner.STATE_COMMITTING);
-            assertThat(targetSize(targetTopic)).isZero();
-
-            // 锁 TTL 过期后由扫描任务接管完成提交（旧实现此处将永久卡死）
-            await().atMost(8, TimeUnit.SECONDS)
+            // 终态一致且恰好投递一次：不出现重复消息，也不残留半消息
+            await().atMost(5, TimeUnit.SECONDS)
                     .until(() -> TransactionScanner.STATE_COMMIT.equals(stateOf(txGroup, txId)));
-            await().atMost(3, TimeUnit.SECONDS).until(() -> targetSize(targetTopic) == 1);
-            // 锁已被清理
-            await().atMost(3, TimeUnit.SECONDS).until(() -> !lockBucket.isExists());
+            assertThat(targetSize(targetTopic)).isEqualTo(1);
+            RStream<String, String> half =
+                    redisson.getStream(StreamMQKeys.halfStream(namespace, txGroup));
+            assertThat(half.size()).isZero();
         } finally {
             scanner.stop();
         }
@@ -135,12 +145,14 @@ class RedTeamRegressionIT extends AbstractRedisIT {
         TransactionScanner scanner = newScanner(150, 3);
         try {
             scanner.registerHalfMessage(txId, txGroup, targetTopic, fieldsOf("race"));
-            RBucket<String> lockBucket =
-                    redisson.getBucket(StreamMQKeys.transactionLock(namespace, txGroup, txId));
-            lockBucket.set("other-instance", Duration.ofSeconds(10));
-
-            scanner.markCommit(txId, txGroup);
-            assertThat(stateOf(txGroup, txId)).isEqualTo(TransactionScanner.STATE_COMMITTING);
+            // 模拟另一实例已原子抢占事务（casState 置位 COMMITTING）、正在执行转投脚本的中间窗口。
+            // 去锁化后状态机 CAS 是唯一串行化手段——ROLLBACK 竞争者必须看到 COMMITTING 并让路，
+            // 不得覆盖为 ROLLBACKING/ROLLBACK。
+            RMap<String, String> stateMap =
+                    redisson.getMap(
+                            StreamMQKeys.transactionStateHash(namespace, txGroup),
+                            StringCodec.INSTANCE);
+            stateMap.put(txId, TransactionScanner.STATE_COMMITTING);
 
             scanner.markRollback(txId, txGroup);
             assertThat(stateOf(txGroup, txId))
