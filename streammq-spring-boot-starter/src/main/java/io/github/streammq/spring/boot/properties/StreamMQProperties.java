@@ -16,7 +16,8 @@ import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import java.time.Duration;
-import lombok.Data;
+import lombok.Getter;
+import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -66,7 +67,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  * @since 0.1.0
  */
 @ConfigurationProperties(prefix = StreamMQSpringConstants.PROP_PREFIX)
-@Data
+@Getter @Setter
 public class StreamMQProperties {
 
     /** 是否启用 StreamMQ 自动装配，默认 true */
@@ -114,7 +115,7 @@ public class StreamMQProperties {
     // ===================== 子配置 =====================
 
     /** 生产者配置。 */
-    @Data
+    @Getter @Setter
     public static class Producer {
         /**
          * 默认生产者组名。
@@ -143,7 +144,7 @@ public class StreamMQProperties {
     }
 
     /** 消费者配置。 */
-    @Data
+    @Getter @Setter
     public static class Consumer {
         /** 单次拉取阻塞超时 */
         private Duration pollTimeout =
@@ -192,7 +193,7 @@ public class StreamMQProperties {
     }
 
     /** 消费者组管理配置（心跳与实例存活判定）。 */
-    @Data
+    @Getter @Setter
     public static class Group {
         /** 心跳上报间隔（毫秒），默认 {@link StreamMQConstants#DEFAULT_HEARTBEAT_INTERVAL_MS} */
         private long heartbeatIntervalMs = StreamMQConstants.DEFAULT_HEARTBEAT_INTERVAL_MS;
@@ -204,7 +205,7 @@ public class StreamMQProperties {
     }
 
     /** 死信队列配置。 */
-    @Data
+    @Getter @Setter
     public static class Dlq {
         /** 死信消费失败处理策略实现类，默认 {@link LogAndDropDlqFailureStrategy} */
         private Class<? extends DlqFailureStrategy> failureStrategy =
@@ -237,7 +238,7 @@ public class StreamMQProperties {
     }
 
     /** 重试策略配置。 */
-    @Data
+    @Getter @Setter
     public static class Retry {
         /** 重试功能开关 */
         private boolean enabled = true;
@@ -276,7 +277,7 @@ public class StreamMQProperties {
     }
 
     /** 延时消息调度器配置。 */
-    @Data
+    @Getter @Setter
     public static class Delay {
         /** 是否启用延时消息调度器，默认 true */
         private boolean enabled = true;
@@ -296,7 +297,7 @@ public class StreamMQProperties {
     }
 
     /** 事务消息配置。 */
-    @Data
+    @Getter @Setter
     public static class Transaction {
         /** 事务消息功能开关 */
         private boolean enabled = true;
@@ -313,14 +314,14 @@ public class StreamMQProperties {
     }
 
     /** 健康检查配置。 */
-    @Data
+    @Getter @Setter
     public static class Health {
         /** 是否启用健康检查，默认 true（仅在 Actuator 在 classpath 时生效） */
         private boolean enabled = true;
     }
 
     /** 重平衡策略配置。 */
-    @Data
+    @Getter @Setter
     public static class Rebalance {
         /** 重平衡策略实现类，默认 {@link ConsistentHashRebalanceStrategy} */
         private Class<? extends RebalanceStrategy> strategy = ConsistentHashRebalanceStrategy.class;
@@ -330,7 +331,7 @@ public class StreamMQProperties {
     }
 
     /** 追踪配置。 */
-    @Data
+    @Getter @Setter
     public static class Tracing {
         /** 是否启用追踪，对应 {@code streammq.tracing.enabled}（默认 false） */
         private boolean enabled = false;
@@ -341,7 +342,7 @@ public class StreamMQProperties {
      *
      * <p>与 {@link Tracing} 区别：Tracing 控制日志级别的追踪输出， Trace 控制追踪数据的持久化存储与查询能力。
      */
-    @Data
+    @Getter @Setter
     public static class Trace {
         /** 是否启用追踪存储与查询服务 */
         private boolean enabled = false;
@@ -357,7 +358,7 @@ public class StreamMQProperties {
     }
 
     /** 管理端点配置（Actuator 运维接口）。 */
-    @Data
+    @Getter @Setter
     public static class Admin {
         /** 管理端点开关：与 streammq.health.enabled 解耦，false 时仅关闭管理/运维 REST 端点（健康检查不受影响） */
         private boolean enabled = true;

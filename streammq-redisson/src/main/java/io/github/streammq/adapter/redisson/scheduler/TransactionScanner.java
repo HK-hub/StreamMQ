@@ -333,16 +333,12 @@ public class TransactionScanner implements StreamMQScheduler {
         StringUtils.requireValidTopic(targetTopic);
 
         // 写入顺序（崩溃安全性分析，顺序不可调整）：
-        //  1. 先原子写入 txstate(PREPARE) + 回查 ZSet —— 若在此步后崩溃，回查发现半消息缺失，
-        //     走"force rollback"安全终止（本地事务尚未执行，不存在业务消息已发布的风险）；
-        //  2. 再 XADD 半消息并补写 halfId —— 若在此步失败/崩溃，最坏情况是残留一条无状态引用的
-        //     半消息条目（可被运维清理），绝不会出现"半消息已投递但事务无状态"导致的重复发布。
-        // XADD first, then publish complete metadata and the check schedule atomically. A crash
-        // before metadata publication leaves only an invisible orphan half entry for retention
-        // cleanup; the scanner can never observe PREPARE without halfId.
+        //  1. 先 XADD 半消息到 half Stream —— 若在此步失败，事务尚未注册，无任何副作用；
+        //  2. 再原子写入 txstate(PREPARE) + target + halfId + 回查 ZSet —— 若在此步后崩溃，
+        //     回查发现半消息存在，正常触发 check；若半消息读取失败，走"force rollback"安全终止。
+        // 顺序不可颠倒：若先写状态再 XADD，崩溃后可能出现 PREPARE 状态但无 half 消息的幽灵事务。
         long firstCheckAt = System.currentTimeMillis() + checkIntervalMs;
         String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
-        // Metadata is written after XADD succeeds.
 
         // XADD 到 half Stream
         String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);

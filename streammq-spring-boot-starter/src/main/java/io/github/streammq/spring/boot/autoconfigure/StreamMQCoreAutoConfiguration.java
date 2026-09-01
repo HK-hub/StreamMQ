@@ -15,6 +15,7 @@ import io.github.streammq.adapter.redisson.interceptor.TraceContextConsumerInter
 import io.github.streammq.adapter.redisson.interceptor.TraceContextProducerInterceptor;
 import io.github.streammq.adapter.redisson.listener.RedissonBroadcastGroupRegistry;
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
+import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducerFactory;
 import io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
@@ -36,6 +37,7 @@ import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.ManagementAuthenticator;
 import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.core.producer.ProducerConfig;
+import io.github.streammq.core.producer.StreamMessageProducer;
 import io.github.streammq.core.producer.StreamMessageProducerFactory;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.service.DefaultStreamMessageService;
@@ -372,6 +374,9 @@ public class StreamMQCoreAutoConfiguration {
     /**
      * 生产者工厂：基于 Redisson 实现。
      *
+     * <p>保留供需要动态创建多 Producer 的场景使用；Spring 自动装配默认路径为直接注册 {@link
+     * StreamMessageProducer} Bean。
+     *
      * @param redisson Redisson 客户端
      * @param converter 消息转换器
      * @param compressionCodecProvider 压缩编解码器（可选）
@@ -397,6 +402,49 @@ public class StreamMQCoreAutoConfiguration {
     }
 
     /**
+     * 默认生产者：基于 Redisson 实现，作为独立 Bean 注册。
+     *
+     * <p>用户可直接注入 {@link StreamMessageProducer} 发送消息，或通过 {@link
+     * StreamMessageTemplate} / {@link io.github.streammq.core.service.StreamMessageService} 使用。 生命周期由 Spring
+     * 容器管理，与 Template 解耦。
+     *
+     * @param redisson Redisson 客户端
+     * @param converter 消息转换器
+     * @param properties 配置
+     * @param compressionCodecProvider 压缩编解码器（可选）
+     * @return 生产者实例
+     */
+    @Bean(destroyMethod = "close")
+    @ConditionalOnMissingBean(StreamMessageProducer.class)
+    public StreamMessageProducer streamMQProducer(
+            RedissonClient redisson,
+            MessageConverter converter,
+            StreamMQProperties properties,
+            ObjectProvider<CompressionCodec> compressionCodecProvider) {
+        RedissonStreamProducer producer =
+                RedissonStreamProducer.builder()
+                        .redisson(redisson)
+                        .namespace(properties.getNamespace())
+                        .group(properties.getProducer().getGroup())
+                        .converter(converter)
+                        .defaultTimeoutMillis(properties.getProducer().getSendMessageTimeout())
+                        .maxLen(properties.getProducer().getStreamMaxLen())
+                        .compressThreshold(properties.getProducer().getCompressThreshold())
+                        .maxMessageSize(properties.getProducer().getMaxMessageSize())
+                        .build();
+        CompressionCodec codec = compressionCodecProvider.getIfAvailable();
+        if (codec != null) {
+            producer.setCompressionCodec(codec);
+            LOG.debug("CompressionCodec injected into RedissonStreamProducer: {}", codec.name());
+        }
+        LOG.debug(
+                "Creating RedissonStreamProducer: group={}, namespace={}",
+                properties.getProducer().getGroup(),
+                properties.getNamespace());
+        return producer;
+    }
+
+    /**
      * Listener 工厂：基于 Redisson 实现。
      *
      * @param redisson Redisson 客户端
@@ -414,7 +462,9 @@ public class StreamMQCoreAutoConfiguration {
     /**
      * 默认 StreamMQTemplate：基于 Redisson 实现。
      *
-     * @param producerFactory 生产者工厂
+     * <p>直接注入 {@link StreamMessageProducer} Bean，避免通过 Factory 间接创建带来的歧义。
+     *
+     * @param producer 生产者实例
      * @param converter 消息转换器
      * @param properties 配置
      * @return 模板
@@ -422,7 +472,7 @@ public class StreamMQCoreAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(StreamMessageTemplate.class)
     public StreamMessageTemplate streamMQTemplate(
-            StreamMessageProducerFactory producerFactory,
+            StreamMessageProducer producer,
             MessageConverter converter,
             StreamMQProperties properties,
             StreamMQEventBus eventBus,
@@ -432,8 +482,7 @@ public class StreamMQCoreAutoConfiguration {
             @Qualifier("streammqExecutor") ExecutorService streammqExecutor) {
         String defaultGroup = properties.getProducer().getGroup();
         String txGroup = properties.getTransaction().getDefaultGroup();
-        // 注入 namespace / send-message-timeout / stream.max-len 到 defaultConfig,
-        // 保证 Producer 与 ListenerContainer 使用相同的 namespace,避免消息写入与读取 Key 不一致。
+        // ProducerConfig 仍需要：用于 Template 层读取 retryTimes / sendMessageTimeout 等发送参数
         ProducerConfig defaultConfig =
                 ProducerConfig.builder()
                         .group(defaultGroup)
@@ -441,11 +490,7 @@ public class StreamMQCoreAutoConfiguration {
                         .sendMessageTimeout(properties.getProducer().getSendMessageTimeout())
                         .streamMaxLen(properties.getProducer().getStreamMaxLen())
                         .compressThreshold(properties.getProducer().getCompressThreshold())
-                        // 注入 maxMessageSize：用户配置的 streammq.producer.max-message-size
-                        // （默认 512MB 与 Redis Stream 上限对齐；推荐不超过 1MB）
                         .maxMessageSize(properties.getProducer().getMaxMessageSize())
-                        // 注入 retryTimes：用户配置的 streammq.producer.retry-times
-                        // （默认与 StreamMessageTemplate.DEFAULT_SYNC_RETRY_TIMES 一致）
                         .retryTimes(properties.getProducer().getRetryTimes())
                         .build();
         LOG.debug(
@@ -456,11 +501,9 @@ public class StreamMQCoreAutoConfiguration {
                 properties.getNamespace());
         DefaultStreamMessageTemplate template =
                 new DefaultStreamMessageTemplate(
-                        producerFactory, defaultGroup, converter, defaultConfig, txGroup);
+                        producer, defaultGroup, converter, defaultConfig, txGroup);
         template.setEventBus(eventBus);
-        // 异步发送复用统一虚拟线程池（用户可通过覆盖名为 streammqExecutor 的 Bean 自定义）
         template.setAsyncSendExecutor(streammqExecutor);
-        // 注入 TransactionScanner（如果可用），启用完整的半消息 + 回查事务流程
         TransactionScanner scanner = transactionScannerProvider.getIfAvailable();
         if (scanner != null) {
             template.setTransactionScanner(scanner);
@@ -468,7 +511,6 @@ public class StreamMQCoreAutoConfiguration {
                     "TransactionScanner injected into DefaultStreamMessageTemplate: full"
                             + " half-message flow enabled");
         }
-        // 注入指标收集器（如果可用），启用发送指标埋点
         StreamMQMetrics metrics = metricsProvider.getIfAvailable();
         if (metrics != null) {
             template.setMetrics(metrics);
@@ -476,7 +518,6 @@ public class StreamMQCoreAutoConfiguration {
                     "StreamMQMetrics injected into DefaultStreamMessageTemplate: send metrics"
                             + " enabled");
         }
-        // 注入生产者拦截器（如果可用），启用追踪、日志等切面能力
         java.util.List<ProducerInterceptor> producerInterceptors =
                 producerInterceptorProvider.stream().toList();
         if (!producerInterceptors.isEmpty()) {

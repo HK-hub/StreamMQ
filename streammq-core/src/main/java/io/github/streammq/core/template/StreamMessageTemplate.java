@@ -62,9 +62,6 @@ public interface StreamMessageTemplate extends TransactionExecutor {
     /** 默认同步发送重试次数 */
     int DEFAULT_SYNC_RETRY_TIMES = StreamMQConstants.DEFAULT_SYNC_RETRY_TIMES;
 
-    /** 回调派发日志（用户回调异常不应吞掉也不应中断框架流程） */
-    Logger log = LoggerFactory.getLogger(StreamMessageTemplate.class);
-
     /**
      * 同步发送（规范形）。
      *
@@ -130,12 +127,15 @@ public interface StreamMessageTemplate extends TransactionExecutor {
                                                             "async send failed", ex));
                                 }
                             } catch (Throwable dispatchError) {
-                                log.warn(
-                                        "async send callback threw exception: topic={},"
-                                                + " messageId={}",
-                                        message.getTopic(),
-                                        Objects.nonNull(result) ? result.getMessageId() : "unknown",
-                                        dispatchError);
+                                LoggerFactory.getLogger(StreamMessageTemplate.class)
+                                        .warn(
+                                                "async send callback threw exception: topic={},"
+                                                        + " messageId={}",
+                                                message.getTopic(),
+                                                Objects.nonNull(result)
+                                                        ? result.getMessageId()
+                                                        : "unknown",
+                                                dispatchError);
                             }
                         });
     }

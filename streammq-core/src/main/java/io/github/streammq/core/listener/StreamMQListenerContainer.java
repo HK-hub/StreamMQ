@@ -107,6 +107,30 @@ public interface StreamMQListenerContainer {
      */
     boolean isRunning();
 
+    // ===================== 运行时管理（可选，默认空实现） =====================
+
+    /**
+     * 触发指定消费者组的重平衡。
+     *
+     * @param group 消费者组名
+     * @return true 如果重平衡已执行
+     */
+    default boolean rebalanceGroup(String group) {
+        return false;
+    }
+
+    /** 设置背压队列容量（运行时调参）。 */
+    default void setInflightCapacity(int capacity) {}
+
+    /** 设置暂停休眠间隔（运行时调参）。 */
+    default void setPausedSleepMillis(long millis) {}
+
+    /** 设置 Broker 异常退避间隔（运行时调参）。 */
+    default void setBrokerErrorBackoffMillis(long millis) {}
+
+    /** 设置消费超时取消后的宽限期（运行时调参）。 */
+    default void setTimeoutCancelGraceMillis(long millis) {}
+
     /**
      * Consumer 元信息。
      *

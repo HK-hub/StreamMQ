@@ -230,36 +230,108 @@ public class RedissonStreamProducer implements StreamMessageProducer {
 
     @Override
     public CompletableFuture<SendResult> asyncSend(Message<?> message) {
-        ensureOpen();
-        Objects.requireNonNull(message, "message");
-        return CompletableFuture.supplyAsync(
-                () -> syncSend(message, defaultTimeoutMillis), asyncExecutor);
+        return asyncSend(message, defaultTimeoutMillis);
     }
 
+    /**
+     * 异步发送：使用 Redisson 原生 {@link RFuture} 转为 {@link CompletableFuture}， 避免在虚拟线程中阻塞等待 Redis
+     * 响应。延时消息当前仍走虚拟线程包装路径（ZSet + Hash 操作链较复杂）。
+     */
     @Override
     public CompletableFuture<SendResult> asyncSend(Message<?> message, long timeoutMillis) {
         ensureOpen();
         Objects.requireNonNull(message, "message");
         long effectiveTimeout = timeoutMillis > 0 ? timeoutMillis : defaultTimeoutMillis;
-        return CompletableFuture.supplyAsync(
-                () -> syncSend(message, effectiveTimeout), asyncExecutor);
+
+        // 延时消息当前仍走 supplyAsync 包装（操作链复杂，异步化收益有限）
+        if (message.isDelayMessage()) {
+            return CompletableFuture.supplyAsync(
+                    () -> syncSend(message, effectiveTimeout), asyncExecutor);
+        }
+
+        String topic =
+                io.github.streammq.core.util.StringUtils.requireValidTopic(message.getTopic());
+        Map<String, String> fields = converter.toStreamFields(message);
+        int estimatedSize = estimateFieldSize(fields);
+        if (estimatedSize > maxMessageSize) {
+            return CompletableFuture.failedFuture(
+                    new StreamMQBrokerException(
+                            "Message size "
+                                    + estimatedSize
+                                    + " bytes exceeds max "
+                                    + maxMessageSize
+                                    + " bytes for topic "
+                                    + topic,
+                            null,
+                            null));
+        }
+        applyCompression(fields);
+        String streamKey = StreamMQKeys.topicStream(namespace, topic);
+        RStream<String, String> stream = redisson.getStream(streamKey);
+        StreamAddArgs<String, String> args = buildAddArgs(fields);
+
+        // 真正的异步 Redis 调用：RFuture → CompletableFuture，无需虚拟线程阻塞
+        RFuture<StreamMessageId> rFuture = stream.addAsync(args);
+        CompletableFuture<SendResult> result = new CompletableFuture<>();
+        rFuture.whenComplete(
+                (streamId, ex) -> {
+                    if (ex != null) {
+                        result.completeExceptionally(
+                                new StreamMQBrokerException(
+                                        "asyncSend failed for topic " + topic, null, ex));
+                    } else {
+                        MessageId messageId = MessageId.fromStreamMessageId(streamId);
+                        result.complete(
+                                new SendResult(
+                                        messageId,
+                                        topic,
+                                        message.getTag(),
+                                        message.getBornTimestamp()));
+                    }
+                });
+        return result;
     }
 
+    /**
+     * 单向发送：fire-and-forget，不等待响应、不抛异常到调用方。
+     *
+     * <p>直接发起 {@link RStream#addAsync} 后即刻返回，不占用虚拟线程执行完整的 syncSend 链路。 异常仅记录日志，由调用方决定是否关心。
+     */
     @Override
     public void sendOneway(Message<?> message) {
         ensureOpen();
         Objects.requireNonNull(message, "message");
-        asyncExecutor.submit(
-                () -> {
-                    try {
-                        syncSend(message, defaultTimeoutMillis);
-                    } catch (RuntimeException ex) {
-                        LOG.warn(
-                                "oneway send failed for topic {}: {}",
-                                message.getTopic(),
-                                ex.getMessage());
-                    }
-                });
+        try {
+            if (message.isDelayMessage()) {
+                // 延时消息 oneway：提交到执行器但不等待结果
+                asyncExecutor.submit(
+                        () -> {
+                            try {
+                                sendDelayMessage(message);
+                            } catch (RuntimeException ex) {
+                                LOG.warn(
+                                        "Oneway delay send failed: {}", ex.getMessage());
+                            }
+                        });
+                return;
+            }
+            String topic =
+                    io.github.streammq.core.util.StringUtils.requireValidTopic(
+                            message.getTopic());
+            Map<String, String> fields = converter.toStreamFields(message);
+            applyCompression(fields);
+            String streamKey = StreamMQKeys.topicStream(namespace, topic);
+            RStream<String, String> stream = redisson.getStream(streamKey);
+            StreamAddArgs<String, String> args = buildAddArgs(fields);
+            // fire-and-forget：发起异步调用，不等待、不处理结果
+            stream.addAsync(args);
+        } catch (RuntimeException ex) {
+            // oneway 语义：所有异常静默丢弃，仅记录日志，不抛到调用方
+            LOG.warn(
+                    "Oneway send failed for topic {}: {}",
+                    message.getTopic(),
+                    ex.getMessage());
+        }
     }
 
     @Override

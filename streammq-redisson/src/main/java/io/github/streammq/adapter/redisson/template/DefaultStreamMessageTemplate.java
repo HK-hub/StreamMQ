@@ -58,6 +58,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate, Auto
 
     private static final Logger LOG = LoggerFactory.getLogger(DefaultStreamMessageTemplate.class);
 
+    private final StreamMessageProducer producer;
     private final StreamMessageProducerFactory producerFactory;
     private final String defaultGroup;
     private final MessageConverter messageConverter;
@@ -127,18 +128,21 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate, Auto
     }
 
     /**
-     * 构造 Template。
+     * 构造 Template（直接注入 Producer）。
      *
-     * @param producerFactory 生产者工厂
+     * <p>推荐在 Spring 环境中使用此构造函数：Producer 作为 Bean 由容器管理生命周期，
+     * Template 直接复用，避免 Factory 中间层的歧义与性能开销。
+     *
+     * @param producer 生产者实例（线程安全，可复用）
      * @param defaultGroup 默认生产组名
      * @param messageConverter 消息转换器
      */
     public DefaultStreamMessageTemplate(
-            StreamMessageProducerFactory producerFactory,
+            StreamMessageProducer producer,
             String defaultGroup,
             MessageConverter messageConverter) {
         this(
-                producerFactory,
+                producer,
                 defaultGroup,
                 messageConverter,
                 ProducerConfig.builder().group(defaultGroup).build(),
@@ -146,7 +150,34 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate, Auto
     }
 
     /**
-     * 全参构造。
+     * 全参构造（直接注入 Producer）。
+     *
+     * @param producer 生产者实例（线程安全，可复用）
+     * @param defaultGroup 默认生产组名
+     * @param messageConverter 消息转换器
+     * @param defaultConfig 默认生产者配置
+     * @param transactionGroup 事务组名（用于事务消息），可为 null
+     */
+    public DefaultStreamMessageTemplate(
+            StreamMessageProducer producer,
+            String defaultGroup,
+            MessageConverter messageConverter,
+            ProducerConfig defaultConfig,
+            String transactionGroup) {
+        this.producer = Objects.requireNonNull(producer, "producer");
+        this.producerFactory = null;
+        this.defaultGroup = Objects.requireNonNull(defaultGroup, "defaultGroup");
+        this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
+        this.interceptorChain = new ProducerInterceptorChain(this.defaultGroup);
+        this.defaultConfig = Objects.requireNonNull(defaultConfig, "defaultConfig");
+        this.transactionGroup = transactionGroup;
+    }
+
+    /**
+     * 构造 Template（通过 Factory 创建 Producer）。
+     *
+     * <p>保留此构造函数供非 Spring / 需要动态创建 Producer 的场景使用。Factory 内部有缓存，
+     * 同配置多次调用返回同一实例，但设计上仍建议在构造期解析一次并持有。
      *
      * @param producerFactory 生产者工厂
      * @param defaultGroup 默认生产组名
@@ -160,7 +191,9 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate, Auto
             MessageConverter messageConverter,
             ProducerConfig defaultConfig,
             String transactionGroup) {
-        this.producerFactory = Objects.requireNonNull(producerFactory, "producerFactory");
+        Objects.requireNonNull(producerFactory, "producerFactory");
+        this.producer = producerFactory.createProducer(defaultConfig);
+        this.producerFactory = producerFactory;
         this.defaultGroup = Objects.requireNonNull(defaultGroup, "defaultGroup");
         this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
         this.interceptorChain = new ProducerInterceptorChain(this.defaultGroup);
@@ -678,14 +711,13 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate, Auto
     }
 
     /**
-     * 解析消息对应的 Producer。 当前实现：所有消息使用同一个 defaultGroup Producer。 未来可扩展：按 message.properties 中的 group
-     * 字段路由。
+     * 解析消息对应的 Producer。当前实现：所有消息使用同一个已缓存的 Producer 实例。
      *
      * @param topic 当前主题（用于未来扩展路由）
      * @return Producer 实例
      */
     private StreamMessageProducer resolveProducer(String topic) {
-        return producerFactory.createProducer(defaultConfig);
+        return producer;
     }
 
     @Override

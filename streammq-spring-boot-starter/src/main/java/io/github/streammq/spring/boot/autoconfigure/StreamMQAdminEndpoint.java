@@ -5,7 +5,7 @@
  */
 package io.github.streammq.spring.boot.autoconfigure;
 
-import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
+import io.github.streammq.core.listener.StreamMQListenerContainer;
 import io.github.streammq.adapter.redisson.converter.MessageFields;
 import io.github.streammq.adapter.redisson.listener.RedissonBroadcastGroupRegistry;
 import io.github.streammq.adapter.redisson.metrics.RuntimeStatsRegistry;
@@ -44,7 +44,7 @@ public class StreamMQAdminEndpoint {
     private static final Logger LOG = LoggerFactory.getLogger(StreamMQAdminEndpoint.class);
 
     private final RedissonClient redisson;
-    private final DefaultStreamMQListenerContainer container;
+    private final StreamMQListenerContainer container;
     private final String namespace;
     private final FailureRetryLimiter failureRetryLimiter;
 
@@ -60,7 +60,7 @@ public class StreamMQAdminEndpoint {
     // 真实消息，已废弃；Topic 元数据现登记在 StreamMQKeys.topicRegistry(namespace) Set 中。
 
     public StreamMQAdminEndpoint(
-            RedissonClient redisson, DefaultStreamMQListenerContainer container, String namespace) {
+            RedissonClient redisson, StreamMQListenerContainer container, String namespace) {
         this(
                 redisson,
                 container,
@@ -80,7 +80,7 @@ public class StreamMQAdminEndpoint {
      */
     public StreamMQAdminEndpoint(
             RedissonClient redisson,
-            DefaultStreamMQListenerContainer container,
+            StreamMQListenerContainer container,
             String namespace,
             long failureRetryCooldownMillis,
             BroadcastGroupRegistry broadcastGroupRegistry) {
@@ -424,8 +424,10 @@ public class StreamMQAdminEndpoint {
     public Map<String, Object> getStats(String group, String topic) {
         Map<String, Object> stats = new LinkedHashMap<>();
         // 1) 进程内真实计数（消费成功/失败、重试、死信、平均耗时）
-        if (container != null) {
-            stats.putAll(container.runtimeStats().snapshot(group, topic));
+        if (container
+                instanceof
+                io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer dlc) {
+            stats.putAll(dlc.runtimeStats().snapshot(group, topic));
         } else {
             stats.put("noData", true);
             stats.put("hint", "Listener container not available on this instance.");
