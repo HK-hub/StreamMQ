@@ -5,7 +5,7 @@
       "values": [
         {
           "value": "io.github.streammq.adapter.redisson.serializer.FurySerializer",
-          "description": "Apache Fury 二进制序列化（默认），吞吐量约为 Jackson 的 7 倍；自定义 body 类型需先注册"
+          "description": "Apache Fury 二进制序列化（默认），吞吐量约为 Jackson 的 7 倍；默认不强制类注册，可配 fury-require-class-registration=true 开启类注册白名单"
         },
         {
           "value": "io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer",
@@ -68,8 +68,14 @@
     {
       "name": "streammq.producer.serializer",
       "type": "java.lang.Class",
-      "description": "消息体序列化器实现类（全限定类名）。默认 Apache Fury，自定义 body 类型需先注册；需要跨语言可读性时切换为 JacksonJsonSerializer。",
+      "description": "消息体序列化器实现类（全限定类名）。默认 Apache Fury（不强制类注册，任意 POJO 开箱即用）；需要跨语言可读性时切换为 JacksonJsonSerializer。",
       "defaultValue": "io.github.streammq.adapter.redisson.serializer.FurySerializer"
+    },
+    {
+      "name": "streammq.producer.fury-require-class-registration",
+      "type": "java.lang.Boolean",
+      "description": "Fury 是否强制类注册白名单（仅当 producer.serializer 为 FurySerializer 时生效）。默认 false=宽松模式，任意 POJO 开箱即用；共享/多租户 Redis 建议设为 true 并注册业务类型，以收窄反序列化攻击面。",
+      "defaultValue": false
     },
     {
       "name": "streammq.tracing.enabled",

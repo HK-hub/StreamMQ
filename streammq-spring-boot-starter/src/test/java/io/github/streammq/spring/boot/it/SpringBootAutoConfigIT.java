@@ -11,6 +11,7 @@ import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerCont
 import io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
+import io.github.streammq.adapter.redisson.serializer.FurySerializer;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.policy.RetryPolicy;
@@ -133,6 +134,76 @@ class SpringBootAutoConfigIT {
                 .isEqualTo(io.github.streammq.core.StreamMQConstants.DEFAULT_SERIALIZER);
         assertThat(serializer.name())
                 .isEqualTo(io.github.streammq.core.StreamMQConstants.DEFAULT_SERIALIZER_NAME);
+    }
+
+    @Test
+    @DisplayName("默认装配的 FurySerializer 为宽松模式：未注册 POJO 开箱即用（开关默认 false）")
+    void messageSerializer_defaultFuryIsUnrestricted() {
+        MessageSerializer<?> serializer = applicationContext.getBean(MessageSerializer.class);
+        assertThat(serializer).isInstanceOf(FurySerializer.class);
+        assertThat(((FurySerializer<?>) serializer).isRequireClassRegistration()).isFalse();
+        assertThat(properties.getProducer().isFuryRequireClassRegistration()).isFalse();
+        SimplePayload payload = new SimplePayload("round-trip", 42);
+        byte[] bytes = serializeThrough(serializer, payload, SimplePayload.class);
+        assertThat(deserializeThrough(serializer, bytes, SimplePayload.class)).isEqualTo(payload);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <P> byte[] serializeThrough(
+            MessageSerializer<?> serializer, P payload, Class<P> type) {
+        return ((MessageSerializer<P>) serializer).serialize(payload, type);
+    }
+
+    private static <P> P deserializeThrough(
+            MessageSerializer<?> serializer, byte[] bytes, Class<P> type) {
+        @SuppressWarnings("unchecked")
+        MessageSerializer<P> typed = (MessageSerializer<P>) serializer;
+        return typed.deserialize(bytes, type);
+    }
+
+    /** 宽松模式开箱即用验证用的简单 POJO（需无参构造与字段） */
+    public static class SimplePayload {
+        private String text;
+        private int number;
+
+        public SimplePayload() {}
+
+        public SimplePayload(String text, int number) {
+            this.text = text;
+            this.number = number;
+        }
+
+        public String getText() {
+            return text;
+        }
+
+        public void setText(String text) {
+            this.text = text;
+        }
+
+        public int getNumber() {
+            return number;
+        }
+
+        public void setNumber(int number) {
+            this.number = number;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof SimplePayload other)) {
+                return false;
+            }
+            return number == other.number && java.util.Objects.equals(text, other.text);
+        }
+
+        @Override
+        public int hashCode() {
+            return java.util.Objects.hash(text, number);
+        }
     }
 
     @Test

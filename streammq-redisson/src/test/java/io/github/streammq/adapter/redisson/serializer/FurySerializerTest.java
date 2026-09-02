@@ -13,7 +13,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * {@link FurySerializer} 单元测试，覆盖序列化/反序列化往返、null 处理、 空 byte[] 处理与 name 方法。
+ * {@link FurySerializer} 单元测试，覆盖序列化/反序列化往返、null 处理、 空 byte[] 处理、默认宽松/强制白名单两种模式与 name 方法。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -78,12 +78,12 @@ class FurySerializerTest {
         }
     }
 
-    /** 默认实例（0.1.0 起 secure-by-default：强制类注册白名单） */
+    /** 宽松模式实例（requireClassRegistration=false），任意 POJO 开箱即用 */
     private final FurySerializer<MyData> serializer = new FurySerializer<>(false);
 
     @org.junit.jupiter.api.BeforeAll
     static void allowUnrestricted() {
-        // 单元测试需要"无白名单"路径，必须显式声明
+        // 显式确认属性：抑制宽松模式构造的 WARN 提醒，避免测试日志噪音
         System.setProperty("streammq.security.allowUnrestrictedSerializer", "true");
     }
 
@@ -106,9 +106,21 @@ class FurySerializerTest {
     }
 
     @Test
-    @DisplayName("默认构造强制类注册：未注册类序列化被拒绝（secure-by-default）")
-    void defaultRejectsUnregisteredClass() {
-        FurySerializer<MyData> secure = new FurySerializer<>();
+    @DisplayName("默认无参构造为宽松模式：任意 POJO 开箱即用（requireClassRegistration=false）")
+    void defaultConstructorAllowsAnyPojo() {
+        FurySerializer<MyData> open = new FurySerializer<>();
+        assertThat(open.isRequireClassRegistration()).isFalse();
+        MyData data = new MyData("Alice", 30, 1719800000L);
+        byte[] bytes = open.serialize(data, MyData.class);
+        assertThat(bytes).isNotEmpty();
+        assertThat(open.deserialize(bytes, MyData.class)).isEqualTo(data);
+    }
+
+    @Test
+    @DisplayName("显式 true（强制类注册白名单）：未注册类序列化被拒绝")
+    void secureModeRejectsUnregisteredClass() {
+        FurySerializer<MyData> secure = new FurySerializer<>(true);
+        assertThat(secure.isRequireClassRegistration()).isTrue();
         MyData data = new MyData("Alice", 30, 1719800000L);
         assertThatThrownBy(() -> secure.serialize(data, MyData.class))
                 .isInstanceOf(Exception.class)
@@ -118,7 +130,7 @@ class FurySerializerTest {
     @Test
     @DisplayName("secure serializer exposes public registration API")
     void registerAllowsPojoRoundTrip() {
-        FurySerializer<MyData> secure = new FurySerializer<>();
+        FurySerializer<MyData> secure = new FurySerializer<>(true);
         secure.register(MyData.class);
         MyData data = new MyData("registered", 7, 42L);
         byte[] bytes = secure.serialize(data, MyData.class);
@@ -126,11 +138,11 @@ class FurySerializerTest {
     }
 
     @Test
-    @DisplayName("默认（类注册白名单）实例可直接处理 String body：框架默认 body 类型无需预注册")
+    @DisplayName("强制类注册白名单实例可直接处理 String body：框架默认 body 类型无需预注册")
     void stringBodyWorksWithoutRegistration() {
-        // 回归保护：Fury 已是框架默认序列化器，而 samples / starter E2E 全部使用 String body。
-        // 若 Fury 未来把 java.lang.String 也纳入白名单校验，默认装配将开箱即失败。
-        FurySerializer<String> secure = new FurySerializer<>();
+        // 回归保护：Fury 是框架默认序列化器，samples / starter E2E 全部使用 String body。
+        // 即使开启类注册白名单，java.lang.String 等内置类型也应开箱可用，无需显式注册。
+        FurySerializer<String> secure = new FurySerializer<>(true);
         byte[] bytes = secure.serialize("streammq-default", String.class);
         assertThat(bytes).isNotEmpty();
         assertThat(secure.deserialize(bytes, String.class)).isEqualTo("streammq-default");
@@ -140,22 +152,27 @@ class FurySerializerTest {
     @DisplayName("constructor registers initial message types")
     void constructorRegistersTypes() {
         FurySerializer<MyData> secure = new FurySerializer<>(MyData.class);
+        assertThat(secure.isRequireClassRegistration()).isTrue();
         MyData data = new MyData("initial", 1, 2L);
         assertThat(secure.deserialize(secure.serialize(data, MyData.class), MyData.class))
                 .isEqualTo(data);
     }
 
     @Test
-    @DisplayName("FurySerializer(false) 默认抛 SecurityException（防止 foot-gun）")
-    void requiresClassRegistrationFalseGatedBySystemProperty() {
+    @DisplayName("宽松模式无需 -D 系统属性即可工作（原 SecurityException 门控已移除为 WARN）")
+    void unrestrictedModeWorksWithoutSystemProperty() {
         String previous = System.getProperty("streammq.security.allowUnrestrictedSerializer");
         System.clearProperty("streammq.security.allowUnrestrictedSerializer");
         try {
-            assertThatThrownBy(() -> new FurySerializer<MyData>(false))
-                    .isInstanceOf(SecurityException.class)
-                    .hasMessageContaining("streammq.security.allowUnrestrictedSerializer");
+            FurySerializer<MyData> open = new FurySerializer<>(false);
+            assertThat(open.isRequireClassRegistration()).isFalse();
+            MyData data = new MyData("gate-free", 1, 1L);
+            byte[] bytes = open.serialize(data, MyData.class);
+            assertThat(open.deserialize(bytes, MyData.class)).isEqualTo(data);
         } finally {
-            if (previous != null) {
+            if (previous == null) {
+                System.clearProperty("streammq.security.allowUnrestrictedSerializer");
+            } else {
                 System.setProperty("streammq.security.allowUnrestrictedSerializer", previous);
             }
         }

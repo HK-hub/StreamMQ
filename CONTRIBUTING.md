@@ -435,9 +435,13 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 
 ### Fury serializer registration
 
-`FurySerializer` is the **default serializer** (`streammq.producer.serializer`) and is secure
-by default: application payload classes must be registered before the first send/receive.
-Prefer constructor registration in Spring configuration so startup fails early for a missing type:
+`FurySerializer` is the **default serializer** (`streammq.producer.serializer`). By default it
+does **not** enforce class registration (unrestricted mode, `requireClassRegistration=false`):
+any POJO works out of the box, but bytes stored in Redis can be deserialized to arbitrary classes
+on the classpath. For shared/multi-tenant Redis, enable the class registration whitelist via
+`streammq.producer.fury-require-class-registration: true` (Spring Boot) or `new FurySerializer(true)`
+(Java API), then register application payloads before the first send/receive. Prefer constructor
+registration in Spring configuration so startup fails early for a missing type:
 
 ```java
 @Bean
@@ -447,10 +451,10 @@ MessageSerializer<OrderCreated> orderSerializer() {
 ```
 
 For dynamic setup, call `register(Class<?>)` or `registerAll(Class<?>...)` once during
-initialization. Do not register classes based on untrusted input. Disabling registration
-(`new FurySerializer(false)`) requires the explicit
-`-Dstreammq.security.allowUnrestrictedSerializer=true` system property and should only
-be used with a fully trusted, isolated Redis instance.
+initialization. Do not register classes based on untrusted input. Constructing an unrestricted
+serializer (`new FurySerializer()` / `new FurySerializer(false)`) logs a WARN; after confirming
+Redis is fully trusted and isolated, set `-Dstreammq.security.allowUnrestrictedSerializer=true`
+to suppress the warning.
 
 ## Pull Request Process
 

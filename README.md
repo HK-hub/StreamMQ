@@ -245,8 +245,8 @@ StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 1. **序列化选择**: 默认 **Apache Fury**（`streammq.producer.serializer` 默认值即
    `io.github.streammq.adapter.redisson.serializer.FurySerializer`，该属性类型为 `Class<? extends MessageSerializer>`，
-   需填写**全限定类名**），其吞吐量是 Jackson 的 7 倍以上；注意 Fury 为 secure-by-default，
-   自定义 body 类型需先注册（见 [反序列化安全](#反序列化安全)）。需要 JSON 可读性/跨语言互通时再切回 `JacksonJsonSerializer`
+   需填写**全限定类名**），其吞吐量是 Jackson 的 7 倍以上；Fury 默认不强制类注册，任意 POJO 开箱即用，
+   共享/多租户 Redis 建议开启类注册白名单（见 [反序列化安全](#反序列化安全)）。需要 JSON 可读性/跨语言互通时再切回 `JacksonJsonSerializer`
 2. **发送策略**: 高吞吐场景使用 `asyncSend`，可提升 4~5 倍性能
 3. **负载大小**: 10KB 大消息建议启用 GZIP 压缩（`MessageCompressor` SPI）
 4. **连接池**: 默认 16 连接可满足多数场景，高并发可调至 32~64。**Sizing 经验**：
@@ -724,6 +724,7 @@ streammq:
     retry-times: 2                     # 同步发送重试次数（0~MAX_SYNC_RETRY_TIMES）
     compress-threshold: 0              # 0=不压缩，>0 时超过该字节数的消息自动压缩
     serializer: io.github.streammq.adapter.redisson.serializer.FurySerializer  # 序列化器（全限定类名，默认 Fury）
+    fury-require-class-registration: false  # Fury 是否强制类注册白名单（仅对 Fury 生效；共享/多租户 Redis 建议 true）
     stream-max-len: 0                  # Stream 最大长度（0=不限制）
     max-message-size: 10485760         # 单条消息最大字节数
 
@@ -1200,21 +1201,24 @@ redisson:
 
 ### 反序列化安全
 
-`FurySerializer` 与 `JdkSerializer` 默认均为**安全优先（secure-by-default）**：
+`FurySerializer`（默认序列化器）与 `JdkSerializer` 的安全姿态如下：
 
-- `FurySerializer` 是**默认序列化器**（`streammq.producer.serializer` 默认值），默认强制类注册白名单（`requireClassRegistration=true`），首次使用前需注册业务消息体类型。可通过构造器一次性注册，或在启动阶段调用公开的 `register`/`registerAll` API：
+- `FurySerializer` 是**默认序列化器**（`streammq.producer.serializer` 默认值）。默认**不强制**类注册（宽松模式，`requireClassRegistration=false`），任意 POJO 开箱即用；但 Redis 中被写入的字节流可被反序列化为 classpath 上的任意类。共享/多租户 Redis 建议通过配置开启类注册白名单：
+  ```yaml
+  streammq:
+    producer:
+      fury-require-class-registration: true # 开启类注册白名单
+  ```
+  白名单模式下需预注册业务消息体类型（构造器注册或启动阶段调用 `register`/`registerAll`）：
   ```java
   FurySerializer<OrderCreated> serializer = new FurySerializer<>(OrderCreated.class);
-  // 等价写法：new FurySerializer<>().register(OrderCreated.class);
+  // 等价写法：new FurySerializer<>(true).register(OrderCreated.class);
   ```
-  若 Redis 实例完全可信，可显式关闭白名单换取任意 POJO 开箱即用：
-  ```java
-  MessageSerializer<?> serializer = new FurySerializer(false); // 仅限完全可信的 Redis
-  ```
+  纯 Java 直接实例化时：`new FurySerializer()` 为宽松模式，`new FurySerializer(true)` 为强制白名单模式；宽松构造会打印 WARN 提醒，已确认风险的场景可用 `-Dstreammq.security.allowUnrestrictedSerializer=true` 抑制。
 - `JdkSerializer` 内置 JEP 290 类名白名单过滤器（目标类型 + JDK 基础类型），反序列化前拦截未知类；
   第三方业务类型通过 `addAllowedClasses(...)` 显式放行。切勿使用 `JdkSerializer.unrestricted()`。
 
-若 Redis 实例可能被不可信方写入（共享实例、多租户场景），请保持默认白名单模式以收窄反序列化攻击面。完整安全策略见 [SECURITY.md](SECURITY.md)。
+若 Redis 实例可能被不可信方写入（共享实例、多租户场景），请开启 Fury 类注册白名单以收窄反序列化攻击面。完整安全策略见 [SECURITY.md](SECURITY.md)。
 
 ### 安全策略
 

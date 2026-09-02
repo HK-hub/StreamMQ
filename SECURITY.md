@@ -27,9 +27,22 @@
 
 ### 序列化器选择
 
-StreamMQ 的**默认序列化器是 `FurySerializer`**（`streammq.producer.serializer` 默认值）。它默认强制类注册白名单（secure-by-default）：仅允许显式注册过的类反序列化，未注册类型在反序列化前直接拒绝。首次使用前需调用 `Fury.register(Class)` 注册业务消息体类型。仅当 Redis 实例完全可信时，才可显式关闭白名单换取任意 POJO 开箱即用：`new FurySerializer(false)`——此举会重新扩大反序列化攻击面，请谨慎评估。
+StreamMQ 的**默认序列化器是 `FurySerializer`**（`streammq.producer.serializer` 默认值）。
 
-若希望开箱即用任意 POJO 且接受 JSON 的性能与体积开销，可显式切换为 `JacksonJsonSerializer`（无需预注册类型）。
+**默认不强制类注册（宽松模式，`requireClassRegistration=false`）**：任意 POJO 开箱即用，但 Redis 中被写入的字节流可被反序列化为 classpath 上的任意类——共享/多租户 Redis 场景下是反序列化攻击面（RCE 向量）。Spring Boot 用户可通过 `streammq.producer.fury-require-class-registration` 开关控制是否强制类注册白名单：
+
+```yaml
+streammq:
+  producer:
+    serializer: io.github.streammq.adapter.redisson.serializer.FurySerializer
+    fury-require-class-registration: true # 开启类注册白名单（生产建议）
+```
+
+开启白名单后仅允许显式注册过的类反序列化，首次使用前需注册业务消息体类型（`new FurySerializer<>(OrderCreated.class)` 或 `register(Class)` / `registerAll(Class...)`）。
+
+**Java API 说明**：`new FurySerializer()` 为宽松模式（与 Spring 装配默认一致）；`new FurySerializer(true)` 或 `new FurySerializer<>(Xxx.class)` 为强制类注册白名单模式。宽松构造会输出一条 WARN 提醒；已评估并接受风险的场景可设置 `-Dstreammq.security.allowUnrestrictedSerializer=true` 抑制该提醒。
+
+若 Redis 实例**可能被不可信方写入（共享实例、多租户场景），请务必开启类注册白名单**以收窄反序列化攻击面。若希望开箱即用任意 POJO 且接受 JSON 的性能与体积开销，可显式切换为 `JacksonJsonSerializer`（无需预注册类型）。
 
 ### 凭据管理
 

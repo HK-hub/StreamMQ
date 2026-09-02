@@ -702,11 +702,16 @@ StreamMQ takes your security seriously. Best practices:
 
 ### Deserialization safety
 
-- `FurySerializer` and `JdkSerializer` are **secure-by-default**:
-  - `FurySerializer` is the **default serializer** (`streammq.producer.serializer` default) and enforces class registration whitelist by default (`requireClassRegistration=true`). Register application payloads up front with `new FurySerializer<>(OrderCreated.class)` or `new FurySerializer<>().register(OrderCreated.class)`. To disable for fully-trusted Redis: `new FurySerializer(false)` — **gated by `-Dstreammq.security.allowUnrestrictedSerializer=true`**.
-  - `JdkSerializer` has JEP 290 class name whitelist filter (target type + JDK basics); use `JdkSerializer.unrestricted()` only as a last resort — also gated by the same system property.
+- `FurySerializer` (the **default serializer**, `streammq.producer.serializer` default) does **not** enforce class registration by default (unrestricted mode, `requireClassRegistration=false`): any POJO works out of the box, but bytes stored in Redis can be deserialized to arbitrary classes on the classpath. For shared/multi-tenant Redis, enable the class registration whitelist:
+  ```yaml
+  streammq:
+    producer:
+      fury-require-class-registration: true
+  ```
+  In whitelist mode, register application payloads up front with `new FurySerializer<>(OrderCreated.class)` or `new FurySerializer<>(true).register(OrderCreated.class)`. When instantiating directly from Java: `new FurySerializer()` is unrestricted, `new FurySerializer(true)` enforces the whitelist. Constructing an unrestricted serializer logs a WARN; after confirming Redis is fully trusted, set `-Dstreammq.security.allowUnrestrictedSerializer=true` to suppress it.
+- `JdkSerializer` has a JEP 290 class name whitelist filter (target type + JDK basics); use `JdkSerializer.unrestricted()` only as a last resort — gated by `-Dstreammq.security.allowUnrestrictedSerializer=true`.
 
-For shared/multi-tenant Redis, keep default whitelist mode. See [SECURITY.md](SECURITY.md) for the full security policy.
+For shared/multi-tenant Redis, keep the Fury whitelist enabled to narrow the deserialization attack surface. See [SECURITY.md](SECURITY.md) for the full security policy.
 
 ---
 

@@ -35,6 +35,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *     retry-times: 2
  *     stream-max-len: 10000
  *     serializer: io.github.streammq.adapter.redisson.serializer.FurySerializer
+ *     fury-require-class-registration: false
  *   consumer:
  *     poll-timeout: 1s
  *     batch-size: 32
@@ -154,11 +155,20 @@ public class StreamMQProperties {
         /**
          * 消息体序列化器实现类（填写全限定类名），默认 {@link FurySerializer}（Apache Fury）。
          *
-         * <p>Fury 为 secure-by-default：自定义 body 类型需先注册，例如 {@code new
-         * FurySerializer<>(OrderCreated.class)}。 若需要 JSON 可读性或跨语言互通，可切换为 {@code
-         * JacksonJsonSerializer}。对应全局默认值常量： {@link StreamMQConstants#DEFAULT_SERIALIZER}。
+         * <p>Fury 默认<b>不强制</b>类注册（宽松模式，任意 POJO 开箱即用）；如需类注册白名单请同时配置 {@code
+         * streammq.producer.fury-require-class-registration=true} 并注册业务类型。 需要 JSON 可读性或跨语言互通时， 可切换为
+         * {@code JacksonJsonSerializer}。对应全局默认值常量： {@link StreamMQConstants#DEFAULT_SERIALIZER}。
          */
         private Class<? extends MessageSerializer> serializer = FurySerializer.class;
+
+        /**
+         * Fury 是否强制类注册白名单（仅当 {@code producer.serializer} 为 {@link FurySerializer} 时生效）。
+         *
+         * <p>默认 {@code false}（宽松模式）：任意 POJO 开箱即用——Redis 中被写入的字节流可反序列化为 classpath 上的任意类，共享/多租户 Redis
+         * 场景下是反序列化攻击面（RCE 向量）。 生产环境建议设为 {@code true} 开启 类注册白名单，并通过 {@code new
+         * FurySerializer<>(Xxx.class)} 或 {@code register(Class)} 预注册业务消息体类型。
+         */
+        private boolean furyRequireClassRegistration = false;
 
         /** 消息体压缩阈值（字节），body 超过此值时触发压缩，0 = 禁用（默认禁用） */
         private int compressThreshold = StreamMQConstants.DEFAULT_COMPRESS_THRESHOLD_BYTES;

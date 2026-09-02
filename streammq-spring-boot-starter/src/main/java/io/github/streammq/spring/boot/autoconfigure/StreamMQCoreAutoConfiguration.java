@@ -19,6 +19,7 @@ import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.adapter.redisson.security.DenyAllAuthenticator;
+import io.github.streammq.adapter.redisson.serializer.FurySerializer;
 import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate;
 import io.github.streammq.adapter.redisson.trace.NoopTraceCollector;
 import io.github.streammq.adapter.redisson.trace.Slf4jTraceCollector;
@@ -154,6 +155,10 @@ public class StreamMQCoreAutoConfiguration {
      * 默认序列化器，从配置 {@code streammq.producer.serializer} 读取 Class 并实例化； 未配置（或配置为空）时使用默认值 Apache
      * Fury（{@link StreamMQConstants#DEFAULT_SERIALIZER}）。
      *
+     * <p>当序列化器为 {@link FurySerializer} 时，按 {@code
+     * streammq.producer.fury-require-class-registration} 决定是否强制类注册白名单：默认 {@code false}=宽松模式（任意 POJO
+     * 开箱即用），共享/多租户 Redis 建议设为 {@code true} 并预注册业务类型。其它序列化器沿用无参构造实例化。
+     *
      * @param properties 配置
      * @return 序列化器
      */
@@ -164,6 +169,15 @@ public class StreamMQCoreAutoConfiguration {
         if (Objects.isNull(clazz)) {
             // 配置为显式空值（如 serializer: 留空）时回退到默认序列化器，避免 NPE
             clazz = StreamMQSpringConstants.DEFAULT_SERIALIZER_CLASS;
+        }
+        if (FurySerializer.class.equals(clazz)) {
+            boolean requireClassRegistration =
+                    properties.getProducer().isFuryRequireClassRegistration();
+            LOG.info(
+                    "Using FurySerializer with requireClassRegistration={} (change via"
+                            + " streammq.producer.fury-require-class-registration)",
+                    requireClassRegistration);
+            return new FurySerializer<>(requireClassRegistration);
         }
         LOG.debug(
                 "Using MessageSerializer: {} (default: {})",

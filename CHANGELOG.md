@@ -9,12 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Fury 类注册白名单可配置化，默认放宽为开箱即用**（`streammq.producer.fury-require-class-registration`，默认 `false`）：
+  - `FurySerializer` 无参构造默认翻转为宽松模式（`requireClassRegistration=false`），任意 POJO 开箱即用；
+    `new FurySerializer(true)` / `new FurySerializer<>(Xxx.class)` 保持强制类注册白名单模式。
+  - Spring Boot 自动装配按上述配置实例化默认序列化器；其余序列化器行为不变。
+  - **移除 `new FurySerializer(false)` 的 SecurityException 门控**：宽松构造不再要求
+    `-Dstreammq.security.allowUnrestrictedSerializer=true`，仅打印 WARN 风险提醒；该系统属性
+    保留为"已确认风险"的静默通道（设置后抑制 WARN）。
+  - 安全建议：共享/多租户 Redis 请配置 `fury-require-class-registration: true` 并预注册业务类型。
+
 - **默认序列化器由 Jackson 切换为 Apache Fury**（`streammq.producer.serializer` 默认值 =
   `io.github.streammq.adapter.redisson.serializer.FurySerializer`，常量 `StreamMQConstants#DEFAULT_SERIALIZER`）。
   - `fury-core` 在 `streammq-redisson` 中由 `optional` 调整为普通依赖，保证默认装配开箱可用。
   - **数据兼容提示**：切换后新写入消息的 body 为 Fury 二进制格式，与既有 Jackson JSON 消息不互通。
     升级时请先消费完存量消息，或显式配置 `serializer: io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer` 保持原行为。
-  - Fury 为 secure-by-default：自定义 body 类型需先注册（`new FurySerializer<>(OrderCreated.class)`）。
+  - Fury 默认不强制类注册（宽松模式），自定义 body 类型开箱即用；生产环境可通过
+    `fury-require-class-registration: true` 开启类注册白名单。
 
 ### Fixed
 

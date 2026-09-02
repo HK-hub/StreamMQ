@@ -23,8 +23,10 @@ import io.github.streammq.core.exception.SerializationException;
  *   <li>{@code StringSerializer} / {@code ByteArraySerializer} - 直通序列化
  * </ul>
  *
- * <p><b>注意：</b>{@code FurySerializer} 与 {@code JdkSerializer} 均为 secure-by-default， 自定义业务 body
- * 类型需先注册（Fury）或加白名单（JDK），详见各实现类 Javadoc。
+ * <p><b>注意：</b>{@code FurySerializer}（默认序列化器）默认不强制类注册，任意 POJO 开箱即用；共享/多租户 Redis 建议开启类注册白名单（{@code
+ * new FurySerializer(true)} 或 Spring 配置 {@code
+ * streammq.producer.fury-require-class-registration=true}）。{@code JdkSerializer} 内置 JEP 290
+ * 白名单，自定义业务 body 类型需显式加白，详见各实现类 Javadoc。
  *
  * @param <T> body 类型
  * @author StreamMQ Contributors

@@ -56,6 +56,7 @@ cp.txt
 
 # 文档辅助
 docs/test-encoding.txt
+tasks/
 
 # 环境变量
 app.env
