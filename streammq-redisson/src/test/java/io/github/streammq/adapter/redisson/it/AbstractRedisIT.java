@@ -10,7 +10,12 @@ import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.serializer.MessageSerializer;
-import io.github.streammq.test.util.RedisAvailability;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assumptions;
@@ -41,7 +46,7 @@ public abstract class AbstractRedisIT {
 
     @BeforeEach
     void setUpRedis() {
-        if (!RedisAvailability.isAvailable("localhost", 6379)) {
+        if (!isRedisAvailable("localhost", 6379)) {
             // 0.1.0 起：跳过时必须输出显眼警告，防止"全绿但其实没跑 IT"
             // 期望 CI 通过 Docker service 保证 Redis 可用；若在本地看到此警告，请启动 Redis 或使用 Testcontainers。
             System.err.println(
@@ -83,5 +88,34 @@ public abstract class AbstractRedisIT {
                 redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
         stream.createGroup(
                 StreamCreateGroupArgs.name(group).makeStream().id(new StreamMessageId(0, 0)));
+    }
+
+    /** 本地 Redis 可用性探测：TCP 连接后发送 PING，要求收到 +PONG 响应。 */
+    private static boolean isRedisAvailable(String host, int port) {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 500);
+            socket.setSoTimeout(300);
+            OutputStream out = socket.getOutputStream();
+            out.write("PING\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            return readsPong(socket.getInputStream());
+        } catch (IOException ex) {
+            return false;
+        }
+    }
+
+    private static boolean readsPong(InputStream in) throws IOException {
+        byte[] buffer = new byte[64];
+        int offset = 0;
+        String expected = "+PONG";
+        while (offset < buffer.length) {
+            int n = in.read(buffer, offset, buffer.length - offset);
+            if (n < 0) break;
+            offset += n;
+            if (offset >= expected.length()) break;
+        }
+        return offset >= expected.length()
+                && expected.equals(
+                        new String(buffer, 0, expected.length(), StandardCharsets.US_ASCII));
     }
 }

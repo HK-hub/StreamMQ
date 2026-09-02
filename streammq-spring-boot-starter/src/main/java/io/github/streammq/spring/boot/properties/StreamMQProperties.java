@@ -8,7 +8,7 @@ package io.github.streammq.spring.boot.properties;
 import io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy;
 import io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy;
 import io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy;
-import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
+import io.github.streammq.adapter.redisson.serializer.FurySerializer;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RebalanceStrategy;
@@ -34,7 +34,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *     send-message-timeout: 3000
  *     retry-times: 2
  *     stream-max-len: 10000
- *     serializer: io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer
+ *     serializer: io.github.streammq.adapter.redisson.serializer.FurySerializer
  *   consumer:
  *     poll-timeout: 1s
  *     batch-size: 32
@@ -75,6 +75,21 @@ public class StreamMQProperties {
 
     /** 命名空间（用于多租户/多环境隔离），默认空字符串 */
     private String namespace = "";
+
+    /**
+     * 实例唯一标识（广播消费模式下用于构造持久化消费者组名）。
+     *
+     * <p>若显式配置，则使用该值；否则按以下优先级自动推导：
+     * <ol>
+     *   <li>系统属性 {@code streammq.instance.id}
+     *   <li>环境变量 {@code STREAMMQ_INSTANCE_ID}
+     *   <li>本地主机名（{@code InetAddress.getLocalHost().getHostName()}）
+     *   <li>UUID 回退
+     * </ol>
+     *
+     * <p>持久化标识保证容器重启后广播消费者组名不变，避免每次重启产生新组导致 PEL 内存泄漏。
+     */
+    private String instanceId = "";
 
     /** 生产者配置 */
     private Producer producer = new Producer();
@@ -133,8 +148,14 @@ public class StreamMQProperties {
         /** Stream 最大长度（0 = 不限制） */
         private int streamMaxLen = StreamMQConstants.DEFAULT_STREAM_MAX_LEN;
 
-        /** 序列化器实现类，默认 {@link JacksonJsonSerializer} */
-        private Class<? extends MessageSerializer> serializer = JacksonJsonSerializer.class;
+        /**
+         * 消息体序列化器实现类（填写全限定类名），默认 {@link FurySerializer}（Apache Fury）。
+         *
+         * <p>Fury 为 secure-by-default：自定义 body 类型需先注册，例如 {@code new
+         * FurySerializer<>(OrderCreated.class)}。 若需要 JSON 可读性或跨语言互通，可切换为 {@code
+         * JacksonJsonSerializer}。对应全局默认值常量： {@link StreamMQConstants#DEFAULT_SERIALIZER}。
+         */
+        private Class<? extends MessageSerializer> serializer = FurySerializer.class;
 
         /** 消息体压缩阈值（字节），body 超过此值时触发压缩，0 = 禁用（默认禁用） */
         private int compressThreshold = StreamMQConstants.DEFAULT_COMPRESS_THRESHOLD_BYTES;

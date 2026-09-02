@@ -48,6 +48,8 @@ desktop.ini
 *.bak
 *.swp
 *~
+# mvn dependency:build-classpath 导出的本地 classpath（含本机绝对路径）
+cp.txt
 
 # Redis 数据文件（本地测试残留）
 *.rdb

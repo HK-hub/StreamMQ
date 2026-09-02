@@ -162,6 +162,64 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     }
 
     /**
+     * 注入自定义实例标识（仅容器 INIT 状态允许）。
+     *
+     * <p>广播消费模式下，instanceToken 用于构造消费者组名。持久化标识保证容器重启后组名不变，
+     * 避免每次重启产生新组导致 Redis PEL 内存泄漏。
+     *
+     * @param instanceToken 实例标识（非空时会覆盖自动推导值）
+     */
+    public void setInstanceToken(String instanceToken) {
+        assertInitState("instanceToken");
+        this.instanceToken = resolveInstanceToken(instanceToken);
+    }
+
+    /**
+     * 返回当前实例标识（广播模式下用于构造消费者组名）。
+     *
+     * @return 实例标识
+     */
+    public String getInstanceToken() {
+        return instanceToken;
+    }
+
+    /**
+     * 解析实例标识：按优先级自动推导持久化标识。
+     *
+     * <p>优先级：显式值 &gt; 系统属性 {@code streammq.instance.id} &gt; 环境变量 {@code STREAMMQ_INSTANCE_ID}
+     * &gt; 本地主机名 &gt; UUID 回退。
+     *
+     * @param configured 显式配置值，可为 null/空
+     * @return 非空实例标识
+     */
+    public static String resolveInstanceToken(String configured) {
+        if (io.github.streammq.core.util.StringUtils.isNotEmpty(configured)) {
+            return configured.trim();
+        }
+        // 1. 系统属性
+        String fromSys = System.getProperty(io.github.streammq.core.StreamMQConstants.INSTANCE_ID_SYSTEM_PROPERTY);
+        if (io.github.streammq.core.util.StringUtils.isNotEmpty(fromSys)) {
+            return fromSys.trim();
+        }
+        // 2. 环境变量
+        String fromEnv = System.getenv(io.github.streammq.core.StreamMQConstants.INSTANCE_ID_ENV_VARIABLE);
+        if (io.github.streammq.core.util.StringUtils.isNotEmpty(fromEnv)) {
+            return fromEnv.trim();
+        }
+        // 3. 本地主机名
+        try {
+            String hostName = java.net.InetAddress.getLocalHost().getHostName();
+            if (io.github.streammq.core.util.StringUtils.isNotEmpty(hostName)) {
+                return hostName;
+            }
+        } catch (Exception ignored) {
+            // 网络不可用时回退到 UUID
+        }
+        // 4. UUID 回退
+        return java.util.UUID.randomUUID().toString();
+    }
+
+    /**
      * 消费循环启动失败登记表：loopKey → 失败原因。
      *
      * <p>消费循环若在创建监听器阶段失败（Redis 认证失败、消费者组非法、配置错误等），此前只会打一条 ERROR 日志后静默退出：消费者在管理端点仍可见、健康检查仍为
@@ -213,14 +271,21 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             new DefaultConsumeLoopSupervisor(this::launchLoop);
 
     /**
-     * 本容器实例的唯一标识（随机生成，容器级唯一）：广播模式消费者组名使用它区分不同容器。
+     * 本容器实例的唯一标识：广播模式消费者组名使用它区分不同容器。
+     *
+     * <p>默认按以下优先级自动推导持久化标识（避免每次重启产生新组导致 PEL 泄漏）：
+     * <ol>
+     *   <li>显式配置的 {@code instanceToken}
+     *   <li>系统属性 {@code streammq.instance.id}
+     *   <li>环境变量 {@code STREAMMQ_INSTANCE_ID}
+     *   <li>本地主机名
+     *   <li>UUID 回退
+     * </ol>
      *
      * <p>注意必须是<b>容器级</b>而非进程级：同一 JVM 内可能运行多个容器实例（测试、多租户宿主），
-     * 共享标识会导致它们的广播组名碰撞、消息只投递给其中一个。跨重启不保证相同——重启后产生 新组、旧组由广播组回收任务在心跳超时后清理（见
-     * RedissonStreamListener#sweepStaleBroadcastGroups）。
+     * 共享标识会导致它们的广播组名碰撞、消息只投递给其中一个。
      */
-    private final String instanceToken =
-            Long.toHexString(java.util.UUID.randomUUID().getMostSignificantBits() & 0xffffffffL);
+    private volatile String instanceToken = resolveInstanceToken(null);
 
     /** 消费超时取消后的宽限期（毫秒），可通过 {@link #setTimeoutCancelGraceMillis(long)} 覆盖 */
     private volatile long timeoutCancelGraceMillis = DEFAULT_TIMEOUT_CANCEL_GRACE_MILLIS;

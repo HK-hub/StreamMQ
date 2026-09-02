@@ -37,6 +37,21 @@ public final class StreamMQSpringConstants {
     /** 健康检查配置前缀：streammq.health */
     public static final String PROP_PREFIX_HEALTH = "streammq.health";
 
+    /** 生产者配置前缀：streammq.producer */
+    public static final String PROP_PREFIX_PRODUCER = "streammq.producer";
+
+    // ==================== 默认值 ====================
+
+    /**
+     * 默认消息体序列化器实现类：Apache Fury。
+     *
+     * <p>与 {@link io.github.streammq.core.StreamMQConstants#DEFAULT_SERIALIZER} 指向同一实现，
+     * 此处以 {@code Class} 形式提供，供自动装配在配置缺失/解析为空时回退使用。
+     */
+    public static final Class<? extends io.github.streammq.core.serializer.MessageSerializer>
+            DEFAULT_SERIALIZER_CLASS =
+                    io.github.streammq.adapter.redisson.serializer.FurySerializer.class;
+
     // ==================== 条件装配属性名与值 ====================
     /** 开关属性名：enabled */
     public static final String PROP_NAME_ENABLED = "enabled";

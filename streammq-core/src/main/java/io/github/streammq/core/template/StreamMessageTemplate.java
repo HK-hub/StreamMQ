@@ -6,19 +6,16 @@
 package io.github.streammq.core.template;
 
 import io.github.streammq.core.StreamMQConstants;
-import io.github.streammq.core.converter.MessageConverter;
-import io.github.streammq.core.filter.ProducerFilter;
-import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.message.BatchMessage;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.SendOptions;
 import io.github.streammq.core.message.SendResult;
+import io.github.streammq.core.pipeline.ProducerPipeline;
 import io.github.streammq.core.producer.SendCallback;
 import io.github.streammq.core.transaction.TransactionExecutor;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
-import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
@@ -54,7 +51,7 @@ import org.slf4j.LoggerFactory;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public interface StreamMessageTemplate extends TransactionExecutor {
+public interface StreamMessageTemplate extends TransactionExecutor, ProducerPipeline {
 
     /** 默认发送超时（毫秒） */
     long DEFAULT_SEND_TIMEOUT_MILLIS = StreamMQConstants.DEFAULT_SEND_TIMEOUT_MS;
@@ -176,39 +173,4 @@ public interface StreamMessageTemplate extends TransactionExecutor {
     default <T> List<SendResult> syncSendBatch(BatchMessage<T> batch) {
         return syncSendBatch(batch, SendOptions.defaults());
     }
-
-    /**
-     * 返回消息转换器。
-     *
-     * @return 消息转换器
-     */
-    MessageConverter getMessageConverter();
-
-    /**
-     * 返回生产者拦截器链（不可修改）。
-     *
-     * @return 拦截器列表
-     */
-    List<ProducerInterceptor> getProducerInterceptors();
-
-    /**
-     * 设置生产者拦截器链（覆盖现有）。
-     *
-     * @param interceptors 拦截器列表
-     */
-    void setProducerInterceptors(List<ProducerInterceptor> interceptors);
-
-    /**
-     * 添加单个生产者拦截器。
-     *
-     * @param interceptor 拦截器
-     */
-    void addProducerInterceptor(ProducerInterceptor interceptor);
-
-    /**
-     * 添加单个生产者过滤器（发送前过滤）。
-     *
-     * @param filter 过滤器
-     */
-    void addProducerFilter(ProducerFilter filter);
 }

@@ -4,16 +4,20 @@
       "name": "streammq.producer.serializer",
       "values": [
         {
-          "value": "io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer",
-          "description": "JSON 序列化（默认），可读性好、跨语言通用"
+          "value": "io.github.streammq.adapter.redisson.serializer.FurySerializer",
+          "description": "Apache Fury 二进制序列化（默认），吞吐量约为 Jackson 的 7 倍；自定义 body 类型需先注册"
         },
         {
-          "value": "io.github.streammq.adapter.redisson.serializer.FurySerializer",
-          "description": "Apache Fury 二进制序列化，吞吐量约为 Jackson 的 7 倍"
+          "value": "io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer",
+          "description": "JSON 序列化，可读性好、跨语言通用，无需预注册类型"
         },
         {
           "value": "io.github.streammq.adapter.redisson.serializer.ProtostuffSerializer",
           "description": "Protostuff 二进制序列化，兼容 Protocol Buffer 生态"
+        },
+        {
+          "value": "io.github.streammq.adapter.redisson.serializer.JdkSerializer",
+          "description": "JDK 原生序列化，带 JEP 290 白名单过滤"
         }
       ]
     },
@@ -60,6 +64,12 @@
       "type": "java.lang.String",
       "description": "Redis Key 命名空间前缀。",
       "defaultValue": ""
+    },
+    {
+      "name": "streammq.producer.serializer",
+      "type": "java.lang.Class",
+      "description": "消息体序列化器实现类（全限定类名）。默认 Apache Fury，自定义 body 类型需先注册；需要跨语言可读性时切换为 JacksonJsonSerializer。",
+      "defaultValue": "io.github.streammq.adapter.redisson.serializer.FurySerializer"
     },
     {
       "name": "streammq.tracing.enabled",

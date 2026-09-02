@@ -16,13 +16,13 @@ import io.github.streammq.adapter.redisson.interceptor.TraceContextProducerInter
 import io.github.streammq.adapter.redisson.listener.RedissonBroadcastGroupRegistry;
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
-import io.github.streammq.adapter.redisson.producer.RedissonStreamProducerFactory;
 import io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.adapter.redisson.security.DenyAllAuthenticator;
 import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate;
 import io.github.streammq.adapter.redisson.trace.NoopTraceCollector;
 import io.github.streammq.adapter.redisson.trace.Slf4jTraceCollector;
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.compression.CompressionCodec;
 import io.github.streammq.core.compression.CompressionCodecRegistry;
 import io.github.streammq.core.converter.MessageConverter;
@@ -38,7 +38,6 @@ import io.github.streammq.core.policy.ManagementAuthenticator;
 import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.StreamMessageProducer;
-import io.github.streammq.core.producer.StreamMessageProducerFactory;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.service.DefaultStreamMessageService;
 import io.github.streammq.core.service.StreamMessageService;
@@ -46,6 +45,7 @@ import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import jakarta.annotation.PostConstruct;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import org.redisson.api.RedissonClient;
@@ -76,10 +76,13 @@ import org.springframework.context.annotation.Configuration;
  *
  * <p>所有核心 Bean 均标注 {@code @ConditionalOnMissingBean}，用户可在自定义配置类中覆盖。
  *
- * <p><b>架构说明（05-1.1 / 05-1.2）：</b>本类直接引用了 Redisson 适配层的具体类 （如 {@code
- * DefaultStreamMessageTemplate}、{@code RedissonStreamProducerFactory}）， 这意味着 Spring Boot Starter 与
- * Redisson 适配层存在紧耦合。 这是有意为之的设计决策——Starter 的职责是提供开箱即用的自动装配体验， 而非实现完全的 SPI 解耦。如需替换 Redis 客户端，可参考
- * {@code streammq-core} 模块的接口定义自行实现适配层，并通过 {@code @ConditionalOnMissingBean} 覆盖本类中的 Bean 定义。
+ * <p><b>架构说明：</b>本类直接引用了 Redisson 适配层的具体类（如 {@code
+ * DefaultStreamMessageTemplate}、{@code RedissonStreamProducer}），Spring Boot Starter 与
+ * Redisson 适配层存在紧耦合。这是有意为之——Starter 的职责是提供开箱即用的自动装配体验。
+ * 如需替换 Redis 客户端，可参考 {@code streammq-core} 模块的接口定义自行实现适配层，
+ * 并通过 {@code @ConditionalOnMissingBean} 覆盖本类中的 Bean 定义。
+ * <p>从 0.1.1 起，{@code StreamMessageProducerFactory} 已移除：Producer 直接作为 Bean 注册，
+ * Template 注入具体 Producer 实例，彻底遵循 DIP（依赖抽象，不依赖具体工厂）。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -148,7 +151,8 @@ public class StreamMQCoreAutoConfiguration {
     }
 
     /**
-     * 默认序列化器，从配置 {@code streammq.producer.serializer} 读取 Class 并实例化。
+     * 默认序列化器，从配置 {@code streammq.producer.serializer} 读取 Class 并实例化； 未配置（或配置为空）时使用默认值 Apache
+     * Fury（{@link StreamMQConstants#DEFAULT_SERIALIZER}）。
      *
      * @param properties 配置
      * @return 序列化器
@@ -157,7 +161,14 @@ public class StreamMQCoreAutoConfiguration {
     @ConditionalOnMissingBean(MessageSerializer.class)
     public MessageSerializer<?> streamMQMessageSerializer(StreamMQProperties properties) {
         Class<? extends MessageSerializer> clazz = properties.getProducer().getSerializer();
-        LOG.debug("Using MessageSerializer: {}", clazz.getSimpleName());
+        if (Objects.isNull(clazz)) {
+            // 配置为显式空值（如 serializer: 留空）时回退到默认序列化器，避免 NPE
+            clazz = StreamMQSpringConstants.DEFAULT_SERIALIZER_CLASS;
+        }
+        LOG.debug(
+                "Using MessageSerializer: {} (default: {})",
+                clazz.getName(),
+                StreamMQConstants.DEFAULT_SERIALIZER);
         return BeanUtils.instantiateClass(clazz);
     }
 
@@ -369,36 +380,6 @@ public class StreamMQCoreAutoConfiguration {
         Class<? extends DlqFailureStrategy> clazz = dlqConfig.getFailureStrategyClass();
         LOG.debug("Using DlqFailureStrategy: {}", clazz.getSimpleName());
         return BeanUtils.instantiateClass(clazz);
-    }
-
-    /**
-     * 生产者工厂：基于 Redisson 实现。
-     *
-     * <p>保留供需要动态创建多 Producer 的场景使用；Spring 自动装配默认路径为直接注册 {@link
-     * StreamMessageProducer} Bean。
-     *
-     * @param redisson Redisson 客户端
-     * @param converter 消息转换器
-     * @param compressionCodecProvider 压缩编解码器（可选）
-     * @return 生产者工厂
-     */
-    @Bean
-    @ConditionalOnMissingBean(StreamMessageProducerFactory.class)
-    public StreamMessageProducerFactory streamMQProducerFactory(
-            RedissonClient redisson,
-            MessageConverter converter,
-            ObjectProvider<CompressionCodec> compressionCodecProvider) {
-        RedissonStreamProducerFactory factory =
-                new RedissonStreamProducerFactory(redisson, converter);
-        CompressionCodec codec = compressionCodecProvider.getIfAvailable();
-        if (codec != null) {
-            factory.setCompressionCodec(codec);
-            LOG.debug(
-                    "CompressionCodec injected into RedissonStreamProducerFactory: {}",
-                    codec.name());
-        }
-        LOG.debug("Creating RedissonStreamProducerFactory");
-        return factory;
     }
 
     /**
@@ -614,7 +595,11 @@ public class StreamMQCoreAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(ManagementAuthenticator.class)
     public ManagementAuthenticator streamMQManagementAuthenticator() {
-        LOG.debug("Using DenyAllAuthenticator (security fallback)");
+        LOG.info(
+                "StreamMQ admin endpoints are secured by default (DenyAllAuthenticator)."
+                    + " All management requests return 401. To enable access, register an"
+                    + " AllowAllAuthenticator / BasicAuthAuthenticator / TokenAuthenticator bean."
+                    + " See: https://github.com/HK-hub/StreamMQ#management-rest-api");
         return new DenyAllAuthenticator();
     }
 

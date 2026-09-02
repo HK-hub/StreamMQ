@@ -73,16 +73,19 @@ public class RedissonStreamListener implements StreamMQListener {
      * <p><b>实例级而非静态：</b>若以 simpleName 为键做成 JVM 级静态缓存，两个不同监听器 （不同 topic /
      * 不同目标类型）会发生跨实例缓存污染——先解析到的类被错误地提供给 另一个监听器，造成反序列化类型混淆。实例级缓存将作用域限制在单个监听器内。
      *
-     * <p><b>有界 LRU：</b>超出 {@link #CLASS_CACHE_MAX_SIZE} 时淘汰最久未访问项。
+     * <p><b>有界 LRU（读写锁优化并发）：</b>超出 {@link #CLASS_CACHE_MAX_SIZE} 时淘汰最久未访问项。
+     * 使用 {@link ReentrantReadWriteLock} 替代 synchronizedMap，高并发消费场景下读操作无锁竞争。
      */
     private final Map<String, Class<?>> classCache =
-            Collections.synchronizedMap(
-                    new LinkedHashMap<String, Class<?>>(16, 0.75f, true) {
-                        @Override
-                        protected boolean removeEldestEntry(Map.Entry<String, Class<?>> eldest) {
-                            return size() > CLASS_CACHE_MAX_SIZE;
-                        }
-                    });
+            new LinkedHashMap<String, Class<?>>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Class<?>> eldest) {
+                    return size() > CLASS_CACHE_MAX_SIZE;
+                }
+            };
+
+    private final java.util.concurrent.locks.ReadWriteLock classCacheLock =
+            new java.util.concurrent.locks.ReentrantReadWriteLock();
 
     private final @NonNull RedissonClient redisson;
     private final String namespace;
@@ -550,9 +553,14 @@ public class RedissonStreamListener implements StreamMQListener {
      * @return 加载到的类；找不到返回 null（由调用方走回退链）
      */
     private Class<?> loadClassBySimpleName(String simpleName) {
-        Class<?> cached = classCache.get(simpleName);
-        if (Objects.nonNull(cached)) {
-            return cached;
+        classCacheLock.readLock().lock();
+        try {
+            Class<?> cached = classCache.get(simpleName);
+            if (Objects.nonNull(cached)) {
+                return cached;
+            }
+        } finally {
+            classCacheLock.readLock().unlock();
         }
         try {
             ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
@@ -560,7 +568,12 @@ public class RedissonStreamListener implements StreamMQListener {
                 classLoader = getClass().getClassLoader();
             }
             Class<?> clazz = Class.forName(simpleName, false, classLoader);
-            classCache.put(simpleName, clazz);
+            classCacheLock.writeLock().lock();
+            try {
+                classCache.put(simpleName, clazz);
+            } finally {
+                classCacheLock.writeLock().unlock();
+            }
             return clazz;
         } catch (ClassNotFoundException e) {
             LOG.debug(

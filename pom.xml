@@ -23,7 +23,6 @@
         <module>streammq-diagnostics</module>
         <module>streammq-kubernetes</module>
         <module>streammq-spring-cloud-stream-binder</module>
-        <module>streammq-test-support</module>
         <module>streammq-test</module>
         <module>streammq-samples</module>
         <module>streammq-benchmark</module>
@@ -150,12 +149,6 @@
 
             <!-- 测试基础设施公共件。虽是内部工具模块，但它是已发布构件 streammq-test 的
                  可传递运行时依赖，因此同样会发布到 Maven Central（不可加入 excludeArtifacts）。 -->
-            <dependency>
-                <groupId>io.github.streammq</groupId>
-                <artifactId>streammq-test-support</artifactId>
-                <version>${streammq.version}</version>
-            </dependency>
-
             <!-- Spring Boot BOM -->
             <dependency>
                 <groupId>org.springframework.boot</groupId>
@@ -412,7 +405,14 @@
                         <!-- @{jacoco.argLine} 由 jacoco prepare-agent 注入（见下方 jacoco 插件
                              propertyName 配置）；若直接写死字面量会覆盖 jacoco agent，
                              导致覆盖率数据永远为空。 -->
-                        <argLine>@{jacoco.argLine} -Xshare:off -XX:+EnableDynamicAgentLoading</argLine>
+                        <!-- Mockito inline mock maker 需要显式 agent 挂载，否则在 JDK 21+  future release 中会失效。
+                             agent 路径指向本地仓库中的 mockito-core jar，由 Maven 在 test-compile 阶段保证可用。 -->
+                        <argLine>
+                            @{jacoco.argLine}
+                            -Xshare:off
+                            -XX:+EnableDynamicAgentLoading
+                            -javaagent:${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar
+                        </argLine>
                     </configuration>
                 </plugin>
                 <plugin>
@@ -422,7 +422,12 @@
                     <!-- 集成测试同样需要加载 jacoco agent（@{jacoco.argLine} 由 prepare-agent 注入），
                          否则 IT 全部不产生覆盖率数据，仅单测数据会低估真实覆盖。 -->
                     <configuration>
-                        <argLine>@{jacoco.argLine} -Xshare:off -XX:+EnableDynamicAgentLoading</argLine>
+                        <argLine>
+                            @{jacoco.argLine}
+                            -Xshare:off
+                            -XX:+EnableDynamicAgentLoading
+                            -javaagent:${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar
+                        </argLine>
                     </configuration>
                     <executions>
                         <execution>
@@ -673,9 +678,7 @@
                          · streammq-samples*  示例工程（仅仓库内演示用）
                          · streammq-benchmark 压测工程
                          · streammq-kubernetes 实验性预览（无模块依赖、核心能力默认 no-op），
-                                              待功能完整后再纳入发布，避免过早形成 API 兼容承诺
-                         注意：streammq-test-support **不可**排除——它是已发布构件 streammq-test
-                         的可传递运行时依赖，排除会导致使用方 NoClassDefFoundError。 -->
+                                              待功能完整后再纳入发布，避免过早形成 API 兼容承诺。 -->
                     <excludeArtifacts>streammq-samples,streammq-sample-quickstart,streammq-sample-transaction,streammq-sample-tracing,streammq-sample-diagnostics,streammq-sample-interceptor,streammq-sample-orderly,streammq-sample-delay,streammq-sample-dlq,streammq-benchmark,streammq-kubernetes</excludeArtifacts>
                 </configuration>
             </plugin>

@@ -13,7 +13,7 @@ import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerCont
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy;
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
-import io.github.streammq.adapter.redisson.producer.RedissonStreamProducerFactory;
+import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.retry.NoRetryPolicy;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
@@ -35,7 +35,7 @@ import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.message.SendStatus;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.SendCallback;
-import io.github.streammq.core.producer.StreamMessageProducerFactory;
+
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.template.StreamMessageTemplate;
 import java.lang.reflect.Proxy;
@@ -86,7 +86,7 @@ class CoreRedisIntegrationIT extends StreamMQTestBase {
     private static final String PRODUCER_GROUP = "it-core-producer";
 
     private MessageConverter converter;
-    private StreamMessageProducerFactory producerFactory;
+    private RedissonStreamProducer producer;
     private StreamMessageTemplate template;
     private StreamMQListenerContainer container;
     private RedissonStreamListenerFactory listenerFactory;
@@ -105,12 +105,21 @@ class CoreRedisIntegrationIT extends StreamMQTestBase {
                         .sendMessageTimeout(5000L)
                         .build();
 
-        producerFactory = new RedissonStreamProducerFactory(redissonClient, converter);
-        producerFactory.createProducer(producerConfig);
+        producer =
+                RedissonStreamProducer.builder()
+                        .redisson(redissonClient)
+                        .namespace(NAMESPACE)
+                        .group(PRODUCER_GROUP)
+                        .converter(converter)
+                        .defaultTimeoutMillis(5000L)
+                        .maxLen(0)
+                        .compressThreshold(0)
+                        .maxMessageSize(512L * 1024 * 1024)
+                        .build();
 
         template =
                 new DefaultStreamMessageTemplate(
-                        producerFactory, PRODUCER_GROUP, converter, producerConfig, null);
+                        producer, PRODUCER_GROUP, converter, producerConfig, null);
 
         listenerFactory = new RedissonStreamListenerFactory(redissonClient, converter);
         NoRetryPolicy retryPolicy = new NoRetryPolicy();
@@ -132,8 +141,8 @@ class CoreRedisIntegrationIT extends StreamMQTestBase {
         if (listenerFactory != null && !listenerFactory.isClosed()) {
             listenerFactory.close();
         }
-        if (producerFactory != null && !producerFactory.isClosed()) {
-            producerFactory.close();
+        if (producer != null) {
+            producer.close();
         }
     }
 
@@ -924,8 +933,8 @@ class CoreRedisIntegrationIT extends StreamMQTestBase {
         @DisplayName("syncSend 关闭后发送抛 IllegalStateException")
         void syncSend_afterClose_throws() {
             String topic = "err-close-" + System.nanoTime();
-            template = new DefaultStreamMessageTemplate(producerFactory, PRODUCER_GROUP, converter);
-            producerFactory.close();
+            template = new DefaultStreamMessageTemplate(producer, PRODUCER_GROUP, converter);
+            producer.close();
 
             Message<String> msg = MessageBuilder.<String>withTopic(topic).body("test").build();
 

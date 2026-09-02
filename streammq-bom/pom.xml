@@ -112,13 +112,6 @@
                 <artifactId>streammq-test</artifactId>
                 <version>${streammq.version}</version>
             </dependency>
-            <!-- streammq-test-support 是 streammq-test 的运行时依赖，同样随版本发布，纳入 BOM 统一管理 -->
-            <dependency>
-                <groupId>io.github.streammq</groupId>
-                <artifactId>streammq-test-support</artifactId>
-                <version>${streammq.version}</version>
-            </dependency>
-
             <!-- Redisson：README 的快速开始片段省略了版本号，依赖 BOM 兜底。
                  这是本 BOM 唯一主动覆盖的第三方传递依赖。 -->
             <dependency>

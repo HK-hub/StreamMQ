@@ -97,13 +97,15 @@ public class TransactionScanner implements StreamMQScheduler {
 
     /** Class.forName 缓存，避免重复类加载查找（LRU 有界，超出上限淘汰最久未访问项） */
     private static final Map<String, Class<?>> CLASS_CACHE =
-            Collections.synchronizedMap(
-                    new LinkedHashMap<String, Class<?>>(16, 0.75f, true) {
-                        @Override
-                        protected boolean removeEldestEntry(Map.Entry<String, Class<?>> eldest) {
-                            return size() > CLASS_CACHE_MAX_SIZE;
-                        }
-                    });
+            new LinkedHashMap<String, Class<?>>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Class<?>> eldest) {
+                    return size() > CLASS_CACHE_MAX_SIZE;
+                }
+            };
+
+    private static final java.util.concurrent.locks.ReadWriteLock CLASS_CACHE_LOCK =
+            new java.util.concurrent.locks.ReentrantReadWriteLock();
 
     /** 事务状态字段值（线上协议编码，委托给 {@link TransactionScanState} 枚举） */
     public static final String STATE_PREPARE = TransactionScanState.PREPARE.getCode();
@@ -975,7 +977,12 @@ public class TransactionScanner implements StreamMQScheduler {
         String bodyTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE);
         Class<?> bodyType = Object.class;
         if (StringUtils.isNotEmpty(bodyTypeName)) {
-            bodyType = CLASS_CACHE.get(bodyTypeName);
+            CLASS_CACHE_LOCK.readLock().lock();
+            try {
+                bodyType = CLASS_CACHE.get(bodyTypeName);
+            } finally {
+                CLASS_CACHE_LOCK.readLock().unlock();
+            }
             if (Objects.isNull(bodyType)) {
                 try {
                     bodyType =
@@ -983,7 +990,12 @@ public class TransactionScanner implements StreamMQScheduler {
                                     bodyTypeName,
                                     false,
                                     Thread.currentThread().getContextClassLoader());
-                    CLASS_CACHE.put(bodyTypeName, bodyType);
+                    CLASS_CACHE_LOCK.writeLock().lock();
+                    try {
+                        CLASS_CACHE.put(bodyTypeName, bodyType);
+                    } finally {
+                        CLASS_CACHE_LOCK.writeLock().unlock();
+                    }
                 } catch (ClassNotFoundException ex) {
                     LOG.warn(
                             "Body type class not found in transaction scanner, fallback to Object:"

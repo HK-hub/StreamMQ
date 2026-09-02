@@ -16,10 +16,10 @@
     <description>StreamMQ 消息生命周期可视化与异常诊断模块：消息画像、慢消费/积压/DLQ 自动诊断与 REST 端点。</description>
 
     <dependencies>
-        <!-- 测试基础设施公共件（PING 探测等，test scope 专用） -->
+        <!-- 测试工具（RedisAvailability / ContainerizedRedisServer 等） -->
         <dependency>
             <groupId>io.github.streammq</groupId>
-            <artifactId>streammq-test-support</artifactId>
+            <artifactId>streammq-test</artifactId>
             <scope>test</scope>
         </dependency>
 

@@ -424,7 +424,7 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 
 | SPI Interface | Default |
 |--------------|---------|
-| `MessageSerializer` | `JacksonJsonSerializer` |
+| `MessageSerializer` | `FurySerializer` |
 | `MessageConverter` | `DefaultMessageConverter` |
 | `RetryPolicy` | `FixedArrayRetryPolicy` |
 | `RebalanceStrategy` | `ConsistentHashRebalanceStrategy`（配置默认）/ `AverageRebalanceStrategy`（API 默认） |
@@ -435,9 +435,9 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 
 ### Fury serializer registration
 
-`FurySerializer` is secure by default and requires application payload classes to be
-registered before the first send/receive. Prefer constructor registration in Spring
-configuration so startup fails early for a missing type:
+`FurySerializer` is the **default serializer** (`streammq.producer.serializer`) and is secure
+by default: application payload classes must be registered before the first send/receive.
+Prefer constructor registration in Spring configuration so startup fails early for a missing type:
 
 ```java
 @Bean

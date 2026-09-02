@@ -27,7 +27,9 @@
 
 ### 序列化器选择
 
-`FurySerializer` 默认强制类注册白名单（secure-by-default）：仅允许显式注册过的类反序列化，未注册类型在反序列化前直接拒绝。首次使用前需调用 `Fury.register(Class)` 注册业务消息体类型。仅当 Redis 实例完全可信时，才可显式关闭白名单换取任意 POJO 开箱即用：`new FurySerializer(false)`——此举会重新扩大反序列化攻击面，请谨慎评估。
+StreamMQ 的**默认序列化器是 `FurySerializer`**（`streammq.producer.serializer` 默认值）。它默认强制类注册白名单（secure-by-default）：仅允许显式注册过的类反序列化，未注册类型在反序列化前直接拒绝。首次使用前需调用 `Fury.register(Class)` 注册业务消息体类型。仅当 Redis 实例完全可信时，才可显式关闭白名单换取任意 POJO 开箱即用：`new FurySerializer(false)`——此举会重新扩大反序列化攻击面，请谨慎评估。
+
+若希望开箱即用任意 POJO 且接受 JSON 的性能与体积开销，可显式切换为 `JacksonJsonSerializer`（无需预注册类型）。
 
 ### 凭据管理
 

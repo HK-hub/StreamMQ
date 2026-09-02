@@ -18,9 +18,9 @@ import io.github.streammq.core.filter.ProducerFilterChain;
 import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.message.*;
 import io.github.streammq.core.metrics.StreamMQMetrics;
+import io.github.streammq.core.pipeline.ProducerPipeline;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.StreamMessageProducer;
-import io.github.streammq.core.producer.StreamMessageProducerFactory;
 import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.core.transaction.TransactionCallback;
 import io.github.streammq.core.transaction.TransactionContext;
@@ -36,7 +36,7 @@ import org.slf4j.LoggerFactory;
 /**
  * {@link StreamMessageTemplate} 的默认实现。
  *
- * <p>组合 {@link StreamMessageProducerFactory} 与拦截器链，对上层提供业务友好的发送 API。
+ * <p>组合 {@link StreamMessageProducer} 与拦截器链，对上层提供业务友好的发送 API。
  *
  * <p>核心职责：
  *
@@ -54,12 +54,11 @@ import org.slf4j.LoggerFactory;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public class DefaultStreamMessageTemplate implements StreamMessageTemplate, AutoCloseable {
+public class DefaultStreamMessageTemplate implements StreamMessageTemplate, ProducerPipeline, AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(DefaultStreamMessageTemplate.class);
 
     private final StreamMessageProducer producer;
-    private final StreamMessageProducerFactory producerFactory;
     private final String defaultGroup;
     private final MessageConverter messageConverter;
     private final ProducerInterceptorChain interceptorChain;
@@ -131,7 +130,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate, Auto
      * 构造 Template（直接注入 Producer）。
      *
      * <p>推荐在 Spring 环境中使用此构造函数：Producer 作为 Bean 由容器管理生命周期，
-     * Template 直接复用，避免 Factory 中间层的歧义与性能开销。
+     * Template 直接复用，避免中间层的歧义与性能开销。
      *
      * @param producer 生产者实例（线程安全，可复用）
      * @param defaultGroup 默认生产组名
@@ -165,35 +164,6 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate, Auto
             ProducerConfig defaultConfig,
             String transactionGroup) {
         this.producer = Objects.requireNonNull(producer, "producer");
-        this.producerFactory = null;
-        this.defaultGroup = Objects.requireNonNull(defaultGroup, "defaultGroup");
-        this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
-        this.interceptorChain = new ProducerInterceptorChain(this.defaultGroup);
-        this.defaultConfig = Objects.requireNonNull(defaultConfig, "defaultConfig");
-        this.transactionGroup = transactionGroup;
-    }
-
-    /**
-     * 构造 Template（通过 Factory 创建 Producer）。
-     *
-     * <p>保留此构造函数供非 Spring / 需要动态创建 Producer 的场景使用。Factory 内部有缓存，
-     * 同配置多次调用返回同一实例，但设计上仍建议在构造期解析一次并持有。
-     *
-     * @param producerFactory 生产者工厂
-     * @param defaultGroup 默认生产组名
-     * @param messageConverter 消息转换器
-     * @param defaultConfig 默认生产者配置（用于创建 Producer）
-     * @param transactionGroup 事务组名（用于事务消息），可为 null
-     */
-    public DefaultStreamMessageTemplate(
-            StreamMessageProducerFactory producerFactory,
-            String defaultGroup,
-            MessageConverter messageConverter,
-            ProducerConfig defaultConfig,
-            String transactionGroup) {
-        Objects.requireNonNull(producerFactory, "producerFactory");
-        this.producer = producerFactory.createProducer(defaultConfig);
-        this.producerFactory = producerFactory;
         this.defaultGroup = Objects.requireNonNull(defaultGroup, "defaultGroup");
         this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
         this.interceptorChain = new ProducerInterceptorChain(this.defaultGroup);

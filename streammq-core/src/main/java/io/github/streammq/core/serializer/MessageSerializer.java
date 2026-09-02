@@ -12,12 +12,19 @@ import io.github.streammq.core.exception.SerializationException;
  *
  * <p>元信息（topic/tag/keys/shardingKey/properties）始终为 String，不参与序列化。 仅 {@code body} 字段经由此接口序列化。
  *
- * <p>默认实现：
+ * <p>内置实现（默认使用 Fury）：
  *
  * <ul>
- *   <li>{@code JacksonJsonSerializer} - 基于 Jackson 的 JSON 序列化（默认）
+ *   <li>{@code FurySerializer} - 基于 Apache Fury 的二进制序列化（<b>默认</b>，见 {@link
+ *       io.github.streammq.core.StreamMQConstants#DEFAULT_SERIALIZER}）
+ *   <li>{@code JacksonJsonSerializer} - 基于 Jackson 的 JSON 序列化（跨语言/可读性优先）
  *   <li>{@code JdkSerializer} - 基于 JDK 原生序列化（备选）
+ *   <li>{@code ProtostuffSerializer} - 基于 Protostuff 的二进制序列化
+ *   <li>{@code StringSerializer} / {@code ByteArraySerializer} - 直通序列化
  * </ul>
+ *
+ * <p><b>注意：</b>{@code FurySerializer} 与 {@code JdkSerializer} 均为 secure-by-default， 自定义业务 body
+ * 类型需先注册（Fury）或加白名单（JDK），详见各实现类 Javadoc。
  *
  * @param <T> body 类型
  * @author StreamMQ Contributors

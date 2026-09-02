@@ -186,7 +186,8 @@ public class DefaultMessageConverter extends AbstractMessageConverter {
     /**
      * 构造默认转换器。
      *
-     * @param serializer body 序列化器，不能为 null（通常为 {@code JacksonJsonSerializer}）
+     * @param serializer body 序列化器，不能为 null（默认 {@code FurySerializer}，见 {@link
+     *     io.github.streammq.core.StreamMQConstants#DEFAULT_SERIALIZER}）
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     public DefaultMessageConverter(MessageSerializer<?> serializer) {

@@ -103,6 +103,18 @@ public class StreamMQListenerContainerAutoConfiguration {
                         namespace,
                         properties.getConsumer().getInflightCapacity());
 
+        // 实例标识：广播模式下用于构造持久化消费者组名
+        String instanceId = properties.getInstanceId();
+        if (io.github.streammq.core.util.StringUtils.isNotEmpty(instanceId)) {
+            container.setInstanceToken(instanceId);
+            LOG.info("Configured instanceId for broadcast group stability: {}", instanceId);
+        } else {
+            LOG.info(
+                    "Auto-resolved instanceToken for broadcast: {} (override via streammq.instanceId"
+                            + " or -Dstreammq.instance.id)",
+                    container.getInstanceToken());
+        }
+
         // 消费者全局默认配置：注解未显式指定时生效（streammq.consumer.* / streammq.rebalance.*）
         container.setDefaultPullBatchSize(properties.getConsumer().getBatchSize());
         container.setDefaultPullBlockTimeoutMillis(

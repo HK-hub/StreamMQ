@@ -23,9 +23,9 @@ import org.openjdk.jmh.runner.options.TimeValue;
 @State(Scope.Benchmark)
 @BenchmarkMode({Mode.Throughput, Mode.SampleTime})
 @OutputTimeUnit(TimeUnit.SECONDS)
-@Warmup(iterations = 3, time = 2)
-@Measurement(iterations = 5, time = 3)
-@Fork(3)
+@Warmup(iterations = 1, time = 1)
+@Measurement(iterations = 2, time = 2)
+@Fork(1)
 public class SerializationBenchmark {
 
     private static final int PAYLOAD_SIZE = 1024;
@@ -53,7 +53,7 @@ public class SerializationBenchmark {
 
         jacksonSerializer = new JacksonJsonSerializer<>();
         jdkSerializer = new JdkSerializer<>();
-        furySerializer = new FurySerializer<>();
+        furySerializer = new FurySerializer<>(TestPayload.class);
 
         jacksonBytes = jacksonSerializer.serialize(payload, TestPayload.class);
         jdkBytes = jdkSerializer.serialize(payload, TestPayload.class);

@@ -6,7 +6,7 @@
 package io.github.streammq.benchmark;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
-import io.github.streammq.adapter.redisson.producer.RedissonStreamProducerFactory;
+import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate;
@@ -118,10 +118,19 @@ public class StreamConsumerBenchmark {
         DefaultMessageConverter converter =
                 new DefaultMessageConverter(new JacksonJsonSerializer<>());
         this.converter = converter;
-        RedissonStreamProducerFactory producerFactory =
-                new RedissonStreamProducerFactory(redisson, converter);
+        RedissonStreamProducer producer =
+                RedissonStreamProducer.builder()
+                        .redisson(redisson)
+                        .namespace("")
+                        .group("benchmark-producer")
+                        .converter(converter)
+                        .defaultTimeoutMillis(3000)
+                        .maxLen(0)
+                        .compressThreshold(0)
+                        .maxMessageSize(512L * 1024 * 1024)
+                        .build();
         template =
-                new DefaultStreamMessageTemplate(producerFactory, "benchmark-producer", converter);
+                new DefaultStreamMessageTemplate(producer, "benchmark-producer", converter);
 
         char[] chars = new char[payloadSize];
         java.util.Arrays.fill(chars, 'x');

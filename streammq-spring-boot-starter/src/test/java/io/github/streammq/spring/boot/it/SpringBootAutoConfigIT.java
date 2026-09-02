@@ -14,7 +14,7 @@ import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.policy.RetryPolicy;
-import io.github.streammq.core.producer.StreamMessageProducerFactory;
+
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.spring.boot.autoconfigure.*;
@@ -124,12 +124,16 @@ class SpringBootAutoConfigIT {
     // ===================== 核心 Bean 实例验证 =====================
 
     @Test
-    @DisplayName("MessageSerializer Bean 存在且为 JacksonJsonSerializer")
+    @DisplayName("MessageSerializer Bean 存在且默认为 FurySerializer")
     void messageSerializer_beanExists() {
         MessageSerializer<?> serializer = applicationContext.getBean(MessageSerializer.class);
         assertThat(serializer).isNotNull();
         assertThat(serializer.getClass().getName())
-                .isEqualTo("io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer");
+                .isEqualTo(io.github.streammq.core.StreamMQConstants.DEFAULT_SERIALIZER);
+        assertThat(properties.getProducer().getSerializer().getName())
+                .isEqualTo(io.github.streammq.core.StreamMQConstants.DEFAULT_SERIALIZER);
+        assertThat(serializer.name())
+                .isEqualTo(io.github.streammq.core.StreamMQConstants.DEFAULT_SERIALIZER_NAME);
     }
 
     @Test
@@ -148,14 +152,6 @@ class SpringBootAutoConfigIT {
         assertThat(policy).isNotNull();
         assertThat(policy.getClass().getName())
                 .isEqualTo("io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy");
-    }
-
-    @Test
-    @DisplayName("StreamMQProducerFactory Bean 存在")
-    void producerFactory_beanExists() {
-        StreamMessageProducerFactory factory =
-                applicationContext.getBean(StreamMessageProducerFactory.class);
-        assertThat(factory).isNotNull();
     }
 
     @Test

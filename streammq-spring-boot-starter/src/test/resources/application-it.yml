@@ -13,7 +13,7 @@ streammq:
     send-message-timeout: 3000
     retry-times: 1
     stream-max-len: 0
-    serializer: io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer
+    # serializer 不显式配置：验证默认序列化器为 Apache Fury
   consumer:
     poll-timeout: 1s
     batch-size: 32

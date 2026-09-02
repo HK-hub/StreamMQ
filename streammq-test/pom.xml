@@ -30,13 +30,6 @@
       · 使用者自备（optional）：streammq-redisson —— 不使用 Redisson 适配器的项目不应被引入该实现。
     -->
     <dependencies>
-        <!-- 测试基础设施公共件（PING 探测）。随本模块一同发布，必须可传递：
-             StreamMQTestBase 在 @BeforeAll 中调用 RedisAvailability.isAvailable()。 -->
-        <dependency>
-            <groupId>io.github.streammq</groupId>
-            <artifactId>streammq-test-support</artifactId>
-        </dependency>
-
         <!-- StreamMQ Core：断言 / Mock / TestListener 工具类的签名与实现均直接引用 core 类型，必须可传递。 -->
         <dependency>
             <groupId>io.github.streammq</groupId>

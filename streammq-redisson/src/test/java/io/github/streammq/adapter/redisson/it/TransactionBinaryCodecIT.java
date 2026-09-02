@@ -11,7 +11,12 @@ import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
-import io.github.streammq.test.util.RedisAvailability;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.Assumptions;
@@ -56,7 +61,7 @@ class TransactionBinaryCodecIT {
 
     @BeforeEach
     void setUpRedis() {
-        if (!RedisAvailability.isAvailable("localhost", 6379)) {
+        if (!isRedisAvailable("localhost", 6379)) {
             Assumptions.assumeTrue(
                     false, "Redis not available at localhost:6379, skipping integration test");
         }
@@ -194,5 +199,34 @@ class TransactionBinaryCodecIT {
         Message<String> message =
                 MessageBuilder.<String>withTopic(targetTopic).tag("tx-tag").body(body).build();
         return converter().toStreamFields(message);
+    }
+
+    /** 本地 Redis 可用性探测：TCP 连接后发送 PING，要求收到 +PONG 响应。 */
+    private static boolean isRedisAvailable(String host, int port) {
+        try (Socket socket = new Socket()) {
+            socket.connect(new InetSocketAddress(host, port), 500);
+            socket.setSoTimeout(300);
+            OutputStream out = socket.getOutputStream();
+            out.write("PING\r\n".getBytes(StandardCharsets.US_ASCII));
+            out.flush();
+            return readsPong(socket.getInputStream());
+        } catch (IOException ex) {
+            return false;
+        }
+    }
+
+    private static boolean readsPong(InputStream in) throws IOException {
+        byte[] buffer = new byte[64];
+        int offset = 0;
+        String expected = "+PONG";
+        while (offset < buffer.length) {
+            int n = in.read(buffer, offset, buffer.length - offset);
+            if (n < 0) break;
+            offset += n;
+            if (offset >= expected.length()) break;
+        }
+        return offset >= expected.length()
+                && expected.equals(
+                        new String(buffer, 0, expected.length(), StandardCharsets.US_ASCII));
     }
 }

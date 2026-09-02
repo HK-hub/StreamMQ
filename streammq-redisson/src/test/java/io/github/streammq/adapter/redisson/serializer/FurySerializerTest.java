@@ -126,6 +126,17 @@ class FurySerializerTest {
     }
 
     @Test
+    @DisplayName("默认（类注册白名单）实例可直接处理 String body：框架默认 body 类型无需预注册")
+    void stringBodyWorksWithoutRegistration() {
+        // 回归保护：Fury 已是框架默认序列化器，而 samples / starter E2E 全部使用 String body。
+        // 若 Fury 未来把 java.lang.String 也纳入白名单校验，默认装配将开箱即失败。
+        FurySerializer<String> secure = new FurySerializer<>();
+        byte[] bytes = secure.serialize("streammq-default", String.class);
+        assertThat(bytes).isNotEmpty();
+        assertThat(secure.deserialize(bytes, String.class)).isEqualTo("streammq-default");
+    }
+
+    @Test
     @DisplayName("constructor registers initial message types")
     void constructorRegistersTypes() {
         FurySerializer<MyData> secure = new FurySerializer<>(MyData.class);

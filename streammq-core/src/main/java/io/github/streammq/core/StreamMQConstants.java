@@ -114,6 +114,12 @@ public final class StreamMQConstants {
     /** 默认消费线程下限 */
     public static final int DEFAULT_CONSUME_THREAD_MIN = 1;
 
+    /** 实例标识系统属性名，用户可通过 -Dstreammq.instance.id=xxx 指定 */
+    public static final String INSTANCE_ID_SYSTEM_PROPERTY = "streammq.instance.id";
+
+    /** 实例标识环境变量名，用户可通过 STREAMMQ_INSTANCE_ID=xxx 指定 */
+    public static final String INSTANCE_ID_ENV_VARIABLE = "STREAMMQ_INSTANCE_ID";
+
     /** 默认单次追踪读取最大条数（Trace 扫描批量上限，默认 10000） */
     public static final int DEFAULT_TRACE_MAX_READ_COUNT = 10_000;
 
@@ -122,6 +128,20 @@ public final class StreamMQConstants {
 
     /** 诊断默认统计窗口（毫秒，5 分钟） */
     public static final long DEFAULT_DIAGNOSTIC_WINDOW_MS = 5 * 60 * 1000L;
+
+    // ==================== 默认序列化器 ====================
+    /**
+     * 默认消息体序列化器实现类全限定名：Apache Fury（{@code
+     * io.github.streammq.adapter.redisson.serializer.FurySerializer}）。
+     *
+     * <p>以字符串形式定义，避免 core 模块反向依赖 redisson 适配器；Spring Boot Starter 按此默认值装配 {@code
+     * streammq.producer.serializer}。
+     */
+    public static final String DEFAULT_SERIALIZER =
+            "io.github.streammq.adapter.redisson.serializer.FurySerializer";
+
+    /** 默认序列化器名称（对应 {@code MessageSerializer#name()}），用于日志与监控标识 */
+    public static final String DEFAULT_SERIALIZER_NAME = "fury";
 
     // ==================== 消息大小限制 ====================
     /** Redis Stream 单条消息最大大小（字节），512MB。 实际建议不超过 1MB，超大消息会增加网络传输和内存压力。 */

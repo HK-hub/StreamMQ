@@ -6,7 +6,7 @@
 package io.github.streammq.benchmark;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
-import io.github.streammq.adapter.redisson.producer.RedissonStreamProducerFactory;
+import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate;
 import io.github.streammq.core.message.Message;
@@ -33,9 +33,9 @@ import org.slf4j.LoggerFactory;
 @State(Scope.Benchmark)
 @BenchmarkMode({Mode.Throughput, Mode.SampleTime})
 @OutputTimeUnit(TimeUnit.SECONDS)
-@Warmup(iterations = 3, time = 2)
-@Measurement(iterations = 5, time = 3)
-@Fork(3)
+@Warmup(iterations = 1, time = 1)
+@Measurement(iterations = 2, time = 2)
+@Fork(1)
 public class StreamMessageTemplateBenchmark {
 
     private static final Logger LOG = LoggerFactory.getLogger(StreamMessageTemplateBenchmark.class);
@@ -87,9 +87,18 @@ public class StreamMessageTemplateBenchmark {
 
         DefaultMessageConverter converter =
                 new DefaultMessageConverter(new JacksonJsonSerializer<>());
-        RedissonStreamProducerFactory producerFactory =
-                new RedissonStreamProducerFactory(redisson, converter);
-        template = new DefaultStreamMessageTemplate(producerFactory, GROUP, converter);
+        RedissonStreamProducer producer =
+                RedissonStreamProducer.builder()
+                        .redisson(redisson)
+                        .namespace("")
+                        .group(GROUP)
+                        .converter(converter)
+                        .defaultTimeoutMillis(3000)
+                        .maxLen(0)
+                        .compressThreshold(0)
+                        .maxMessageSize(512L * 1024 * 1024)
+                        .build();
+        template = new DefaultStreamMessageTemplate(producer, GROUP, converter);
 
         char[] chars = new char[payloadSize];
         java.util.Arrays.fill(chars, 'x');

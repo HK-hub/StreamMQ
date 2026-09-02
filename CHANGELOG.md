@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **默认序列化器由 Jackson 切换为 Apache Fury**（`streammq.producer.serializer` 默认值 =
+  `io.github.streammq.adapter.redisson.serializer.FurySerializer`，常量 `StreamMQConstants#DEFAULT_SERIALIZER`）。
+  - `fury-core` 在 `streammq-redisson` 中由 `optional` 调整为普通依赖，保证默认装配开箱可用。
+  - **数据兼容提示**：切换后新写入消息的 body 为 Fury 二进制格式，与既有 Jackson JSON 消息不互通。
+    升级时请先消费完存量消息，或显式配置 `serializer: io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer` 保持原行为。
+  - Fury 为 secure-by-default：自定义 body 类型需先注册（`new FurySerializer<>(OrderCreated.class)`）。
+
 ## [0.1.1] - 2026-08-29 — 第一个公开发布版本
 
 > **关于 `v0.1.0` 标签（发布前必读）**

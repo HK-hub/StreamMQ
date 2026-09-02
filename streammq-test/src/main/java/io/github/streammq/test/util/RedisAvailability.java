@@ -21,7 +21,7 @@ import java.nio.charset.StandardCharsets;
  * <p>用于避免在无 Redis 环境中运行集成测试时直接连接失败（Connection refused）， 而是在 {@code @BeforeAll} /
  * {@code @BeforeEach} 阶段通过 JUnit {@code Assumptions} 或 {@code @EnabledIf} 优雅跳过依赖 Redis 的测试。
  *
- * <p>本类位于零依赖叶子模块 {@code streammq-test-support}，请始终以 {@code test} scope 引用；不要在生产代码中使用。
+ * <p>请始终以 {@code test} scope 引用；不要在生产代码中使用。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

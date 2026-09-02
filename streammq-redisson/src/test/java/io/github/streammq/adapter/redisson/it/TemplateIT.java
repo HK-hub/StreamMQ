@@ -10,7 +10,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListener;
-import io.github.streammq.adapter.redisson.producer.RedissonStreamProducerFactory;
+import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate;
 import io.github.streammq.core.interceptor.ProducerInterceptor;
@@ -43,24 +43,34 @@ import org.redisson.api.StreamMessageId;
 @DisplayName("DefaultStreamMQTemplate 集成测试")
 class TemplateIT extends AbstractRedisIT {
 
-    private RedissonStreamProducerFactory producerFactory;
+    private RedissonStreamProducer producer;
     private DefaultStreamMessageTemplate template;
     private static final String DEFAULT_GROUP = "template-test-group";
 
     @BeforeEach
     void setUpTemplate() {
-        producerFactory = new RedissonStreamProducerFactory(redisson, converter);
+        producer =
+                RedissonStreamProducer.builder()
+                        .redisson(redisson)
+                        .namespace(namespace)
+                        .group(DEFAULT_GROUP)
+                        .converter(converter)
+                        .defaultTimeoutMillis(3000)
+                        .maxLen(0)
+                        .compressThreshold(0)
+                        .maxMessageSize(512L * 1024 * 1024)
+                        .build();
         ProducerConfig defaultProps =
                 ProducerConfig.builder().group(DEFAULT_GROUP).namespace(namespace).build();
         template =
                 new DefaultStreamMessageTemplate(
-                        producerFactory, DEFAULT_GROUP, converter, defaultProps, null);
+                        producer, DEFAULT_GROUP, converter, defaultProps, null);
     }
 
     @AfterEach
     void tearDownTemplate() {
-        if (producerFactory != null) {
-            producerFactory.close();
+        if (producer != null) {
+            producer.close();
         }
     }
 
@@ -99,7 +109,7 @@ class TemplateIT extends AbstractRedisIT {
         String txGroup = "template-tx-group";
         DefaultStreamMessageTemplate transactionalTemplate =
                 new DefaultStreamMessageTemplate(
-                        producerFactory,
+                        producer,
                         DEFAULT_GROUP,
                         converter,
                         ProducerConfig.builder().group(DEFAULT_GROUP).namespace(namespace).build(),

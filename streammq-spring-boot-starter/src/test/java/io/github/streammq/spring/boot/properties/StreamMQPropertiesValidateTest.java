@@ -5,9 +5,12 @@
  */
 package io.github.streammq.spring.boot.properties;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -25,6 +28,16 @@ class StreamMQPropertiesValidateTest {
     void defaults_shouldPassValidation() {
         StreamMQProperties properties = new StreamMQProperties();
         assertThatCode(properties::validate).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("producer.serializer 默认值为 Apache Fury，且自动装配回退常量与之保持一致")
+    void defaultSerializer_isFury() {
+        StreamMQProperties properties = new StreamMQProperties();
+        assertThat(properties.getProducer().getSerializer().getName())
+                .isEqualTo(StreamMQConstants.DEFAULT_SERIALIZER);
+        assertThat(StreamMQSpringConstants.DEFAULT_SERIALIZER_CLASS.getName())
+                .isEqualTo(StreamMQConstants.DEFAULT_SERIALIZER);
     }
 
     @Test

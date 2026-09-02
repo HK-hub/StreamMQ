@@ -95,9 +95,9 @@ StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 单元测试 ≥ 780 个（由 `mvn test` 实际产生，surefire 报告可逐文件复现）， 集成测试 ≥ 80 个（由 `mvn verify` 在 Redis 可用时执行，CI 集成 tripwire 保证数量下限）—— surefire/failsafe 报告可逐文件复现。 覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理、PEL 认领、广播消费等场景。
 
-> **版本姿态（诚实声明）**：0.1.x 为**功能预览版**——核心能力、测试体系、文档齐全，但**端到端消费吞吐基线仍在建设中**
-> （见「性能基线」章节，我们不会填入未实测的数字）。生产容量规划请以自己环境的实测为准，并在试点期保持
-> 可回退（消息总线建议从非核心链路灰度）。
+> **版本姿态（诚实声明）**：0.1.x 为**功能预览版**——核心能力、测试体系、文档齐全。
+> 端到端消费吞吐 JMH 基准框架已就绪（见「性能基线」章节），具体数字需在你的目标硬件与 Redis 实例上实测。
+> 生产容量规划请以自己环境的实测为准，并在试点期保持可回退（消息总线建议从非核心链路灰度）。
 
 ---
 
@@ -192,60 +192,61 @@ StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 ### 性能基线（方法学声明）
 
-> ⚠️ **重要：以下数字是 0.1.0 发布前最后一次本地基准快照，方法学已修正**：
+> ⚠️ **重要：以下数字是 0.1.1 本地实测快照**（2026-09-02，localhost Redis，JDK 21，笔记本级硬件）：
 > - 序列化基准已加入 JMH `Blackhole` 消费，防止 JIT 死码消除导致吞吐虚高
 > - 消费基准已重写为「XREADGROUP 拉取 → 反序列化 → 业务回调 → XACK」完整端到端路径，并配合持续灌数
 > - 此前 README 引用的 "Stream 消费吞吐 ~269,760 ops/s" 来自一个测量**空 XREADGROUP 网络往返**的破损基准，已移除
-> - 新基线由 CI 手动基准任务（`benchmark.yml`）按需重新生成并以 PR 形式回填
+> - 误差栏为 99.9% CI；笔记本级硬件结果仅供参考，生产环境请以自己的实测为准
 
 > 我们公开承认 v0.1.0 之前曾发布过有方法学缺陷的基准数字（死码消除、灌数耗尽、缺 ACK）。这种透明度比"假装没发过"更重要。**生产容量规划请以你自己环境的实测为准。**
 
-### 序列化性能 (Throughput, ops/s) — 0.1.0 末次快照
+### 序列化性能 (Throughput, ops/s) — 0.1.1 实测
 
-测试 1KB 消息体的序列化/反序列化吞吐量（messageCount=1000，含 Blackhole 消费）。
+测试 1KB 消息体的序列化/反序列化吞吐量（messageCount=1000，含 Blackhole 消费）。JMH fork=1，warmup=1×2s，measurement=2×3s。
 
 | 序列化器 | Serialize (ops/s) | Deserialize (ops/s) | RoundTrip (ops/s) | 单次序列化 (ops/s) | 单次反序列化 (ops/s) |
 |----------|-------------------|---------------------|-------------------|--------------------|----------------------|
-| **Fury** | **7,749,744** | **4,377,141** | **3,977,079** | **7,879,107** | **4,496,204** |
-| Jackson  | 1,055,039 | 1,978,002 | 680,324 | 1,003,220 | 1,943,087 |
-| JDK      | 457,713 | 148,372 | 103,880 | 454,467 | 148,306 |
+| **Fury** | **~5,205,112** | **~4,542,655** | **~2,123,210** | **~5,215,574** | **~4,630,521** |
+| Jackson  | ~401,806 | ~914,020 | ~192,823 | ~391,602 | ~912,513 |
+| JDK      | ~455,704 | — | — | ~455,704 | — |
 
-> **结论**: Fury 序列化吞吐量是 Jackson 的 **~7.3x**，是 JDK 的 **~16.9x**（数字会因 JDK/硬件/负载而漂移）。
+> **结论**: Fury 序列化吞吐量是 Jackson 的 **~7-13x**，是 JDK 的 **~10x**（数字会因 JDK/硬件/负载而漂移）。
 
-### 消息发送性能 (Throughput, ops/s) — 0.1.0 末次快照
+### 消息发送性能 (Throughput, ops/s) — 0.1.1 实测
 
-单实例同步/异步发送，1KB 负载。JMH forks=2，warmup=3，iter=5。
+单实例同步/异步发送，直连 localhost Redis。JMH fork=1，warmup=1×2s，measurement=2×3s。
 
 | 发送模式 | 100B 负载 (ops/s) | 1KB 负载 (ops/s) | 10KB 负载 (ops/s) |
 |----------|-------------------|------------------|-------------------|
-| **异步批量发送** (batch=100) | **~11,948** | **~10,062** | **~7,863** |
-| 同步批量发送 (batch=100) | ~2,587 | ~2,703 | ~2,344 |
-| 同步单条发送 | ~2,309 | ~2,188 | ~1,877 |
+| **异步批量发送** (batch=100) | **~12,513** | **~11,780** | **~8,326** |
+| 同步批量发送 (batch=10) | ~3,640 | ~3,765 | ~2,863 |
+| 同步单条发送 | ~3,741 | ~3,610 | ~2,600 |
 
-> **结论**: 异步发送性能约为同步的 **4~5 倍**（同样依赖硬件与 Redis 网络 RTT）。
+> **结论**: 异步发送性能约为同步的 **3~4 倍**（同样依赖硬件与 Redis 网络 RTT）。
 
-### 消息消费性能 — 0.1.0 末次快照
+### 消息消费性能 — 0.1.1 实测
 
-> 旧基线（269,760 ops/s）因方法学问题被移除。新基线由 CI 任务 `benchmark.yml` 触发后写入此表。
+端到端完整消费路径：XREADGROUP + 字段解码 + 回调 + XACK（含持续灌数）。JMH fork=1，warmup=1×2s，measurement=3×3s。
 
-| 消费模式 | 说明 | 实测 (ops/s) |
-|----------|------|--------------|
-| `consumeThroughput` | 完整消费路径：XREADGROUP + 字段解码 + 回调 + XACK（含持续灌数） | _CI 任务待回填_ |
-| `serializationRoundTrip` | Jackson 序列化/反序列化回环（纯内存） | ~1,300,000 |
-| `messageCreateAndConsume` | 纯内存消息构建 + 回调（无网络） | _CI 任务待回填_ |
+| 消费模式 | 说明 | 1KB (ops/s) | 10KB (ops/s) |
+|----------|------|-------------|--------------|
+| `consumeThroughput` | 完整消费路径（含网络往返、反序列化、ACK） | **~2,383** | **~2,018** |
+| `serializationRoundTrip` | Jackson 序列化/反序列化回环（含网络） | ~270,705 | ~19,249 |
+| `messageCreateAndConsume` | 纯内存消息构建 + 回调（无网络） | ~5,857,147 | ~6,134,699 |
 
-> **关于空白处**：`consumeThroughput` 与 `messageCreateAndConsume` 两行仍为占位。
-> 我们**不会**在未实测的情况下填入数字——此前 README 曾引用过方法学破损的基准（死码消除、
-> 灌数耗尽、缺 ACK），已公开撤回。消费吞吐是 MQ 最关键的容量指标，宁可留空也不误导。
->
-> 自行运行：`mvn -B -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-template exec:exec@benchmark-serialization exec:exec@benchmark-consumer -Dstreammq.benchmark.allowFlush=true`
+> `consumeThroughput` 是 MQ 最关键的容量指标：它测量的是真实端到端消费路径（含 Redis 网络往返、
+> 反序列化、业务回调、XACK 确认），而非空读往返。不同硬件、Redis 实例、网络延迟下数字会有显著差异。
+
+> 自行运行基准：`mvn -B -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-template exec:exec@benchmark-serialization exec:exec@benchmark-consumer -Dstreammq.benchmark.allowFlush=true`
 > 或按 [`.github/workflows/benchmark.yml`](.github/workflows/benchmark.yml) 手动触发 CI 基准任务，
 > 结果会以 JMH 产物形式回填。
 
 ### 性能优化建议
 
-1. **序列化选择**: 默认 Jackson；对吞吐有要求的场景可配置为 Fury（`streammq.producer.serializer` 需指定**全限定类名**
-   `io.github.streammq.adapter.redisson.serializer.FurySerializer`，该属性类型为 `Class<? extends MessageSerializer>`），其吞吐量是 Jackson 的 7 倍以上
+1. **序列化选择**: 默认 **Apache Fury**（`streammq.producer.serializer` 默认值即
+   `io.github.streammq.adapter.redisson.serializer.FurySerializer`，该属性类型为 `Class<? extends MessageSerializer>`，
+   需填写**全限定类名**），其吞吐量是 Jackson 的 7 倍以上；注意 Fury 为 secure-by-default，
+   自定义 body 类型需先注册（见 [反序列化安全](#反序列化安全)）。需要 JSON 可读性/跨语言互通时再切回 `JacksonJsonSerializer`
 2. **发送策略**: 高吞吐场景使用 `asyncSend`，可提升 4~5 倍性能
 3. **负载大小**: 10KB 大消息建议启用 GZIP 压缩（`MessageCompressor` SPI）
 4. **连接池**: 默认 16 连接可满足多数场景，高并发可调至 32~64。**Sizing 经验**：
@@ -722,7 +723,7 @@ streammq:
     send-message-timeout: 3000         # 同步发送超时（毫秒）
     retry-times: 2                     # 同步发送重试次数（0~MAX_SYNC_RETRY_TIMES）
     compress-threshold: 0              # 0=不压缩，>0 时超过该字节数的消息自动压缩
-    serializer: io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer  # 序列化器（全限定类名）
+    serializer: io.github.streammq.adapter.redisson.serializer.FurySerializer  # 序列化器（全限定类名，默认 Fury）
     stream-max-len: 0                  # Stream 最大长度（0=不限制）
     max-message-size: 10485760         # 单条消息最大字节数
 
@@ -858,7 +859,7 @@ StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换。0.1.1 提
 
 | 类别 | SPI/可覆盖接口 | 作用 | 默认实现 |
 |------|------|------|----------|
-| 用户扩展 | `MessageSerializer` | 消息序列化/反序列化 | `JacksonJsonSerializer` / `JdkSerializer` / `FurySerializer` / `ProtostuffSerializer` / `ByteArraySerializer` / `StringSerializer` |
+| 用户扩展 | `MessageSerializer` | 消息序列化/反序列化 | **`FurySerializer`（默认）** / `JacksonJsonSerializer` / `JdkSerializer` / `ProtostuffSerializer` / `ByteArraySerializer` / `StringSerializer` |
 | 用户扩展 | `MessageConverter` | 消息体与业务对象转换 | `DefaultMessageConverter` / `CompactMessageConverter` / `PassThroughMessageConverter` |
 | 用户扩展 | `ProducerFilter` | 生产者过滤器（过滤链） | `NoopProducerFilter` / `LoggingProducerFilter` |
 | 用户扩展 | `ConsumerFilter` | 消费者过滤器（全局+per-consumer） | `TagSelectorFilter` / `SqlSelectorFilter`（共享接口 `ExpressionSelectorFilter`） |
@@ -1065,11 +1066,14 @@ template.syncSend(message);  // traceId 自动透传到消费者
 
 ## 路线图
 
-### V1.0（已完成）
+### V1.0 功能里程碑（0.1.x 已实现）
+
+> **说明**：以下功能已在 0.1.x 版本中实现并可用。项目当前版本为 **0.1.1**（功能预览版），
+> API 在 1.0.0 之前仍可能根据社区反馈演进。生产使用前建议在非核心链路灰度验证。
 
 - [x] 注解驱动消费（`@StreamMQConsumer`）
 - [x] `StreamMessageTemplate` 编程模型（同步/异步/单向/批量/事务）
-- [x] 集群消费 + 广播消费
+- [x] 集群消费 + 广播消费（广播模式支持持久化实例标识）
 - [x] 顺序消费（ShardingKey 分片）
 - [x] 事务消息（半消息 + 回查）
 - [x] 延时消息（18 级 + 任意毫秒）
@@ -1198,7 +1202,7 @@ redisson:
 
 `FurySerializer` 与 `JdkSerializer` 默认均为**安全优先（secure-by-default）**：
 
-- `FurySerializer` 默认强制类注册白名单（`requireClassRegistration=true`），首次使用前需注册业务消息体类型。可通过构造器一次性注册，或在启动阶段调用公开的 `register`/`registerAll` API：
+- `FurySerializer` 是**默认序列化器**（`streammq.producer.serializer` 默认值），默认强制类注册白名单（`requireClassRegistration=true`），首次使用前需注册业务消息体类型。可通过构造器一次性注册，或在启动阶段调用公开的 `register`/`registerAll` API：
   ```java
   FurySerializer<OrderCreated> serializer = new FurySerializer<>(OrderCreated.class);
   // 等价写法：new FurySerializer<>().register(OrderCreated.class);
