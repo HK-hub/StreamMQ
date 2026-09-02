@@ -57,7 +57,17 @@ public abstract class AbstractRedisIT {
                     false, "Redis not available at localhost:6379, skipping integration test");
         }
         Config config = new Config();
-        config.useSingleServer().setAddress("redis://localhost:6379").setDatabase(0);
+        config.useSingleServer()
+                .setAddress("redis://localhost:6379")
+                .setDatabase(0)
+                // 全量 verify 时 20 个 IT 类共用本地单实例 Redis，高压下偶发响应超过
+                // Redisson 默认 3s 超时（RedisResponseTimeoutException → createGroup 失败），
+                // 表现为与被测逻辑无关的负载 flaky。此处放宽客户端超时仅作用于测试基建，
+                // 不改变产品默认值。
+                .setTimeout(10_000)
+                .setConnectTimeout(10_000)
+                .setRetryAttempts(5)
+                .setRetryInterval(1_000);
         // 使用 StringCodec 避免 Kryo 反序列化问题（与 Lua 脚本交互时）
         config.setCodec(StringCodec.INSTANCE);
         redisson = Redisson.create(config);

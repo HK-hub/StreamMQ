@@ -54,7 +54,8 @@ import org.slf4j.LoggerFactory;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public class DefaultStreamMessageTemplate implements StreamMessageTemplate, ProducerPipeline, AutoCloseable {
+public class DefaultStreamMessageTemplate
+        implements StreamMessageTemplate, ProducerPipeline, AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(DefaultStreamMessageTemplate.class);
 
@@ -129,8 +130,7 @@ public class DefaultStreamMessageTemplate implements StreamMessageTemplate, Prod
     /**
      * 构造 Template（直接注入 Producer）。
      *
-     * <p>推荐在 Spring 环境中使用此构造函数：Producer 作为 Bean 由容器管理生命周期，
-     * Template 直接复用，避免中间层的歧义与性能开销。
+     * <p>推荐在 Spring 环境中使用此构造函数：Producer 作为 Bean 由容器管理生命周期， Template 直接复用，避免中间层的歧义与性能开销。
      *
      * @param producer 生产者实例（线程安全，可复用）
      * @param defaultGroup 默认生产组名

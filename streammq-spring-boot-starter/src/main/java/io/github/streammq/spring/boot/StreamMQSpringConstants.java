@@ -45,8 +45,8 @@ public final class StreamMQSpringConstants {
     /**
      * 默认消息体序列化器实现类：Apache Fury。
      *
-     * <p>与 {@link io.github.streammq.core.StreamMQConstants#DEFAULT_SERIALIZER} 指向同一实现，
-     * 此处以 {@code Class} 形式提供，供自动装配在配置缺失/解析为空时回退使用。
+     * <p>与 {@link io.github.streammq.core.StreamMQConstants#DEFAULT_SERIALIZER} 指向同一实现， 此处以 {@code
+     * Class} 形式提供，供自动装配在配置缺失/解析为空时回退使用。
      */
     public static final Class<? extends io.github.streammq.core.serializer.MessageSerializer>
             DEFAULT_SERIALIZER_CLASS =

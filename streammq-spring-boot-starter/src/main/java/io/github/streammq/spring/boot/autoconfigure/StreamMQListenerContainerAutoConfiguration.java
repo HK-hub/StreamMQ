@@ -110,8 +110,8 @@ public class StreamMQListenerContainerAutoConfiguration {
             LOG.info("Configured instanceId for broadcast group stability: {}", instanceId);
         } else {
             LOG.info(
-                    "Auto-resolved instanceToken for broadcast: {} (override via streammq.instanceId"
-                            + " or -Dstreammq.instance.id)",
+                    "Auto-resolved instanceToken for broadcast: {} (override via"
+                            + " streammq.instanceId or -Dstreammq.instance.id)",
                     container.getInstanceToken());
         }
 

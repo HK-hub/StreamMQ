@@ -35,7 +35,6 @@ import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.message.SendStatus;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.SendCallback;
-
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.template.StreamMessageTemplate;
 import java.lang.reflect.Proxy;

@@ -76,13 +76,13 @@ import org.springframework.context.annotation.Configuration;
  *
  * <p>所有核心 Bean 均标注 {@code @ConditionalOnMissingBean}，用户可在自定义配置类中覆盖。
  *
- * <p><b>架构说明：</b>本类直接引用了 Redisson 适配层的具体类（如 {@code
- * DefaultStreamMessageTemplate}、{@code RedissonStreamProducer}），Spring Boot Starter 与
- * Redisson 适配层存在紧耦合。这是有意为之——Starter 的职责是提供开箱即用的自动装配体验。
- * 如需替换 Redis 客户端，可参考 {@code streammq-core} 模块的接口定义自行实现适配层，
- * 并通过 {@code @ConditionalOnMissingBean} 覆盖本类中的 Bean 定义。
- * <p>从 0.1.1 起，{@code StreamMessageProducerFactory} 已移除：Producer 直接作为 Bean 注册，
- * Template 注入具体 Producer 实例，彻底遵循 DIP（依赖抽象，不依赖具体工厂）。
+ * <p><b>架构说明：</b>本类直接引用了 Redisson 适配层的具体类（如 {@code DefaultStreamMessageTemplate}、{@code
+ * RedissonStreamProducer}），Spring Boot Starter 与 Redisson 适配层存在紧耦合。这是有意为之——Starter
+ * 的职责是提供开箱即用的自动装配体验。 如需替换 Redis 客户端，可参考 {@code streammq-core} 模块的接口定义自行实现适配层， 并通过
+ * {@code @ConditionalOnMissingBean} 覆盖本类中的 Bean 定义。
+ *
+ * <p>从 0.1.1 起，{@code StreamMessageProducerFactory} 已移除：Producer 直接作为 Bean 注册， Template 注入具体
+ * Producer 实例，彻底遵循 DIP（依赖抽象，不依赖具体工厂）。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -385,9 +385,8 @@ public class StreamMQCoreAutoConfiguration {
     /**
      * 默认生产者：基于 Redisson 实现，作为独立 Bean 注册。
      *
-     * <p>用户可直接注入 {@link StreamMessageProducer} 发送消息，或通过 {@link
-     * StreamMessageTemplate} / {@link io.github.streammq.core.service.StreamMessageService} 使用。 生命周期由 Spring
-     * 容器管理，与 Template 解耦。
+     * <p>用户可直接注入 {@link StreamMessageProducer} 发送消息，或通过 {@link StreamMessageTemplate} / {@link
+     * io.github.streammq.core.service.StreamMessageService} 使用。 生命周期由 Spring 容器管理，与 Template 解耦。
      *
      * @param redisson Redisson 客户端
      * @param converter 消息转换器
@@ -596,8 +595,8 @@ public class StreamMQCoreAutoConfiguration {
     @ConditionalOnMissingBean(ManagementAuthenticator.class)
     public ManagementAuthenticator streamMQManagementAuthenticator() {
         LOG.info(
-                "StreamMQ admin endpoints are secured by default (DenyAllAuthenticator)."
-                    + " All management requests return 401. To enable access, register an"
+                "StreamMQ admin endpoints are secured by default (DenyAllAuthenticator). All"
+                    + " management requests return 401. To enable access, register an"
                     + " AllowAllAuthenticator / BasicAuthAuthenticator / TokenAuthenticator bean."
                     + " See: https://github.com/HK-hub/StreamMQ#management-rest-api");
         return new DenyAllAuthenticator();

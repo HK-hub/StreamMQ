@@ -14,7 +14,6 @@ import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.policy.RetryPolicy;
-
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.spring.boot.autoconfigure.*;

@@ -164,8 +164,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /**
      * 注入自定义实例标识（仅容器 INIT 状态允许）。
      *
-     * <p>广播消费模式下，instanceToken 用于构造消费者组名。持久化标识保证容器重启后组名不变，
-     * 避免每次重启产生新组导致 Redis PEL 内存泄漏。
+     * <p>广播消费模式下，instanceToken 用于构造消费者组名。持久化标识保证容器重启后组名不变， 避免每次重启产生新组导致 Redis PEL 内存泄漏。
      *
      * @param instanceToken 实例标识（非空时会覆盖自动推导值）
      */
@@ -186,8 +185,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /**
      * 解析实例标识：按优先级自动推导持久化标识。
      *
-     * <p>优先级：显式值 &gt; 系统属性 {@code streammq.instance.id} &gt; 环境变量 {@code STREAMMQ_INSTANCE_ID}
-     * &gt; 本地主机名 &gt; UUID 回退。
+     * <p>优先级：显式值 &gt; 系统属性 {@code streammq.instance.id} &gt; 环境变量 {@code STREAMMQ_INSTANCE_ID} &gt;
+     * 本地主机名（追加进程内容器序号，保证容器级唯一）&gt; UUID 回退。
      *
      * @param configured 显式配置值，可为 null/空
      * @return 非空实例标识
@@ -197,27 +196,45 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             return configured.trim();
         }
         // 1. 系统属性
-        String fromSys = System.getProperty(io.github.streammq.core.StreamMQConstants.INSTANCE_ID_SYSTEM_PROPERTY);
+        String fromSys =
+                System.getProperty(
+                        io.github.streammq.core.StreamMQConstants.INSTANCE_ID_SYSTEM_PROPERTY);
         if (io.github.streammq.core.util.StringUtils.isNotEmpty(fromSys)) {
             return fromSys.trim();
         }
         // 2. 环境变量
-        String fromEnv = System.getenv(io.github.streammq.core.StreamMQConstants.INSTANCE_ID_ENV_VARIABLE);
+        String fromEnv =
+                System.getenv(io.github.streammq.core.StreamMQConstants.INSTANCE_ID_ENV_VARIABLE);
         if (io.github.streammq.core.util.StringUtils.isNotEmpty(fromEnv)) {
             return fromEnv.trim();
         }
-        // 3. 本地主机名
+        // 3. 本地主机名 + 进程内容器序号（容器级隔离）
         try {
             String hostName = java.net.InetAddress.getLocalHost().getHostName();
             if (io.github.streammq.core.util.StringUtils.isNotEmpty(hostName)) {
-                return hostName;
+                // 主机名是进程级值：同一 JVM 内的多个容器实例（测试、多租户宿主）会解析到
+                // 同一主机名，若不加区分，它们的广播消费者组名将完全相同（组名 =
+                // group:consumerName），广播语义退化为集群——消息只投递给组内一个消费者。
+                // 因此在主机名后追加进程内容器序号：首个容器保持纯主机名（单容器生产常态，
+                // 重启后组名不变、PEL 可恢复），同 JVM 内后续容器依次 -2、-3……保证容器级唯一。
+                int seq = CONTAINER_SEQUENCE.incrementAndGet();
+                return seq == 1 ? hostName : hostName + "-" + seq;
             }
         } catch (Exception ignored) {
             // 网络不可用时回退到 UUID
         }
-        // 4. UUID 回退
+        // 4. UUID 回退（每次 JVM 随机，天然容器级唯一，无碰撞风险）
         return java.util.UUID.randomUUID().toString();
     }
+
+    /**
+     * 进程内容器实例计数器：为主机名分支提供容器级唯一序号。
+     *
+     * <p>见 {@link #resolveInstanceToken(String)}——主机名是进程级值，同 JVM 多容器直接复用会令 广播组名碰撞（违反 {@link
+     * #instanceToken} 的容器级唯一约束）。
+     */
+    private static final java.util.concurrent.atomic.AtomicInteger CONTAINER_SEQUENCE =
+            new java.util.concurrent.atomic.AtomicInteger();
 
     /**
      * 消费循环启动失败登记表：loopKey → 失败原因。
@@ -274,6 +291,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      * 本容器实例的唯一标识：广播模式消费者组名使用它区分不同容器。
      *
      * <p>默认按以下优先级自动推导持久化标识（避免每次重启产生新组导致 PEL 泄漏）：
+     *
      * <ol>
      *   <li>显式配置的 {@code instanceToken}
      *   <li>系统属性 {@code streammq.instance.id}
@@ -282,8 +300,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      *   <li>UUID 回退
      * </ol>
      *
-     * <p>注意必须是<b>容器级</b>而非进程级：同一 JVM 内可能运行多个容器实例（测试、多租户宿主），
-     * 共享标识会导致它们的广播组名碰撞、消息只投递给其中一个。
+     * <p>注意必须是<b>容器级</b>而非进程级：同一 JVM 内可能运行多个容器实例（测试、多租户宿主）， 共享标识会导致它们的广播组名碰撞、消息只投递给其中一个。
      */
     private volatile String instanceToken = resolveInstanceToken(null);
 

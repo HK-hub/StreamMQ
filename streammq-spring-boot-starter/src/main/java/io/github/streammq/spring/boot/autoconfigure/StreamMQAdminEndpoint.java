@@ -5,13 +5,13 @@
  */
 package io.github.streammq.spring.boot.autoconfigure;
 
-import io.github.streammq.core.listener.StreamMQListenerContainer;
 import io.github.streammq.adapter.redisson.converter.MessageFields;
 import io.github.streammq.adapter.redisson.listener.RedissonBroadcastGroupRegistry;
 import io.github.streammq.adapter.redisson.metrics.RuntimeStatsRegistry;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.listener.BroadcastGroupRegistry;
+import io.github.streammq.core.listener.StreamMQListenerContainer;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
@@ -426,7 +426,8 @@ public class StreamMQAdminEndpoint {
         // 1) 进程内真实计数（消费成功/失败、重试、死信、平均耗时）
         if (container
                 instanceof
-                io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer dlc) {
+                io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer
+                                dlc) {
             stats.putAll(dlc.runtimeStats().snapshot(group, topic));
         } else {
             stats.put("noData", true);

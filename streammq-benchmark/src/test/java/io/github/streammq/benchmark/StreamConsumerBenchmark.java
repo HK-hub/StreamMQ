@@ -129,8 +129,7 @@ public class StreamConsumerBenchmark {
                         .compressThreshold(0)
                         .maxMessageSize(512L * 1024 * 1024)
                         .build();
-        template =
-                new DefaultStreamMessageTemplate(producer, "benchmark-producer", converter);
+        template = new DefaultStreamMessageTemplate(producer, "benchmark-producer", converter);
 
         char[] chars = new char[payloadSize];
         java.util.Arrays.fill(chars, 'x');

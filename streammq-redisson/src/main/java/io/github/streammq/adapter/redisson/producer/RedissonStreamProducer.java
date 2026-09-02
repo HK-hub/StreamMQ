@@ -309,15 +309,13 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                             try {
                                 sendDelayMessage(message);
                             } catch (RuntimeException ex) {
-                                LOG.warn(
-                                        "Oneway delay send failed: {}", ex.getMessage());
+                                LOG.warn("Oneway delay send failed: {}", ex.getMessage());
                             }
                         });
                 return;
             }
             String topic =
-                    io.github.streammq.core.util.StringUtils.requireValidTopic(
-                            message.getTopic());
+                    io.github.streammq.core.util.StringUtils.requireValidTopic(message.getTopic());
             Map<String, String> fields = converter.toStreamFields(message);
             applyCompression(fields);
             String streamKey = StreamMQKeys.topicStream(namespace, topic);
@@ -327,10 +325,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             stream.addAsync(args);
         } catch (RuntimeException ex) {
             // oneway 语义：所有异常静默丢弃，仅记录日志，不抛到调用方
-            LOG.warn(
-                    "Oneway send failed for topic {}: {}",
-                    message.getTopic(),
-                    ex.getMessage());
+            LOG.warn("Oneway send failed for topic {}: {}", message.getTopic(), ex.getMessage());
         }
     }
 

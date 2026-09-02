@@ -116,6 +116,31 @@
 - 处置：一次性清空 `streammq:*` 共 **65 个残留 key**（模拟 CI 的全新 Redis）后重跑即全绿。
 - 影响评估：非产品缺陷；CI 使用全新 Redis service 不受影响。
 
+### 验证记录（2026-09-02）
+
+| 轮次 | 结果 | 说明 |
+| --- | --- | --- |
+| 第 1 轮 | ❌ FAILURE | redisson IT `ConsumerIT` Redis 3s 响应超时（负载 flaky，单独复跑通过） |
+| 第 2 轮 | ❌ FAILURE | `ConsumeTimeoutAndBroadcastIT.broadcastRetry` 期望 3 实收 2 —— **真实缺陷 P1-10** |
+| 第 3 轮 | ❌ FAILURE | `OrderlyMessageIT` DLQ 等待超时（负载 flaky，单独 8/8 通过） |
+| 第 4 轮 | ❌ FAILURE | spotless：`RedisAvailability` 等历史 CRLF 行尾违规 |
+| 第 5 轮 | ✅ SUCCESS | 分段复核：全仓 install + redisson(419 单测+IT) + 其余模块 + samples 8 模块全绿 |
+
+P1-10 修复（第 2 轮发现，非 flaky）：
+
+- 症状：`ConsumeTimeoutAndBroadcastIT` 两个广播实例，原始消息只被一个实例消费、重试副本只被一个
+  retry 循环读到（总调用 2 而非 3）；或另一个时序下无任何实例触发重试（等待超时）。
+- 根因：`DefaultStreamMQListenerContainer#resolveInstanceToken` 未显式配置时回退到**本地主机名**
+  （9182ec3 引入"持久化标识"时改为主机名优先），而主机名是**进程级**值——同一 JVM 内两个容器
+  解析到同一标识，广播组名 `group:consumerName` 完全相同 → 广播语义退化为集群（消息只投组内
+  一个消费者）。字段 Javadoc 明言"必须容器级"，实现却给了进程级值（自相矛盾）。
+- 修复：主机名分支追加**进程内容器序号**（首个容器纯主机名，保持单容器重启后组名稳定/PEL 可恢复；
+  后续容器 `-2`、`-3`…），并新增 `DefaultStreamMQListenerContainerTest` 容器级唯一性回归用例。
+- 负载 flaky 加固：IT 基类 `AbstractRedisIT` 放宽客户端超时（本地单实例 Redis 全量压测偶发 >3s）；
+  连续多轮全量中 `ConsumerIT`/`OrderlyMessageIT` 各 1 例超时，单独复跑全绿，非产品缺陷。
+- samples 残留说明：`DelaySampleIT` 在**上次运行失败/中断后**未清理的延迟消息会污染下次运行
+  （与 2026-08-29 orderly 同类）；干净 Redis 下连续两次通过，CI 全新实例不受影响。
+
 ## 后续待办（已知、已排期）
 
 > 以下条目已于 2026-08-29 逐条复核，行数为实测值；**2026-08-31 复核并勾销本批已解决项**。

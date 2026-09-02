@@ -18,7 +18,6 @@ import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -73,8 +72,8 @@ public class RedissonStreamListener implements StreamMQListener {
      * <p><b>实例级而非静态：</b>若以 simpleName 为键做成 JVM 级静态缓存，两个不同监听器 （不同 topic /
      * 不同目标类型）会发生跨实例缓存污染——先解析到的类被错误地提供给 另一个监听器，造成反序列化类型混淆。实例级缓存将作用域限制在单个监听器内。
      *
-     * <p><b>有界 LRU（读写锁优化并发）：</b>超出 {@link #CLASS_CACHE_MAX_SIZE} 时淘汰最久未访问项。
-     * 使用 {@link ReentrantReadWriteLock} 替代 synchronizedMap，高并发消费场景下读操作无锁竞争。
+     * <p><b>有界 LRU（读写锁优化并发）：</b>超出 {@link #CLASS_CACHE_MAX_SIZE} 时淘汰最久未访问项。 使用 {@link
+     * ReentrantReadWriteLock} 替代 synchronizedMap，高并发消费场景下读操作无锁竞争。
      */
     private final Map<String, Class<?>> classCache =
             new LinkedHashMap<String, Class<?>>(16, 0.75f, true) {

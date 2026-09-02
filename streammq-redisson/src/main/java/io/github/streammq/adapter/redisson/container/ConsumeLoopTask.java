@@ -221,11 +221,10 @@ final class ConsumeLoopTask implements Runnable {
      *
      * <p>背压启用时排空条目经由 inflight sink 派发（与主循环一致的解耦路径）； 背压禁用（sink 为同步直发）时保持原内联同步处理。
      *
-     * <p><b>并发度门控：</b>并发消费（{@code consumeThreadMin>1}）时，所有循环共享同一消费者名，
-     * 本循环启动排空会持续读取其它并发循环刚 XREADGROUP 读入、尚未 ACK 的在途消息（XREADGROUP id=0
-     * 按消费者名读取整段 PEL），导致同一消息被两条循环各处理一次——重复投递。因此并发度 &gt; 1 时跳过
-     * 启动排空：遗留未 ACK 消息由 PelClaimScheduler 按 group 级空闲阈值（默认 60s）认领重投，
-     * at-least-once 语义不变；并发度 = 1（单循环独占该消费者 PEL）时保留快速恢复路径。
+     * <p><b>并发度门控：</b>并发消费（{@code consumeThreadMin>1}）时，所有循环共享同一消费者名， 本循环启动排空会持续读取其它并发循环刚
+     * XREADGROUP 读入、尚未 ACK 的在途消息（XREADGROUP id=0 按消费者名读取整段 PEL），导致同一消息被两条循环各处理一次——重复投递。因此并发度 &gt; 1
+     * 时跳过 启动排空：遗留未 ACK 消息由 PelClaimScheduler 按 group 级空闲阈值（默认 60s）认领重投， at-least-once 语义不变；并发度 =
+     * 1（单循环独占该消费者 PEL）时保留快速恢复路径。
      */
     private void hookDrainOwnPending(MessageSink sink) {
         if (!ctx.primaryLoop()

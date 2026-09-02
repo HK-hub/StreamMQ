@@ -68,6 +68,23 @@ class DefaultStreamMQListenerContainerTest {
     }
 
     @Test
+    @DisplayName("同 JVM 内多个容器自动推导的 instanceToken 互不相同（广播组名防碰撞）")
+    void autoResolvedInstanceTokens_areUniquePerContainer() {
+        // 主机名是进程级值：两个容器若都解析到同一主机名，广播组名（group:consumerName）
+        // 将碰撞、消息只投递给其一——广播语义退化为集群（回归：P1-10）。
+        DefaultStreamMQListenerContainer first = newContainer();
+        DefaultStreamMQListenerContainer second = newContainer();
+        assertThat(first.getInstanceToken())
+                .as("同 JVM 容器级标识必须唯一")
+                .isNotEqualTo(second.getInstanceToken());
+
+        // 显式配置的 token 不受序号机制影响
+        DefaultStreamMQListenerContainer explicit = newContainer();
+        explicit.setInstanceToken("my-instance");
+        assertThat(explicit.getInstanceToken()).isEqualTo("my-instance");
+    }
+
+    @Test
     @DisplayName("重复注入执行器时，容器不会关闭任何外部注入的执行器（所有权归提供方）")
     void repeatedInjectionNeverShutsDownExternalExecutors() {
         DefaultStreamMQListenerContainer container = newContainer();

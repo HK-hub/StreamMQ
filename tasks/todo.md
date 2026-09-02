@@ -33,4 +33,13 @@
       StreamMQAdminEndpointTest / HardeningTest confirm 用例 / MessageSinkTest P1-8 回归
 - [x] P1-9 并发消费启动排空"偷取"在途消息致重复投递（hookDrainOwnPending 并发度门控：
       并发度 >1 跳过启动排空，遗留未 ACK 由 PelClaimScheduler 认领）—— 全量复核发现并修复
-- [ ] 全量 `mvn clean verify` 复核并提交（含 CHANGELOG 与任务文档更新）
+- [x] P1-10 广播消费者组名碰撞：instanceToken 自动推导回退到进程级主机名，同 JVM 多容器
+      组名相同致广播退化为集群（消息只投给其一）。主机名分支追加进程内容器序号（首容器
+      纯主机名保持重启稳定性，后续 -2、-3…），并加容器级唯一性回归单测
+- [x] 全量 `mvn clean verify` 复核并提交（含 CHANGELOG 与任务文档更新）
+      分段复核全部通过：全仓 install ✓；redisson 单测 419 + IT ✓；core/starter/tracing/
+      diagnostics/kubernetes/binder/test ✓；samples 8 模块 ✓；benchmark（JMH 无单测）✓；
+      全仓 spotless 合规 ✓
+      说明：本地连续运行 DelaySampleIT 偶发"残留消息交叉污染"（上次运行失败中断后遗留
+      延迟消息被下次消费），干净 Redis 下全绿，CI 全新实例无此问题；IT 基类已放宽客户端
+      超时降低全量压测负载 flaky

@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     升级时请先消费完存量消息，或显式配置 `serializer: io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer` 保持原行为。
   - Fury 为 secure-by-default：自定义 body 类型需先注册（`new FurySerializer<>(OrderCreated.class)`）。
 
+### Fixed
+
+- **广播消费者组名碰撞**（`instanceToken` 容器级唯一）：`resolveInstanceToken` 未显式配置时回退到
+  **本地主机名**，而主机名是进程级值——同一 JVM 内多个容器实例（测试、多租户宿主）会解析到同一
+  标识，导致广播组名（`group:consumerName`）完全相同、广播语义退化为集群（消息只投递给组内一个
+  消费者、对端收不到消息）。现在主机名分支追加进程内容器序号：首个容器保持纯主机名（单容器生产
+  常态，重启后组名不变、PEL 可恢复），同 JVM 内后续容器依次 `-2`、`-3`……保证容器级唯一。
+- 全量复核发现的测试基建加固：
+  - IT 基类 Redisson 客户端超时放宽（本地单实例 Redis 全量压测下偶发 3s 响应超时，属负载 flaky）
+  - 全仓 spotless 格式统一（历史 CRLF 行尾等存量违规）
+
 ## [0.1.1] - 2026-08-29 — 第一个公开发布版本
 
 > **关于 `v0.1.0` 标签（发布前必读）**
