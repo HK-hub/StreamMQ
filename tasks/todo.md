@@ -43,3 +43,14 @@
       说明：本地连续运行 DelaySampleIT 偶发"残留消息交叉污染"（上次运行失败中断后遗留
       延迟消息被下次消费），干净 Redis 下全绿，CI 全新实例无此问题；IT 基类已放宽客户端
       超时降低全量压测负载 flaky
+
+发布前红队审查第三批修复（2026-09-03，工作区待提交）：
+- [x] 管理端点 CSRF 同源防护（`WebRequestAuthSupport#isSameOriginRequest` + `checkCsrf()`，跨站写/删 403）
+- [x] 删除单条 DLQ 消息需 `confirm=msgId` 显式确认（防误删排障数据）+ HardeningTest 用例更新
+- [x] P2-5 `AllowAllAuthenticator` 启动强告警（`AdminEndpointExposureStartupWarner` SECURITY ALERT + endpoint `allowAll` 标记）
+- [x] P2-2 `streammq-test` 补 `maven-failsafe-plugin`，使 `CoreRedisIntegrationIT`（44 个 IT）真实执行
+- [x] P2-3 CI 默认 `verify` 启用 JaCoCo 覆盖率门禁（`-Djacoco.check.skip=false`）
+- [x] 容器 `stop` 执行器生命周期修正（仅关自有、保留注入共享执行器）+ `stopShutsDownInternalExecutor` 对照用例
+- [x] DLQ pending 重投原子化（`PelClaimScheduler#xaddAndAck` + `LUA_XADD_AND_ACK`，防并发重复投递）
+- [x] 编译 + 目标单测验证通过（`DefaultStreamMQListenerContainerTest` / `StreamMQActuatorEndpointHardeningTest` 全绿）
+- [x] CHANGELOG 补充第三批记录

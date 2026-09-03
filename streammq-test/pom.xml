@@ -121,6 +121,14 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-javadoc-plugin</artifactId>
             </plugin>
+            <!-- 发布前修复 P2-2：此前本模块未声明 failsafe，导致 CoreRedisIntegrationIT（44 个集成测试）
+                 永远以 *IT 命名被 surefire 忽略、又无 failsafe 接管，在本地与 CI 中均从未执行。
+                 现声明后，mvn verify 会真正运行这批针对真实 Redis 的核心集成测试。
+                 无 Redis 时 CoreRedisIntegrationIT 通过 Assumptions.assumeTrue 优雅跳过，不会破坏构建。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+            </plugin>
         </plugins>
     </build>
 

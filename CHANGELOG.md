@@ -48,6 +48,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `estimateFieldSize` 改为 UTF-8 字节精确估算，消除中文/emoji 高估、ASCII 低估导致的误判。
   - DLQ Stream 新增 `streammq.dlq.stream-max-len`（默认 0=不限制）上限配置。
 
+### Fixed（发布前红队审查第三批 — 2026-09-03）
+
+- **管理端点 CSRF 同源防护**：`/actuator/streammq/**` 的全部写/删操作（POST/DELETE）新增同源校验，
+  跨站请求（携带与外域 `Host` 不一致的 `Origin`）直接返回 HTTP 403；不影响 curl / SDK 等合法非浏览器调用。
+  新增 `WebRequestAuthSupport#isSameOriginRequest()`（fail-open：非 Web 环境或无 `Origin` 一律放行）。
+  仍建议在反向代理层强制同源并启用 Spring Security。
+- **删除单条 DLQ 消息需显式确认**：`StreamMQAdminEndpoint#deleteDlq(group, msgId, confirm)` 要求
+  `confirm` 必须等于 `msgId`，缺失/不匹配时拒绝并给出明确提示，防止路径参数被误构造时直接删除排障数据
+  （破坏性操作不可逆）。`StreamMQActuatorEndpoint` 的 DELETE 分发透传 `confirm` 参数。
+- **`AllowAllAuthenticator` 启动强告警（P2-5）**：此前仅 `DenyAll` 触发告警，而零鉴权、可被任意调用方
+  删除 Topic/DLQ/重投的 `AllowAll` 反而无提示。现由 `AdminEndpointExposureStartupWarner` 针对该最危险场景
+  发出 `SECURITY ALERT`（可通过 `-Dstreammq.admin.startup-warn=false` 抑制）。`StreamMQActuatorEndpoint`
+  新增 `allowAll` 标记，由 `StreamMQHealthAutoConfiguration` 在装配时注入。
+- **`streammq-test` 集成测试从未执行（P2-2）**：本模块此前未声明 `maven-failsafe-plugin`，导致
+  `CoreRedisIntegrationIT`（44 个针对真实 Redis 的核心集成测试）以 `*IT` 命名被 surefire 忽略、又无
+  failsafe 接管，在本地与 CI 中均从未运行。现声明 failsafe，无 Redis 时经 `Assumptions` 优雅跳过。
+- **CI 默认 `verify` 启用覆盖率门禁（P2-3）**：`ci.yml` 的集成测试步骤改为
+  `mvn verify -Djacoco.check.skip=false -Dspotless.check.skip=true`，默认既验证 IT 执行数（tripwire
+  防静默跳过），也兜住发布模块的覆盖红线；spotless 由专门 job / 本地 pre-commit 负责，避免重复卡构建。
+- **容器 `stop` 执行器生命周期修正**：仅当执行器为容器自有（`ownsExecutor`）时才 `shutdown`，外部注入的
+  共享执行器（如 Spring 的 `streammqExecutor`）在 `stop` 时**不再关闭**，避免误关中断事件总线 / 异步发送
+  / 事务回查并拖慢停机；对应单元测试修正为先 `start` 离开 INIT 再 `stop`，消除假阳性，并新增
+  `stopShutsDownInternalExecutor` 对照用例。
+- **DLQ pending 重投原子化（防重复投递）**：DLQ 尾拷贝重投改为原子「`XACK` 旧条目 + `XADD` 副本」
+  （`PelClaimScheduler#xaddAndAck` + `LUA_XADD_AND_ACK`），认领成功（返回 1）才写副本；旧条目已被其它
+  实例/消费者先行认领时（`XACK` 返回 0）跳过，杜绝并发重复投递。
+
 > **关于 `v0.1.0` 标签（发布前必读）**
 >
 > 仓库中曾存在指向 `f54b1fe`（2026-08-25）的 `v0.1.0` 标签，而其后有 11 个修复提交（含多项 P0/P1）

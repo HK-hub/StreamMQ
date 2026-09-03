@@ -6,6 +6,7 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
+import io.github.streammq.adapter.redisson.security.AllowAllAuthenticator;
 import io.github.streammq.adapter.redisson.security.DenyAllAuthenticator;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.listener.BroadcastGroupRegistry;
@@ -140,6 +141,8 @@ public class StreamMQHealthAutoConfiguration {
                 new StreamMQActuatorEndpoint(
                         adminEndpoint, healthIndicatorProvider.getIfAvailable(), rateLimited);
         endpoint.setListPageSize(properties.getAdmin().getListPageSize());
+        // 发布前修复 P2-5：标记是否使用了 AllowAll 鉴权器，供启动告警针对最危险场景发出强提示
+        endpoint.setAllowAll(authenticator instanceof AllowAllAuthenticator);
         return endpoint;
     }
 

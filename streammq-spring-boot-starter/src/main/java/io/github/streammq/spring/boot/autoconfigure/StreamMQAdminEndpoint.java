@@ -351,11 +351,36 @@ public class StreamMQAdminEndpoint {
                     + "redis.call('XDEL', KEYS[1], msgId)\n"
                     + "return 1\n";
 
-    /** 删除指定 DLQ 消息。 */
-    public Map<String, Object> deleteDlq(String group, String msgId) {
+    /**
+     * 删除指定 DLQ 消息（不可逆，需显式确认）。
+     *
+     * <p><b>发布前修复 P2：</b>删除单条 DLQ 消息属于破坏性操作，暴露在 HTTP DELETE 上。要求调用方 通过 {@code confirm}
+     * 参数回传待删除的 {@code msgId} 以确认意图，避免路径参数被误构造/误触发时 直接删除业务排障数据。
+     *
+     * @param group 消费者组名
+     * @param msgId 消息 ID（格式：{@code ts-seq}）
+     * @param confirm 确认串，必须等于 msgId
+     * @return 操作结果
+     */
+    public Map<String, Object> deleteDlq(String group, String msgId, String confirm) {
         Map<String, Object> result = new LinkedHashMap<>();
         String limitKey = "deleteDlq:" + group + ":" + msgId;
         if (isFailureCooldown(result, limitKey)) {
+            return result;
+        }
+        if (!Objects.equals(msgId, confirm)) {
+            result.put("success", false);
+            result.put(
+                    "error",
+                    "Refusing to delete DLQ message '"
+                            + msgId
+                            + "': this operation is irreversible. Pass confirm="
+                            + msgId
+                            + " to acknowledge.");
+            LOG.warn(
+                    "Delete DLQ message rejected, missing/incorrect confirm: group={}, msgId={}",
+                    group,
+                    msgId);
             return result;
         }
         String dlqKey = StreamMQKeys.dlqStream(namespace, group);

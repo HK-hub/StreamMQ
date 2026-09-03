@@ -14,6 +14,7 @@ import io.github.streammq.core.listener.BroadcastGroupRegistry;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -25,10 +26,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.redisson.api.PendingEntry;
 import org.redisson.api.RLock;
+import org.redisson.api.RScript;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.StreamMessageId;
-import org.redisson.api.stream.StreamAddArgs;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -82,6 +84,35 @@ public class PelClaimScheduler implements StreamMQScheduler {
     /** 关闭调度线程池时的等待超时（秒） */
     private static final long AWAIT_TERMINATION_SECONDS =
             StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
+
+    /**
+     * PEL 扫描锁 lease（毫秒）。
+     *
+     * <p>使用 {@code -1} 启用 Redisson 看门狗自动续期：扫描持有期间锁持续有效，实例崩溃时看门狗停止续期
+     * → 锁自动释放，避免死锁。
+     *
+     * <p><b>历史缺陷（已修复）：</b>此前误用 {@code DEFAULT_AWAIT_TERMINATION_SECONDS * 1000}（=5s）作为 lease，
+     * 会关闭看门狗续期，导致单轮扫描 >5s（跨 AZ / 大 PEL）时锁中途过期，另一实例并发扫描同一目标 → 重复投递。
+     */
+    private static final long PEL_CLAIM_LOCK_LEASE_MS = -1L;
+
+    /**
+     * 原子「XADD 副本 + XACK 旧条目」脚本。
+     *
+     * <p>KEYS[1]=源 stream（XACK 目标），KEYS[2]=目标 stream（XADD 目标）。 ARGV[1]=消费组，ARGV[2]=旧 entry
+     * id，ARGV[3..]=XADD 的 field/value 对。
+     *
+     * <p>先 XACK 再 XADD 且整体原子：仅当本次 XACK 真正移除该 pending（返回 1，即本实例成功认领）时才写副本；
+     * 若该条目已被其它实例/消费者先行 ACK（返回 0），直接跳过，<b>杜绝重复投递</b>。 整个脚本在 Redis 端单线程原子执行，
+     * 消除了此前「XADD 成功但 XACK 失败 → 下一轮重复重投」的窗口（见 P1-A）。
+     */
+    private static final String LUA_XADD_AND_ACK =
+            "local acked = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])\n"
+                    + "if acked == 1 then\n"
+                    + "  return redis.call('XADD', KEYS[2], '*', unpack(ARGV, 3))\n"
+                    + "else\n"
+                    + "  return '0'\n"
+                    + "end";
 
     private final long minIdleMs;
     private volatile ScheduledExecutorService scanExecutor;
@@ -379,14 +410,10 @@ public class PelClaimScheduler implements StreamMQScheduler {
     private void scanPel(PelClaimTarget target) {
         String lockKey = StreamMQKeys.pelClaimLock(namespace, target.topic, target.group);
         RLock scanLock = redisson.getLock(lockKey);
-        // 不等待：其它实例正在扫该目标时直接跳过本轮；leaseTime 兜底防止持有者崩溃后死锁
+        // 不等待：其它实例正在扫该目标时直接跳过本轮；lease=-1 启用看门狗续期，持有者崩溃后自动释放
         boolean locked;
         try {
-            locked =
-                    scanLock.tryLock(
-                            0,
-                            StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS * 1000L,
-                            TimeUnit.MILLISECONDS);
+            locked = scanLock.tryLock(0, PEL_CLAIM_LOCK_LEASE_MS, TimeUnit.MILLISECONDS);
         } catch (InterruptedException ex) {
             Thread.currentThread().interrupt();
             return;
@@ -459,17 +486,18 @@ public class PelClaimScheduler implements StreamMQScheduler {
                             (Map<String, String>) readResult.values().iterator().next();
                     int retryTimes = parseRetryTimes(fields);
                     if (retryTimes >= target.maxReconsumeTimes) {
-                        // 超限 → 先 XADD 到 DLQ，成功后再 ACK 移除（顺序不可颠倒：
-                        // 若先 ACK 后写 DLQ，两步之间崩溃会导致消息永久丢失）
                         fields.put(
                                 RetryScheduler.FIELD_DLQ_REASON,
                                 DlqReason.MAX_RETRY_ORDERLY.getCode());
                         fields.put(
                                 RetryScheduler.FIELD_ORIGINAL_RETRY_COUNT,
                                 Integer.toString(retryTimes));
-                        RStream<String, String> dlqStream = redisson.getStream(dlqStreamKey);
-                        dlqStream.add(StreamAddArgs.entries(fields));
-                        stream.ack(target.group, id);
+                        // 原子认领：先 XACK 旧条目，认领成功才 XADD 到 DLQ（Lua 端原子执行，
+                        // 消除「XADD 成功但 XACK 失败」导致的重复死信；旧条目已被他人认领则跳过）
+                        if (xaddAndAck(streamKey, dlqStreamKey, target.group, id, fields)
+                                == null) {
+                            continue;
+                        }
                         LOG.info(
                                 "Orderly message entered DLQ: topic={}, group={}, id={},"
                                         + " retryTimes={}",
@@ -498,8 +526,11 @@ public class PelClaimScheduler implements StreamMQScheduler {
                                     DefaultMessageConverter.FIELD_RETRY_TIMES,
                                     Integer.toString(retryTimes + 1));
                             fields.put(FIELD_ORIGINAL_MESSAGE_ID, id.toString());
-                            stream.add(StreamAddArgs.entries(fields));
-                            stream.ack(target.group, id);
+                            // 原子认领：先 XACK 旧条目，认领成功才 XADD 副本（杜绝重复投递）
+                            if (xaddAndAck(streamKey, streamKey, target.group, id, fields)
+                                    == null) {
+                                continue;
+                            }
                             LOG.info(
                                     "Orderly pending redelivered: topic={}, group={}, id={},"
                                             + " retryTimes={}",
@@ -574,14 +605,15 @@ public class PelClaimScheduler implements StreamMQScheduler {
                             (Map<String, String>) readResult.values().iterator().next();
                     int retryTimes = parseRetryTimes(fields);
                     if (retryTimes >= target.maxReconsumeTimes) {
-                        // 超限 → 先 XADD 到 DLQ，成功后再 ACK 移除（顺序不可颠倒）
+                        // 超限 → 原子认领后进 DLQ（先 XACK 旧条目，认领成功才 XADD DLQ）
                         fields.put(RetryScheduler.FIELD_DLQ_REASON, DlqReason.MAX_RETRY.getCode());
                         fields.put(
                                 RetryScheduler.FIELD_ORIGINAL_RETRY_COUNT,
                                 Integer.toString(retryTimes));
-                        redisson.<String, String>getStream(dlqStreamKey)
-                                .add(StreamAddArgs.entries(fields));
-                        stream.ack(target.group, id);
+                        if (xaddAndAck(streamKey, dlqStreamKey, target.group, id, fields)
+                                == null) {
+                            continue;
+                        }
                         LOG.info(
                                 "Retry-stream message entered DLQ: topic={}, group={}, id={},"
                                         + " retryTimes={}",
@@ -590,10 +622,10 @@ public class PelClaimScheduler implements StreamMQScheduler {
                                 id,
                                 retryTimes);
                     } else {
-                        // 未超限：原样复制到流尾（计数字段随行）+ ACK 旧条目，
-                        // 消费者以 '>' 读到新 ID 后继续按既有计数处理
-                        stream.add(StreamAddArgs.entries(fields));
-                        stream.ack(target.group, id);
+                        // 未超限：原子认领后原样复制到流尾（先 XACK 旧条目，认领成功才 XADD 副本）
+                        if (xaddAndAck(streamKey, streamKey, target.group, id, fields) == null) {
+                            continue;
+                        }
                         LOG.info(
                                 "Retry-stream pending redelivered (tail copy): topic={},"
                                         + " group={}, id={}, retryTimes={}",
@@ -650,8 +682,10 @@ public class PelClaimScheduler implements StreamMQScheduler {
                     }
                     Map<String, String> fields =
                             (Map<String, String>) readResult.values().iterator().next();
-                    stream.add(StreamAddArgs.entries(fields));
-                    stream.ack(target.group, id);
+                    // 原子认领后原样复制到流尾（先 XACK 旧条目，认领成功才 XADD 副本，杜绝重复投递）
+                    if (xaddAndAck(streamKey, streamKey, target.group, id, fields) == null) {
+                        continue;
+                    }
                     LOG.info(
                             "DLQ pending redelivered (tail copy): group={}, id={}",
                             target.group,
@@ -701,6 +735,43 @@ public class PelClaimScheduler implements StreamMQScheduler {
             }
         }
         return 0;
+    }
+
+    /**
+     * 原子地「认领旧条目 + 写副本」：在 Redis 端先 {@code XACK}（认领），仅当认领成功（返回 1）才 {@code XADD}
+     * 副本，整个脚本单线程原子执行。
+     *
+     * @param sourceStreamKey 源 stream（XACK 目标）
+     * @param destStreamKey 目标 stream（XADD 目标，重投时与源相同）
+     * @param group 消费组名
+     * @param id 待认领的旧 entry id
+     * @param fields XADD 副本的字段表
+     * @return 新写入的 entry id；若旧条目已被其它实例/消费者先行认领（XACK 返回 0）则返回 {@code null}
+     */
+    private String xaddAndAck(
+            String sourceStreamKey,
+            String destStreamKey,
+            String group,
+            StreamMessageId id,
+            Map<String, String> fields) {
+        String[] argv = new String[fields.size() * 2 + 2];
+        argv[0] = group;
+        argv[1] = id.toString();
+        int i = 2;
+        for (Map.Entry<String, String> e : fields.entrySet()) {
+            argv[i++] = e.getKey();
+            argv[i++] = e.getValue();
+        }
+        String result =
+                redisson
+                        .getScript(StringCodec.INSTANCE)
+                        .eval(
+                                RScript.Mode.READ_WRITE,
+                                LUA_XADD_AND_ACK,
+                                RScript.ReturnType.STATUS,
+                                Arrays.asList(sourceStreamKey, destStreamKey),
+                                (Object[]) argv);
+        return "0".equals(result) ? null : result;
     }
 
     public int getTargetCount() {

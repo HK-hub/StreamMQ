@@ -79,6 +79,19 @@ public class AdminEndpointExposureStartupWarner {
                     managementPort);
             return;
         }
+        // 发布前修复 P2-5：AllowAllAuthenticator 是最危险场景（零鉴权、可被任意调用方删除 Topic/DLQ/重投），
+        // 必须发出比端口暴露更强的告警，避免误以为「默认安全」而对外开放。
+        if (endpoint.isAllowAll()) {
+            LOG.error(
+                    "SECURITY ALERT: StreamMQ admin endpoint is using AllowAllAuthenticator — ALL"
+                        + " management operations (create/delete Topic, delete DLQ messages,"
+                        + " requeue, rebalance, manual ACK) are OPEN TO ANYONE with network access,"
+                        + " including destructive ones. This is only acceptable for local dev /"
+                        + " isolated networks. For any shared or production environment, register a"
+                        + " BasicAuthAuthenticator / TokenAuthenticator (or custom"
+                        + " ManagementAuthenticator) and restrict access at the network layer. To"
+                        + " suppress this warning, set -Dstreammq.admin.startup-warn=false.");
+        }
         LOG.warn(
                 "StreamMQ admin endpoint (WebEndpoint id=streammq) registered on the MAIN"
                     + " application port ({}). Path: /actuator/streammq/** — governed by"

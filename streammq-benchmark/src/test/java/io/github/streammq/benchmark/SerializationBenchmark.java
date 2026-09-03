@@ -174,8 +174,8 @@ public class SerializationBenchmark {
                         .measurementTime(TimeValue.seconds(3))
                         .measurementIterations(5)
                         .forks(1)
-                        .result("target/jmh-serialization.txt")
-                        .resultFormat(ResultFormatType.TEXT)
+                        .result("target/jmh-serialization.json")
+                        .resultFormat(ResultFormatType.JSON)
                         .build();
         new Runner(opt).run();
     }

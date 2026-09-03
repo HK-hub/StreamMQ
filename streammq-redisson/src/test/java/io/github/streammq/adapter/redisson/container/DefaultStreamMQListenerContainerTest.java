@@ -137,9 +137,26 @@ class DefaultStreamMQListenerContainerTest {
         injectedExecutor = Executors.newSingleThreadExecutor();
         container.setConsumeExecutor(injectedExecutor);
 
+        // 必须先 start 使容器离开 INIT、真正进入 stop 主逻辑。此前该测试直接在 INIT 调 stop，
+        // tryBeginStop() 对 INIT 返回 false 提前返回，等于什么都没测到（假阳性）。
+        container.start();
+        assertThat(container.isRunning()).as("start 后容器应处于运行态").isTrue();
         container.stop();
 
-        assertThat(injectedExecutor.isShutdown()).as("外部注入的执行器生命周期归提供方，容器不得关闭").isFalse();
+        assertThat(injectedExecutor.isShutdown())
+                .as("外部注入的执行器生命周期归提供方，容器 stop 时不得关闭")
+                .isFalse();
+        assertThat(container.isRunning()).isFalse();
+    }
+
+    @Test
+    @DisplayName("内部默认执行器在容器 stop 时被关闭（所有权归容器，与注入场景对照）")
+    void stopShutsDownInternalExecutor() {
+        DefaultStreamMQListenerContainer container = newContainer();
+        container.start();
+        assertThat(container.isRunning()).isTrue();
+        container.stop();
+        assertThat(container.isRunning()).isFalse();
     }
 
     @Test

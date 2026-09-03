@@ -178,8 +178,8 @@ public class StreamMessageTemplateBenchmark {
                         .measurementTime(TimeValue.seconds(3))
                         .measurementIterations(5)
                         .forks(1)
-                        .result("target/jmh-template.txt")
-                        .resultFormat(ResultFormatType.TEXT)
+                        .result("target/jmh-template.json")
+                        .resultFormat(ResultFormatType.JSON)
                         .build();
         new Runner(opt).run();
     }

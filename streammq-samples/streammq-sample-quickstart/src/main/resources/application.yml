@@ -17,6 +17,19 @@ management:
       exposure:
         include: "health,info,metrics,prometheus,streammq"
 
+# ============================================================================
+# 安全提示（发布前修复 P3）：/actuator/streammq/** 管理端点默认使用 DenyAllAuthenticator，
+# 即「全部拒绝」（任何调用返回 401）——暴露但不开放，fail-closed，本地体验默认是安全的。
+# 但若你在生产环境放开访问，必须显式注册一个鉴权器（否则等于零鉴权、可被任意调用方删除 Topic/DLQ）：
+#   1) 注入 Bean 选择其一（BasicAuth / Token / 自定义 ManagementAuthenticator），例如：
+#      @Bean ManagementAuthenticator streamMqAuth() {
+#          return new TokenAuthenticator("your-strong-token");
+#      }
+#   2) 强烈建议在反向代理/Ingress 层限制该路径的访问来源，并优先将管理端点隔离到独立 management.server.port。
+#   3) 管理端点的写/删操作已内置同源校验（跨站 CSRF 请求直接拒绝），但仍需配套上述鉴权。
+# 另：streammq.admin.enabled=true 才启用该端点；不需要排障能力时可设为 false 彻底关闭。
+# ============================================================================
+
 # Redisson 配置（示例用单机），生产环境请使用集群配置
 redisson:
   singleServerConfig:

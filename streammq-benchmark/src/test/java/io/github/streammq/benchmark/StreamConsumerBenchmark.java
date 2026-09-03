@@ -334,8 +334,8 @@ public class StreamConsumerBenchmark {
         Options opt =
                 new OptionsBuilder()
                         .include(StreamConsumerBenchmark.class.getSimpleName())
-                        .result("target/jmh-consumer.txt")
-                        .resultFormat(ResultFormatType.TEXT)
+                        .result("target/jmh-consumer.json")
+                        .resultFormat(ResultFormatType.JSON)
                         .build();
         new Runner(opt).run();
     }

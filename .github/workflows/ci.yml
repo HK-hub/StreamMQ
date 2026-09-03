@@ -146,7 +146,10 @@ jobs:
           cache: maven
 
       - name: Run integration tests
-        run: mvn verify
+        # 发布前修复 P2-3：除运行集成测试外，同时启用覆盖率门禁（jacoco.check.skip=false），
+        # 使默认 verify 既验证集成测试执行数（见下方 tripwire），也兜住发布模块的覆盖红线，
+        # 不必依赖单独的 coverage job。spotless 由专门 job / 本地 pre-commit 负责，verify 中跳过以免重复卡构建。
+        run: mvn verify -Djacoco.check.skip=false -Dspotless.check.skip=true
 
       # Tripwire：集成测试若因 Redis service 容器异常被整体跳过，mvn verify 仍会"绿色"通过。
       # 此步骤解析 failsafe 报告，校验实际执行的 IT 数量下限与跳过率上限，防止静默失效。

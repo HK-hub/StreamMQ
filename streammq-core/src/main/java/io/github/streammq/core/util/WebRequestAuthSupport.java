@@ -56,6 +56,12 @@ public class WebRequestAuthSupport {
     /** X-Forwarded-For 请求头名称（反向代理场景下识别真实客户端地址） */
     private static final String HEADER_X_FORWARDED_FOR = "X-Forwarded-For";
 
+    /** Origin 请求头名称（同源策略 / CSRF 防护） */
+    private static final String HEADER_ORIGIN = "Origin";
+
+    /** Host 请求头名称（与 Origin 比对判断同源） */
+    private static final String HEADER_HOST = "Host";
+
     /**
      * 是否信任 {@code X-Forwarded-For} 请求头。默认 {@code false}：仅使用不可伪造的 {@code remoteAddr}。
      *
@@ -316,5 +322,54 @@ public class WebRequestAuthSupport {
         } catch (ReflectiveOperationException ex) {
             return null;
         }
+    }
+
+    /**
+     * 判断当前请求是否为同源请求（用于防御 CSRF / 跨站简单请求）。
+     *
+     * <p><b>策略：</b>仅当请求携带 {@code Origin} 头且其 authority（host[:port]）与 {@code Host} 头不一致时，
+     * 才判定为跨站（返回 {@code false}）。浏览器发起的跨站简单请求（POST/DELETE，无自定义头）会携带外域 {@code Origin}，
+     * 据此拦截；同源请求、以及非浏览器客户端（curl / SDK，通常不带 {@code Origin}，或携带与 {@code Host} 一致的 {@code
+     * Origin}）一律放行，不破坏既有 API 契约。</p>
+     *
+     * <p><b>非 Web 环境或读取失败时返回 {@code true}（fail-open）</b>——此处只防浏览器 CSRF，不应阻断非浏览器调用。
+     * 注意：仅比对 host（不比对 scheme），对于已启用严格传输安全等场景，建议额外在反向代理层强制同源。</p>
+     *
+     * @return {@code true} 表示同源或无法判定（放行），{@code false} 表示跨站（应拒绝）
+     */
+    public static boolean isSameOriginRequest() {
+        Object request = currentRequest();
+        if (request == null) {
+            return true;
+        }
+        String origin = getHeader(request, HEADER_ORIGIN);
+        if (StringUtils.isEmpty(origin)) {
+            // 无 Origin：非浏览器客户端或同源（浏览器同源简单请求也可能省略 Origin），放行
+            return true;
+        }
+        String host = getHeader(request, HEADER_HOST);
+        if (StringUtils.isEmpty(host)) {
+            return true;
+        }
+        String originAuthority = authorityOf(origin);
+        String hostAuthority = authorityOf(host);
+        if (originAuthority == null || hostAuthority == null) {
+            return true;
+        }
+        return originAuthority.equalsIgnoreCase(hostAuthority);
+    }
+
+    /** 从 URL 或纯 host 字符串中提取 authority（host[:port]），失败返回 null。 */
+    private static String authorityOf(String value) {
+        String v = value.trim();
+        int schemeIdx = v.indexOf("://");
+        if (schemeIdx >= 0) {
+            v = v.substring(schemeIdx + 3);
+        }
+        int pathIdx = v.indexOf('/');
+        if (pathIdx >= 0) {
+            v = v.substring(0, pathIdx);
+        }
+        return v.isEmpty() ? null : v;
     }
 }

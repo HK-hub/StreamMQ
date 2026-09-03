@@ -21,6 +21,15 @@
 >   `hookDrainOwnPending` 增加并发度门控（并发度 > 1 跳过启动排空，遗留未 ACK 由 `PelClaimScheduler`
 >   按 group 级空闲阈值认领重投，at-least-once 不变）。详见「验证记录（2026-08-31）」。
 >
+> **📌 发布前红队审查（第三批）修复：2026-09-03 追加完成**（工作区待提交）
+>
+> - 管理端点 CSRF 同源防护（`WebRequestAuthSupport#isSameOriginRequest` + 端点 `checkCsrf()`，跨站写/删 403）。
+> - 删除单条 DLQ 消息需 `confirm=msgId` 显式确认（防误删排障数据）；`AllowAllAuthenticator` 启动强告警（P2-5）。
+> - P2-2 `streammq-test` 补 `maven-failsafe-plugin`，`CoreRedisIntegrationIT`（44 IT）真实执行；
+>   P2-3 CI 默认 `verify` 启用 JaCoCo 覆盖率门禁。
+> - 容器 `stop` 执行器生命周期修正（仅关自有、保留注入共享执行器）；DLQ pending 重投原子化（`xaddAndAck` + `LUA_XADD_AND_ACK`，防并发重复投递）。
+> - 编译 + 目标单测验证通过（`DefaultStreamMQListenerContainerTest` / `StreamMQActuatorEndpointHardeningTest` 全绿）；CHANGELOG 已补录。
+>
 > ⚠️ 本计划完成 ≠ 可以发布。下方「后续待办」与「发布前决策（含 1 项阻断项）」仍需处理。
 
 ## Overview

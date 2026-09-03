@@ -971,14 +971,19 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         consumerFactory.close();
         if (ownsExecutor) {
             consumeExecutor.shutdown();
-        }
-        try {
-            if (!consumeExecutor.awaitTermination(AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
+            try {
+                if (!consumeExecutor.awaitTermination(
+                        AWAIT_TERMINATION_SECONDS, TimeUnit.SECONDS)) {
+                    consumeExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
                 consumeExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
             }
-        } catch (InterruptedException e) {
-            consumeExecutor.shutdownNow();
-            Thread.currentThread().interrupt();
+        } else {
+            // 执行器为外部注入（共享）时绝不可关闭：其生命周期归提供方（如 Spring 的
+            // streammqExecutor），误关会中断事件总线/异步发送/事务回查，并拖慢停机。
+            LOG.debug("Injected (shared) consumeExecutor retained on stop; not shutting down");
         }
         paused = false;
         // 停止后清空：历史失败不应影响下一次 start 的健康判定
