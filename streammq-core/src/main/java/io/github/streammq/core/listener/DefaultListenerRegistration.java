@@ -8,6 +8,7 @@ package io.github.streammq.core.listener;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.consumer.StreamMessageConsumer;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.enums.ConsumeFromWhere;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.filter.ConsumerFilter;
@@ -74,6 +75,10 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
     private final Class<? extends RebalanceStrategy> rebalanceStrategy;
     private final long suspendCurrentQueueTimeMillis;
     private final int streamMaxLen;
+
+    /** 新消费者组的起始消费位点（永不为 null，未声明时为 {@link ConsumeFromWhere#DEFAULT}）。 */
+    private final ConsumeFromWhere consumeFromWhere;
+
     private final boolean enableMsgTrace;
     private final boolean dlqMode;
     private final Class<?> targetBodyType;
@@ -125,6 +130,8 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         this.suspendCurrentQueueTimeMillis =
                 requireMin("suspendCurrentQueueTimeMillis", b.suspendCurrentQueueTimeMillis, 0);
         this.streamMaxLen = Math.max(0, b.streamMaxLen);
+        this.consumeFromWhere =
+                Objects.isNull(b.consumeFromWhere) ? ConsumeFromWhere.DEFAULT : b.consumeFromWhere;
         this.enableMsgTrace = b.enableMsgTrace;
         this.dlqMode = b.dlqMode;
         this.targetBodyType = b.targetBodyType;
@@ -168,6 +175,7 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         private long suspendCurrentQueueTimeMillis =
                 StreamMQConstants.DEFAULT_SUSPEND_CURRENT_QUEUE_TIME_MS;
         private int streamMaxLen;
+        private ConsumeFromWhere consumeFromWhere = ConsumeFromWhere.DEFAULT;
         private boolean enableMsgTrace;
         private boolean dlqMode;
         private Class<?> targetBodyType;
@@ -273,6 +281,17 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
 
         public Builder<T> suspendCurrentQueueTimeMillis(long v) {
             this.suspendCurrentQueueTimeMillis = v;
+            return this;
+        }
+
+        /**
+         * 设置新消费者组的起始消费位点；传 null 视为 {@link ConsumeFromWhere#DEFAULT}。
+         *
+         * @param v 起始消费位点策略
+         * @return this
+         */
+        public Builder<T> consumeFromWhere(ConsumeFromWhere v) {
+            this.consumeFromWhere = v;
             return this;
         }
 

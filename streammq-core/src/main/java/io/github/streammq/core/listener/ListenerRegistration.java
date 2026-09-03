@@ -144,6 +144,17 @@ public interface ListenerRegistration<T> {
     }
 
     /**
+     * 新消费者组的起始消费位点（默认 {@link io.github.streammq.core.enums.ConsumeFromWhere#DEFAULT}）。
+     *
+     * <p>仅在该 Redis 消费者组<b>首次创建</b>时生效，已存在的组不受影响。缺省实现返回全局默认， 保证未声明该字段的自定义实现 / 测试桩不会因接口新增方法而编译失败。
+     *
+     * @return 起始消费位点策略，永不为 null
+     */
+    default io.github.streammq.core.enums.ConsumeFromWhere getConsumeFromWhere() {
+        return io.github.streammq.core.enums.ConsumeFromWhere.DEFAULT;
+    }
+
+    /**
      * per-consumer 已解析转换器实例；null 表示使用全局转换器。
      *
      * @return 转换器实例，可为 null

@@ -347,7 +347,11 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                             reg.getGroup(),
                             dlqConfig.getSecondaryDlqKeyPrefix());
             RStream<String, String> dlq2Stream = redisson.getStream(dlq2Key);
-            dlq2Stream.add(StreamAddArgs.entries(fields));
+            StreamAddArgs<String, String> dlq2Args = StreamAddArgs.entries(fields);
+            if (dlqConfig.getStreamMaxLen() > 0) {
+                dlq2Args = dlq2Args.trimNonStrict().maxLen(dlqConfig.getStreamMaxLen()).noLimit();
+            }
+            dlq2Stream.add(dlq2Args);
             LOG.warn(
                     "Message routed to secondary DLQ: topic={}, group={}, messageId={}, dlq2Key={}",
                     reg.getTopic(),
@@ -555,7 +559,11 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             fields.put(FIELD_ORIGINAL_MESSAGE_ID, messageId.getStreamEntryId());
             String dlqKey = StreamMQKeys.dlqStream(reg.getNamespace(), reg.getGroup());
             RStream<String, String> dlqStream = redisson.getStream(dlqKey);
-            dlqStream.add(StreamAddArgs.entries(fields));
+            StreamAddArgs<String, String> dlqArgs = StreamAddArgs.entries(fields);
+            if (dlqConfig.getStreamMaxLen() > 0) {
+                dlqArgs = dlqArgs.trimNonStrict().maxLen(dlqConfig.getStreamMaxLen()).noLimit();
+            }
+            dlqStream.add(dlqArgs);
             LOG.info(
                     "Message routed to DLQ: topic={}, group={}, messageId={}, reason={}",
                     reg.getTopic(),

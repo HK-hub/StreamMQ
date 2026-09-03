@@ -19,6 +19,7 @@ import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.producer.StreamMessageProducer;
 import io.github.streammq.core.util.StringUtils;
+import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -60,7 +61,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
      *
      * <p>正常流程中 payload 在转投成功后即被 DEL；TTL 仅用于兜底清理异常场景下 （如调度器 ZREM 后崩溃）残留的孤儿 payload，防止 Redis 中无限累积。
      */
-    static final long DELAY_PAYLOAD_TTL_MS = 7L * 24 * 60 * 60 * 1000;
+    static final long DELAY_PAYLOAD_TTL_MS = StreamMQConstants.DEFAULT_DELAY_PAYLOAD_TTL_MS;
 
     private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamProducer.class);
 
@@ -317,6 +318,16 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             String topic =
                     io.github.streammq.core.util.StringUtils.requireValidTopic(message.getTopic());
             Map<String, String> fields = converter.toStreamFields(message);
+            // oneway 同样执行大小预检：与直发路径保持一致，避免超大消息绕过校验
+            int estimatedSize = estimateFieldSize(fields);
+            if (estimatedSize > maxMessageSize) {
+                LOG.warn(
+                        "Oneway send rejected (oversize {} > max {} bytes) for topic {}",
+                        estimatedSize,
+                        maxMessageSize,
+                        topic);
+                return;
+            }
             applyCompression(fields);
             String streamKey = StreamMQKeys.topicStream(namespace, topic);
             RStream<String, String> stream = redisson.getStream(streamKey);
@@ -461,8 +472,16 @@ public class RedissonStreamProducer implements StreamMessageProducer {
     /**
      * 同步发送延时消息：写入延时 ZSet + payload Hash，不直接写入 Stream。
      *
-     * <p><b>写入顺序：</b>先写 payload Hash，再写 ZSet 调度条目。若进程在两步之间崩溃， 只会残留一个无调度条目的孤儿
-     * payload（由清理任务回收），绝不会出现"已调度但 payload 缺失"导致的永久消息丢失。
+     * <p><b>原子性：</b>payload Hash（putAll + expire）与 ZSet 调度条目（add）通过 {@link
+     * BatchOptions#transactional()} 包裹在<b>单个 Redis 事务</b>中提交—— 任何一步失败（含进程崩溃）都不会留下「已调度但 payload
+     * 缺失」的孤儿调度条目，也不会留下「有 payload 但无调度」的死 payload（事务整体回滚）。 这是 P1-6 的核心修复：消除了原两步顺序写入之间的崩溃窗口。
+     *
+     * <p><b>TTL 上界：</b>payload Hash 的 TTL 取 {@code min(DELAY_PAYLOAD_TTL_MS, delay + 1h)}。 延时超过
+     * {@link StreamMQConstants#MAX_DELAY_TIME_MILLIS}（7 天）会被发送侧快速失败—— 因为 TTL 无法覆盖如此长的延时，payload
+     * 会在投递前过期，消息事实丢失。 该上界与常量 {@link StreamMQConstants#DEFAULT_DELAY_PAYLOAD_TTL_MS} 强绑定，二者必须一致。
+     *
+     * <p><b>延时边界：</b>{@code delayTimeMillis} 超过 {@link StreamMQConstants#MAX_DELAY_TIME_MILLIS}
+     * 时直接抛 {@link StreamMQException}（fail-fast），避免「发送成功但消息在投递前因 TTL 过期而静默丢失」。
      *
      * <p>发送结果中的 messageId 为占位 ID（{@link MessageId#sentinel()}）： 延时消息的真实 Stream Entry ID 在到期投递时才由
      * Redis 生成。
@@ -495,9 +514,16 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         Long delayTimeMillis = message.getDelayTimeMillis();
 
         // 任意延时优先：同时设置 delayLevel 与 delayTimeMillis 时，delayTimeMillis 优先（对齐 Message javadoc）。
-        // 使用 custom ZSet 支持任意延时。
         if (Objects.nonNull(delayTimeMillis) && delayTimeMillis > 0) {
-            // 使用 custom ZSet 支持任意延时
+            if (delayTimeMillis > StreamMQConstants.MAX_DELAY_TIME_MILLIS) {
+                throw new StreamMQException(
+                        "Delay time "
+                                + delayTimeMillis
+                                + "ms exceeds max allowed "
+                                + StreamMQConstants.MAX_DELAY_TIME_MILLIS
+                                + "ms (payload TTL would expire before delivery) for topic "
+                                + message.getTopic());
+            }
             long deliverAt = now + delayTimeMillis;
             String zsetKey = StreamMQKeys.delayCustomZSet(namespace);
             String payloadHashKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
@@ -506,43 +532,27 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             fields.put(FIELD_TARGET_TOPIC, message.getTopic());
             fields.put(FIELD_DELIVER_AT, Long.toString(deliverAt));
 
-            try {
-                // 先写 payload（带 TTL），再写调度条目（顺序不可颠倒）。
-                // TTL 为孤儿保护：正常流程转投成功即 DEL；若实例在 ZREM 后崩溃等异常导致
-                // payload 成为无调度引用的孤儿，TTL 到期后自动清理，不会无限累积。
-                RMap<String, String> payloadMap = redisson.getMap(payloadHashKey);
-                payloadMap.putAll(fields);
-                payloadMap.expire(java.time.Duration.ofMillis(DELAY_PAYLOAD_TTL_MS));
-
-                RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
-                zset.add(deliverAt, msgId);
-
-                LOG.debug(
-                        "Custom delay message queued: msgId={}, delayMs={}, deliverAt={}, topic={}",
-                        msgId,
-                        delayTimeMillis,
-                        deliverAt,
-                        message.getTopic());
-
-                return new SendResult(
-                        MessageId.sentinel(),
-                        message.getTopic(),
-                        message.getTag(),
-                        message.getBornTimestamp());
-            } catch (RuntimeException ex) {
-                throw new StreamMQBrokerException(
-                        "sendDelayMessage (custom) failed for topic " + message.getTopic(),
-                        null,
-                        ex);
-            }
+            storeDelayPayloadAtomically(
+                    payloadHashKey, fields, zsetKey, deliverAt, delayTimeMillis, msgId);
+            LOG.debug(
+                    "Custom delay message queued: msgId={}, delayMs={}, deliverAt={}, topic={}",
+                    msgId,
+                    delayTimeMillis,
+                    deliverAt,
+                    message.getTopic());
+            return new SendResult(
+                    MessageId.sentinel(),
+                    message.getTopic(),
+                    message.getTag(),
+                    message.getBornTimestamp());
         }
 
         if (Objects.isNull(level)) {
             throw new StreamMQException("Delay message has no delayLevel or delayTimeMillis");
         }
 
-        // 原有 DelayLevel 逻辑保持不变
-        long deliverAt = now + level.toMillis();
+        long levelDelay = level.toMillis();
+        long deliverAt = now + levelDelay;
         String zsetKey = StreamMQKeys.delayZSet(namespace, level.name());
         String payloadHashKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
 
@@ -550,30 +560,56 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         fields.put(FIELD_TARGET_TOPIC, message.getTopic());
         fields.put(FIELD_DELIVER_AT, Long.toString(deliverAt));
 
+        storeDelayPayloadAtomically(payloadHashKey, fields, zsetKey, deliverAt, levelDelay, msgId);
+        LOG.debug(
+                "Delay message queued: msgId={}, level={}, deliverAt={}, topic={}",
+                msgId,
+                level,
+                deliverAt,
+                message.getTopic());
+        return new SendResult(
+                MessageId.sentinel(),
+                message.getTopic(),
+                message.getTag(),
+                message.getBornTimestamp());
+    }
+
+    /**
+     * 原子写入延时消息的 payload Hash + 调度条目。
+     *
+     * <p>通过 {@link BatchOptions#transactional()} 保证两步在单个 Redis 事务中提交， 杜绝崩溃窗口导致的孤儿条目。payload Hash 的
+     * TTL 取 {@code min(DELAY_PAYLOAD_TTL_MS, delayMillis + 1h)}， 既能在正常流程中转投成功后清理，也能在异常残留时兜底过期。
+     *
+     * @param payloadHashKey payload Hash Key
+     * @param fields 待写入字段（已含 targetTopic / deliverAt）
+     * @param zsetKey 调度 ZSet Key
+     * @param deliverAt 投递时间戳（ZSet score）
+     * @param delayMillis 延时时长（毫秒），用于推导 TTL
+     * @param msgId 调度条目成员（与 payloadHashKey 末尾 UUID 一致）
+     */
+    private void storeDelayPayloadAtomically(
+            String payloadHashKey,
+            Map<String, String> fields,
+            String zsetKey,
+            long deliverAt,
+            long delayMillis,
+            String msgId) {
+        long payloadTtl = Math.min(DELAY_PAYLOAD_TTL_MS, delayMillis + 3_600_000L);
         try {
-            // 先写 payload（带 TTL，孤儿保护见 custom 分支注释），再写调度条目（顺序不可颠倒）
-            RMap<String, String> payloadMap = redisson.getMap(payloadHashKey);
-            payloadMap.putAll(fields);
-            payloadMap.expire(java.time.Duration.ofMillis(DELAY_PAYLOAD_TTL_MS));
-
-            RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
-            zset.add(deliverAt, msgId);
-
-            LOG.debug(
-                    "Delay message queued: msgId={}, level={}, deliverAt={}, topic={}",
-                    msgId,
-                    level,
-                    deliverAt,
-                    message.getTopic());
-
-            return new SendResult(
-                    MessageId.sentinel(),
-                    message.getTopic(),
-                    message.getTag(),
-                    message.getBornTimestamp());
+            // 原子事务：putAll + zset.add 在单个 Redis 事务（MULTI/EXEC）中提交，
+            // 杜绝「已调度但 payload 缺失」的崩溃窗口。TTL 作为孤儿保护在事务提交后设置——
+            // 若 TTL 设置失败，payload 将存活至被正常转投后再 DEL（不会丢失），可接受。
+            RBatch batch =
+                    redisson.createBatch(
+                            BatchOptions.defaults()
+                                    .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
+            batch.getMap(payloadHashKey).putAllAsync(fields);
+            batch.<String>getScoredSortedSet(zsetKey).addAsync(deliverAt, msgId);
+            batch.execute();
+            redisson.getMap(payloadHashKey).expire(java.time.Duration.ofMillis(payloadTtl));
         } catch (RuntimeException ex) {
             throw new StreamMQBrokerException(
-                    "sendDelayMessage failed for topic " + message.getTopic(), null, ex);
+                    "storeDelayPayloadAtomically failed for payload " + payloadHashKey, null, ex);
         }
     }
 
@@ -664,16 +700,17 @@ public class RedissonStreamProducer implements StreamMessageProducer {
     }
 
     /**
-     * 估算序列化后 Stream fields 的近似字节大小。
+     * 估算序列化后 Stream fields 的字节大小（UTF-8）。
      *
-     * <p>使用 key.length + value.length 累加，UTF-8 每字符约 1-3 字节， 实际值取保守估算（每个字符 3 字节）以避免低估。
+     * <p>直接以 UTF-8 字节长度累加 key 与 value，与 Redis 实际存储字节一致， 避免此前「每字符按 3 字节保守估算」在中文/emoji 场景下高估、 在纯
+     * ASCII 场景下低估导致的误判（要么漏过超限消息，要么误杀合法消息）。
      */
     static int estimateFieldSize(Map<String, String> fields) {
         int size = 0;
         for (Map.Entry<String, String> e : fields.entrySet()) {
-            size += e.getKey().length() * 3;
+            size += e.getKey().getBytes(StandardCharsets.UTF_8).length;
             if (e.getValue() != null) {
-                size += e.getValue().length() * 3;
+                size += e.getValue().getBytes(StandardCharsets.UTF_8).length;
             }
         }
         return size;

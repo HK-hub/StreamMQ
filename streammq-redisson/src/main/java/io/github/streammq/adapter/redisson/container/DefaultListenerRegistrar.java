@@ -11,6 +11,7 @@ import io.github.streammq.core.annotation.StreamMQDlqConsumer;
 import io.github.streammq.core.consumer.DlqMessageConsumer;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
+import io.github.streammq.core.enums.ConsumeFromWhere;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.listener.DefaultListenerRegistration;
@@ -56,6 +57,7 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
     private final ConsumerTuning tuning;
     private final String defaultNamespace;
     private final String instanceToken;
+    private final ConsumeFromWhere defaultConsumeFromWhere;
     private final ShardLocksFactory shardLocksFactory;
     private final java.util.function.Consumer<ListenerRegistration<?>> wireIfRunning;
 
@@ -71,6 +73,7 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
             ConsumerTuning tuning,
             String defaultNamespace,
             String instanceToken,
+            ConsumeFromWhere defaultConsumeFromWhere,
             ShardLocksFactory shardLocksFactory,
             java.util.function.Consumer<ListenerRegistration<?>> wireIfRunning) {
         this.stateMachine = Objects.requireNonNull(stateMachine);
@@ -79,6 +82,10 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
         this.tuning = Objects.requireNonNull(tuning);
         this.defaultNamespace = Objects.requireNonNull(defaultNamespace);
         this.instanceToken = Objects.requireNonNull(instanceToken);
+        this.defaultConsumeFromWhere =
+                Objects.isNull(defaultConsumeFromWhere)
+                        ? ConsumeFromWhere.DEFAULT
+                        : defaultConsumeFromWhere;
         this.shardLocksFactory = Objects.requireNonNull(shardLocksFactory);
         this.wireIfRunning = Objects.requireNonNull(wireIfRunning);
     }
@@ -176,9 +183,9 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
                 .topic(ann.topic())
                 .group(ann.consumerGroup())
                 .consumeMode(ann.consumeMode())
-                .maxReconsumeTimes(ann.maxReconsumeTimes())
+                .maxReconsumeTimes(tuning.effectiveMaxReconsumeTimes(ann.maxReconsumeTimes()))
                 .shardCount(shardCount)
-                .consumeTimeoutMillis(ann.consumeTimeout())
+                .consumeTimeoutMillis(tuning.effectiveConsumeTimeoutMillis(ann.consumeTimeout()))
                 .orderlyConsumeTimeoutMillis(
                         tuning.effectiveOrderlyConsumeTimeoutMillis(ann.orderlyConsumeTimeout()))
                 .shardLocks(shardLocks)
@@ -192,6 +199,7 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
                 .rebalanceStrategy(ann.rebalanceStrategy())
                 .suspendCurrentQueueTimeMillis(ann.suspendCurrentQueueTimeMillis())
                 .streamMaxLen(ann.streamMaxLen())
+                .consumeFromWhere(resolveConsumeFromWhere(ann.consumeFromWhere()))
                 .enableMsgTrace(ann.enableMsgTrace())
                 .dlqMode(dlqMode)
                 .dlqFailureStrategy(DlqFailureStrategy.class)
@@ -214,9 +222,11 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
                 .consumeMode(ConsumeMode.CLUSTERING)
                 .maxReconsumeTimes(0)
                 .shardCount(0)
-                .consumeTimeoutMillis(StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS)
+                .consumeTimeoutMillis(
+                        tuning.effectiveConsumeTimeoutMillis(
+                                StreamMQConstants.ANNOTATION_UNSET_LONG))
                 .pullBatchSize(
-                        tuning.effectivePullBatchSize(StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE))
+                        tuning.effectivePullBatchSize(StreamMQConstants.ANNOTATION_UNSET_INT))
                 .pullBlockTimeoutMillis(tuning.defaultPullBlockTimeoutMillis())
                 .selectorExpression(StreamMQConstants.SELECTOR_WILDCARD)
                 .serializer(MessageSerializer.class)
@@ -245,5 +255,27 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
         store.putRegistration(reg);
         wireIfRunning.accept(reg);
         LOG.info(logFormat, logArgs);
+    }
+
+    /**
+     * 解析新消费者组起始消费位点。
+     *
+     * <p><b>为何仅 {@code CONSUME_FROM_FIRST} 视为显式覆盖：</b>注解枚举属性无法使用 {@code null} 哨兵，其默认值只能是某个枚举常量（这里取
+     * {@code CONSUME_FROM_LAST}，与全局默认相同）， 因此「未声明」与「显式
+     * CONSUME_FROM_LAST」在字节码层面无法区分。为保证「全局配置定义默认行为、用户可显式覆盖」的单一口径：
+     *
+     * <ul>
+     *   <li>注解显式声明 {@code CONSUME_FROM_FIRST} → 用户意图明确，采用之（最高优先级）
+     *   <li>其余（注解未声明 / 显式 CONSUME_FROM_LAST，二者不可区分）→ 一律采用全局配置 {@link
+     *       #defaultConsumeFromWhere}（其默认同为 CONSUME_FROM_LAST）
+     * </ul>
+     *
+     * <p>该策略下：仅当用户<a href="...">显式</a>把全局设为 {@code CONSUME_FROM_FIRST} 时，未声明注解的消费者即重放历史； 若个别消费者想强制
+     * {@code CONSUME_FROM_LAST}，显式声明注解值（效果等同全局默认，无副作用）。
+     */
+    private ConsumeFromWhere resolveConsumeFromWhere(ConsumeFromWhere annotationValue) {
+        return annotationValue == ConsumeFromWhere.CONSUME_FROM_FIRST
+                ? ConsumeFromWhere.CONSUME_FROM_FIRST
+                : defaultConsumeFromWhere;
     }
 }

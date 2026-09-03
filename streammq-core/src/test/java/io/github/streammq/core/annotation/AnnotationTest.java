@@ -7,6 +7,7 @@ package io.github.streammq.core.annotation;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
 import io.github.streammq.core.serializer.MessageSerializer;
@@ -68,17 +69,21 @@ class AnnotationTest {
         }
 
         @Test
-        @DisplayName("maxReconsumeTimes 默认 16")
+        @DisplayName("maxReconsumeTimes 默认 -1（=未设置，回落全局 streammq.retry.max-reconsume-times，其默认 16）")
         void maxReconsumeTimesDefault() {
             StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
-            assertThat(ann.maxReconsumeTimes()).isEqualTo(16);
+            assertThat(ann.maxReconsumeTimes()).isEqualTo(-1);
+            assertThat(StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES).isEqualTo(16);
         }
 
         @Test
-        @DisplayName("consumeTimeout 默认 30000L")
+        @DisplayName(
+                "consumeTimeout 默认 -1（=未设置，回落全局 streammq.consumer.consume-timeout-millis，其默认"
+                        + " 30000L）")
         void consumeTimeoutDefault() {
             StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
-            assertThat(ann.consumeTimeout()).isEqualTo(30000L);
+            assertThat(ann.consumeTimeout()).isEqualTo(-1L);
+            assertThat(StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS).isEqualTo(30000L);
         }
 
         @Test

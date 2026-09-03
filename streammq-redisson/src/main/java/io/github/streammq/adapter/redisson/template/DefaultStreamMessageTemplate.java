@@ -697,16 +697,4 @@ public class DefaultStreamMessageTemplate
 
     // StreamMessageService 桥接已统一在 DefaultStreamMessageService 中实现，
     // 通过 @Autowired StreamMessageService 注入业务门面；本类保留 StreamMessageTemplate 完整 API。
-
-    private static SendOptions metadataToOptions(MessageMetadataBuilder metadata) {
-        if (Objects.isNull(metadata)) {
-            return SendOptions.defaults();
-        }
-        long timeout = metadata.getTimeoutMillis();
-        int retries = metadata.getRetryTimes();
-        if (timeout <= 0 && retries < 0) {
-            return SendOptions.defaults();
-        }
-        return SendOptions.of(timeout > 0 ? timeout : -1, retries >= 0 ? retries : -1);
-    }
 }

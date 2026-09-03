@@ -233,7 +233,7 @@ jobs:
         run: >-
           mvn -pl streammq-core,streammq-redisson,streammq-spring-boot-starter,
           streammq-tracing-opentelemetry,streammq-diagnostics,
-          streammq-spring-cloud-stream-binder,streammq-test,streammq-test-support
+          streammq-spring-cloud-stream-binder,streammq-test
           -am verify -Djacoco.check.skip=false -Dspotless.check.skip=true
 
   staging-smoke:

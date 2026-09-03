@@ -20,6 +20,7 @@ import io.github.streammq.core.annotation.StreamMQDlqConsumer;
 import io.github.streammq.core.consumer.*;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.enums.ConsumeAction;
+import io.github.streammq.core.enums.ConsumeFromWhere;
 import io.github.streammq.core.filter.ConsumerFilter;
 import io.github.streammq.core.filter.ConsumerFilterChain;
 import io.github.streammq.core.filter.ConsumerFilterResolver;
@@ -433,6 +434,12 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 拉取运行参数（Parameter Object） */
     private final DefaultConsumerTuning tuning = new DefaultConsumerTuning();
 
+    /**
+     * 全局新消费者组起始消费位点（来自 {@code streammq.consumer.consume-from-where}）， 默认 {@link
+     * ConsumeFromWhere#DEFAULT}。消费者注解未显式声明时回落到本值。
+     */
+    private volatile ConsumeFromWhere defaultConsumeFromWhere = ConsumeFromWhere.DEFAULT;
+
     /** per-consumer SPI 解析器（接口注入，懒构建） */
     private PerConsumerSpiResolver spiResolver;
 
@@ -538,6 +545,30 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      */
     public void setDefaultOrderlyConsumeTimeoutMillis(long millis) {
         tuning.setDefaultOrderlyConsumeTimeoutMillis(millis);
+    }
+
+    /** 注入全局并发消费超时（毫秒，{@code streammq.consumer.consume-timeout-millis}）。 */
+    public void setDefaultConsumeTimeoutMillis(long millis) {
+        tuning.setDefaultConsumeTimeoutMillis(millis);
+    }
+
+    /** 注入全局最大重试次数（{@code streammq.retry.max-reconsume-times}）。 */
+    public void setDefaultMaxReconsumeTimes(int times) {
+        tuning.setDefaultMaxReconsumeTimes(times);
+    }
+
+    /**
+     * 注入全局新消费者组起始消费位点（{@code streammq.consumer.consume-from-where}）。
+     *
+     * <p>消费者注解未显式声明 {@code consumeFromWhere}（即取枚举默认值 {@link ConsumeFromWhere#DEFAULT}）时回落到本值。
+     * 本值本身默认 {@link ConsumeFromWhere#DEFAULT}（= {@code CONSUME_FROM_LAST}），与配置默认值单一来源一致。
+     */
+    public void setDefaultConsumeFromWhere(ConsumeFromWhere where) {
+        this.defaultConsumeFromWhere = Objects.isNull(where) ? ConsumeFromWhere.DEFAULT : where;
+    }
+
+    public ConsumeFromWhere getDefaultConsumeFromWhere() {
+        return defaultConsumeFromWhere;
     }
 
     /**
@@ -1150,6 +1181,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                     tuning,
                                     defaultNamespace,
                                     instanceToken,
+                                    defaultConsumeFromWhere,
                                     (defaultNs, topic, group, ns, shardCount) -> {
                                         Lock[] array =
                                                 shardLockManager.createShardLocks(

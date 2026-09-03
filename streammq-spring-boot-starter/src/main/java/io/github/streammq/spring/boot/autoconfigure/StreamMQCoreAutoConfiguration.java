@@ -9,6 +9,7 @@ import io.github.streammq.adapter.redisson.compression.DefaultCompressionCodecRe
 import io.github.streammq.adapter.redisson.compression.GzipCompressionCodec;
 import io.github.streammq.adapter.redisson.compression.Lz4CompressionCodec;
 import io.github.streammq.adapter.redisson.compression.Lz4CompressionCodecFactory;
+import io.github.streammq.adapter.redisson.container.ConsumerTuning;
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.event.AsyncStreamMQEventBus;
 import io.github.streammq.adapter.redisson.interceptor.TraceContextConsumerInterceptor;
@@ -384,6 +385,7 @@ public class StreamMQCoreAutoConfiguration {
                 .dlqRetryBackoffMultiplier(dlqProps.getRetryBackoffMultiplier())
                 .dlqRetryMaxDelayMs(dlqProps.getRetryMaxDelayMs())
                 .minRetryDelayMs(dlqProps.getMinRetryDelayMs())
+                .streamMaxLen(dlqProps.getStreamMaxLen())
                 .build();
     }
 
@@ -448,9 +450,9 @@ public class StreamMQCoreAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(StreamMQListenerFactory.class)
     public StreamMQListenerFactory streamMQListenerFactory(
-            RedissonClient redisson, MessageConverter converter) {
+            RedissonClient redisson, MessageConverter converter, ConsumerTuning tuning) {
         LOG.debug("Creating RedissonStreamListenerFactory");
-        return new RedissonStreamListenerFactory(redisson, converter);
+        return new RedissonStreamListenerFactory(redisson, converter, tuning);
     }
 
     /**

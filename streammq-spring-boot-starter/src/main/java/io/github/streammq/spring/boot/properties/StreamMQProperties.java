@@ -10,6 +10,7 @@ import io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStra
 import io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy;
 import io.github.streammq.adapter.redisson.serializer.FurySerializer;
 import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.core.enums.ConsumeFromWhere;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
@@ -225,6 +226,30 @@ public class StreamMQProperties {
          * 需要保护分片可用性时在此一次性全局开启，或在具体消费者注解上开启。
          */
         private long orderlyConsumeTimeoutMillis = 0L;
+
+        /**
+         * 新消费者组起始消费位点，默认 {@link ConsumeFromWhere#DEFAULT}（= {@code CONSUME_FROM_LAST}）。
+         *
+         * <p><b>仅在该 Redis 消费者组首次创建时生效</b>；已存在的组不受此值影响。 默认值常量 {@link
+         * StreamMQConstants#DEFAULT_CONSUME_FROM_WHERE} 与枚举 {@link ConsumeFromWhere#DEFAULT} 单一来源，
+         * 保证「配置默认值 / 注解默认值 / 运行实际值」三方一致。
+         *
+         * <p>可选值：
+         *
+         * <ul>
+         *   <li>{@code CONSUME_FROM_LAST}：只消费组创建之后写入的消息（安全默认，向长期运行 Topic 追加组不会重放历史）
+         *   <li>{@code CONSUME_FROM_FIRST}：重放该 Topic 全部历史消息
+         * </ul>
+         */
+        private ConsumeFromWhere consumeFromWhere = StreamMQConstants.DEFAULT_CONSUME_FROM_WHERE;
+
+        /**
+         * 全局并发消费超时（毫秒），默认 {@link StreamMQConstants#DEFAULT_CONSUME_TIMEOUT_MS}（30000ms）。
+         *
+         * <p>仅作为 {@code @StreamMQConsumer#consumeTimeout()} 未显式声明（为 -1）时的回落值； 注解显式声明 {@code >= 0}
+         * 时始终优先，per-consumer 可覆盖全局。
+         */
+        private long consumeTimeoutMillis = StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS;
     }
 
     /** 消费者组管理配置（心跳与实例存活判定）。 */
@@ -272,6 +297,12 @@ public class StreamMQProperties {
 
         /** DLQ 重试最小延迟下限（毫秒），默认 {@link StreamMQConstants#MIN_DLQ_RETRY_DELAY_MS} */
         private long minRetryDelayMs = StreamMQConstants.MIN_DLQ_RETRY_DELAY_MS;
+
+        /**
+         * DLQ Stream 最大长度（0=不限制，默认）。对齐 retry Stream 的默认姿态—— 默认不限制，由 Redis 自身 maxlen 策略兜底；
+         * 需要硬上限时显式配置为正值。
+         */
+        private int streamMaxLen = StreamMQConstants.DEFAULT_DLQ_STREAM_MAX_LEN;
     }
 
     /** 重试策略配置。 */
@@ -304,7 +335,7 @@ public class StreamMQProperties {
         private Duration pelClaimScanInterval =
                 Duration.ofMillis(StreamMQConstants.DEFAULT_PEL_CLAIM_SCAN_INTERVAL_MS);
 
-        /** PEL 认领空闲阈值（顺序消费专用，默认 30s） */
+        /** PEL 认领空闲阈值（顺序消费专用，默认 60s） */
         private long pelClaimMinIdleMs = StreamMQConstants.DEFAULT_PEL_CLAIM_MIN_IDLE_MS;
 
         /**
@@ -588,6 +619,19 @@ public class StreamMQProperties {
                     "streammq.consumer.orderly-consume-timeout-millis must be >= 0, got: "
                             + consumer.orderlyConsumeTimeoutMillis);
         }
+        if (consumer.consumeTimeoutMillis < 0) {
+            throw new IllegalArgumentException(
+                    "streammq.consumer.consume-timeout-millis must be >= 0, got: "
+                            + consumer.consumeTimeoutMillis);
+        }
+        if (consumer.consumeFromWhere == null) {
+            throw new IllegalArgumentException(
+                    "streammq.consumer.consume-from-where must not be null");
+        }
+        if (dlq.streamMaxLen < 0) {
+            throw new IllegalArgumentException(
+                    "streammq.dlq.stream-max-len must be >= 0, got: " + dlq.streamMaxLen);
+        }
         if (retry.scanInterval.toMillis() <= 0) {
             throw new IllegalArgumentException(
                     "streammq.retry.scan-interval must be > 0, got: " + retry.scanInterval);
@@ -600,6 +644,13 @@ public class StreamMQProperties {
         if (retry.pelClaimMinIdleMs <= 0) {
             throw new IllegalArgumentException(
                     "streammq.retry.pel-claim-min-idle-ms must be > 0, got: "
+                            + retry.pelClaimMinIdleMs);
+        }
+        if (retry.pelClaimMinIdleMs < StreamMQConstants.MIN_PEL_CLAIM_MIN_IDLE_MS) {
+            throw new IllegalArgumentException(
+                    "streammq.retry.pel-claim-min-idle-ms must be >= "
+                            + StreamMQConstants.MIN_PEL_CLAIM_MIN_IDLE_MS
+                            + " (否则仍处理中的消息会被误判为孤儿并重投), got: "
                             + retry.pelClaimMinIdleMs);
         }
         if (delay.scanInterval.toMillis() <= 0) {

@@ -8,6 +8,7 @@ package io.github.streammq.core.listener;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.enums.ConsumeFromWhere;
 import io.github.streammq.core.serializer.MessageSerializer;
 import io.github.streammq.core.util.StringUtils;
 import java.util.Objects;
@@ -138,6 +139,16 @@ public class ListenerConfig {
     @lombok.Builder.Default
     private final int streamMaxLen = StreamMQConstants.DEFAULT_STREAM_MAX_LEN;
 
+    /**
+     * 新消费者组的起始消费位点（默认 {@link ConsumeFromWhere#DEFAULT}）。
+     *
+     * <p>仅在该 Redis 消费者组<b>首次创建</b>时生效，已存在的组不受影响。 由 {@code streammq.consumer.consume-from-where} 或
+     * {@code io.github.streammq.core.annotation.StreamMQConsumer#consumeFromWhere()} 提供， 经 {@link
+     * ListenerRegistration#getConsumeFromWhere()} 单点派生。
+     */
+    @lombok.Builder.Default
+    private final ConsumeFromWhere consumeFromWhere = ConsumeFromWhere.DEFAULT;
+
     @lombok.Builder.Default private final boolean enableMsgTrace = false;
 
     /**
@@ -177,6 +188,7 @@ public class ListenerConfig {
             long suspendCurrentQueueTimeMillis,
             int shardCount,
             int streamMaxLen,
+            ConsumeFromWhere consumeFromWhere,
             boolean enableMsgTrace) {
         this.topic = StringUtils.requireValidName(topic, "topic");
         this.consumerGroup = StringUtils.requireValidName(consumerGroup, "consumerGroup");
@@ -243,6 +255,8 @@ public class ListenerConfig {
         this.suspendCurrentQueueTimeMillis = suspendCurrentQueueTimeMillis;
         this.shardCount = shardCount;
         this.streamMaxLen = streamMaxLen;
+        this.consumeFromWhere =
+                Objects.isNull(consumeFromWhere) ? ConsumeFromWhere.DEFAULT : consumeFromWhere;
         this.enableMsgTrace = enableMsgTrace;
     }
 
@@ -283,6 +297,7 @@ public class ListenerConfig {
                 .suspendCurrentQueueTimeMillis(reg.getSuspendCurrentQueueTimeMillis())
                 .shardCount(Math.max(1, reg.getShardCount()))
                 .streamMaxLen(reg.getStreamMaxLen())
+                .consumeFromWhere(reg.getConsumeFromWhere())
                 .enableMsgTrace(reg.isEnableMsgTrace())
                 .build();
     }

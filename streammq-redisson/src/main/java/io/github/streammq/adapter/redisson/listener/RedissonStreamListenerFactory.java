@@ -5,6 +5,8 @@
  */
 package io.github.streammq.adapter.redisson.listener;
 
+import io.github.streammq.adapter.redisson.container.ConsumerTuning;
+import io.github.streammq.adapter.redisson.container.DefaultConsumerTuning;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.listener.ListenerConfig;
 import io.github.streammq.core.listener.StreamMQListener;
@@ -12,8 +14,7 @@ import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.util.StringUtils;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
 import org.redisson.api.RedissonClient;
@@ -47,8 +48,29 @@ public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
 
     @NonNull private final RedissonClient redisson;
     @NonNull private final MessageConverter converter;
-    private final ConcurrentMap<RedissonStreamListener, Boolean> listeners =
-            new ConcurrentHashMap<>();
+    @NonNull private final ConsumerTuning tuning;
+
+    /**
+     * 便捷构造：使用默认 {@link DefaultConsumerTuning}。供测试与不需要自定义调优策略的调用方使用。
+     *
+     * @param redisson Redisson 客户端
+     * @param converter 消息转换器
+     */
+    public RedissonStreamListenerFactory(RedissonClient redisson, MessageConverter converter) {
+        this(redisson, converter, new DefaultConsumerTuning());
+    }
+
+    /**
+     * 已创建 listener 的保活集合（用于 close 时统一关闭）。
+     *
+     * <p><b>不使用以 listener 为键的 Map：</b>{@link RedissonStreamListener} 重写了 {@code equals/hashCode} （按
+     * topic/group/consumerName/mode 计算），若两个 listener 仅 dlqMode 等差异相同，则会被判为相等导致 Map 覆盖、 close
+     * 时漏关并泄漏资源。改用 FIFO 队列，createListener 每次恰好入队一个，close 时全部关闭， 无去重依赖、无碰撞。 由于 {@code equals} 仅用于
+     * {@code @EqualsAndHashCode} 兼容场景，此处以入队顺序为唯一标识。
+     */
+    private final ConcurrentLinkedQueue<RedissonStreamListener> listeners =
+            new ConcurrentLinkedQueue<>();
+
     private volatile boolean closed = false;
 
     @Override
@@ -89,15 +111,19 @@ public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
                         .retryMode(config.isRetryMode())
                         .broadcast(config.isBroadcast())
                         .targetBodyType(config.getTargetBodyType())
+                        .consumeFromWhere(config.getConsumeFromWhere())
+                        .maxBatchSizeLimit(tuning.maxBatchSizeLimit())
                         .build();
-        listeners.put(listener, Boolean.TRUE);
+        listeners.add(listener);
         LOG.debug(
-                "Listener created: topic={}, group={}, consumer={}, dlqMode={}, retryMode={}",
+                "Listener created: topic={}, group={}, consumer={}, dlqMode={}, retryMode={},"
+                        + " consumeFromWhere={}",
                 topic,
                 group,
                 consumerName,
                 config.isDlqMode(),
-                config.isRetryMode());
+                config.isRetryMode(),
+                config.getConsumeFromWhere());
         return listener;
     }
 
@@ -108,14 +134,14 @@ public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
         }
         closed = true;
         int total = listeners.size();
-        for (RedissonStreamListener listener : listeners.keySet()) {
+        RedissonStreamListener listener;
+        while ((listener = listeners.poll()) != null) {
             try {
                 listener.close();
             } catch (RuntimeException ex) {
                 LOG.warn("Failed to close listener: {}", ex.getMessage(), ex);
             }
         }
-        listeners.clear();
         LOG.info("RedissonStreamListenerFactory closed, total listeners: {}", total);
     }
 

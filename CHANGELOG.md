@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.1] - 2026-08-29 — 第一个公开发布版本
 
 ### Changed
 
@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Fury 默认不强制类注册（宽松模式），自定义 body 类型开箱即用；生产环境可通过
     `fury-require-class-registration: true` 开启类注册白名单。
 
+- **新消费者组起始消费位点可配置**（`streammq.consumer.consume-from-where`，默认 `CONSUME_FROM_LAST`）：
+  仅首次创建消费者组时生效。默认从 Stream 末尾开始（只消费组创建后新写入的消息，向长期运行 Topic 追加组不会重放历史）；
+  需重放历史时设为 `CONSUME_FROM_FIRST`。`@StreamMQConsumer#consumeFromWhere()` 可 per-consumer 覆盖。
+
 ### Fixed
 
 - **广播消费者组名碰撞**（`instanceToken` 容器级唯一）：`resolveInstanceToken` 未显式配置时回退到
@@ -36,8 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 全量复核发现的测试基建加固：
   - IT 基类 Redisson 客户端超时放宽（本地单实例 Redis 全量压测下偶发 3s 响应超时，属负载 flaky）
   - 全仓 spotless 格式统一（历史 CRLF 行尾等存量违规）
-
-## [0.1.1] - 2026-08-29 — 第一个公开发布版本
+- **配置值三方统一（property → 默认值常量 → 运行实际值）**：
+  - `@StreamMQConsumer` 的数值属性改用独立"未设置"哨兵（`-1`），消除"注解显式值恰等于常量默认值时被全局配置静默覆盖"的哨兵碰撞配置失效。
+  - 修复 `streammq.retry.max-reconsume-times` 此前声明后从未被读取、重试预算只取注解值的配置失效，现已接入解析链。
+  - `RedissonStreamListener` 批量校验改以可配置的 `max-batch-size-limit`（默认 1000）为准，避免用户调大上界后校验拒绝的自相矛盾。
+  - 延时消息延时超过 7 天时发送侧快速失败（此前 payload TTL 会在投递前过期导致静默丢失）；payload 写入改用 Redis 事务原子提交。
+  - `estimateFieldSize` 改为 UTF-8 字节精确估算，消除中文/emoji 高估、ASCII 低估导致的误判。
+  - DLQ Stream 新增 `streammq.dlq.stream-max-len`（默认 0=不限制）上限配置。
 
 > **关于 `v0.1.0` 标签（发布前必读）**
 >
@@ -195,12 +204,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   修复：三个分析器改由自动装配显式 `@Bean` 注册（`@ConditionalOnMissingBean` 兜底，应用自行
   扫描该包时不会重复实例化），服务 Bean 通过它们完成装配。
 - **`streammq-test` 发布构件存在无法解析的运行时依赖**：`StreamMQTestBase` 在运行期调用
-  `RedisAvailability`，而后者所在的 `streammq-test-support` 同时满足两个致命条件——在
-  `streammq-test` 中被声明为 `<optional>`（不传递），又被 `excludeArtifacts` 排除发布。
-  结果是：外部用户引入 `streammq-test` 后会得到 `NoClassDefFoundError`，且**无法通过补依赖自救**
-  （该坐标在中央仓库根本不存在）。
-  本轮修复：`streammq-test-support` 纳入发布；`streammq-test` 对
-  `streammq-test-support` / `streammq-core` / `slf4j-api` / `redisson` 改为可传递的普通 compile 依赖
+  `RedisAvailability`，二者同处 `streammq-test` 模块，但 `RedisAvailability` 对 `streammq-core` /
+  `slf4j-api` / `redisson` 的依赖此前被声明为 `<optional>`（不传递），又被 `excludeArtifacts`
+  排除发布。结果是：外部用户引入 `streammq-test` 后会得到 `NoClassDefFoundError`，且**无法通过补依赖自救**。
+  本轮修复：`streammq-test` 对 `streammq-core` / `slf4j-api` / `redisson` 改为可传递的普通 compile 依赖
   （测试框架与 `streammq-redisson` 仍保持 optional，交由使用方决定版本）。
 
 ### Fixed (P1)
@@ -471,7 +478,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ##### 工程/测试强化
 
-- 新增零依赖叶子模块 `streammq-test-support`：RedisAvailability 以 PING/+PONG 协议握手探测并从 core 生产构件迁出；live-Redis 集成套件更名为 `CoreRedisIntegrationIT` 归入 failsafe
+- live-Redis 集成套件更名为 `CoreRedisIntegrationIT` 归入 failsafe；`RedisAvailability` 以 PING/+PONG 协议握手探测，位于 `streammq-test` 模块（零外部依赖，随 `streammq-test` 一同发布）
 - 基准测试加入 JMH `Blackhole` 消费防 JIT 死码消除；flushdb 增加 `-Dstreammq.benchmark.allowFlush=true` 防误删守卫；新增手动触发 benchmark 工作流
 - 测试强化：重复投递检测、故障注入用例、CI 集成测试数量下限 tripwire
 

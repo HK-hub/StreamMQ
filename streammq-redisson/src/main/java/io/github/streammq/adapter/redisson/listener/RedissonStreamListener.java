@@ -9,6 +9,7 @@ import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.enums.ConsumeFromWhere;
 import io.github.streammq.core.enums.DlqReason;
 import io.github.streammq.core.exception.StreamMQBrokerException;
 import io.github.streammq.core.listener.StreamMQListener;
@@ -18,6 +19,7 @@ import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -72,19 +74,20 @@ public class RedissonStreamListener implements StreamMQListener {
      * <p><b>实例级而非静态：</b>若以 simpleName 为键做成 JVM 级静态缓存，两个不同监听器 （不同 topic /
      * 不同目标类型）会发生跨实例缓存污染——先解析到的类被错误地提供给 另一个监听器，造成反序列化类型混淆。实例级缓存将作用域限制在单个监听器内。
      *
-     * <p><b>有界 LRU（读写锁优化并发）：</b>超出 {@link #CLASS_CACHE_MAX_SIZE} 时淘汰最久未访问项。 使用 {@link
-     * ReentrantReadWriteLock} 替代 synchronizedMap，高并发消费场景下读操作无锁竞争。
+     * <p><b>线程安全（有界 LRU）：</b>使用 {@link java.util.Collections#synchronizedMap} 包裹的访问序 {@link
+     * LinkedHashMap}。 此前采用 {@code ReentrantReadWriteLock} + 访问序 LinkedHashMap 存在并发缺陷： 访问序
+     * LinkedHashMap 的 {@code get()} 会触发 {@code afterNodeAccess} 重排链表（结构性写），而读锁下不允许结构性写，
+     * 高并发命中缓存时会因「读锁内并发改结构」导致 {@code ConcurrentModificationException} 或链表损坏。 {@code synchronizedMap}
+     * 对读/写统一串行化，访问序重排被正确保护，且 bodyType 集合极小（≤256），串行代价可忽略。
      */
     private final Map<String, Class<?>> classCache =
-            new LinkedHashMap<String, Class<?>>(16, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<String, Class<?>> eldest) {
-                    return size() > CLASS_CACHE_MAX_SIZE;
-                }
-            };
-
-    private final java.util.concurrent.locks.ReadWriteLock classCacheLock =
-            new java.util.concurrent.locks.ReentrantReadWriteLock();
+            Collections.synchronizedMap(
+                    new LinkedHashMap<String, Class<?>>(16, 0.75f, true) {
+                        @Override
+                        protected boolean removeEldestEntry(Map.Entry<String, Class<?>> eldest) {
+                            return size() > CLASS_CACHE_MAX_SIZE;
+                        }
+                    });
 
     private final @NonNull RedissonClient redisson;
     private final String namespace;
@@ -110,11 +113,19 @@ public class RedissonStreamListener implements StreamMQListener {
      */
     private final Class<?> targetBodyType;
 
+    /** 新消费者组起始消费位点（默认 {@link ConsumeFromWhere#DEFAULT}），仅在该 Redis 消费者组首次创建时生效。 已存在的组不受此值影响。 */
+    private final ConsumeFromWhere consumeFromWhere;
+
+    /**
+     * 单次拉取批量上界（来自 {@code streammq.consumer.max-batch-size-limit}）。
+     *
+     * <p><b>必须与配置值一致：</b>底层校验用本实例字段而非 {@link StreamMQConstants#MAX_BATCH_SIZE_LIMIT}
+     * 常量——否则用户把上界调大到超过常量时，全局配置生效、 适配层校验却拒绝，形成自相矛盾的「配置值/实际值不对等」。
+     */
+    private final int maxBatchSizeLimit;
+
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean groupCreated = new AtomicBoolean(false);
-
-    /** batchSize 校验上界，对应 Redis Stream 单次 XREADGROUP 的合理上限 */
-    private static final int MAX_BATCH_SIZE = StreamMQConstants.MAX_BATCH_SIZE_LIMIT;
 
     /** BUSYGROUP 错误标识，用于判断消费者组已存在 */
     private static final String BUSYGROUP_MARKER = "BUSYGROUP";
@@ -142,7 +153,19 @@ public class RedissonStreamListener implements StreamMQListener {
             @NonNull String group,
             @NonNull String consumerName,
             @NonNull MessageConverter converter) {
-        this(redisson, namespace, topic, group, consumerName, converter, false, false, false, null);
+        this(
+                redisson,
+                namespace,
+                topic,
+                group,
+                consumerName,
+                converter,
+                false,
+                false,
+                false,
+                null,
+                ConsumeFromWhere.DEFAULT,
+                StreamMQConstants.MAX_BATCH_SIZE_LIMIT);
     }
 
     /**
@@ -206,7 +229,9 @@ public class RedissonStreamListener implements StreamMQListener {
             boolean dlqMode,
             boolean retryMode,
             boolean broadcast,
-            Class<?> targetBodyType) {
+            Class<?> targetBodyType,
+            ConsumeFromWhere consumeFromWhere,
+            Integer maxBatchSizeLimit) {
         this.redisson = redisson;
         this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.topic = topic;
@@ -217,6 +242,12 @@ public class RedissonStreamListener implements StreamMQListener {
         this.retryMode = retryMode;
         this.broadcast = broadcast;
         this.targetBodyType = targetBodyType;
+        this.consumeFromWhere =
+                Objects.isNull(consumeFromWhere) ? ConsumeFromWhere.DEFAULT : consumeFromWhere;
+        this.maxBatchSizeLimit =
+                Objects.isNull(maxBatchSizeLimit) || maxBatchSizeLimit <= 0
+                        ? StreamMQConstants.MAX_BATCH_SIZE_LIMIT
+                        : maxBatchSizeLimit;
     }
 
     @Override
@@ -552,14 +583,9 @@ public class RedissonStreamListener implements StreamMQListener {
      * @return 加载到的类；找不到返回 null（由调用方走回退链）
      */
     private Class<?> loadClassBySimpleName(String simpleName) {
-        classCacheLock.readLock().lock();
-        try {
-            Class<?> cached = classCache.get(simpleName);
-            if (Objects.nonNull(cached)) {
-                return cached;
-            }
-        } finally {
-            classCacheLock.readLock().unlock();
+        Class<?> cached = classCache.get(simpleName);
+        if (Objects.nonNull(cached)) {
+            return cached;
         }
         try {
             ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
@@ -567,12 +593,7 @@ public class RedissonStreamListener implements StreamMQListener {
                 classLoader = getClass().getClassLoader();
             }
             Class<?> clazz = Class.forName(simpleName, false, classLoader);
-            classCacheLock.writeLock().lock();
-            try {
-                classCache.put(simpleName, clazz);
-            } finally {
-                classCacheLock.writeLock().unlock();
-            }
+            classCache.put(simpleName, clazz);
             return clazz;
         } catch (ClassNotFoundException e) {
             LOG.debug(
@@ -667,15 +688,20 @@ public class RedissonStreamListener implements StreamMQListener {
                     stream.getName());
             try {
                 // makeStream：如果 Stream 不存在则创建
-                // id(0-0)：从头开始消费
+                // 起始位点仅首次建组生效：
+                //   CONSUME_FROM_FIRST -> id(0-0)：从头（全量历史）消费
+                //   CONSUME_FROM_LAST  -> id(NEWEST "$")：仅消费组创建之后写入的消息（安全默认）
+                StreamMessageId startId =
+                        consumeFromWhere == ConsumeFromWhere.CONSUME_FROM_FIRST
+                                ? new StreamMessageId(0, 0)
+                                : StreamMessageId.NEWEST;
                 stream.createGroup(
-                        StreamCreateGroupArgs.name(effectiveGroup)
-                                .makeStream()
-                                .id(new StreamMessageId(0, 0)));
+                        StreamCreateGroupArgs.name(effectiveGroup).makeStream().id(startId));
                 LOG.info(
-                        "Consumer group created: topic={}, group={}{}",
+                        "Consumer group created: topic={}, group={}, consumeFromWhere={}{}",
                         topic,
                         effectiveGroup,
+                        consumeFromWhere,
                         broadcast ? " (broadcast, unique per instance)" : "");
             } catch (RuntimeException ex) {
                 // BUSYGROUP 表示 group 已存在，属于正常情况
@@ -761,10 +787,10 @@ public class RedissonStreamListener implements StreamMQListener {
         }
     }
 
-    private static void validateBatchSize(int batchSize) {
-        if (batchSize <= 0 || batchSize > MAX_BATCH_SIZE) {
+    private void validateBatchSize(int batchSize) {
+        if (batchSize <= 0 || batchSize > maxBatchSizeLimit) {
             throw new IllegalArgumentException(
-                    "batchSize must be between 1 and " + MAX_BATCH_SIZE + ", got " + batchSize);
+                    "batchSize must be between 1 and " + maxBatchSizeLimit + ", got " + batchSize);
         }
     }
 }

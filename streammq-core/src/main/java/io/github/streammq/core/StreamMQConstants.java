@@ -10,6 +10,27 @@ public final class StreamMQConstants {
 
     private StreamMQConstants() {}
 
+    // ==================== 注解属性"未设置"哨兵 ====================
+    /**
+     * {@code @StreamMQConsumer} 数值属性的"未设置"哨兵（int 型）：表示回落到全局配置。
+     *
+     * <p><b>统一口径（配置值 → 默认值 → 实际值 三方对等）：</b>
+     *
+     * <pre>
+     *   注解属性 = UNSET        → 取 streammq.* 全局配置
+     *   全局配置 = 常量默认值   → 取 StreamMQConstants.DEFAULT_*
+     *   注解属性 != UNSET       → 注解优先（用户显式声明最高优先级）
+     * </pre>
+     *
+     * <p>使用哨兵而非"与常量默认值比较"的原因：后者会产生哨兵碰撞—— 当注解显式写上与常量默认值相同的数值时 （例如 {@code pullBatchSize = 32} 恰等于
+     * {@link #DEFAULT_CONSUME_BATCH_SIZE}）， 框架无法区分"用户显式指定"与"使用注解默认值"，
+     * 会被全局配置静默覆盖，即典型的配置失效。独立哨兵值彻底消除该歧义。
+     */
+    public static final int ANNOTATION_UNSET_INT = -1;
+
+    /** {@code @StreamMQConsumer} 数值属性的"未设置"哨兵（long 型），语义同 {@link #ANNOTATION_UNSET_INT}。 */
+    public static final long ANNOTATION_UNSET_LONG = -1L;
+
     // ==================== 默认值常量 ====================
     /** 默认发送超时（毫秒） */
     public static final long DEFAULT_SEND_TIMEOUT_MS = 3000L;
@@ -80,9 +101,24 @@ public final class StreamMQConstants {
     /** 默认 retry Stream 最大长度（0=不限制） */
     public static final int DEFAULT_RETRY_STREAM_MAX_LEN = 0;
 
-    /** 默认 PEL 认领空闲阈值（毫秒） */
-    /** PEL 认领最小空闲阈值默认值：必须显著大于消费超时（30s）+ 超时取消宽限期， 否则调度器会把仍在正常处理中的消息判定为"孤儿"并复制重投，造成重复消费与顺序破坏。 */
+    /** 默认 DLQ Stream 最大长度（0=不限制，对齐 retry Stream 的默认姿态） */
+    public static final int DEFAULT_DLQ_STREAM_MAX_LEN = 0;
+
+    /**
+     * PEL 认领空闲阈值默认值（毫秒）：60 秒。
+     *
+     * <p><b>下界约束（安全不变量）：</b>必须显著大于「消费超时（默认 30s）+ 消费超时取消宽限期（默认 2s）」，
+     * 否则调度器会把<b>仍在正常处理中</b>的消息判定为"孤儿"并复制重投，造成重复消费与顺序破坏。 配置校验见 {@code
+     * StreamMQProperties#validate}：低于 {@link #MIN_PEL_CLAIM_MIN_IDLE_MS} 时启动失败。
+     */
     public static final long DEFAULT_PEL_CLAIM_MIN_IDLE_MS = 60_000L;
+
+    /**
+     * PEL 认领空闲阈值的硬性下界（毫秒）：{@code 消费超时默认 30s + 取消宽限期默认 2s + 3s 安全余量 = 35s}。
+     *
+     * <p>低于该值意味着"消息可能还在处理就被认领重投"，是数据正确性风险而非性能取舍， 因此不允许通过配置突破。
+     */
+    public static final long MIN_PEL_CLAIM_MIN_IDLE_MS = 35_000L;
 
     /** 默认 PEL 认领扫描间隔（毫秒） */
     public static final long DEFAULT_PEL_CLAIM_SCAN_INTERVAL_MS = 5_000L;
@@ -92,6 +128,34 @@ public final class StreamMQConstants {
 
     /** 默认单次事务回查超时（毫秒） */
     public static final long DEFAULT_CHECK_TIMEOUT_MS = 60_000L;
+
+    // ==================== 延时消息边界 ====================
+    /**
+     * 单条延时消息允许的最大延时时长（毫秒）：7 天。
+     *
+     * <p>与 {@code RedissonStreamProducer#DELAY_PAYLOAD_TTL} 的来源常量 {@link
+     * #DEFAULT_DELAY_PAYLOAD_TTL_MS} 强绑定——延时 payload 是 Redis Hash + TTL， 一旦延时时长超过 TTL，payload
+     * 会先于投递过期， 调度器只能把该条目移入隔离区（消息事实丢失，仅留痕）。因此这里把"允许配置的最大延时" 显式上界化，在<b>发送侧</b>快速失败，而不是等到投递时才发现消息已经消失。
+     */
+    public static final long MAX_DELAY_TIME_MILLIS = 7L * 24 * 60 * 60 * 1000;
+
+    /**
+     * 延时消息 payload Hash 的保留时长（毫秒）：7 天。
+     *
+     * <p>正常流程中 payload 在转投成功后即被 DEL；TTL 仅用于兜底清理异常场景残留的孤儿 payload。 该值同时定义了 {@link
+     * #MAX_DELAY_TIME_MILLIS} 的上界，二者必须一致。
+     */
+    public static final long DEFAULT_DELAY_PAYLOAD_TTL_MS = MAX_DELAY_TIME_MILLIS;
+
+    // ==================== 新消费者组起始位点 ====================
+    /**
+     * 新消费者组的默认起始消费位点：{@link io.github.streammq.core.enums.ConsumeFromWhere#CONSUME_FROM_LAST}。
+     *
+     * <p>常量与枚举 {@link io.github.streammq.core.enums.ConsumeFromWhere#DEFAULT}
+     * 保持单一来源——配置默认值、注解默认值、代码回退值三处一律引用本常量，避免漂移。
+     */
+    public static final io.github.streammq.core.enums.ConsumeFromWhere DEFAULT_CONSUME_FROM_WHERE =
+            io.github.streammq.core.enums.ConsumeFromWhere.DEFAULT;
 
     /** 默认心跳存活窗口（毫秒），超过该时间无心跳视为不活跃 */
     public static final long DEFAULT_HEARTBEAT_ALIVE_WINDOW_MS = 30_000L;

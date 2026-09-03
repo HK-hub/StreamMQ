@@ -7,6 +7,7 @@ package io.github.streammq.core.annotation;
 
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.enums.ConsumeFromWhere;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
 import io.github.streammq.core.enums.SelectorType;
@@ -80,6 +81,29 @@ public @interface StreamMQConsumer {
     ConsumeMode consumeMode() default ConsumeMode.CLUSTERING;
 
     /**
+     * 新消费者组的起始消费位点，默认 {@link ConsumeFromWhere#CONSUME_FROM_LAST}（从 Stream 末尾开始）。
+     *
+     * <p><b>仅在该消费者组首次创建时生效</b>——已存在的组不会因为本配置改变位点。
+     *
+     * <p>可选值：
+     *
+     * <ul>
+     *   <li>{@link ConsumeFromWhere#CONSUME_FROM_LAST}（默认）：只消费组创建之后写入的消息。安全默认， 向长期运行的 Topic
+     *       追加消费者组不会触发历史重放。
+     *   <li>{@link ConsumeFromWhere#CONSUME_FROM_FIRST}：重放该 Topic 的全部历史消息。
+     * </ul>
+     *
+     * <p><b>与广播消费的关系：</b>广播模式下每个实例使用独立组名，若 {@code instanceToken} 不稳定（UUID 回退）， 每次重启都会新建组，此时 {@code
+     * CONSUME_FROM_FIRST} 会导致<b>每次重启重放全量历史</b>。 广播模式请先配置稳定的 {@code streammq.instanceId}。
+     *
+     * <p><b>回落到全局配置：</b>本注解不提供"未设置"哨兵（枚举默认即全局默认）， 需要按 Topic 差异化时显式声明本属性； 否则一律使用全局配置 {@code
+     * streammq.consumer.consume-from-where}（默认 {@code CONSUME_FROM_LAST}）。
+     *
+     * @return 起始消费位点策略
+     */
+    ConsumeFromWhere consumeFromWhere() default ConsumeFromWhere.CONSUME_FROM_LAST;
+
+    /**
      * 消息模型，默认 {@link MessageModel#CONCURRENT}。
      *
      * <p>设置为 {@link MessageModel#ORDERLY} 时表示顺序消费，需实现 {@link
@@ -111,25 +135,39 @@ public @interface StreamMQConsumer {
     int consumeThreadMax() default StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX;
 
     /**
-     * 最大重试次数，默认 16。
+     * 最大重试次数。
      *
-     * @return 最大重试次数
+     * <p><b>优先级（配置值 → 默认值 → 实际值 三方对等）：</b>
+     *
+     * <ul>
+     *   <li>本属性 {@code >= 0}：以注解声明为准（用户显式优先）。{@code 0} 表示消费失败不重试、直接进 DLQ
+     *   <li>本属性 = {@link StreamMQConstants#ANNOTATION_UNSET_INT}（默认 -1）：回落到全局配置 {@code
+     *       streammq.retry.max-reconsume-times}
+     *   <li>全局配置默认值 = {@link StreamMQConstants#DEFAULT_MAX_RECONSUME_TIMES}（16）
+     * </ul>
+     *
+     * @return 最大重试次数；-1 表示使用全局配置
      */
-    int maxReconsumeTimes() default StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES;
+    int maxReconsumeTimes() default StreamMQConstants.ANNOTATION_UNSET_INT;
 
     /**
-     * 单条消息消费超时（毫秒），默认 30000（30 秒）。
+     * 单条消息消费超时（毫秒）。
      *
-     * <p>超时后框架会 ACK 当前消息并调度重试投递。由于消费线程可能仍在执行业务逻辑， 重试消费与原消费可能并发执行，因此业务层必须实现幂等性。
+     * <p>超时后框架会取消当前消费并调度重试投递。由于消费线程可能仍在执行业务逻辑， 重试消费与原消费可能并发执行，因此业务层必须实现幂等性。
      *
      * <p>仅对并发消费（{@link MessageModel#CONCURRENT}）生效，顺序消费请使用 {@link #orderlyConsumeTimeout()}。
      *
-     * @return 超时毫秒数，0 表示不超时
+     * <p><b>优先级：</b>本属性 {@code >= 0} 时以注解为准（{@code 0} = 不设超时）； 为 {@link
+     * StreamMQConstants#ANNOTATION_UNSET_LONG}（默认 -1）时回落全局配置 {@code
+     * streammq.consumer.consume-timeout-millis}，其默认值为 {@link
+     * StreamMQConstants#DEFAULT_CONSUME_TIMEOUT_MS}（30000ms）。
+     *
+     * @return 超时毫秒数；0 表示不超时；-1 表示使用全局配置
      */
-    long consumeTimeout() default StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS;
+    long consumeTimeout() default StreamMQConstants.ANNOTATION_UNSET_LONG;
 
     /**
-     * 顺序消费单条消息消费超时（毫秒），默认 0（不启用）。
+     * 顺序消费单条消息消费超时（毫秒）。
      *
      * <p>仅对顺序消费（{@link MessageModel#ORDERLY}）生效。顺序消费默认不设超时——卡死的 handler 会持有分片锁
      * 并阻塞消费循环，直到进程重启。设置本属性后：
@@ -142,13 +180,18 @@ public @interface StreamMQConsumer {
      *
      * <p>注意：顺序消费的重试是严格串行的（同分片不越过失败消息），设置过小的超时可能将慢消息快速送入 DLQ， 建议按业务最慢耗时的 2 倍以上配置。
      *
-     * <p><b>与全局配置的关系：</b>本属性 {@code > 0} 时优先；为 {@code 0}（默认）时回落到全局配置 {@code
-     * streammq.consumer.orderly-consume-timeout-millis}（其默认值同样为 0，即不启用）。 因此
-     * <b>全局开启后无法用本属性单独关闭某个消费者</b>——需要对该消费者放松保护时，请设置一个足够大的值。
+     * <p><b>优先级（注解始终可覆盖全局，含"单独关闭"）：</b>
      *
-     * @return 超时毫秒数，0 表示回落全局配置（全局默认同样为 0，即不启用）
+     * <ul>
+     *   <li>本属性 {@code >= 0}：以注解为准。{@code 0} = <b>显式关闭</b>该消费者的顺序消费超时保护 ——即使全局 {@code
+     *       streammq.consumer.orderly-consume-timeout-millis} 已开启也生效
+     *   <li>本属性 = {@link StreamMQConstants#ANNOTATION_UNSET_LONG}（默认 -1）：回落全局配置
+     *   <li>全局配置默认值 = {@code 0}（不启用）
+     * </ul>
+     *
+     * @return 超时毫秒数；0 表示显式关闭；-1 表示使用全局配置
      */
-    long orderlyConsumeTimeout() default 0L;
+    long orderlyConsumeTimeout() default StreamMQConstants.ANNOTATION_UNSET_LONG;
 
     /**
      * Tag 过滤表达式（SQL92 风格子集），默认 "*" 表示全部接收。 例如：{@code "tag1 || tag2"} / {@code "tag1 && tag2"}。
@@ -189,11 +232,16 @@ public @interface StreamMQConsumer {
     SelectorType selectorType() default SelectorType.TAG;
 
     /**
-     * 单次拉取批量大小，默认 32。
+     * 单次拉取批量大小。
      *
-     * @return 拉取批量
+     * <p><b>优先级：</b>本属性 {@code > 0} 时以注解为准；为 {@link StreamMQConstants#ANNOTATION_UNSET_INT} （默认
+     * -1）时回落全局配置 {@code streammq.consumer.batch-size}，其默认值为 {@link
+     * StreamMQConstants#DEFAULT_CONSUME_BATCH_SIZE}（32）。最终值会被 {@code
+     * streammq.consumer.max-batch-size-limit} 夹取上界。
+     *
+     * @return 拉取批量；-1 表示使用全局配置
      */
-    int pullBatchSize() default StreamMQConstants.DEFAULT_CONSUME_BATCH_SIZE;
+    int pullBatchSize() default StreamMQConstants.ANNOTATION_UNSET_INT;
 
     /**
      * 每个消费者专属重试策略类，默认 {@link RetryPolicy} 表示使用全局策略。
@@ -237,11 +285,15 @@ public @interface StreamMQConsumer {
     Class<? extends RebalanceStrategy> rebalanceStrategy() default RebalanceStrategy.class;
 
     /**
-     * 拉取间隔（毫秒，0=不间隔）。
+     * 拉取间隔（毫秒）。
      *
-     * @return 拉取间隔毫秒
+     * <p><b>优先级：</b>本属性 {@code >= 0} 时以注解为准（{@code 0} = 不间隔，即拉取之间不主动休眠）； 为 {@link
+     * StreamMQConstants#ANNOTATION_UNSET_LONG}（默认 -1）时回落全局配置 {@code
+     * streammq.consumer.pull-interval}，其默认值为 {@link StreamMQConstants#DEFAULT_PULL_INTERVAL_MS}（0）。
+     *
+     * @return 拉取间隔毫秒；0 表示不间隔；-1 表示使用全局配置
      */
-    long pullInterval() default 0L;
+    long pullInterval() default StreamMQConstants.ANNOTATION_UNSET_LONG;
 
     /**
      * 顺序消费挂起时长（毫秒）。

@@ -70,4 +70,12 @@ public class DlqConfig {
 
     /** 重试最小延迟下限（毫秒，默认 1000 = 1 秒），防止退避计算出过短的间隔 */
     @Builder.Default private long minRetryDelayMs = StreamMQConstants.MIN_DLQ_RETRY_DELAY_MS;
+
+    /**
+     * DLQ Stream 最大长度（0 = 不限制，默认）。
+     *
+     * <p>对齐 retry Stream 的默认姿态：默认不限制，由 Redis 自身兜底；需要硬上限时显式配置。 经 {@code streammq.dlq.stream-max-len}
+     * 注入。
+     */
+    @Builder.Default private int streamMaxLen = StreamMQConstants.DEFAULT_DLQ_STREAM_MAX_LEN;
 }

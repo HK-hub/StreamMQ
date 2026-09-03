@@ -702,8 +702,7 @@ Redis 的消费者组天然是"组内竞争消费"。要实现广播（每条消
 | **streammq-kubernetes** | K8s 健康检查、HPA、优雅停机、CRD Operator。**实验性预览**：默认关闭，且当前**不发布**到 Maven Central（`ConfigMapConfigRefresher` 默认实现为 no-op）。待功能完整后再纳入发布 |
 | **streammq-spring-cloud-stream-binder** | Spring Cloud Stream Binder 实现（分区生产不支持） |
 | **streammq-benchmark** | JMH 基准测试 |
-| **streammq-test** | 测试工具包：容器化 Redis（基于 Testcontainers，**需要 Docker daemon**）、Redis 可用性探测、断言工具、Mock 工具。请以 `test` scope 引入。注意 `testcontainers` 与 `com.redis:testcontainers-redis` 为 optional 依赖，需自行显式引入 |
-| **streammq-test-support** | 测试基础设施公共件（Redis 可用性探测）。本身零依赖，作为 `streammq-test` 的可传递依赖一同发布 |
+| **streammq-test** | 测试工具包：容器化 Redis（基于 Testcontainers，**需要 Docker daemon**）、Redis 可用性探测（`RedisAvailability`，零外部依赖、随本模块一同发布）、断言工具、Mock 工具。请以 `test` scope 引入。注意 `testcontainers` 与 `com.redis:testcontainers-redis` 为 optional 依赖，需自行显式引入 |
 | **streammq-samples** | 示例工程集合，覆盖快速开始、事务、延时、顺序、DLQ、拦截器、诊断、链路追踪 |
 
 ---
@@ -730,27 +729,29 @@ streammq:
 
   # ── 消费者 ──────────────────────────────────────────────
   consumer:
-    batch-size: 32                     # 单次拉取批量大小（1~max-batch-size-limit）
+    batch-size: 32                     # 单次拉取批量大小（1~max-batch-size-limit；注解未声明时生效）
     poll-timeout: 2000ms               # 单次拉取阻塞超时（Duration 格式）
-    pull-interval: 0                   # 拉取间隔（毫秒），0=不间隔
-    max-batch-size-limit: 256          # 拉取批量上界（注解/配置均不可超过）
+    pull-interval: 0                   # 拉取间隔（毫秒），0=不间隔（注解未声明时生效）
+    max-batch-size-limit: 1000         # 拉取批量上界（注解/配置与底层校验均以此为准；不可超过）
     inflight-capacity: 0               # 背压队列容量（0=禁用；>0 时拉取与处理解耦，队列满则拉取阻塞）
     paused-sleep-millis: 100           # 暂停状态下的休眠间隔（毫秒）
     broker-error-backoff-millis: 1000  # Broker 异常退避间隔（毫秒）
     timeout-cancel-grace-millis: 100   # 消费超时取消宽限期（毫秒），缩小与重试副本的重叠窗口
+    consume-timeout-millis: 30000      # 全局并发消费超时（毫秒），0=不设超时（注解未声明时生效）
     orderly-consume-timeout-millis: 0  # 全局顺序消费超时（毫秒），0=不启用（注解可 per-consumer 覆盖）
+    consume-from-where: CONSUME_FROM_LAST  # 新消费者组起始位点（仅首次建组生效）：CONSUME_FROM_LAST=只消费组创建后消息；CONSUME_FROM_FIRST=重放全量历史
 
   # ── 重试 ────────────────────────────────────────────────
   retry:
     enabled: true
     policy: io.github.streammq.adapter.redisson.policy.FixedArrayRetryPolicy   # 重试策略（全限定类名）
-    max-reconsume-times: 16            # 消费失败最大重试次数
+    max-reconsume-times: 16            # 消费失败最大重试次数（注解未声明时生效；此前该值仅取注解、全局配置失效，已修复）
     scan-interval: 5s                  # 重试 ZSet 扫描间隔
     batch-size: 100                    # 单次扫描批量
     delay-array: ""                    # 自定义重试延时数组（逗号分隔毫秒，如 1000,5000,10000）
     stream-max-len: 0                  # retry Stream 最大长度（0=不限制）
     pel-claim-scan-interval: 5s        # PEL 认领扫描间隔（顺序消费专用）
-    pel-claim-min-idle-ms: 30000       # PEL 认领空闲阈值（顺序消费专用）
+    pel-claim-min-idle-ms: 60000       # PEL 认领空闲阈值（顺序消费专用，默认 60s；须 >= 35s 否则启动失败）
     failure-requeue-backoff-ms: 5000   # 转移失败后的回写退避间隔（毫秒）
 
   # ── 延时 ────────────────────────────────────────────────
@@ -773,6 +774,7 @@ streammq:
     dlq-retry-delay-ms: 1000          # DLQ 重试间隔（毫秒）
     retry-max-delay-ms: 300000        # DLQ 重试最大退避（毫秒）
     min-retry-delay-ms: 1000          # DLQ 重试最小退避（毫秒）
+    stream-max-len: 0                 # DLQ Stream 最大长度（0=不限制，默认）
     secondary-dlq-enabled: false      # 是否启用二级 DLQ（DLQ 再次失败时）
     secondary-dlq-key-prefix: streammq:dlq2   # 二级 DLQ key 前缀
     alert-threshold: 3                # DLQ 告警阈值
@@ -829,15 +831,16 @@ streammq:
 | `consumeMode` | ConsumeMode | CLUSTERING | 消费模式：CLUSTERING / BROADCASTING |
 | `consumeThreadMin` | int | 1 | **并发消费循环数**（仅 CONCURRENT 集群消费生效；每循环独立 XREADGROUP 拉取，共享 consumer name 原子分配互不相交） |
 | `consumeThreadMax` | int | 64 | 并发消费循环数上限（夹取上界） |
-| `maxReconsumeTimes` | int | 16 | 最大重试次数 |
-| `consumeTimeout` | long | 30000 | 并发消费超时（毫秒）；超时后消息按 RECONSUME_LATER 重试（业务层需幂等） |
-| `orderlyConsumeTimeout` | long | 0 | 顺序消费超时（毫秒）；0=回落全局配置（全局默认同为 0，即不启用）。开启后卡死 handler 不再阻塞消费循环，语义见「顺序消息」 |
-| `pullBatchSize` | int | 32 | 单次拉取批量 |
+| `maxReconsumeTimes` | int | -1（=回落全局 `streammq.retry.max-reconsume-times`，默认 16） | 最大重试次数；-1 时取全局配置，>=0 时注解优先（0=消费失败不重试直接进 DLQ） |
+| `consumeTimeout` | long | -1（=回落全局 `streammq.consumer.consume-timeout-millis`，默认 30000） | 并发消费超时（毫秒）；-1 取全局，>=0 注解优先（0=不设超时）。超时后按 RECONSUME_LATER 重试（业务层需幂等） |
+| `orderlyConsumeTimeout` | long | -1（=回落全局 `streammq.consumer.orderly-consume-timeout-millis`，默认 0=不启用） | 顺序消费超时（毫秒）；-1 取全局，>=0 注解优先；**显式设 0 可单独关闭该消费者的顺序超时保护**（即使全局已开启） |
+| `consumeFromWhere` | ConsumeFromWhere | CONSUME_FROM_LAST（=全局默认） | 新消费者组起始位点（仅首次建组生效）。由于枚举注解默认值无法用哨兵表达，<b>仅显式声明 `CONSUME_FROM_FIRST` 视为用户覆盖</b>；未声明或声明 `CONSUME_FROM_LAST` 一律采用全局 `streammq.consumer.consume-from-where`（默认 `CONSUME_FROM_LAST`）。`CONSUME_FROM_LAST`=只消费组创建后消息；`CONSUME_FROM_FIRST`=重放全量历史 |
+| `pullBatchSize` | int | -1（=回落全局 `streammq.consumer.batch-size`，默认 32） | 单次拉取批量；-1 取全局，>0 注解优先。最终夹取到 1~max-batch-size-limit |
 | `selectorExpression` | String | "*" | Tag/SQL92 过滤表达式 |
 | `selectorType` | SelectorType | TAG | 过滤类型：TAG / SQL92 |
 | `shardCount` | int | 4 | 顺序消费分片数 |
 | `dlqMode` | boolean | false | 是否 DLQ 消费者 |
-| `pullInterval` | long | 0 | 拉取间隔（毫秒） |
+| `pullInterval` | long | -1（=回落全局 `streammq.consumer.pull-interval`，默认 0=不间隔） | 拉取间隔（毫秒）；-1 取全局，>=0 注解优先 |
 | `streamMaxLen` | int | 0 | Stream 最大长度（0=不限制） |
 | `retryStreamMaxLen` | int | 0 | 重试 Stream 最大长度 |
 | `enableMsgTrace` | boolean | false | 是否启用消息追踪 |

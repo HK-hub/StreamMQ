@@ -126,6 +126,10 @@ public class StreamMQListenerContainerAutoConfiguration {
                 properties.getConsumer().getBrokerErrorBackoffMillis());
         container.setDefaultOrderlyConsumeTimeoutMillis(
                 properties.getConsumer().getOrderlyConsumeTimeoutMillis());
+        container.setDefaultConsumeTimeoutMillis(
+                properties.getConsumer().getConsumeTimeoutMillis());
+        container.setDefaultMaxReconsumeTimes(properties.getRetry().getMaxReconsumeTimes());
+        container.setDefaultConsumeFromWhere(properties.getConsumer().getConsumeFromWhere());
         container.setDefaultVirtualNodes(properties.getRebalance().getVirtualNodes());
         container.setDefaultRebalanceStrategy(properties.getRebalance().getStrategy());
         // 统一线程模型：容器消费循环复用 streammqExecutor（仅识别该名称的 Bean，用户可同名覆盖自定义）
