@@ -147,8 +147,9 @@
                 <scope>import</scope>
             </dependency>
 
-            <!-- 测试基础设施公共件。虽是内部工具模块，但它是已发布构件 streammq-test 的
-                 可传递运行时依赖，因此同样会发布到 Maven Central（不可加入 excludeArtifacts）。 -->
+            <!-- 测试基础设施公共件（内部工具模块，已发布构件 streammq-test）。
+                 其依赖以 test scope 提供，不会作为可传递运行时依赖引入下游应用；
+                 同样会发布到 Maven Central（不可加入 excludeArtifacts）。 -->
             <!-- Spring Boot BOM -->
             <dependency>
                 <groupId>org.springframework.boot</groupId>

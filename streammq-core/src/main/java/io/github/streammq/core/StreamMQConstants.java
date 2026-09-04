@@ -77,6 +77,9 @@ public final class StreamMQConstants {
     /** 关闭线程池等待超时（秒） */
     public static final long DEFAULT_AWAIT_TERMINATION_SECONDS = 5L;
 
+    /** 广播组僵尸回收扫描间隔（毫秒） */
+    public static final long DEFAULT_BROADCAST_SWEEP_INTERVAL_MS = 30_000L;
+
     /** 暂停休眠间隔（毫秒） */
     public static final long DEFAULT_PAUSED_SLEEP_MS = 100L;
 
@@ -195,17 +198,18 @@ public final class StreamMQConstants {
 
     // ==================== 默认序列化器 ====================
     /**
-     * 默认消息体序列化器实现类全限定名：Apache Fury（{@code
-     * io.github.streammq.adapter.redisson.serializer.FurySerializer}）。
+     * 默认消息体序列化器实现类全限定名：Jackson JSON（{@code
+     * io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer}）。
      *
      * <p>以字符串形式定义，避免 core 模块反向依赖 redisson 适配器；Spring Boot Starter 按此默认值装配 {@code
-     * streammq.producer.serializer}。
+     * streammq.producer.serializer}。Jackson 为安全默认：严格类型、无多态类型反序列化，共享/多租户 Redis 上无 RCE 风险； 追求吞吐且
+     * Redis 为受信单租户时显式切换为 {@code FurySerializer}。
      */
     public static final String DEFAULT_SERIALIZER =
-            "io.github.streammq.adapter.redisson.serializer.FurySerializer";
+            "io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer";
 
     /** 默认序列化器名称（对应 {@code MessageSerializer#name()}），用于日志与监控标识 */
-    public static final String DEFAULT_SERIALIZER_NAME = "fury";
+    public static final String DEFAULT_SERIALIZER_NAME = "jackson-json";
 
     // ==================== 消息大小限制 ====================
     /** Redis Stream 单条消息最大大小（字节），512MB。 实际建议不超过 1MB，超大消息会增加网络传输和内存压力。 */
@@ -289,6 +293,8 @@ public final class StreamMQConstants {
     public static final String THREAD_TXCHECK_SCHEDULER = "streammq-txcheck-scheduler";
     public static final String THREAD_DELAY_SCHEDULER = "streammq-delay-scheduler";
     public static final String THREAD_PELCLAIM_SCHEDULER = "streammq-pelclaim-scheduler";
+    public static final String THREAD_BROADCAST_SWEEP_SCHEDULER =
+            "streammq-broadcast-sweep-scheduler";
     public static final String THREAD_HEARTBEAT_PREFIX = "streammq-hb-";
     public static final String THREAD_PROCESS_PREFIX = "streammq-process-";
 

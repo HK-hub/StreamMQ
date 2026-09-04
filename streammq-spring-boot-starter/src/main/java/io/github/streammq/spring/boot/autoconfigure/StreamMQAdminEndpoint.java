@@ -354,8 +354,8 @@ public class StreamMQAdminEndpoint {
     /**
      * 删除指定 DLQ 消息（不可逆，需显式确认）。
      *
-     * <p><b>发布前修复 P2：</b>删除单条 DLQ 消息属于破坏性操作，暴露在 HTTP DELETE 上。要求调用方 通过 {@code confirm}
-     * 参数回传待删除的 {@code msgId} 以确认意图，避免路径参数被误构造/误触发时 直接删除业务排障数据。
+     * <p><b>发布前修复 P2：</b>删除单条 DLQ 消息属于破坏性操作，暴露在 HTTP DELETE 上。要求调用方 通过 {@code confirm} 参数回传待删除的
+     * {@code msgId} 以确认意图，避免路径参数被误构造/误触发时 直接删除业务排障数据。
      *
      * @param group 消费者组名
      * @param msgId 消息 ID（格式：{@code ts-seq}）

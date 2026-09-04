@@ -43,14 +43,14 @@ public final class StreamMQSpringConstants {
     // ==================== 默认值 ====================
 
     /**
-     * 默认消息体序列化器实现类：Apache Fury。
+     * 默认消息体序列化器实现类：Jackson JSON（安全默认，无类注册 / 无多态类型反序列化）。
      *
      * <p>与 {@link io.github.streammq.core.StreamMQConstants#DEFAULT_SERIALIZER} 指向同一实现， 此处以 {@code
-     * Class} 形式提供，供自动装配在配置缺失/解析为空时回退使用。
+     * Class} 形式提供，供自动装配在配置缺失/解析为空时回退使用。追求吞吐时可显式切换为 FurySerializer。
      */
     public static final Class<? extends io.github.streammq.core.serializer.MessageSerializer>
             DEFAULT_SERIALIZER_CLASS =
-                    io.github.streammq.adapter.redisson.serializer.FurySerializer.class;
+                    io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer.class;
 
     // ==================== 条件装配属性名与值 ====================
     /** 开关属性名：enabled */

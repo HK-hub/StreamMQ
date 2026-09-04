@@ -51,9 +51,9 @@ import org.springframework.boot.actuate.health.HealthIndicator;
  * BasicAuthAuthenticator} / {@code TokenAuthenticator}（或自定义实现）Bean 以开放访问。Basic 凭据取自请求的 {@code
  * Authorization: Basic} 头，Token 凭据取自同一头的密码字段。
  *
- * <p><b>CSRF 防护：</b>所有写/删操作（POST/DELETE）额外执行同源校验——跨站请求（携带与外域 {@code Host} 不一致的 {@code
- * Origin}）直接返回 HTTP 403。 该检查只拦截浏览器发起的跨站简单请求，不影响 curl / SDK 等合法非浏览器调用。 若通过反向代理暴露端点，
- * 仍建议在代理层强制同源并启用 Spring Security。
+ * <p><b>CSRF 防护：</b>所有写/删操作（POST/DELETE）额外执行同源校验——跨站请求（携带与外域 {@code Host} 不一致的 {@code Origin}）直接返回
+ * HTTP 403。 该检查只拦截浏览器发起的跨站简单请求，不影响 curl / SDK 等合法非浏览器调用。 若通过反向代理暴露端点， 仍建议在代理层强制同源并启用 Spring
+ * Security。
  *
  * <p>为避免对 Servlet API 的编译期依赖，请求头通过 {@code RequestContextHolder} 反射读取； 非 Web 环境下凭据视为空（默认拒绝）。
  *
@@ -172,9 +172,9 @@ public class StreamMQActuatorEndpoint {
     /**
      * 同源校验（CSRF 防护）：跨站请求直接拒绝（HTTP 403）。
      *
-     * <p>仅影响浏览器发起的跨站写/删简单请求（POST/DELETE 不附带自定义头、但会携带外域 {@code Origin}），
-     * 不破坏 curl / SDK 等不带 {@code Origin} 或携带与 {@code Host} 一致 {@code Origin} 的合法调用。
-     * 详见 {@link WebRequestAuthSupport#isSameOriginRequest()}。
+     * <p>仅影响浏览器发起的跨站写/删简单请求（POST/DELETE 不附带自定义头、但会携带外域 {@code Origin}）， 不破坏 curl / SDK 等不带 {@code
+     * Origin} 或携带与 {@code Host} 一致 {@code Origin} 的合法调用。 详见 {@link
+     * WebRequestAuthSupport#isSameOriginRequest()}。
      */
     private WebEndpointResponse<?> checkCsrf() {
         if (!WebRequestAuthSupport.isSameOriginRequest()) {

@@ -10,6 +10,7 @@ import io.github.streammq.adapter.redisson.compression.GzipCompressionCodec;
 import io.github.streammq.adapter.redisson.compression.Lz4CompressionCodec;
 import io.github.streammq.adapter.redisson.compression.Lz4CompressionCodecFactory;
 import io.github.streammq.adapter.redisson.container.ConsumerTuning;
+import io.github.streammq.adapter.redisson.container.DefaultConsumerTuning;
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.event.AsyncStreamMQEventBus;
 import io.github.streammq.adapter.redisson.interceptor.TraceContextConsumerInterceptor;
@@ -153,12 +154,13 @@ public class StreamMQCoreAutoConfiguration {
     }
 
     /**
-     * 默认序列化器，从配置 {@code streammq.producer.serializer} 读取 Class 并实例化； 未配置（或配置为空）时使用默认值 Apache
-     * Fury（{@link StreamMQConstants#DEFAULT_SERIALIZER}）。
+     * 默认序列化器，从配置 {@code streammq.producer.serializer} 读取 Class 并实例化； 未配置（或配置为空）时使用安全默认值 Jackson
+     * JSON（{@link StreamMQConstants#DEFAULT_SERIALIZER}）。
      *
-     * <p>当序列化器为 {@link FurySerializer} 时，按 {@code
-     * streammq.producer.fury-require-class-registration} 决定是否强制类注册白名单：默认 {@code false}=宽松模式（任意 POJO
-     * 开箱即用），共享/多租户 Redis 建议设为 {@code true} 并预注册业务类型。其它序列化器沿用无参构造实例化。
+     * <p>Jackson 为安全默认（严格类型、无多态类型反序列化，共享/多租户 Redis 上无 RCE 风险）。当序列化器为 {@link FurySerializer} 时，按
+     * {@code streammq.producer.fury-require-class-registration} 决定是否强制类注册白名单：默认 {@code
+     * false}=宽松模式（任意 POJO 开箱即用，仅限受信单租户 Redis），共享/多租户 Redis 建议设为 {@code true}
+     * 并预注册业务类型。其它序列化器沿用无参构造实例化。
      *
      * @param properties 配置
      * @return 序列化器
@@ -453,6 +455,19 @@ public class StreamMQCoreAutoConfiguration {
             RedissonClient redisson, MessageConverter converter, ConsumerTuning tuning) {
         LOG.debug("Creating RedissonStreamListenerFactory");
         return new RedissonStreamListenerFactory(redisson, converter, tuning);
+    }
+
+    /**
+     * 消费调优参数对象（Parameter Object），被 {@link #streamMQListenerFactory} 与 Listener 容器消费。
+     *
+     * <p>默认实现 {@link DefaultConsumerTuning} 提供带下界保护的写入与哨兵解析；用户可通过 {@code @Bean} 覆盖以注入自定义调优策略。
+     *
+     * @return 消费调优配置
+     */
+    @Bean
+    @ConditionalOnMissingBean(ConsumerTuning.class)
+    public ConsumerTuning consumerTuning() {
+        return new DefaultConsumerTuning();
     }
 
     /**

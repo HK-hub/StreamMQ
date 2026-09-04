@@ -8,7 +8,7 @@ package io.github.streammq.spring.boot.properties;
 import io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy;
 import io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy;
 import io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy;
-import io.github.streammq.adapter.redisson.serializer.FurySerializer;
+import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.ConsumeFromWhere;
 import io.github.streammq.core.policy.DlqFailureStrategy;
@@ -154,13 +154,14 @@ public class StreamMQProperties {
         private int streamMaxLen = StreamMQConstants.DEFAULT_STREAM_MAX_LEN;
 
         /**
-         * 消息体序列化器实现类（填写全限定类名），默认 {@link FurySerializer}（Apache Fury）。
+         * 消息体序列化器实现类（填写全限定类名），默认 {@link JacksonJsonSerializer}（安全默认）。
          *
-         * <p>Fury 默认<b>不强制</b>类注册（宽松模式，任意 POJO 开箱即用）；如需类注册白名单请同时配置 {@code
-         * streammq.producer.fury-require-class-registration=true} 并注册业务类型。 需要 JSON 可读性或跨语言互通时， 可切换为
-         * {@code JacksonJsonSerializer}。对应全局默认值常量： {@link StreamMQConstants#DEFAULT_SERIALIZER}。
+         * <p>Jackson 为<b>安全默认</b>：严格类型、无多态类型反序列化，共享/多租户 Redis 上无 RCE 风险。 追求吞吐且 Redis 为受信单租户时， 可切换为
+         * {@link FurySerializer}；此时建议同时配置 {@code
+         * streammq.producer.fury-require-class-registration=true} 并注册业务类型，以开启类注册白名单。 对应全局默认值常量：
+         * {@link StreamMQConstants#DEFAULT_SERIALIZER}。
          */
-        private Class<? extends MessageSerializer> serializer = FurySerializer.class;
+        private Class<? extends MessageSerializer> serializer = JacksonJsonSerializer.class;
 
         /**
          * Fury 是否强制类注册白名单（仅当 {@code producer.serializer} 为 {@link FurySerializer} 时生效）。

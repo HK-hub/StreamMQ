@@ -31,7 +31,7 @@ class StreamMQPropertiesValidateTest {
     }
 
     @Test
-    @DisplayName("producer.serializer 默认值为 Apache Fury，且自动装配回退常量与之保持一致")
+    @DisplayName("producer.serializer 默认值为 JacksonJsonSerializer，且自动装配回退常量与之保持一致")
     void defaultSerializer_isFury() {
         StreamMQProperties properties = new StreamMQProperties();
         assertThat(properties.getProducer().getSerializer().getName())

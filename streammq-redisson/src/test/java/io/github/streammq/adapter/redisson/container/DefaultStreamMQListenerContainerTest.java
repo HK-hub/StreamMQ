@@ -143,9 +143,7 @@ class DefaultStreamMQListenerContainerTest {
         assertThat(container.isRunning()).as("start 后容器应处于运行态").isTrue();
         container.stop();
 
-        assertThat(injectedExecutor.isShutdown())
-                .as("外部注入的执行器生命周期归提供方，容器 stop 时不得关闭")
-                .isFalse();
+        assertThat(injectedExecutor.isShutdown()).as("外部注入的执行器生命周期归提供方，容器 stop 时不得关闭").isFalse();
         assertThat(container.isRunning()).isFalse();
     }
 

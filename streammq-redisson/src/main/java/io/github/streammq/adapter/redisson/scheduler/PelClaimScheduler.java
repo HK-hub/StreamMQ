@@ -6,11 +6,9 @@
 package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
-import io.github.streammq.adapter.redisson.listener.RedissonBroadcastGroupRegistry;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.DlqReason;
-import io.github.streammq.core.listener.BroadcastGroupRegistry;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
@@ -44,6 +42,9 @@ import org.slf4j.LoggerFactory;
  * 到 DLQ Stream；DLQ 种类一律尾部复制重投（终局投递语义）。
  *
  * <p>线程安全：所有字段均为 final 或线程安全类型。
+ *
+ * <p><b>P1-B 修复：</b>广播消费者组僵尸回收已从此调度器解耦，改为由独立的 {@link BroadcastGroupSweeper} 负责 （只要 StreamMQ 启用即运行，与
+ * PelClaimScheduler 是否启用无关），彻底消除「禁用 PelClaimScheduler 时广播组永久泄漏」的风险。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -88,8 +89,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
     /**
      * PEL 扫描锁 lease（毫秒）。
      *
-     * <p>使用 {@code -1} 启用 Redisson 看门狗自动续期：扫描持有期间锁持续有效，实例崩溃时看门狗停止续期
-     * → 锁自动释放，避免死锁。
+     * <p>使用 {@code -1} 启用 Redisson 看门狗自动续期：扫描持有期间锁持续有效，实例崩溃时看门狗停止续期 → 锁自动释放，避免死锁。
      *
      * <p><b>历史缺陷（已修复）：</b>此前误用 {@code DEFAULT_AWAIT_TERMINATION_SECONDS * 1000}（=5s）作为 lease，
      * 会关闭看门狗续期，导致单轮扫描 >5s（跨 AZ / 大 PEL）时锁中途过期，另一实例并发扫描同一目标 → 重复投递。
@@ -102,9 +102,8 @@ public class PelClaimScheduler implements StreamMQScheduler {
      * <p>KEYS[1]=源 stream（XACK 目标），KEYS[2]=目标 stream（XADD 目标）。 ARGV[1]=消费组，ARGV[2]=旧 entry
      * id，ARGV[3..]=XADD 的 field/value 对。
      *
-     * <p>先 XACK 再 XADD 且整体原子：仅当本次 XACK 真正移除该 pending（返回 1，即本实例成功认领）时才写副本；
-     * 若该条目已被其它实例/消费者先行 ACK（返回 0），直接跳过，<b>杜绝重复投递</b>。 整个脚本在 Redis 端单线程原子执行，
-     * 消除了此前「XADD 成功但 XACK 失败 → 下一轮重复重投」的窗口（见 P1-A）。
+     * <p>先 XACK 再 XADD 且整体原子：仅当本次 XACK 真正移除该 pending（返回 1，即本实例成功认领）时才写副本； 若该条目已被其它实例/消费者先行 ACK（返回
+     * 0），直接跳过，<b>杜绝重复投递</b>。 整个脚本在 Redis 端单线程原子执行， 消除了此前「XADD 成功但 XACK 失败 → 下一轮重复重投」的窗口（见 P1-A）。
      */
     private static final String LUA_XADD_AND_ACK =
             "local acked = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])\n"
@@ -123,26 +122,6 @@ public class PelClaimScheduler implements StreamMQScheduler {
     private volatile ScheduledFuture<?> scanFuture;
 
     /**
-     * 广播组注册表（僵尸组回收）。
-     *
-     * <p>非 final：允许通过 {@link #setBroadcastGroupRegistry(BroadcastGroupRegistry)} 在装配后替换 （Spring
-     * 场景下注册表 Bean 可能晚于调度器构造）。
-     */
-    private volatile BroadcastGroupRegistry broadcastGroupRegistry;
-
-    /**
-     * 替换广播组注册表（僵尸组回收策略）。
-     *
-     * @param registry 注册表实现，null 表示回落默认 Redisson 实现
-     */
-    public void setBroadcastGroupRegistry(BroadcastGroupRegistry registry) {
-        this.broadcastGroupRegistry =
-                Objects.nonNull(registry)
-                        ? registry
-                        : new RedissonBroadcastGroupRegistry(redisson, namespace);
-    }
-
-    /**
      * 构造调度器。
      *
      * @param redisson Redisson 客户端
@@ -152,56 +131,9 @@ public class PelClaimScheduler implements StreamMQScheduler {
      */
     public PelClaimScheduler(
             RedissonClient redisson, String namespace, long scanIntervalMs, int batchSize) {
-        this(redisson, namespace, scanIntervalMs, batchSize, DEFAULT_MIN_IDLE_MS, null);
+        this(redisson, namespace, scanIntervalMs, batchSize, DEFAULT_MIN_IDLE_MS);
     }
 
-    /**
-     * 构造调度器（可指定 PEL 空闲阈值与广播组注册表）。
-     *
-     * <p><b>依赖倒置：</b>{@code broadcastGroupRegistry} 以接口 {@link BroadcastGroupRegistry} 注入，
-     * 用户可替换僵尸组回收策略（如接入外部监控、或提供空实现并自行承担 PEL 泄漏风险）。 传 {@code null} 时回落到默认 Redisson 实现。
-     *
-     * @param redisson Redisson 客户端
-     * @param namespace 命名空间
-     * @param scanIntervalMs 扫描间隔（毫秒）
-     * @param batchSize 单次扫描批量
-     * @param minIdleMs PEL 空闲阈值（毫秒）
-     * @param broadcastGroupRegistry 广播组注册表（可为 null，回落默认实现）
-     */
-    public PelClaimScheduler(
-            RedissonClient redisson,
-            String namespace,
-            long scanIntervalMs,
-            int batchSize,
-            long minIdleMs,
-            BroadcastGroupRegistry broadcastGroupRegistry) {
-        this.redisson = Objects.requireNonNull(redisson, "redisson");
-        this.namespace = Objects.isNull(namespace) ? "" : namespace;
-        this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
-        this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
-        this.minIdleMs = minIdleMs > 0 ? minIdleMs : DEFAULT_MIN_IDLE_MS;
-        this.broadcastGroupRegistry =
-                Objects.nonNull(broadcastGroupRegistry)
-                        ? broadcastGroupRegistry
-                        : new RedissonBroadcastGroupRegistry(redisson, this.namespace);
-        this.scanExecutor =
-                Executors.newSingleThreadScheduledExecutor(
-                        r -> {
-                            Thread t = new Thread(r, StreamMQConstants.THREAD_PELCLAIM_SCHEDULER);
-                            t.setDaemon(true);
-                            return t;
-                        });
-    }
-
-    /**
-     * 构造调度器（可指定 PEL 空闲阈值），广播组注册表回落到默认 Redisson 实现。
-     *
-     * @param redisson Redisson 客户端
-     * @param namespace 命名空间
-     * @param scanIntervalMs 扫描间隔（毫秒）
-     * @param batchSize 单次扫描批量
-     * @param minIdleMs PEL 空闲阈值（毫秒）
-     */
     public PelClaimScheduler(
             RedissonClient redisson,
             String namespace,
@@ -209,6 +141,40 @@ public class PelClaimScheduler implements StreamMQScheduler {
             int batchSize,
             long minIdleMs) {
         this(redisson, namespace, scanIntervalMs, batchSize, minIdleMs, null);
+    }
+
+    /**
+     * 构造调度器（含广播组注册表参数，保持与自动装配历史 6 参构造签名兼容）。
+     *
+     * <p><b>P1-B：</b>{@code broadcastGroupRegistry} 不再被本调度器使用——广播组僵尸回收已解耦为独立的
+     * BroadcastGroupSweeper。此处保留该参数仅为兼容既有自动装配调用，值被忽略。
+     *
+     * @param redisson Redisson 客户端
+     * @param namespace 命名空间
+     * @param scanIntervalMs 扫描间隔（毫秒）
+     * @param batchSize 单次扫描批量
+     * @param minIdleMs PEL 空闲阈值（毫秒）
+     * @param broadcastGroupRegistry 广播组注册表（已弃用，忽略）
+     */
+    public PelClaimScheduler(
+            RedissonClient redisson,
+            String namespace,
+            long scanIntervalMs,
+            int batchSize,
+            long minIdleMs,
+            io.github.streammq.core.listener.BroadcastGroupRegistry broadcastGroupRegistry) {
+        this.redisson = Objects.requireNonNull(redisson, "redisson");
+        this.namespace = Objects.isNull(namespace) ? "" : namespace;
+        this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
+        this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
+        this.minIdleMs = minIdleMs > 0 ? minIdleMs : DEFAULT_MIN_IDLE_MS;
+        this.scanExecutor =
+                Executors.newSingleThreadScheduledExecutor(
+                        r -> {
+                            Thread t = new Thread(r, StreamMQConstants.THREAD_PELCLAIM_SCHEDULER);
+                            t.setDaemon(true);
+                            return t;
+                        });
     }
 
     /**
@@ -374,24 +340,9 @@ public class PelClaimScheduler implements StreamMQScheduler {
                         ex);
             }
         }
-        // 低频搭车任务：回收心跳超时的僵尸广播消费者组（策略由注入的 BroadcastGroupRegistry 决定）
-        if (Math.floorMod(scanCounter.incrementAndGet(), BROADCAST_SWEEP_EVERY_N_SCANS) == 0) {
-            try {
-                int swept = broadcastGroupRegistry.sweepStaleBroadcastGroups();
-                if (swept > 0) {
-                    LOG.info("Swept {} stale broadcast group(s)", swept);
-                }
-            } catch (RuntimeException ex) {
-                LOG.debug("Sweep stale broadcast groups failed: {}", ex.getMessage());
-            }
-        }
+        // P1-B：广播组僵尸回收已解耦为独立的 BroadcastGroupSweeper，
+        // 不再搭车于本调度器，确保广播模式在 PelClaimScheduler 未启用时仍能可靠回收。
     }
-
-    /** 广播僵尸组回收频率：每 N 轮扫描执行一次 */
-    private static final int BROADCAST_SWEEP_EVERY_N_SCANS = 60;
-
-    private final java.util.concurrent.atomic.AtomicLong scanCounter =
-            new java.util.concurrent.atomic.AtomicLong();
 
     /**
      * 扫描指定目标的 PEL，对空闲超阈值的消息执行重投或 DLQ 路由。
@@ -494,8 +445,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
                                 Integer.toString(retryTimes));
                         // 原子认领：先 XACK 旧条目，认领成功才 XADD 到 DLQ（Lua 端原子执行，
                         // 消除「XADD 成功但 XACK 失败」导致的重复死信；旧条目已被他人认领则跳过）
-                        if (xaddAndAck(streamKey, dlqStreamKey, target.group, id, fields)
-                                == null) {
+                        if (xaddAndAck(streamKey, dlqStreamKey, target.group, id, fields) == null) {
                             continue;
                         }
                         LOG.info(
@@ -610,8 +560,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
                         fields.put(
                                 RetryScheduler.FIELD_ORIGINAL_RETRY_COUNT,
                                 Integer.toString(retryTimes));
-                        if (xaddAndAck(streamKey, dlqStreamKey, target.group, id, fields)
-                                == null) {
+                        if (xaddAndAck(streamKey, dlqStreamKey, target.group, id, fields) == null) {
                             continue;
                         }
                         LOG.info(
@@ -738,8 +687,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
     }
 
     /**
-     * 原子地「认领旧条目 + 写副本」：在 Redis 端先 {@code XACK}（认领），仅当认领成功（返回 1）才 {@code XADD}
-     * 副本，整个脚本单线程原子执行。
+     * 原子地「认领旧条目 + 写副本」：在 Redis 端先 {@code XACK}（认领），仅当认领成功（返回 1）才 {@code XADD} 副本，整个脚本单线程原子执行。
      *
      * @param sourceStreamKey 源 stream（XACK 目标）
      * @param destStreamKey 目标 stream（XADD 目标，重投时与源相同）
@@ -763,8 +711,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
             argv[i++] = e.getValue();
         }
         String result =
-                redisson
-                        .getScript(StringCodec.INSTANCE)
+                redisson.getScript(StringCodec.INSTANCE)
                         .eval(
                                 RScript.Mode.READ_WRITE,
                                 LUA_XADD_AND_ACK,

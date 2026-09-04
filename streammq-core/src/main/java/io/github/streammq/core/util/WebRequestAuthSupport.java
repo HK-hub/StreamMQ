@@ -327,13 +327,12 @@ public class WebRequestAuthSupport {
     /**
      * 判断当前请求是否为同源请求（用于防御 CSRF / 跨站简单请求）。
      *
-     * <p><b>策略：</b>仅当请求携带 {@code Origin} 头且其 authority（host[:port]）与 {@code Host} 头不一致时，
-     * 才判定为跨站（返回 {@code false}）。浏览器发起的跨站简单请求（POST/DELETE，无自定义头）会携带外域 {@code Origin}，
-     * 据此拦截；同源请求、以及非浏览器客户端（curl / SDK，通常不带 {@code Origin}，或携带与 {@code Host} 一致的 {@code
-     * Origin}）一律放行，不破坏既有 API 契约。</p>
+     * <p><b>策略：</b>仅当请求携带 {@code Origin} 头且其 authority（host[:port]）与 {@code Host} 头不一致时， 才判定为跨站（返回
+     * {@code false}）。浏览器发起的跨站简单请求（POST/DELETE，无自定义头）会携带外域 {@code Origin}， 据此拦截；同源请求、以及非浏览器客户端（curl
+     * / SDK，通常不带 {@code Origin}，或携带与 {@code Host} 一致的 {@code Origin}）一律放行，不破坏既有 API 契约。
      *
-     * <p><b>非 Web 环境或读取失败时返回 {@code true}（fail-open）</b>——此处只防浏览器 CSRF，不应阻断非浏览器调用。
-     * 注意：仅比对 host（不比对 scheme），对于已启用严格传输安全等场景，建议额外在反向代理层强制同源。</p>
+     * <p><b>非 Web 环境或读取失败时返回 {@code true}（fail-open）</b>——此处只防浏览器 CSRF，不应阻断非浏览器调用。 注意：仅比对 host（不比对
+     * scheme），对于已启用严格传输安全等场景，建议额外在反向代理层强制同源。
      *
      * @return {@code true} 表示同源或无法判定（放行），{@code false} 表示跨站（应拒绝）
      */

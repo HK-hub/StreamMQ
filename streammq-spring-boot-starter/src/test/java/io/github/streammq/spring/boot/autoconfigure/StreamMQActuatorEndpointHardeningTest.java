@@ -75,8 +75,7 @@ class StreamMQActuatorEndpointHardeningTest {
         assertThat(((WebEndpointResponse<?>) result).getStatus()).isEqualTo(400);
 
         Object ok =
-                endpoint.deleteDispatch(
-                        new String[] {"dlq", "order-group", "123-456"}, "123-456");
+                endpoint.deleteDispatch(new String[] {"dlq", "order-group", "123-456"}, "123-456");
         verify(adminEndpoint).deleteDlq("order-group", "123-456", "123-456");
         assertThat(ok).isNotInstanceOf(WebEndpointResponse.class);
     }
