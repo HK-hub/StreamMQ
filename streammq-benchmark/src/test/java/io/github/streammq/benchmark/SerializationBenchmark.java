@@ -8,6 +8,7 @@ package io.github.streammq.benchmark;
 import io.github.streammq.adapter.redisson.serializer.FurySerializer;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.adapter.redisson.serializer.JdkSerializer;
+import io.github.streammq.adapter.redisson.serializer.ProtostuffSerializer;
 import io.github.streammq.core.serializer.MessageSerializer;
 import java.io.Serializable;
 import java.util.concurrent.TimeUnit;
@@ -38,10 +39,12 @@ public class SerializationBenchmark {
     private byte[] jacksonBytes;
     private byte[] jdkBytes;
     private byte[] furyBytes;
+    private byte[] protostuffBytes;
 
     private MessageSerializer<TestPayload> jacksonSerializer;
     private MessageSerializer<TestPayload> jdkSerializer;
     private MessageSerializer<TestPayload> furySerializer;
+    private MessageSerializer<TestPayload> protostuffSerializer;
 
     @Setup(Level.Trial)
     public void setup() {
@@ -54,10 +57,12 @@ public class SerializationBenchmark {
         jacksonSerializer = new JacksonJsonSerializer<>();
         jdkSerializer = new JdkSerializer<>();
         furySerializer = new FurySerializer<>(TestPayload.class);
+        protostuffSerializer = new ProtostuffSerializer<>();
 
         jacksonBytes = jacksonSerializer.serialize(payload, TestPayload.class);
         jdkBytes = jdkSerializer.serialize(payload, TestPayload.class);
         furyBytes = furySerializer.serialize(payload, TestPayload.class);
+        protostuffBytes = protostuffSerializer.serialize(payload, TestPayload.class);
     }
 
     @Benchmark
@@ -109,6 +114,22 @@ public class SerializationBenchmark {
     }
 
     @Benchmark
+    @OperationsPerInvocation(BATCH_SIZE)
+    public void protostuffSerialize(Blackhole blackhole) {
+        for (int i = 0; i < BATCH_SIZE; i++) {
+            blackhole.consume(protostuffSerializer.serialize(payload, TestPayload.class));
+        }
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(BATCH_SIZE)
+    public void protostuffDeserialize(Blackhole blackhole) {
+        for (int i = 0; i < BATCH_SIZE; i++) {
+            blackhole.consume(protostuffSerializer.deserialize(protostuffBytes, TestPayload.class));
+        }
+    }
+
+    @Benchmark
     public byte[] jacksonSerializeSingle() {
         return jacksonSerializer.serialize(payload, TestPayload.class);
     }
@@ -124,6 +145,11 @@ public class SerializationBenchmark {
     }
 
     @Benchmark
+    public byte[] protostuffSerializeSingle() {
+        return protostuffSerializer.serialize(payload, TestPayload.class);
+    }
+
+    @Benchmark
     public TestPayload jacksonDeserializeSingle() {
         return jacksonSerializer.deserialize(jacksonBytes, TestPayload.class);
     }
@@ -136,6 +162,11 @@ public class SerializationBenchmark {
     @Benchmark
     public TestPayload furyDeserializeSingle() {
         return furySerializer.deserialize(furyBytes, TestPayload.class);
+    }
+
+    @Benchmark
+    public TestPayload protostuffDeserializeSingle() {
+        return protostuffSerializer.deserialize(protostuffBytes, TestPayload.class);
     }
 
     @Benchmark
@@ -162,6 +193,15 @@ public class SerializationBenchmark {
         for (int i = 0; i < BATCH_SIZE; i++) {
             byte[] bytes = furySerializer.serialize(payload, TestPayload.class);
             blackhole.consume(furySerializer.deserialize(bytes, TestPayload.class));
+        }
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(BATCH_SIZE)
+    public void protostuffRoundTrip(Blackhole blackhole) {
+        for (int i = 0; i < BATCH_SIZE; i++) {
+            byte[] bytes = protostuffSerializer.serialize(payload, TestPayload.class);
+            blackhole.consume(protostuffSerializer.deserialize(bytes, TestPayload.class));
         }
     }
 

@@ -54,23 +54,20 @@
 
         <!-- 默认序列化：Apache Fury -->
         <!-- Fury 是 streammq.producer.serializer 的默认值（见 StreamMQConstants#DEFAULT_SERIALIZER），
-             因此 fury-core 必须随本模块传递，不能声明为 optional，否则默认装配会在运行期
-             抛出 NoClassDefFoundError。 -->
+             因此 fury-core 必须随本模块传递，不能声明为 optional，否则默认装配会在运行期抛出 NoClassDefFoundError。 -->
         <dependency>
             <groupId>org.apache.fury</groupId>
             <artifactId>fury-core</artifactId>
         </dependency>
 
-        <!-- 可选序列化：Protostuff（optional，理由同上） -->
+        <!-- 可选序列化：Protostuff（非 optional 以保证切换默认即可用，无 gadget RCE 面） -->
         <dependency>
             <groupId>io.protostuff</groupId>
             <artifactId>protostuff-core</artifactId>
-            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.protostuff</groupId>
             <artifactId>protostuff-runtime</artifactId>
-            <optional>true</optional>
         </dependency>
 
         <!-- 测试 -->

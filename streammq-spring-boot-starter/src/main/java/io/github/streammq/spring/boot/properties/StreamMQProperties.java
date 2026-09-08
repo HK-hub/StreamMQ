@@ -8,6 +8,7 @@ package io.github.streammq.spring.boot.properties;
 import io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy;
 import io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy;
 import io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy;
+import io.github.streammq.adapter.redisson.serializer.FurySerializer;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.ConsumeFromWhere;
@@ -154,21 +155,32 @@ public class StreamMQProperties {
         private int streamMaxLen = StreamMQConstants.DEFAULT_STREAM_MAX_LEN;
 
         /**
-         * 消息体序列化器实现类（填写全限定类名），默认 {@link JacksonJsonSerializer}（安全默认）。
+         * 消息体序列化器实现类（填写全限定类名），默认 {@link FurySerializer}（宽松模式 {@code
+         * requireClassRegistration=false}）。
          *
-         * <p>Jackson 为<b>安全默认</b>：严格类型、无多态类型反序列化，共享/多租户 Redis 上无 RCE 风险。 追求吞吐且 Redis 为受信单租户时， 可切换为
-         * {@link FurySerializer}；此时建议同时配置 {@code
-         * streammq.producer.fury-require-class-registration=true} 并注册业务类型，以开启类注册白名单。 对应全局默认值常量：
-         * {@link StreamMQConstants#DEFAULT_SERIALIZER}。
+         * <p><b>为什么默认 Fury：</b>消息队列首要诉求是吞吐，Fury 吞吐约为 Jackson 的 7~13 倍、无需 {@code .proto}，任意 POJO
+         * 开箱即用。
+         *
+         * <p><b>默认宽松模式的安全风险：</b>Fury 默认<b>不强制类注册</b>，Redis 中被写入的字节流可反序列化为 classpath 上的任意类，
+         * 在<b>共享/多租户 Redis</b>上是反序列化 RCE 攻击面。仅当 Redis 为<b>受信单租户</b>实例时默认风险可接受； 否则应开启类注册白名单（{@code
+         * streammq.producer.fury-require-class-registration=true} 并预注册业务类型）， 或切换为无 gadget 面的 {@link
+         * JacksonJsonSerializer}（严格类型、无多态反序列化，需 JSON 可读性时）/ {@code
+         * io.github.streammq.adapter.redisson.serializer.ProtostuffSerializer}（schema 由类型决定）。
+         * 对应全局默认值常量： {@link StreamMQConstants#DEFAULT_SERIALIZER}。
          */
-        private Class<? extends MessageSerializer> serializer = JacksonJsonSerializer.class;
+        private Class<? extends MessageSerializer> serializer = FurySerializer.class;
 
         /**
          * Fury 是否强制类注册白名单（仅当 {@code producer.serializer} 为 {@link FurySerializer} 时生效）。
          *
-         * <p>默认 {@code false}（宽松模式）：任意 POJO 开箱即用——Redis 中被写入的字节流可反序列化为 classpath 上的任意类，共享/多租户 Redis
-         * 场景下是反序列化攻击面（RCE 向量）。 生产环境建议设为 {@code true} 开启 类注册白名单，并通过 {@code new
-         * FurySerializer<>(Xxx.class)} 或 {@code register(Class)} 预注册业务消息体类型。
+         * <p>默认 {@code false}（宽松模式）是<b>有意为之</b>：优先保证任意 POJO 开箱即用与最优吞吐，代价是 Redis 中字节流可反序列化为
+         * classpath 上任意类， 在<b>共享/多租户 Redis</b>上是反序列化 RCE 攻击面（依赖 classpath 上的 gadget
+         * 链）。这是项目方在「吞吐优先」与「零 RCE 面」之间做的明确权衡。
+         *
+         * <p><b>缓解：</b>共享/多租户 Redis 生产环境建议设为 {@code true} 开启类注册白名单，并通过 {@code new
+         * FurySerializer<>(Xxx.class)} 或 {@code register(Class)} / {@code registerAll(Class...)}
+         * 预注册业务消息体类型； 若不能接受任何 RCE 面，直接切换为 {@code JacksonJsonSerializer} 或 {@code
+         * io.github.streammq.adapter.redisson.serializer.ProtostuffSerializer}。
          */
         private boolean furyRequireClassRegistration = false;
 

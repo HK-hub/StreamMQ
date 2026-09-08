@@ -18,9 +18,10 @@ import org.junit.jupiter.api.Test;
 /**
  * {@link StreamMQCoreAutoConfiguration#streamMQMessageSerializer} 装配行为单元测试（无需 Spring 上下文与 Redis）。
  *
- * <p>验证序列化器装配行为：<b>默认装配 {@link JacksonJsonSerializer}（安全默认，严格类型、无多态反序列化， 共享/多租户 Redis 上无 RCE
- * 风险）</b>；显式选择 {@link FurySerializer} 时，{@code streammq.producer.fury-require-class-registration}
- * 开关可正确传导——默认 {@code false}=宽松模式（任意 POJO 开箱即用，仅限受信单租户 Redis），{@code true}=强制类注册白名单模式。
+ * <p>验证序列化器装配行为：<b>默认装配 {@link FurySerializer}（宽松模式 {@code requireClassRegistration=false}，吞吐约为
+ * Jackson 的 7~13 倍；共享/多租户 Redis 上有反序列化 RCE 面，受信单租户可接受）</b>；{@code
+ * streammq.producer.fury-require-class-registration} 开关可正确传导——{@code false}=宽松模式（任意 POJO
+ * 开箱即用），{@code true}=强制类注册白名单模式。
  */
 @DisplayName("StreamMQ 序列化器自动装配单元测试")
 class StreamMQSerializerAutoConfigurationTest {
@@ -32,12 +33,13 @@ class StreamMQSerializerAutoConfigurationTest {
     }
 
     @Test
-    @DisplayName("默认装配 JacksonJsonSerializer（安全默认：严格类型、无多态反序列化）")
-    void defaultSerializerIsJackson() {
+    @DisplayName("默认装配 FurySerializer（宽松模式，吞吐优先；共享 Redis 需开类注册白名单）")
+    void defaultSerializerIsFury() {
         StreamMQProperties properties = new StreamMQProperties();
         MessageSerializer<?> serializer =
                 new StreamMQCoreAutoConfiguration(properties).streamMQMessageSerializer(properties);
-        assertThat(serializer).isInstanceOf(JacksonJsonSerializer.class);
+        assertThat(serializer).isInstanceOf(FurySerializer.class);
+        assertThat(serializer.name()).isEqualTo("fury");
     }
 
     @Test

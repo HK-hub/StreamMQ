@@ -126,4 +126,25 @@ class ProtostuffSerializerTest {
     void name() {
         assertThat(serializer.name()).isEqualTo("protostuff");
     }
+
+    @Test
+    @DisplayName("String body 原生支持：按 UTF-8 编解码往返")
+    void stringBodyRoundTrip() {
+        // Protostuff 对 String 会生成 0 字段 schema（序列化为空字节 → 反序列化 null），
+        // 作为默认序列化器必须特判，否则 String 消息体会静默丢数据
+        ProtostuffSerializer<String> stringSerializer = new ProtostuffSerializer<>();
+        String body = "e2e-sync-中文-42";
+        byte[] bytes = stringSerializer.serialize(body, String.class);
+        assertThat(bytes).isNotEmpty();
+        assertThat(stringSerializer.deserialize(bytes, String.class)).isEqualTo(body);
+    }
+
+    @Test
+    @DisplayName("byte[] body 原生支持：直通往返")
+    void byteArrayBodyRoundTrip() {
+        ProtostuffSerializer<byte[]> rawSerializer = new ProtostuffSerializer<>();
+        byte[] body = {1, 2, 3, 4, 5};
+        assertThat(rawSerializer.serialize(body, byte[].class)).isEqualTo(body);
+        assertThat(rawSerializer.deserialize(body, byte[].class)).isEqualTo(body);
+    }
 }

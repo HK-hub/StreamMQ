@@ -198,18 +198,32 @@ public final class StreamMQConstants {
 
     // ==================== 默认序列化器 ====================
     /**
-     * 默认消息体序列化器实现类全限定名：Jackson JSON（{@code
-     * io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer}）。
+     * 默认消息体序列化器实现类全限定名：Apache Fury（{@code
+     * io.github.streammq.adapter.redisson.serializer.FurySerializer}）。
      *
-     * <p>以字符串形式定义，避免 core 模块反向依赖 redisson 适配器；Spring Boot Starter 按此默认值装配 {@code
-     * streammq.producer.serializer}。Jackson 为安全默认：严格类型、无多态类型反序列化，共享/多租户 Redis 上无 RCE 风险； 追求吞吐且
-     * Redis 为受信单租户时显式切换为 {@code FurySerializer}。
+     * <p><b>选择 Fury 作为默认的原因：</b>消息队列的首要诉求是吞吐与延迟，Fury 是高性能二进制序列化， 吞吐约为 Jackson 的 7~13 倍、JDK 的约 10
+     * 倍，且无需 {@code .proto} 文件、任意 POJO 开箱即用，是默认序列化的最佳平衡点。
+     *
+     * <p><b>已知安全风险（默认宽松模式）：</b>{@code FurySerializer} 默认<b>不强制类注册</b>（{@code
+     * requireClassRegistration=false}），Redis 中被写入的字节流可被反序列化为 classpath 上的任意类—— 在<b>共享/多租户
+     * Redis</b>场景下这是反序列化攻击面（RCE 向量，依赖 classpath 上的 gadget 链）。 以字符串形式定义此默认值，避免 core 模块反向依赖 redisson
+     * 适配器；Spring Boot Starter 按此默认值装配 {@code streammq.producer.serializer}。
+     *
+     * <p><b>风险缓解（按场景选择）：</b>
+     *
+     * <ul>
+     *   <li><b>受信单租户 Redis</b>（最常见内部部署）：保持默认即可，风险可控；
+     *   <li><b>共享/多租户 Redis</b>：开启类注册白名单 {@code
+     *       streammq.producer.fury-require-class-registration=true}，并预注册业务消息体类型；
+     *   <li><b>不能接受任何 RCE 面</b>：切回 {@code JacksonJsonSerializer}（严格类型、无多态反序列化）或 {@code
+     *       ProtostuffSerializer}（schema 由类型决定、无 gadget 面）。
+     * </ul>
      */
     public static final String DEFAULT_SERIALIZER =
-            "io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer";
+            "io.github.streammq.adapter.redisson.serializer.FurySerializer";
 
     /** 默认序列化器名称（对应 {@code MessageSerializer#name()}），用于日志与监控标识 */
-    public static final String DEFAULT_SERIALIZER_NAME = "jackson-json";
+    public static final String DEFAULT_SERIALIZER_NAME = "fury";
 
     // ==================== 消息大小限制 ====================
     /** Redis Stream 单条消息最大大小（字节），512MB。 实际建议不超过 1MB，超大消息会增加网络传输和内存压力。 */

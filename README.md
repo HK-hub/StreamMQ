@@ -197,7 +197,7 @@ artifacts and back-filled into this table.
 
 > ⚠️ `mvn verify` requires a local Redis (`localhost:6379`). Without Redis, IT auto-skips; CI uses Docker service.
 > ⚠️ **Build prerequisites:** JDK **21+** is required (`requireJavaVersion [21,)`) and Maven **3.9+**. The build runs `spotless:check` at the `verify` phase — run `mvn spotless:apply` first, or skip with `-Dspotless.check.skip=true`.
-> 🔒 **Secure by default:** the message serializer defaults to `JacksonJsonSerializer` (strict typing, no polymorphic deserialization — safe on shared Redis). For maximum throughput on a trusted single-tenant Redis, opt into `FurySerializer` and enable class registration (`streammq.producer.fury-require-class-registration=true`) to avoid RCE on shared Redis.
+> ⚠️ **Default serializer is `FurySerializer` (unrestricted mode).** Fury gives ~7–13× the throughput of Jackson with no `.proto` files and works with any POJO out of the box, which is why it is the default. **The trade-off:** by default it does **not** enforce class registration (`requireClassRegistration=false`), so bytes written to Redis can be deserialized into arbitrary classes on the classpath — a deserialization RCE attack surface on **shared/multi-tenant Redis**. Keep the default only on a **trusted single-tenant** Redis; on shared/multi-tenant Redis either enable the class-registration whitelist (`streammq.producer.fury-require-class-registration=true`, and pre-register payload types), or switch to `JacksonJsonSerializer` / `ProtostuffSerializer` which have no gadget RCE surface. See [SECURITY.md](SECURITY.md).
 
 ### 1. Add dependencies
 
@@ -506,7 +506,7 @@ streammq:
 
 | SPI Interface | Purpose | Default Implementation |
 |---|---|---|
-| `MessageSerializer` | Message serialization | **`FurySerializer` (default)** / `JacksonJsonSerializer` / `JdkSerializer` / `ProtostuffSerializer` |
+| `MessageSerializer` | Message serialization | **`FurySerializer` (default, unrestricted mode)** / `JacksonJsonSerializer` / `ProtostuffSerializer` / `JdkSerializer` |
 | `MessageConverter` | Message-body ↔ business object | `DefaultMessageConverter` / `CompactMessageConverter` / `PassThroughMessageConverter` |
 | `ProducerFilter` | Producer filter chain | `NoopProducerFilter` / `LoggingProducerFilter` |
 | `ConsumerFilter` | Consumer filter chain | `TagSelectorFilter` / `SqlSelectorFilter` |
@@ -684,8 +684,8 @@ git commit -m "feat: add your feature"
 | Spring Boot | 3.3.5 | Framework |
 | Redisson | 3.34.1 | Redis client |
 | Jackson | 2.18.1 | JSON serialization |
-| Fury | 0.9.0 | High-perf serialization (optional) |
-| Protostuff | 1.8.0 | Protobuf serialization (optional) |
+| Fury | 0.9.0 | High-perf serialization (default; non-optional) |
+| Protostuff | 1.8.0 | Protobuf serialization (non-optional alternative) |
 | Lombok | - | Code simplification |
 | Micrometer | - | Metrics |
 | SLF4J | - | Logging facade |

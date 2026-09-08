@@ -154,13 +154,16 @@ public class StreamMQCoreAutoConfiguration {
     }
 
     /**
-     * 默认序列化器，从配置 {@code streammq.producer.serializer} 读取 Class 并实例化； 未配置（或配置为空）时使用安全默认值 Jackson
-     * JSON（{@link StreamMQConstants#DEFAULT_SERIALIZER}）。
+     * 默认序列化器，从配置 {@code streammq.producer.serializer} 读取 Class 并实例化； 未配置（或配置为空）时使用默认值 Fury （{@link
+     * StreamMQConstants#DEFAULT_SERIALIZER}，{@code requireClassRegistration=false} 宽松模式）。
      *
-     * <p>Jackson 为安全默认（严格类型、无多态类型反序列化，共享/多租户 Redis 上无 RCE 风险）。当序列化器为 {@link FurySerializer} 时，按
-     * {@code streammq.producer.fury-require-class-registration} 决定是否强制类注册白名单：默认 {@code
-     * false}=宽松模式（任意 POJO 开箱即用，仅限受信单租户 Redis），共享/多租户 Redis 建议设为 {@code true}
-     * 并预注册业务类型。其它序列化器沿用无参构造实例化。
+     * <p><b>为什么默认 Fury：</b>消息队列首要诉求是吞吐，Fury 约为 Jackson 的 7~13 倍且任意 POJO 开箱即用。
+     * <b>已知风险：</b>默认宽松模式不强制类注册，Redis 中字节流可反序列化为 classpath 上任意类，共享/多租户 Redis 上是反序列化 RCE 攻击面（详见
+     * {@link FurySerializer} 类注释与 SECURITY.md）。
+     *
+     * <p>当序列化器为 {@link FurySerializer} 时，按 {@code
+     * streammq.producer.fury-require-class-registration} 决定类注册白名单： {@code false}=宽松模式（默认，仅限受信单租户
+     * Redis），{@code true}=强制白名单（共享/多租户 Redis 建议）。 其它序列化器沿用无参构造实例化。
      *
      * @param properties 配置
      * @return 序列化器

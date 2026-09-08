@@ -863,7 +863,7 @@ StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换。0.1.1 提
 
 | 类别 | SPI/可覆盖接口 | 作用 | 默认实现 |
 |------|------|------|----------|
-| 用户扩展 | `MessageSerializer` | 消息序列化/反序列化 | **`FurySerializer`（默认）** / `JacksonJsonSerializer` / `JdkSerializer` / `ProtostuffSerializer` / `ByteArraySerializer` / `StringSerializer` |
+| 用户扩展 | `MessageSerializer` | 消息序列化/反序列化 | **`FurySerializer`（默认，宽松模式）** / `JacksonJsonSerializer` / `ProtostuffSerializer` / `JdkSerializer` / `ByteArraySerializer` / `StringSerializer` |
 | 用户扩展 | `MessageConverter` | 消息体与业务对象转换 | `DefaultMessageConverter` / `CompactMessageConverter` / `PassThroughMessageConverter` |
 | 用户扩展 | `ProducerFilter` | 生产者过滤器（过滤链） | `NoopProducerFilter` / `LoggingProducerFilter` |
 | 用户扩展 | `ConsumerFilter` | 消费者过滤器（全局+per-consumer） | `TagSelectorFilter` / `SqlSelectorFilter`（共享接口 `ExpressionSelectorFilter`） |
@@ -1174,8 +1174,8 @@ git commit -m "feat: add your feature"
 | Spring Boot | 3.3.5 | 框架基础 |
 | Redisson | 3.34.1 | Redis 客户端 |
 | Jackson | 2.18.1 | JSON 序列化 |
-| Fury | 0.9.0 | 高性能序列化（可选） |
-| Protostuff | 1.8.0 | Protobuf 序列化（可选） |
+| Fury | 0.9.0 | 高性能序列化（默认，非可选） |
+| Protostuff | 1.8.0 | Protobuf 序列化（非可选替代） |
 | Lombok | - | 代码简化 |
 | Micrometer | - | 指标收集 |
 | SLF4J | - | 日志门面 |

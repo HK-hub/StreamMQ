@@ -15,16 +15,33 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * 基于 Apache Fury 的高性能跨语言序列化器。
+ * 基于 Apache Fury 的高性能跨语言序列化器，是 StreamMQ 的<b>默认消息体序列化器</b>。
  *
- * <p>Fury 支持 Java 对象的高性能序列化，性能显著优于 JDK 序列化， 且支持跨语言场景（通过 {@link Language#XLANG} 模式）。
+ * <p>Fury 支持 Java 对象的高性能序列化，性能显著优于 JDK 序列化， 且支持跨语言场景（通过 {@link Language#XLANG} 模式）。 作为默认序列化器，其吞吐约为
+ * Jackson 的 7~13 倍、JDK 的约 10 倍，且无需 {@code .proto} 文件、任意 POJO 开箱即用—— 这是项目在「吞吐优先」与「零 RCE
+ * 面」之间做的明确权衡（详见 {@link io.github.streammq.core.StreamMQConstants#DEFAULT_SERIALIZER} 与
+ * SECURITY.md）。
  *
  * <p>注意：Fury 序列化要求被序列化的类与反序列化端的类版本一致， 适合 StreamMQ 内部消息体（body）的序列化。
  *
- * <p><b>安全提示：</b>序列化器默认采用<b>宽松模式</b>（{@code requireClassRegistration=false}），任意 POJO 均可开箱即用， 但
- * Redis 中被写入的字节流可被反序列化为 classpath 上的任意类，共享/多租户 Redis 场景下是反序列化攻击面（RCE 向量）。 生产环境建议开启类注册白名单：{@code new
- * FurySerializer(true)} 或 {@code new FurySerializer<>(Xxx.class)}， 并通过 {@link #register(Class)} /
- * {@link #registerAll(Class...)} 注册业务消息体类型。 宽松模式下构造会输出一条 WARN 提醒；如已评估并接受风险，可设置系统属性 {@code
+ * <p><b>⚠️ 安全风险（默认宽松模式）：</b>构造器默认采用<b>宽松模式</b>（{@code requireClassRegistration=false}），任意 POJO
+ * 均可开箱即用； 但这意味着 Redis 中被写入的字节流会被反序列化为 classpath 上的<b>任意类</b>。 在<b>共享/多租户 Redis</b>场景下，攻击者若能在 Redis
+ * 中写入消息字节，即可构造 gadget 链触发 <b>远程代码执行（RCE）</b>。该风险仅存在于反序列化端 classpath 同时含有可利用 gadget（常见 JDK/三方库）且
+ * Redis 不可信时。
+ *
+ * <p><b>风险缓解（按场景选择）：</b>
+ *
+ * <ul>
+ *   <li><b>受信单租户 Redis</b>（最常见内部部署）：保持默认宽松模式即可，风险可控；
+ *   <li><b>共享/多租户 Redis</b>：开启类注册白名单——{@code new FurySerializer(true)} 或 {@code new
+ *       FurySerializer<>(Xxx.class)}，并通过 {@link #register(Class)} / {@link #registerAll(Class...)}
+ *       预注册业务消息体类型；
+ *   <li><b>不能接受任何 RCE 面</b>：切换为 {@code JacksonJsonSerializer}（严格类型、无多态反序列化）或 {@code
+ *       io.github.streammq.adapter.redisson.serializer.ProtostuffSerializer}（schema 由目标类型决定，无
+ *       gadget 面）。
+ * </ul>
+ *
+ * <p>宽松模式构造会输出一条 WARN 提醒；如已评估并接受风险（受信单租户），可设置系统属性 {@code
  * -Dstreammq.security.allowUnrestrictedSerializer=true} 抑制该提醒。
  *
  * @author StreamMQ Contributors

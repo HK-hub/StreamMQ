@@ -13,7 +13,7 @@ streammq:
     send-message-timeout: 3000
     retry-times: 1
     stream-max-len: 0
-    # serializer 不显式配置：验证默认序列化器为 JacksonJsonSerializer（安全默认）
+    # serializer 不显式配置：验证默认序列化器为 FurySerializer（宽松模式，注意共享/多租户 Redis 的反序列化 RCE 风险）
   consumer:
     poll-timeout: 1s
     batch-size: 32
