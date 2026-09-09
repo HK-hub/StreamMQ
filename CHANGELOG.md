@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-09-09 — 持久化广播消费实例
+
+### Added
+
+- **持久化广播消费实例身份（根因级修复：广播消费每次重启都是新编号）**：
+  广播消费的每个实例使用一个独立 Redis 消费者组，组名由实例身份派生；旧实现每次重启都生成新身份，
+  旧组成为僵尸组持续占用 Redis 内存，且重启期间产生的消息不会被补投。新增一整套机制从根本上解决：
+  - `BroadcastInstanceRegistry` SPI（注册中心抽象）+ `RedisBroadcastInstanceRegistry`（单 Hash Key
+    Lua 实现，Redis Cluster 安全）持久化每个实例的**租约**（`instanceId`/`host`/心跳时间）。
+  - `BroadcastInstanceIdResolver` 把五级来源收敛为单一稳定身份：
+    **显式配置 → 本地持久文件（对齐 RocketMQ `LocalFileOffsetStore`）→ Redis 注册中心回收同主机历史槽位 →
+    Redis 注册中心分配 → 随机降级**。快路径零 Redis 往返，慢路径可恢复，覆盖物理机到 K8s 全部部署形态。
+  - **同主机槽位回收 + 回收宽限期**（`streammq.consumer.broadcast-reclaim-grace`，默认 7 天）：重启后
+    在宽限期内可回收同主机历史身份，**保住 PEL 与消费位点**，不重放也不丢失；超过宽限期才由清扫任务
+    销毁消费者组释放内存。
+  - 广播监听器心跳同时续租身份槽位；僵尸组回收与实例槽位清扫分工明确（前者 10 分钟、后者 7 天），互不破坏。
+  - 配置项：`streammq.consumer.broadcast-instance-id`、`streammq.consumer.broadcast-instance-id-file`、
+    `streammq.consumer.broadcast-lease-timeout`、`streammq.consumer.broadcast-reclaim-grace`。
+
+### Fixed
+
+- **顺序消费全局超时不生效**（发布前红队审查项）：注解 `orderlyConsumeTimeout = 0`（未显式声明）时，
+  此前被当作"关闭"而非"继承全局默认"，导致全局 `defaultOrderlyConsumeTimeoutMillis` 对未声明者失效、
+  卡死消息不进 DLQ。现语义修正为 **0 = 继承全局默认；>0 = 覆盖；<0 = 显式关闭**。
+- 广播模式集成测试在真实 Redis 下确定性失败（非 flaky）的根因修复：`close()` 不再销毁组（保留 PEL）、
+  广播组默认在 `NEWEST` 建组需先建组再发消息、组名带实例标识后注册表成员匹配规则同步更新。
+- **DLQ 样例集成测试（`DlqSampleIT`）预存缺陷修复**：`@BeforeEach` 的 `cleanStreams()` 删除 topic 流会连带销毁 Redis 消费者组，
+  监听器随后以 `NEWEST` 重建组、错过测试消息（`receivedMessages` 恒为 0）。现改为仅清理 retry/dlq 流，保留 topic 流与消费者组
+  （组位点随消费推进、已 ACK 消息不重复投递，天然隔离）。
+- `streammq-test` 的 `CoreRedisIntegrationIT.consumer_throwException_failCount` 为偶发 flaky（依赖 Redis 残留状态/时序），
+  非回归，复跑稳定通过。
+
+### Changed
+
+- `RedissonBroadcastGroupRegistry.DEFAULT_MAX_SWEEP` 可见性由 private 提升为 public，供装配层复用。
+
 ## [0.1.1] - 2026-08-29 — 第一个公开发布版本
 
 ### Changed

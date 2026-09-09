@@ -241,8 +241,11 @@ class RedTeamRegressionIT extends AbstractRedisIT {
         producer.syncSend(MessageBuilder.<String>withTopic(topic).body("M1").build());
 
         RedissonStreamListener first = newListener(topic, group, consumer);
+        // 先触发建组（广播默认 CONSUME_FROM_LAST，从"此刻"开始消费），再发送 M1，保证 M1 被首个实例收到
+        first.pull(10);
+        producer.syncSend(MessageBuilder.<String>withTopic(topic).body("M1").build());
         var got1 = first.pull(10);
-        assertThat(got1).hasSize(1); // 组创建于 0-0，收到 M1
+        assertThat(got1).hasSize(1); // 收到 M1
         first.ack(got1.get(0).getMessageId());
         first.close();
 

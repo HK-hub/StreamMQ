@@ -60,3 +60,6 @@ tasks/
 
 # 环境变量
 app.env
+
+# CodeBuddy 代理本地数据目录
+.codebuddy/

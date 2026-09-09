@@ -120,6 +120,20 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 全局消息转换器（per-consumer 未指定时的回退） */
     private final MessageConverter messageConverter;
 
+    /**
+     * 广播消费实例身份解析器（可选注入）。
+     *
+     * <p>非 null 时，每个广播模式注册都会通过它申请<b>跨重启稳定</b>的持久化实例身份（配置 → 本地持久文件 → Redis 注册中心回收 → Redis 注册中心分配 →
+     * 随机降级）。这是广播消费"重启不丢 PEL、不重放历史"的根本保障。
+     *
+     * <p>为 null 时退化为 0.1.1 行为（主机名 + 进程内序号），重启会产生新的广播消费者组。
+     */
+    private volatile io.github.streammq.core.broadcast.BroadcastInstanceIdResolver
+            broadcastInstanceResolver;
+
+    /** 显式配置的广播实例身份（可为 null，表示交由解析器自行读取系统属性/环境变量）。 */
+    private volatile java.util.function.Supplier<String> configuredBroadcastInstanceId;
+
     /** 全局重试策略（per-consumer 未指定时的回退） */
     private final RetryPolicy retryPolicy;
 
@@ -181,6 +195,39 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      */
     public String getInstanceToken() {
         return instanceToken;
+    }
+
+    /**
+     * 注入广播消费实例身份解析器（仅 INIT 状态允许）。
+     *
+     * <p>注入后，广播模式注册的消费者组名将使用<b>跨重启稳定</b>的持久化身份， 重启后复用同一 Redis 消费者组：PEL 不丢、位点连续、不重放历史。 未注入时退化为旧的"主机名
+     * + 进程内序号"，重启会产生新组。
+     *
+     * @param resolver 解析器，null 表示禁用持久化广播身份
+     * @param configuredId 显式配置的实例身份提供源，可为 null
+     */
+    public void setBroadcastInstanceResolver(
+            io.github.streammq.core.broadcast.BroadcastInstanceIdResolver resolver,
+            java.util.function.Supplier<String> configuredId) {
+        assertInitState("broadcastInstanceResolver");
+        this.broadcastInstanceResolver = resolver;
+        this.configuredBroadcastInstanceId = configuredId;
+        // 把注册中心同步给监听器工厂：广播监听器需在每次心跳时续租其身份槽位，
+        // 否则运行中的实例也会落进"可回收"窗口，被同主机上的另一个同 group 广播消费者抢走。
+        if (consumerFactory instanceof RedissonStreamListenerFactory redissonFactory) {
+            redissonFactory.setBroadcastInstanceRegistry(
+                    Objects.isNull(resolver) ? null : resolver.registry());
+        }
+    }
+
+    /**
+     * 返回当前广播消费实例身份解析器（可能为 null）。
+     *
+     * @return 解析器
+     */
+    public io.github.streammq.core.broadcast.BroadcastInstanceIdResolver
+            getBroadcastInstanceResolver() {
+        return broadcastInstanceResolver;
     }
 
     /**
@@ -1193,7 +1240,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                                         defaultNs, topic, group, ns, shardCount);
                                         return Objects.nonNull(array) ? Arrays.asList(array) : null;
                                     },
-                                    this::wireRegistrationIfRunning);
+                                    this::wireRegistrationIfRunning,
+                                    broadcastInstanceResolver,
+                                    configuredBroadcastInstanceId);
                     registrar = current;
                 }
             }

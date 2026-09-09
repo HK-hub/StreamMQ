@@ -5,6 +5,7 @@
  */
 package io.github.streammq.spring.boot.autoconfigure;
 
+import io.github.streammq.adapter.redisson.broadcast.RedisBroadcastInstanceRegistry;
 import io.github.streammq.adapter.redisson.compression.DefaultCompressionCodecRegistry;
 import io.github.streammq.adapter.redisson.compression.GzipCompressionCodec;
 import io.github.streammq.adapter.redisson.compression.Lz4CompressionCodec;
@@ -26,6 +27,8 @@ import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate
 import io.github.streammq.adapter.redisson.trace.NoopTraceCollector;
 import io.github.streammq.adapter.redisson.trace.Slf4jTraceCollector;
 import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.core.broadcast.BroadcastInstanceIdResolver;
+import io.github.streammq.core.broadcast.BroadcastInstanceRegistry;
 import io.github.streammq.core.compression.CompressionCodec;
 import io.github.streammq.core.compression.CompressionCodecRegistry;
 import io.github.streammq.core.converter.MessageConverter;
@@ -249,6 +252,48 @@ public class StreamMQCoreAutoConfiguration {
             @Qualifier("streammqExecutor") ExecutorService streammqExecutor) {
         LOG.debug("Creating AsyncStreamMQEventBus (shared virtual executor)");
         return new AsyncStreamMQEventBus(streammqExecutor, false);
+    }
+
+    /**
+     * 广播消费实例注册中心：为广播消费者提供<b>跨重启稳定</b>的持久化实例身份。
+     *
+     * <p><b>为什么默认装配：</b>广播消费的每个实例使用一个独立 Redis 消费者组， 组名由实例身份派生。身份不稳定会导致每次重启新建组——旧组成为僵尸组持续占用 Redis
+     * 内存，且重启期间产生的消息<b>不会被补投</b>。注册中心把身份持久化到 Redis（辅以本地文件快路径）， 从根本上消除该问题。
+     *
+     * <p><b>可覆盖：</b>注册自定义 {@link BroadcastInstanceRegistry} Bean 即可替换（例如接入外部服务发现系统）。
+     *
+     * @param redisson Redisson 客户端
+     * @return 广播实例注册中心
+     */
+    @Bean
+    @ConditionalOnMissingBean(BroadcastInstanceRegistry.class)
+    public BroadcastInstanceRegistry streamMQBroadcastInstanceRegistry(RedissonClient redisson) {
+        LOG.debug("Creating RedisBroadcastInstanceRegistry (persistent broadcast identity)");
+        return new RedisBroadcastInstanceRegistry(redisson);
+    }
+
+    /**
+     * 广播实例身份解析器：把"配置 / 本地持久文件 / 注册中心回收 / 注册中心分配"四级来源收敛为单一稳定身份。
+     *
+     * @param registry 广播实例注册中心
+     * @param properties 配置属性
+     * @return 身份解析器
+     */
+    @Bean
+    @ConditionalOnMissingBean(BroadcastInstanceIdResolver.class)
+    public BroadcastInstanceIdResolver streamMQBroadcastInstanceIdResolver(
+            BroadcastInstanceRegistry registry, StreamMQProperties properties) {
+        StreamMQProperties.Consumer consumer = properties.getConsumer();
+        String file = consumer.getBroadcastInstanceIdFile();
+        java.nio.file.Path path =
+                io.github.streammq.core.util.StringUtils.isEmpty(file)
+                        ? null
+                        : java.nio.file.Paths.get(file);
+        return new BroadcastInstanceIdResolver(
+                registry,
+                path,
+                consumer.getBroadcastLeaseTimeout().toMillis(),
+                consumer.getBroadcastReclaimGrace().toMillis());
     }
 
     /**
@@ -613,9 +658,20 @@ public class StreamMQCoreAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(BroadcastGroupRegistry.class)
     public BroadcastGroupRegistry streamMQBroadcastGroupRegistry(
-            RedissonClient redisson, StreamMQProperties properties) {
+            RedissonClient redisson,
+            StreamMQProperties properties,
+            ObjectProvider<BroadcastInstanceRegistry> instanceRegistryProvider) {
         LOG.debug("Using RedissonBroadcastGroupRegistry");
-        return new RedissonBroadcastGroupRegistry(redisson, properties.getNamespace());
+        BroadcastInstanceRegistry instanceRegistry = instanceRegistryProvider.getIfAvailable();
+        StreamMQProperties.Consumer consumer = properties.getConsumer();
+        return new RedissonBroadcastGroupRegistry(
+                redisson,
+                properties.getNamespace(),
+                RedissonBroadcastGroupRegistry.BROADCAST_GROUP_STALE_TTL_MS,
+                RedissonBroadcastGroupRegistry.DEFAULT_MAX_SWEEP,
+                instanceRegistry,
+                consumer.getBroadcastLeaseTimeout().toMillis(),
+                consumer.getBroadcastReclaimGrace().toMillis());
     }
 
     /**

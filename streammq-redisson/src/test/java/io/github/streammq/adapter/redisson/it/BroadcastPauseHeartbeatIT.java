@@ -88,10 +88,11 @@ class BroadcastPauseHeartbeatIT extends AbstractRedisIT {
         RedissonStreamProducer producer =
                 new RedissonStreamProducer(
                         redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
-        producer.syncSend(MessageBuilder.<String>withTopic(topic).body("M1").build());
 
         container.start();
         try {
+            // 广播组默认在 NEWEST 建组：必须先 start() 建组，再发送 M1，才能保证 M1 被本实例收到
+            producer.syncSend(MessageBuilder.<String>withTopic(topic).body("M1").build());
             await().atMost(15, TimeUnit.SECONDS).until(() -> receivedBodies.contains("M1"));
 
             // 进入暂停：读循环停止拉取（旧实现此处心跳随之停止）
@@ -106,7 +107,8 @@ class BroadcastPauseHeartbeatIT extends AbstractRedisIT {
             for (String member :
                     registry.valueRange(
                             Double.NEGATIVE_INFINITY, true, Double.POSITIVE_INFINITY, true)) {
-                if (member.endsWith(":" + group)) {
+                // 成员格式：{topic}|{effectiveGroup}，effectiveGroup = {group}:{group}-{instanceId}
+                if (member.startsWith(topic + "|" + group + ":")) {
                     registry.add(staleCutoff, member);
                 }
             }
@@ -122,7 +124,7 @@ class BroadcastPauseHeartbeatIT extends AbstractRedisIT {
                                                     Double.POSITIVE_INFINITY,
                                                     true)
                                             .stream()
-                                            .filter(m -> m.endsWith(":" + group))
+                                            .filter(m -> m.startsWith(topic + "|" + group + ":"))
                                             .allMatch(
                                                     m -> {
                                                         Double s = registry.getScore(m);

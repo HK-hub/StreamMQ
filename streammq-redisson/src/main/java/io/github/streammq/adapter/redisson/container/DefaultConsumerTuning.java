@@ -109,6 +109,8 @@ public class DefaultConsumerTuning implements ConsumerTuning {
     /**
      * 注入全局顺序消费超时（毫秒），{@code >= 0} 才生效；0 表示不启用（默认）。
      *
+     * <p>当容器全局开启（{@code > 0}）后，所有未显式声明 {@code orderlyConsumeTimeout} 的顺序消费者自动继承该值。
+     *
      * @param millis 超时毫秒数
      */
     public void setDefaultOrderlyConsumeTimeoutMillis(long millis) {
@@ -172,7 +174,14 @@ public class DefaultConsumerTuning implements ConsumerTuning {
 
     @Override
     public long effectiveOrderlyConsumeTimeoutMillis(long annotationValue) {
-        return annotationValue >= 0 ? annotationValue : defaultOrderlyConsumeTimeoutMillis;
+        // 0（注解未显式声明时的默认值）回落到全局默认；>0 覆盖全局；<0 视为禁用（返回 0）
+        if (annotationValue > 0) {
+            return annotationValue;
+        }
+        if (annotationValue < 0) {
+            return 0L;
+        }
+        return defaultOrderlyConsumeTimeoutMillis;
     }
 
     @Override

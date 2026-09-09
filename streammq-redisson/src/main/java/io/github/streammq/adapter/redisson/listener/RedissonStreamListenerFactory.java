@@ -73,6 +73,35 @@ public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
 
     private volatile boolean closed = false;
 
+    /**
+     * 广播实例注册中心（可选）：注入后，由本工厂创建的广播监听器会在心跳时续租其持久化实例身份槽位。
+     *
+     * <p>不注入时广播消费者组仍可工作，但槽位在注册表中的 {@code lastHeartbeat} 会一直停留在启动时， 运行中的实例会落进"可回收"窗口，同主机上另一个同 group
+     * 的广播消费者可能抢走该槽位（广播退化为集群语义）。
+     */
+    private volatile io.github.streammq.core.broadcast.BroadcastInstanceRegistry
+            broadcastInstanceRegistry;
+
+    /**
+     * 设置广播实例注册中心。
+     *
+     * @param registry 注册中心，null 表示不续租实例身份
+     */
+    public void setBroadcastInstanceRegistry(
+            io.github.streammq.core.broadcast.BroadcastInstanceRegistry registry) {
+        this.broadcastInstanceRegistry = registry;
+    }
+
+    /**
+     * 返回当前广播实例注册中心（可能为 null）。
+     *
+     * @return 注册中心
+     */
+    public io.github.streammq.core.broadcast.BroadcastInstanceRegistry
+            getBroadcastInstanceRegistry() {
+        return broadcastInstanceRegistry;
+    }
+
     @Override
     public StreamMQListener createListener(ListenerConfig config) {
         if (closed) {
@@ -113,6 +142,7 @@ public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
                         .targetBodyType(config.getTargetBodyType())
                         .consumeFromWhere(config.getConsumeFromWhere())
                         .maxBatchSizeLimit(tuning.maxBatchSizeLimit())
+                        .broadcastInstanceRegistry(broadcastInstanceRegistry)
                         .build();
         listeners.add(listener);
         LOG.debug(

@@ -61,11 +61,35 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
     private final ShardLocksFactory shardLocksFactory;
     private final java.util.function.Consumer<ListenerRegistration<?>> wireIfRunning;
 
+    /**
+     * 广播消费实例身份解析器（可为 null = 使用容器级 {@link #instanceToken}）。
+     *
+     * <p>非 null 时，每个 <b>广播模式</b>注册都会向它申请一个<b>跨重启稳定</b>的实例身份， 从而保证广播消费者组名 {@code
+     * {group}:{group}-{instanceId}} 在重启后不变、PEL 与消费位点得以复用。
+     */
+    private final io.github.streammq.core.broadcast.BroadcastInstanceIdResolver broadcastResolver;
+
+    /** 显式配置的广播实例身份提供源（可为 null，表示交由解析器自行读取系统属性/环境变量）。 */
+    private final java.util.function.Supplier<String> configuredBroadcastId;
+
     /** 分片锁创建抽象（容器侧委托 OrderlyShardLockManager）。 */
     interface ShardLocksFactory {
         List<Lock> create(String defaultNs, String topic, String group, String ns, int shardCount);
     }
 
+    /**
+     * 兼容构造：不启用持久化广播实例身份（沿用容器级 {@code instanceToken}）。
+     *
+     * @param stateMachine 生命周期状态机
+     * @param store 注册表
+     * @param spiResolver per-consumer SPI 解析器
+     * @param tuning 拉取运行参数
+     * @param defaultNamespace 默认命名空间
+     * @param instanceToken 容器级实例标识
+     * @param defaultConsumeFromWhere 新组起始位点
+     * @param shardLocksFactory 分片锁工厂
+     * @param wireIfRunning 运行中动态接线回调
+     */
     public DefaultListenerRegistrar(
             ContainerStateMachine stateMachine,
             RegistrationStore store,
@@ -76,6 +100,47 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
             ConsumeFromWhere defaultConsumeFromWhere,
             ShardLocksFactory shardLocksFactory,
             java.util.function.Consumer<ListenerRegistration<?>> wireIfRunning) {
+        this(
+                stateMachine,
+                store,
+                spiResolver,
+                tuning,
+                defaultNamespace,
+                instanceToken,
+                defaultConsumeFromWhere,
+                shardLocksFactory,
+                wireIfRunning,
+                null,
+                null);
+    }
+
+    /**
+     * 全参构造（启用持久化广播实例身份）。
+     *
+     * @param stateMachine 生命周期状态机
+     * @param store 注册表
+     * @param spiResolver per-consumer SPI 解析器
+     * @param tuning 拉取运行参数
+     * @param defaultNamespace 默认命名空间
+     * @param instanceToken 容器级实例标识（广播身份不可用时的回退值）
+     * @param defaultConsumeFromWhere 新组起始位点
+     * @param shardLocksFactory 分片锁工厂
+     * @param wireIfRunning 运行中动态接线回调
+     * @param broadcastResolver 广播实例身份解析器，可为 null
+     * @param configuredBroadcastId 显式配置的广播实例身份提供源，可为 null
+     */
+    public DefaultListenerRegistrar(
+            ContainerStateMachine stateMachine,
+            RegistrationStore store,
+            PerConsumerSpiResolver spiResolver,
+            ConsumerTuning tuning,
+            String defaultNamespace,
+            String instanceToken,
+            ConsumeFromWhere defaultConsumeFromWhere,
+            ShardLocksFactory shardLocksFactory,
+            java.util.function.Consumer<ListenerRegistration<?>> wireIfRunning,
+            io.github.streammq.core.broadcast.BroadcastInstanceIdResolver broadcastResolver,
+            java.util.function.Supplier<String> configuredBroadcastId) {
         this.stateMachine = Objects.requireNonNull(stateMachine);
         this.store = Objects.requireNonNull(store);
         this.spiResolver = Objects.requireNonNull(spiResolver);
@@ -88,6 +153,44 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
                         : defaultConsumeFromWhere;
         this.shardLocksFactory = Objects.requireNonNull(shardLocksFactory);
         this.wireIfRunning = Objects.requireNonNull(wireIfRunning);
+        this.broadcastResolver = broadcastResolver;
+        this.configuredBroadcastId = configuredBroadcastId;
+    }
+
+    /**
+     * 解析本注册应使用的实例标识。
+     *
+     * <p>仅<b>广播模式</b>走持久化身份解析器：广播语义依赖"每实例一个消费者组"， 组名不稳定会直接导致 PEL 泄漏与重启期间消息漏投。 集群模式（{@code
+     * CLUSTERING}）的消费者组由 rebalance 统一分配，沿用容器级标识即可。
+     */
+    private String resolveInstanceToken(String namespace, String topic, String group) {
+        if (broadcastResolver == null) {
+            return instanceToken;
+        }
+        String ns = StringUtils.isEmpty(namespace) ? defaultNamespace : namespace;
+        String configured = configuredBroadcastId == null ? null : configuredBroadcastId.get();
+        try {
+            io.github.streammq.core.broadcast.BroadcastInstanceIdResolver.Resolution resolution =
+                    broadcastResolver.resolve(ns, topic, group, configured);
+            if (!resolution.isStable()) {
+                LOG.warn(
+                        "Broadcast instance identity for topic={}, group={} is NOT stable"
+                                + " (source={}); the broadcast consumer group will change across"
+                                + " restarts and restart-window messages may be missed",
+                        topic,
+                        group,
+                        resolution.source());
+            }
+            return resolution.instanceId();
+        } catch (RuntimeException ex) {
+            LOG.warn(
+                    "Failed to resolve persistent broadcast instance identity (topic={},"
+                            + " group={}), falling back to container token: {}",
+                    topic,
+                    group,
+                    ex.toString());
+            return instanceToken;
+        }
     }
 
     // ===================== 公共入口 =====================
@@ -206,7 +309,17 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
                 .consumerFilter(ann.consumerFilter())
                 .selectorType(ann.selectorType())
                 .namespace(ann.namespace())
-                .consumerName(ann.consumerGroup() + "-" + instanceToken)
+                // 广播模式的实例标识必须跨重启稳定：组名 = {group}:{group}-{token}，
+                // 组名漂移会导致旧组成为僵尸组（PEL 泄漏）且重启期间的消息不会被补投。
+                .consumerName(
+                        ann.consumerGroup()
+                                + "-"
+                                + (ann.consumeMode()
+                                                == io.github.streammq.core.enums.ConsumeMode
+                                                        .BROADCASTING
+                                        ? resolveInstanceToken(
+                                                ann.namespace(), ann.topic(), ann.consumerGroup())
+                                        : instanceToken))
                 .consumeThreadMin(ann.consumeThreadMin())
                 .consumeThreadMax(ann.consumeThreadMax());
     }

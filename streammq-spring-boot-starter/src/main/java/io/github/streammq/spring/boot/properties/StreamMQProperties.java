@@ -241,6 +241,42 @@ public class StreamMQProperties {
         private long orderlyConsumeTimeoutMillis = 0L;
 
         /**
+         * 广播消费实例身份（可选）：显式指定后，广播消费者组名跨重启恒定。
+         *
+         * <p>留空时按「本地持久文件 → Redis 注册中心回收 → Redis 注册中心分配」自动解析， 重启后仍保持稳定；仅当 Redis 与本地文件同时不可用时才会退化为随机值。
+         *
+         * <p><b>何时需要显式配置：</b>K8s StatefulSet 有稳定序号（{@code streammq-0}、{@code streammq-1}）时， 直接绑定
+         * Pod 名可获得完全确定性的组名，便于运维对账。
+         */
+        private String broadcastInstanceId = "";
+
+        /**
+         * 广播实例身份本地持久化文件路径（可选）。
+         *
+         * <p>默认 {@code ${user.home}/.streammq/instance-id}。设为 {@code none} 或 {@code false} 可禁用本地文件
+         * （只读根文件系统场景，此时完全依赖 Redis 注册中心回收）。
+         */
+        private String broadcastInstanceIdFile = "";
+
+        /**
+         * 广播实例租约超时：空闲超过该时长的身份槽位进入「可被同主机实例回收」窗口。
+         *
+         * <p>默认 {@link StreamMQConstants#DEFAULT_BROADCAST_LEASE_TIMEOUT_MS}（20s）。
+         */
+        private Duration broadcastLeaseTimeout =
+                Duration.ofMillis(StreamMQConstants.DEFAULT_BROADCAST_LEASE_TIMEOUT_MS);
+
+        /**
+         * 广播实例回收宽限期：自最后心跳起算，超过后槽位及其消费者组被销毁。
+         *
+         * <p>该窗口决定「重启多久后仍能保住 PEL 与消费位点」。 默认 {@link
+         * StreamMQConstants#DEFAULT_BROADCAST_RECLAIM_GRACE_MS} （7 天），足以覆盖滚动发布、节点驱逐与常规停机； 调小可更快释放
+         * Redis 内存，代价是长停机后广播消费会从当前时间点重新开始。
+         */
+        private Duration broadcastReclaimGrace =
+                Duration.ofMillis(StreamMQConstants.DEFAULT_BROADCAST_RECLAIM_GRACE_MS);
+
+        /**
          * 新消费者组起始消费位点，默认 {@link ConsumeFromWhere#DEFAULT}（= {@code CONSUME_FROM_LAST}）。
          *
          * <p><b>仅在该 Redis 消费者组首次创建时生效</b>；已存在的组不受此值影响。 默认值常量 {@link

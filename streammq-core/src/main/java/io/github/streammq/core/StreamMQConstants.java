@@ -181,6 +181,22 @@ public final class StreamMQConstants {
     /** 默认消费线程下限 */
     public static final int DEFAULT_CONSUME_THREAD_MIN = 1;
 
+    /**
+     * 默认广播实例租约超时（毫秒）：空闲超过该时长的广播实例槽位进入"可回收"窗口。
+     *
+     * <p>与集群消费的实例超时同值，语义一致：超过该时长无心跳即认为实例已停止。
+     */
+    public static final long DEFAULT_BROADCAST_LEASE_TIMEOUT_MS = 20_000L;
+
+    /**
+     * 默认广播实例回收宽限期（毫秒，自最后心跳起算）。
+     *
+     * <p>该窗口是"重启后能否保住 PEL"的关键：空闲超过租约超时、但未超过宽限期时， 槽位<b>仅允许相同 host 的实例回收</b>，其 Redis 消费者组与 PEL 完整保留。
+     *
+     * <p>默认 7 天：足以覆盖滚动发布、节点驱逐、周末停机等常规运维窗口； 超过后才由清扫任务 {@code XGROUP DESTROY} 释放内存。
+     */
+    public static final long DEFAULT_BROADCAST_RECLAIM_GRACE_MS = 7L * 24 * 60 * 60 * 1000;
+
     /** 实例标识系统属性名，用户可通过 -Dstreammq.instance.id=xxx 指定 */
     public static final String INSTANCE_ID_SYSTEM_PROPERTY = "streammq.instance.id";
 

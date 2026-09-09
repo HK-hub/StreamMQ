@@ -67,15 +67,21 @@ public interface ConsumerTuning {
     long effectivePullInterval(long annotationValue);
 
     /**
-     * 解析生效的顺序消费超时（毫秒）：注解 {@code >= 0} 优先，否则取全局配置。
+     * 解析生效的顺序消费超时（毫秒）。
+     *
+     * <p><b>语义（注解未声明 → 继承全局默认）：</b>
+     *
+     * <ul>
+     *   <li>{@code annotationValue = 0}：未显式声明，回落到 {@code defaultOrderlyConsumeTimeoutMillis} （全局默认
+     *       0 表示不启用，业务显式开启后所有未声明者自动继承）；
+     *   <li>{@code annotationValue > 0}：覆盖全局，使用注解值；
+     *   <li>{@code annotationValue < 0}：显式关闭该消费者的超时保护（返回 0）。
+     * </ul>
      *
      * <p><b>为什么默认关闭：</b>顺序消费超时后走串行重试，耗尽 {@code maxReconsumeTimes} 即进 DLQ。
-     * 默认开启会把所有存量顺序消费者的慢消息系统性误杀，因此全局默认 0（不启用），由业务显式开启。
+     * 默认开启会把所有存量顺序消费者的慢消息系统性误杀，因此全局默认 0（不启用），由业务显式开启；开启后未显式声明超时值的消费者自动继承该全局值。
      *
-     * <p><b>注解可单独关闭：</b>全局开启后，对某个消费者声明 {@code orderlyConsumeTimeout = 0} 即可 显式关闭该消费者的超时保护（0
-     * 是"关闭"语义，不是"未设置"语义）。
-     *
-     * @param annotationValue 注解声明值；{@link StreamMQConstants#ANNOTATION_UNSET_LONG} 表示未设置
+     * @param annotationValue 注解声明值
      * @return 生效的超时毫秒数；0 表示不启用顺序消费超时
      */
     long effectiveOrderlyConsumeTimeoutMillis(long annotationValue);

@@ -106,6 +106,15 @@ public class RedissonStreamListener implements StreamMQListener {
     private final boolean broadcast;
 
     /**
+     * 广播实例注册中心（可选）。
+     *
+     * <p>非 null 且 {@link #broadcast} 为真时，{@link #heartbeatBroadcastRegistry()} 会同时续租本实例的持久化身份槽位，
+     * 使其保持 active、不被同主机其它实例误回收。
+     */
+    private final io.github.streammq.core.broadcast.BroadcastInstanceRegistry
+            broadcastInstanceRegistry;
+
+    /**
      * 目标 body 类型（跨平台反序列化回退类型）。
      *
      * <p>当 Stream Entry 缺失 {@code bodyType} 字段（发送方非 StreamMQ SDK）， 或 {@code bodyType}
@@ -165,7 +174,8 @@ public class RedissonStreamListener implements StreamMQListener {
                 false,
                 null,
                 ConsumeFromWhere.DEFAULT,
-                StreamMQConstants.MAX_BATCH_SIZE_LIMIT);
+                StreamMQConstants.MAX_BATCH_SIZE_LIMIT,
+                null);
     }
 
     /**
@@ -231,7 +241,8 @@ public class RedissonStreamListener implements StreamMQListener {
             boolean broadcast,
             Class<?> targetBodyType,
             ConsumeFromWhere consumeFromWhere,
-            Integer maxBatchSizeLimit) {
+            Integer maxBatchSizeLimit,
+            io.github.streammq.core.broadcast.BroadcastInstanceRegistry broadcastInstanceRegistry) {
         this.redisson = redisson;
         this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.topic = topic;
@@ -248,6 +259,7 @@ public class RedissonStreamListener implements StreamMQListener {
                 Objects.isNull(maxBatchSizeLimit) || maxBatchSizeLimit <= 0
                         ? StreamMQConstants.MAX_BATCH_SIZE_LIMIT
                         : maxBatchSizeLimit;
+        this.broadcastInstanceRegistry = broadcastInstanceRegistry;
     }
 
     @Override
@@ -632,6 +644,43 @@ public class RedissonStreamListener implements StreamMQListener {
         } catch (RuntimeException ex) {
             LOG.debug("Broadcast heartbeat failed: {}", ex.getMessage());
         }
+        heartbeatBroadcastInstanceLease();
+    }
+
+    /**
+     * 续租持久化广播实例身份槽位。
+     *
+     * <p>不加续租的后果：槽位的 {@code lastHeartbeat} 会一直停留在启动时，运行中的实例也会落进"可回收"窗口—— 同主机上的<b>另一个</b>广播消费者（相同
+     * group）就可能抢走该槽位，导致两个实例共用同一 Redis 消费者组， 广播语义退化为集群（消息只投递给其中一个）。
+     *
+     * <p>实例身份从 {@code consumerName} 反解：注册期按 {@code {group}-{instanceId}} 拼装（见 {@code
+     * DefaultListenerRegistrar}），此处按同一规则剥离前缀。
+     */
+    private void heartbeatBroadcastInstanceLease() {
+        io.github.streammq.core.broadcast.BroadcastInstanceRegistry registry =
+                broadcastInstanceRegistry;
+        if (registry == null) {
+            return;
+        }
+        String instanceId = broadcastInstanceId();
+        if (instanceId == null) {
+            return;
+        }
+        try {
+            registry.heartbeat(namespace, group, instanceId);
+        } catch (RuntimeException ex) {
+            LOG.debug("Broadcast instance lease heartbeat failed: {}", ex.getMessage());
+        }
+    }
+
+    /** 从 consumerName 反解实例身份（{@code {group}-{instanceId}}）；格式不匹配时返回 null。 */
+    private String broadcastInstanceId() {
+        String prefix = group + "-";
+        if (consumerName == null || !consumerName.startsWith(prefix)) {
+            return null;
+        }
+        String id = consumerName.substring(prefix.length());
+        return id.isEmpty() ? null : id;
     }
 
     private String registryMember() {

@@ -7,6 +7,7 @@ package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
+import io.github.streammq.core.broadcast.BroadcastInstanceIdResolver;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.filter.ConsumerFilter;
 import io.github.streammq.core.interceptor.ConsumerInterceptor;
@@ -86,6 +87,7 @@ public class StreamMQListenerContainerAutoConfiguration {
             ObjectProvider<StreamMQMetrics> metricsProvider,
             ObjectProvider<PelClaimScheduler> pelClaimSchedulerProvider,
             @Qualifier("streammqExecutor") ObjectProvider<ExecutorService> executorProvider,
+            ObjectProvider<BroadcastInstanceIdResolver> broadcastResolverProvider,
             ApplicationContext applicationContext) {
         String namespace = properties.getNamespace();
         LOG.info(
@@ -113,6 +115,22 @@ public class StreamMQListenerContainerAutoConfiguration {
                     "Auto-resolved instanceToken for broadcast: {} (override via"
                             + " streammq.instanceId or -Dstreammq.instance.id)",
                     container.getInstanceToken());
+        }
+
+        // 持久化广播实例身份：使广播消费者组名跨重启稳定（PEL 保留、位点连续、不重放历史）
+        BroadcastInstanceIdResolver broadcastResolver = broadcastResolverProvider.getIfAvailable();
+        if (broadcastResolver != null) {
+            container.setBroadcastInstanceResolver(
+                    broadcastResolver, () -> properties.getConsumer().getBroadcastInstanceId());
+            LOG.info(
+                    "Persistent broadcast instance identity enabled: leaseTimeout={},"
+                            + " reclaimGrace={}, explicitId={}",
+                    properties.getConsumer().getBroadcastLeaseTimeout(),
+                    properties.getConsumer().getBroadcastReclaimGrace(),
+                    io.github.streammq.core.util.StringUtils.isNotEmpty(
+                                    properties.getConsumer().getBroadcastInstanceId())
+                            ? "yes"
+                            : "auto");
         }
 
         // 消费者全局默认配置：注解未显式指定时生效（streammq.consumer.* / streammq.rebalance.*）

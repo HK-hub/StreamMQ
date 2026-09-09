@@ -88,7 +88,11 @@ class DlqSampleIT {
 
     private void cleanStreams() {
         try {
-            String topicKey = "streammq:" + NAMESPACE + ":msg:" + TOPIC;
+            // 注意：不得删除 topic 流（streammq:{ns}:msg:{topic}）。
+            // Redis 的 DEL 会连带销毁该流上的全部消费者组；监听器随后以 NEWEST（默认位点）重建组，
+            // 导致本次测试发送的消息（在组重建之前写入）永远被错过，表现为 receivedMessages 恒为 0。
+            // 正确做法：保留 topic 流与消费者组（组位点随消费推进，已 ACK 消息不会重复投递，天然隔离），
+            // 仅清理 retry / dlq 流以避免跨测试污染。
             String retryKey =
                     "streammq:"
                             + NAMESPACE
@@ -97,9 +101,8 @@ class DlqSampleIT {
                             + ":"
                             + TEST_FAIL_CONSUMER_GROUP;
             String dlqKey = "streammq:" + NAMESPACE + ":dlq:" + TEST_FAIL_CONSUMER_GROUP;
-            System.out.println(
-                    "=== Cleaning streams: " + topicKey + ", " + retryKey + ", " + dlqKey);
-            long deleted = redissonClient.getKeys().delete(topicKey, retryKey, dlqKey);
+            System.out.println("=== Cleaning streams: " + retryKey + ", " + dlqKey);
+            long deleted = redissonClient.getKeys().delete(retryKey, dlqKey);
             System.out.println("=== Deleted keys count: " + deleted);
         } catch (Exception e) {
             System.out.println("=== Clean streams error: " + e.getMessage());

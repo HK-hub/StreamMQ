@@ -11,6 +11,7 @@ import io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler;
 import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
+import io.github.streammq.core.broadcast.BroadcastInstanceRegistry;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.listener.BroadcastGroupRegistry;
 import io.github.streammq.core.metrics.StreamMQMetrics;
@@ -231,8 +232,19 @@ public class StreamMQSchedulerAutoConfiguration {
     @Bean
     @ConditionalOnMissingBean(BroadcastGroupRegistry.class)
     public BroadcastGroupRegistry streamMQBroadcastGroupRegistry(
-            RedissonClient redisson, StreamMQProperties properties) {
-        return new RedissonBroadcastGroupRegistry(redisson, properties.getNamespace());
+            RedissonClient redisson,
+            StreamMQProperties properties,
+            ObjectProvider<BroadcastInstanceRegistry> instanceRegistryProvider) {
+        BroadcastInstanceRegistry instanceRegistry = instanceRegistryProvider.getIfAvailable();
+        StreamMQProperties.Consumer consumer = properties.getConsumer();
+        return new RedissonBroadcastGroupRegistry(
+                redisson,
+                properties.getNamespace(),
+                RedissonBroadcastGroupRegistry.BROADCAST_GROUP_STALE_TTL_MS,
+                RedissonBroadcastGroupRegistry.DEFAULT_MAX_SWEEP,
+                instanceRegistry,
+                consumer.getBroadcastLeaseTimeout().toMillis(),
+                consumer.getBroadcastReclaimGrace().toMillis());
     }
 
     /**

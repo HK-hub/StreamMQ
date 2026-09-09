@@ -35,7 +35,7 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
     public static final long BROADCAST_GROUP_STALE_TTL_MS = 10L * 60 * 1000;
 
     /** 单次回收扫描的最大条目数，限制单轮 Redis 往返成本 */
-    private static final int DEFAULT_MAX_SWEEP = 100;
+    public static final int DEFAULT_MAX_SWEEP = 100;
 
     private static final Logger LOG = LoggerFactory.getLogger(RedissonBroadcastGroupRegistry.class);
 
@@ -45,7 +45,26 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
     private final int maxSweep;
 
     /**
-     * 使用默认参数构造：过期阈值 {@link #BROADCAST_GROUP_STALE_TTL_MS}，单次回收上限 100 条。
+     * 广播实例注册中心（可选）：注入后，本回收任务会顺带清扫<b>超过回收宽限期</b>的实例身份槽位。
+     *
+     * <p>两者分工必须分清，否则会互相破坏：
+     *
+     * <ul>
+     *   <li>本类按 {@code staleTtlMillis}（默认 10 分钟）销毁<b>僵尸消费者组</b>——针对身份漂移时代遗留的组；
+     *   <li>实例注册中心按 {@code reclaimGraceMillis}（默认 7 天）销毁<b>身份槽位</b>——必须远长于本 TTL，
+     *       否则一次稍长的重启就会永久丢掉广播消费位点。
+     * </ul>
+     */
+    private final io.github.streammq.core.broadcast.BroadcastInstanceRegistry instanceRegistry;
+
+    /** 广播实例租约超时（毫秒） */
+    private final long instanceLeaseTimeoutMillis;
+
+    /** 广播实例回收宽限期（毫秒） */
+    private final long instanceReclaimGraceMillis;
+
+    /**
+     * 使用默认参数构造：过期阈值 {@link #BROADCAST_GROUP_STALE_TTL_MS}，单次回收上限 100 条，不启用实例槽位清扫。
      *
      * @param redisson Redisson 客户端
      * @param namespace 命名空间
@@ -64,10 +83,50 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
      */
     public RedissonBroadcastGroupRegistry(
             RedissonClient redisson, String namespace, long staleTtlMillis, int maxSweep) {
+        this(
+                redisson,
+                namespace,
+                staleTtlMillis,
+                maxSweep,
+                null,
+                io.github.streammq.core.StreamMQConstants.DEFAULT_BROADCAST_LEASE_TIMEOUT_MS,
+                io.github.streammq.core.StreamMQConstants.DEFAULT_BROADCAST_RECLAIM_GRACE_MS);
+    }
+
+    /**
+     * 全参构造（启用广播实例身份槽位清扫）。
+     *
+     * @param redisson Redisson 客户端
+     * @param namespace 命名空间
+     * @param staleTtlMillis 僵尸组过期阈值（毫秒），{@code <= 0} 时回落默认值
+     * @param maxSweep 单次回收扫描上限，{@code <= 0} 时回落默认值
+     * @param instanceRegistry 广播实例注册中心，null 表示不启用身份槽位清扫
+     * @param instanceLeaseTimeoutMillis 实例租约超时（毫秒）
+     * @param instanceReclaimGraceMillis 实例回收宽限期（毫秒）
+     */
+    public RedissonBroadcastGroupRegistry(
+            RedissonClient redisson,
+            String namespace,
+            long staleTtlMillis,
+            int maxSweep,
+            io.github.streammq.core.broadcast.BroadcastInstanceRegistry instanceRegistry,
+            long instanceLeaseTimeoutMillis,
+            long instanceReclaimGraceMillis) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
         this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.staleTtlMillis = staleTtlMillis > 0 ? staleTtlMillis : BROADCAST_GROUP_STALE_TTL_MS;
         this.maxSweep = maxSweep > 0 ? maxSweep : DEFAULT_MAX_SWEEP;
+        this.instanceRegistry = instanceRegistry;
+        this.instanceLeaseTimeoutMillis =
+                instanceLeaseTimeoutMillis > 0
+                        ? instanceLeaseTimeoutMillis
+                        : io.github.streammq.core.StreamMQConstants
+                                .DEFAULT_BROADCAST_LEASE_TIMEOUT_MS;
+        this.instanceReclaimGraceMillis =
+                instanceReclaimGraceMillis > 0
+                        ? instanceReclaimGraceMillis
+                        : io.github.streammq.core.StreamMQConstants
+                                .DEFAULT_BROADCAST_RECLAIM_GRACE_MS;
     }
 
     @Override
@@ -87,6 +146,14 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
                 }
                 String topic = member.substring(0, sepIdx);
                 String effectiveGroup = member.substring(sepIdx + 1);
+                // 持久化广播身份：槽位仍在回收宽限期内时，其消费者组与 PEL 必须保留，
+                // 否则"重启 10 分钟"就会把位点永久销毁，回收机制随之失去意义。
+                if (isProtectedByInstanceLease(effectiveGroup)) {
+                    LOG.debug(
+                            "Broadcast group retained within reclaim grace window: group={}",
+                            effectiveGroup);
+                    continue;
+                }
                 try {
                     RStream<String, String> stream =
                             redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
@@ -120,11 +187,81 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
                         namespace,
                         registry.size());
             }
+            sweepInstanceSlots(registry);
             return removed;
         } catch (RuntimeException ex) {
             // 回收失败不得阻塞 PEL 认领调度：下轮自动重试
             LOG.debug("Sweep stale broadcast groups failed: {}", ex.getMessage());
             return 0;
+        }
+    }
+
+    /**
+     * 判断某广播消费者组是否仍受实例身份租约保护（即其槽位还在回收宽限期内）。
+     *
+     * <p>组名形如 {@code {group}:{group}-{instanceId}}，按此规则反解出 group 与 instanceId， 再向实例注册中心查询租约。
+     *
+     * @param effectiveGroup 广播消费者的实际 Redis 组名
+     * @return true 表示应保留该组（不得销毁）
+     */
+    private boolean isProtectedByInstanceLease(String effectiveGroup) {
+        io.github.streammq.core.broadcast.BroadcastInstanceRegistry registry = instanceRegistry;
+        if (registry == null) {
+            return false;
+        }
+        int colon = effectiveGroup.indexOf(':');
+        if (colon <= 0) {
+            return false;
+        }
+        String group = effectiveGroup.substring(0, colon);
+        String consumerPart = effectiveGroup.substring(colon + 1);
+        String prefix = group + "-";
+        if (!consumerPart.startsWith(prefix)) {
+            return false;
+        }
+        String instanceId = consumerPart.substring(prefix.length());
+        if (instanceId.isEmpty()) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        for (io.github.streammq.core.broadcast.BroadcastInstanceLease lease :
+                registry.listInstances(namespace, group)) {
+            if (lease.instanceId().equals(instanceId)) {
+                return now - lease.lastHeartbeatMillis() <= instanceReclaimGraceMillis;
+            }
+        }
+        return false;
+    }
+
+    /** 顺带清扫超过回收宽限期的实例身份槽位（按注册表内出现的 group 去重）。 */
+    private void sweepInstanceSlots(RScoredSortedSet<String> registry) {
+        io.github.streammq.core.broadcast.BroadcastInstanceRegistry inst = instanceRegistry;
+        if (inst == null) {
+            return;
+        }
+        java.util.Set<String> groups = new java.util.HashSet<>();
+        for (String member : registry) {
+            int sepIdx = member.indexOf('|');
+            if (sepIdx <= 0) {
+                continue;
+            }
+            String effectiveGroup = member.substring(sepIdx + 1);
+            int colon = effectiveGroup.indexOf(':');
+            if (colon > 0) {
+                groups.add(effectiveGroup.substring(0, colon));
+            }
+        }
+        for (String group : groups) {
+            try {
+                inst.sweep(
+                        namespace,
+                        group,
+                        instanceLeaseTimeoutMillis,
+                        instanceReclaimGraceMillis,
+                        maxSweep);
+            } catch (RuntimeException ex) {
+                LOG.debug("Broadcast instance slot sweep failed: {}", ex.getMessage());
+            }
         }
     }
 

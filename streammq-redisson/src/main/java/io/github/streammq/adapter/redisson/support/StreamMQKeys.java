@@ -93,12 +93,38 @@ public class StreamMQKeys {
     /** 广播组注册表后缀段 */
     public static final String SEG_REGISTRY = "-registry";
 
+    /** 广播实例注册表后缀段（与消费组实例列表的 SEG_INSTANCES 区分，避免语义混淆） */
+    public static final String SEG_BROADCAST_INSTANCES = "-instances";
+
     /**
      * 广播组注册表 Key：{@code
      * streammq:{ns}:broadcast-registry}（ZSet，member={topic}|{effectiveGroup}，score=最后心跳毫秒）
      */
     public static String broadcastRegistry(String namespace) {
         return prefix(namespace) + SEP + TYPE_BROADCAST + SEG_REGISTRY;
+    }
+
+    /**
+     * 广播消费实例注册表 Key：{@code streammq:{ns}:broadcast-instances:{group}}。
+     *
+     * <p><b>数据结构：单个 Hash</b>（field={@code instanceId}，value={@link
+     * io.github.streammq.core.broadcast.BroadcastInstanceLease#encode()}）。 心跳、回收、分配、清扫全部以<b>单 key
+     * Lua 脚本</b>原子执行——这是 Redis Cluster 兼容的硬约束： 多 key 脚本在 Cluster 下会因跨 slot 被拒。
+     *
+     * <p>之所以刻意<b>不</b>引入 ZSet 做心跳排序：广播实例数量级通常是个位数到数十， 扫描整个 Hash 的成本远低于维护"双 key 同 slot"的复杂度； 而 topic
+     * / group / namespace 的命名校验已显式拒绝 {@code { }}， 因此单 key 结构天然不会因用户可控输入产生 hash tag 解析歧义。
+     *
+     * @param namespace 命名空间
+     * @param group 消费者组
+     * @return 实例注册表 Key
+     */
+    public static String broadcastInstances(String namespace, String group) {
+        return prefix(namespace)
+                + SEP
+                + TYPE_BROADCAST
+                + SEG_BROADCAST_INSTANCES
+                + SEP
+                + requireNonEmpty(group, "group");
     }
 
     /** 事务锁类型段 */
