@@ -11,7 +11,11 @@ import io.github.streammq.core.broadcast.BroadcastInstanceLease;
 import io.github.streammq.core.broadcast.BroadcastInstanceRegistry;
 import io.github.streammq.core.listener.BroadcastGroupRegistry;
 import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
@@ -58,7 +62,7 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
      *       否则一次稍长的重启就会永久丢掉广播消费位点。
      * </ul>
      */
-    private final io.github.streammq.core.broadcast.BroadcastInstanceRegistry instanceRegistry;
+    private final BroadcastInstanceRegistry instanceRegistry;
 
     /** 广播实例租约超时（毫秒） */
     private final long instanceLeaseTimeoutMillis;
@@ -112,7 +116,7 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
             String namespace,
             long staleTtlMillis,
             int maxSweep,
-            io.github.streammq.core.broadcast.BroadcastInstanceRegistry instanceRegistry,
+            BroadcastInstanceRegistry instanceRegistry,
             long instanceLeaseTimeoutMillis,
             long instanceReclaimGraceMillis) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
@@ -141,6 +145,23 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
             Collection<String> staleMembers =
                     registry.valueRange(0, true, cutoff, true, 0, maxSweep - 1);
             int removed = 0;
+            // 按 group 聚合，单次拉取每个 group 的实例租约快照，避免对每个僵尸组各做一次 HGETALL
+            Set<String> involvedGroups = new HashSet<>();
+            for (String member : staleMembers) {
+                int sepIdx = member.indexOf('|');
+                if (sepIdx <= 0) {
+                    continue;
+                }
+                String effectiveGroup = member.substring(sepIdx + 1);
+                int colon = effectiveGroup.indexOf(':');
+                if (colon > 0) {
+                    involvedGroups.add(effectiveGroup.substring(0, colon));
+                }
+            }
+            Map<String, Map<String, Long>> leaseByGroup = new HashMap<>();
+            for (String g : involvedGroups) {
+                leaseByGroup.put(g, instanceLeaseSnapshot(g));
+            }
             for (String member : staleMembers) {
                 int sepIdx = member.indexOf('|');
                 if (sepIdx <= 0) {
@@ -151,7 +172,7 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
                 String effectiveGroup = member.substring(sepIdx + 1);
                 // 持久化广播身份：槽位仍在回收宽限期内时，其消费者组与 PEL 必须保留，
                 // 否则"重启 10 分钟"就会把位点永久销毁，回收机制随之失去意义。
-                if (isProtectedByInstanceLease(effectiveGroup)) {
+                if (isProtectedByInstanceLease(effectiveGroup, leaseByGroup)) {
                     LOG.debug(
                             "Broadcast group retained within reclaim grace window: group={}",
                             effectiveGroup);
@@ -202,42 +223,59 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
     /**
      * 判断某广播消费者组是否仍受实例身份租约保护（即其槽位还在回收宽限期内）。
      *
-     * <p>组名形如 {@code {group}:{group}-{instanceId}}，按此规则反解出 group 与 instanceId， 再向实例注册中心查询租约。
+     * <p>组名形如 {@code {group}:{group}-{instanceId}}，按此规则反解出 group 与 instanceId， 再查预拉取的租约快照。
      *
      * @param effectiveGroup 广播消费者的实际 Redis 组名
+     * @param leaseByGroup group → (instanceId → lastHeartbeatMillis) 预拉取快照
      * @return true 表示应保留该组（不得销毁）
      */
-    private boolean isProtectedByInstanceLease(String effectiveGroup) {
-        BroadcastInstanceRegistry registry = instanceRegistry;
-        if (registry == null) {
-            return false;
-        }
+    private boolean isProtectedByInstanceLease(
+            String effectiveGroup, Map<String, Map<String, Long>> leaseByGroup) {
         int colon = effectiveGroup.indexOf(':');
         if (colon <= 0) {
             return false;
         }
         String group = effectiveGroup.substring(0, colon);
+        Map<String, Long> snapshot = leaseByGroup.get(group);
+        if (snapshot == null) {
+            return false;
+        }
         String instanceId =
                 BroadcastGroupNaming.instanceIdFromEffectiveGroup(group, effectiveGroup);
         if (instanceId == null || instanceId.isEmpty()) {
             return false;
         }
-        long now = System.currentTimeMillis();
-        for (BroadcastInstanceLease lease : registry.listInstances(namespace, group)) {
-            if (lease.instanceId().equals(instanceId)) {
-                return now - lease.lastHeartbeatMillis() <= instanceReclaimGraceMillis;
-            }
+        Long lastHb = snapshot.get(instanceId);
+        return lastHb != null && System.currentTimeMillis() - lastHb <= instanceReclaimGraceMillis;
+    }
+
+    /** 拉取某 group 下的实例租约快照：instanceId → lastHeartbeatMillis（注册中心不可用/为空时返回空 map）。 */
+    private Map<String, Long> instanceLeaseSnapshot(String group) {
+        BroadcastInstanceRegistry registry = instanceRegistry;
+        if (registry == null) {
+            return Map.of();
         }
-        return false;
+        Map<String, Long> snapshot = new HashMap<>();
+        try {
+            for (BroadcastInstanceLease lease : registry.listInstances(namespace, group)) {
+                snapshot.put(lease.instanceId(), lease.lastHeartbeatMillis());
+            }
+        } catch (RuntimeException ex) {
+            LOG.debug(
+                    "List broadcast instance leases failed for group={}: {}",
+                    group,
+                    ex.getMessage());
+        }
+        return snapshot;
     }
 
     /** 顺带清扫超过回收宽限期的实例身份槽位（按注册表内出现的 group 去重）。 */
     private void sweepInstanceSlots(RScoredSortedSet<String> registry) {
-        io.github.streammq.core.broadcast.BroadcastInstanceRegistry inst = instanceRegistry;
+        BroadcastInstanceRegistry inst = instanceRegistry;
         if (inst == null) {
             return;
         }
-        java.util.Set<String> groups = new java.util.HashSet<>();
+        Set<String> groups = new HashSet<>();
         for (String member : registry) {
             int sepIdx = member.indexOf('|');
             if (sepIdx <= 0) {

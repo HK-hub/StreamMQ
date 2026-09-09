@@ -30,6 +30,13 @@ public final class BroadcastGroupNaming {
         return group + "-" + instanceId;
     }
 
+    /** 构造生效 Redis 消费者组名：{@code {group}:{group}-{instanceId}}。 */
+    public static String effectiveGroup(String group, String instanceId) {
+        return group
+                + StreamMQConstants.BROADCAST_GROUP_SEPARATOR
+                + consumerName(group, instanceId);
+    }
+
     /** 从消费者名反解实例身份；格式不匹配时返回 null。 */
     public static String instanceIdFromConsumerName(String group, String consumerName) {
         if (consumerName == null) {

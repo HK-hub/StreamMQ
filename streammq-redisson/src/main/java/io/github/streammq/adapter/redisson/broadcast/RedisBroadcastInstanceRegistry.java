@@ -5,6 +5,7 @@
  */
 package io.github.streammq.adapter.redisson.broadcast;
 
+import io.github.streammq.adapter.redisson.support.BroadcastGroupNaming;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.broadcast.BroadcastInstanceLease;
 import io.github.streammq.core.broadcast.BroadcastInstanceRegistry;
@@ -248,8 +249,10 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
 
     @Override
     public void release(String namespace, String group, String instanceId) {
-        // 语义：保留槽位与消费者组，只把心跳刷新到"最后时刻"，使其尽快进入可回收窗口。
-        // 绝不 HDEL —— 删除槽位会让重启后的同主机实例无法回收，PEL 与消费位点随之丢失。
+        // 释放 ≠ 销毁：优雅停机时把槽位心跳刷新到"停止时刻"，将槽位在回收宽限期内保持为活跃，
+        // 使同主机实例在宽限期内重启能回收同一身份、复用 PEL（消费位点连续）。
+        // 消费者组的真正销毁由 sweep 在超过宽限期后执行——此处绝不 HDEL，
+        // 否则重启后的同主机实例无法回收该槽位，PEL 与消费位点随之永久丢失。
         heartbeat(namespace, group, instanceId);
     }
 
@@ -290,7 +293,8 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
                     }
                     try {
                         redisson.getStream(StreamMQKeys.topicStream(namespace, ownedTopic))
-                                .removeGroup(group + ":" + group + "-" + instanceId);
+                                .removeGroup(
+                                        BroadcastGroupNaming.effectiveGroup(group, instanceId));
                     } catch (RuntimeException ex) {
                         // NOGROUP 表示组已不存在，视为已清理
                         LOG.debug(

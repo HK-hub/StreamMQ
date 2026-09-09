@@ -5,6 +5,7 @@
  */
 package io.github.streammq.core.broadcast;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
@@ -164,7 +165,12 @@ public record BroadcastInstanceLease(
             return null;
         }
         try {
-            List<String> topics = List.of(parts[2].split(String.valueOf(TOPIC_SEP), -1));
+            List<String> topics = new ArrayList<>();
+            for (String t : parts[2].split(String.valueOf(TOPIC_SEP), -1)) {
+                if (!t.isEmpty()) {
+                    topics.add(t);
+                }
+            }
             return new BroadcastInstanceLease(
                     parts[0],
                     parts[1],

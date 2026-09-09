@@ -1102,7 +1102,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         }
     }
 
-    /** 注销广播监听器时刷新实例身份槽位心跳，使其尽快进入可回收窗口（消费者组由清扫任务兜底销毁）。 */
+    /**
+     * 注销广播监听器时刷新实例身份槽位心跳：把槽位在回收宽限期内保持为活跃，使同主机实例在宽限期内重启能回收同一身份并复用 PEL；消费者组的真正销毁由 sweep 在超过宽限期后执行。
+     */
     private void releaseBroadcastInstance(ListenerRegistration<?> reg) {
         if (broadcastInstanceResolver == null || reg.getConsumeMode() != ConsumeMode.BROADCASTING) {
             return;

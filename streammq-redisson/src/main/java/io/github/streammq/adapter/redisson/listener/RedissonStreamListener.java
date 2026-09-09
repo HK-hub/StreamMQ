@@ -758,7 +758,7 @@ public class RedissonStreamListener implements StreamMQListener {
             return group;
         }
         if (broadcast) {
-            return group + StreamMQConstants.BROADCAST_GROUP_SEPARATOR + consumerName;
+            return BroadcastGroupNaming.effectiveGroup(group, broadcastInstanceId());
         }
         return group;
     }
