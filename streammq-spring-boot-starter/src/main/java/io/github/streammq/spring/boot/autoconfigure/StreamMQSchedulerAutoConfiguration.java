@@ -5,13 +5,11 @@
  */
 package io.github.streammq.spring.boot.autoconfigure;
 
-import io.github.streammq.adapter.redisson.listener.RedissonBroadcastGroupRegistry;
 import io.github.streammq.adapter.redisson.scheduler.BroadcastGroupSweeper;
 import io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler;
 import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
-import io.github.streammq.core.broadcast.BroadcastInstanceRegistry;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.listener.BroadcastGroupRegistry;
 import io.github.streammq.core.metrics.StreamMQMetrics;
@@ -220,31 +218,6 @@ public class StreamMQSchedulerAutoConfiguration {
                 batchSize,
                 minIdleMs,
                 registryProvider.getIfAvailable());
-    }
-
-    /**
-     * 广播消费者组注册表（僵尸组回收策略）。默认实现为 Redisson；用户可覆盖。
-     *
-     * @param redisson Redisson 客户端
-     * @param properties 配置
-     * @return 广播组注册表
-     */
-    @Bean
-    @ConditionalOnMissingBean(BroadcastGroupRegistry.class)
-    public BroadcastGroupRegistry streamMQBroadcastGroupRegistry(
-            RedissonClient redisson,
-            StreamMQProperties properties,
-            ObjectProvider<BroadcastInstanceRegistry> instanceRegistryProvider) {
-        BroadcastInstanceRegistry instanceRegistry = instanceRegistryProvider.getIfAvailable();
-        StreamMQProperties.Consumer consumer = properties.getConsumer();
-        return new RedissonBroadcastGroupRegistry(
-                redisson,
-                properties.getNamespace(),
-                RedissonBroadcastGroupRegistry.BROADCAST_GROUP_STALE_TTL_MS,
-                RedissonBroadcastGroupRegistry.DEFAULT_MAX_SWEEP,
-                instanceRegistry,
-                consumer.getBroadcastLeaseTimeout().toMillis(),
-                consumer.getBroadcastReclaimGrace().toMillis());
     }
 
     /**

@@ -282,7 +282,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 健康检查（`HealthIndicator` 在存在启动失败时返回 DOWN，详情含 loopKey → 原因）
   - 管理端点总览 `status` 字段
   `start()` / `stop()` 会清空登记表，避免历史失败影响下一轮判定。
-- **广播消费组累积可被观测**：新增 `RedissonStreamListener#countBroadcastGroups()`、
+- **广播消费组累积可被观测**：新增 `RedissonBroadcastGroupRegistry#countBroadcastGroups()`、
   sweep 汇总日志（`Swept N stale broadcast group(s): remaining=M`），并通过管理端点总览的
   `broadcastGroups` 字段暴露。此前该数字只能靠直接查 Redis 才能看到。
 - **执行器替换未同步给 `DefaultMessageProcessor`（潜在的"消费者静默不消费"）**：
@@ -319,7 +319,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`RedissonClientMissingFailureAnalyzer`**：缺少 `RedissonClient` Bean 时，把语焉不详的
   `NoSuchBeanDefinitionException` 替换为含完整依赖声明与配置示例的启动失败报告。
-- **`RedissonStreamListener#countBroadcastGroups()`** 与管理端点总览的 `broadcastGroups` 字段。
+- **`RedissonBroadcastGroupRegistry#countBroadcastGroups()`** 与管理端点总览的 `broadcastGroups` 字段。
 - 新增测试：`TokenAuthenticatorTest`（含长度预言机回归用例）、
   `DefaultStreamMQListenerContainerTest`（执行器所有权、失败登记、INIT-only 约束）、
   `EnumsTest#doesNotContainMisspelledAlias`（守卫 `UNKNOW` 不得重新引入）。

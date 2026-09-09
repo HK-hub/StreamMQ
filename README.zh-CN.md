@@ -642,7 +642,7 @@ Redis 的消费者组天然是"组内竞争消费"。要实现广播（每条消
 `DefaultStreamMQListenerContainer#instanceToken`）。因此：
 
 - **每次重启都会产生一个新组**，旧组不会立即消失；
-- 旧组由回收任务在心跳超时后清理（`RedissonStreamListener#sweepStaleBroadcastGroups`）；
+- 旧组由回收任务在心跳超时后清理（`RedissonBroadcastGroupRegistry#sweepStaleBroadcastGroups`）；
 - 清理前的窗口内，组的总数 = 心跳超时窗口内的「实例数 × 重启次数」；
 - 每个组都持有自己的 PEL，**会占用 Redis 内存**。
 

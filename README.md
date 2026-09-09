@@ -400,7 +400,7 @@ restarts**. Therefore:
 
 - **Every restart creates a new group**; the old one is not removed immediately.
 - Stale groups are swept after their heartbeat expires
-  (`RedissonStreamListener#sweepStaleBroadcastGroups`).
+  (`RedissonBroadcastGroupRegistry#sweepStaleBroadcastGroups`).
 - Until then, total group count = "instance count × restart count" within the heartbeat window.
 - Each group holds its own PEL and **occupies Redis memory**.
 

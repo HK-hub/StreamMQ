@@ -5,6 +5,7 @@
  */
 package io.github.streammq.core.broadcast;
 
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -14,11 +15,12 @@ import java.util.Objects;
  * BroadcastInstanceRegistry#heartbeat} 续租；超过租约超时未续租的槽位可被同主机实例回收， 超过回收宽限期仍未回收的槽位会被清扫任务销毁。
  *
  * <p><b>编码约定：</b>注册中心需要把租约序列化为单个字符串存放（如 Redis Hash 的 value）。 本类提供 {@link #encode()} / {@link
- * #decode(String)} 的紧凑编码：字段以 {@code |} 分隔， 写入前由 {@link #sanitize(String)} 剔除分隔符， 保证编解码可逆且不会出现字段错位。
+ * #decode(String)} 的紧凑编码：字段以 {@code |} 分隔、主题集合以 {@code ,} 分隔， 写入前由 {@link #sanitize(String)}
+ * 剔除分隔符，保证编解码可逆且不会出现字段错位。
  *
  * @param instanceId 实例身份（非空），会参与构造广播消费者组名
  * @param host 宿主标识（主机名或容器名），用于同主机槽位回收匹配
- * @param topic 主题
+ * @param topics 主题集合：一个实例身份可同时覆盖同一消费者组下的多个主题（多 topic 同 group 场景），清扫时全部释放对应消费者组
  * @param group 消费者组
  * @param pid 进程标识（尽力而为，不可获取时为 {@code -1}）
  * @param createdAtMillis 槽位首次分配时间（毫秒）
@@ -30,7 +32,7 @@ import java.util.Objects;
 public record BroadcastInstanceLease(
         String instanceId,
         String host,
-        String topic,
+        List<String> topics,
         String group,
         long pid,
         long createdAtMillis,
@@ -40,26 +42,32 @@ public record BroadcastInstanceLease(
     /** 编码字段分隔符 */
     private static final char SEP = '|';
 
-    /** 编码字段数：instanceId|host|topic|group|pid|createdAt|lastHeartbeat|reclaimed */
+    /** 主题集合分隔符（写入编码第 3 字段前由 {@link #sanitize} 净化，故解码时可安全按此切分） */
+    private static final char TOPIC_SEP = ',';
+
+    /** 编码字段数：instanceId|host|topics|group|pid|createdAt|lastHeartbeat|reclaimed */
     private static final int FIELD_COUNT = 8;
 
     /**
-     * 紧凑构造：校验必填字段并对 host / topic / group 做分隔符净化。
+     * 紧凑构造：校验必填字段并对 host / group / 各 topic 做分隔符净化。
      *
-     * @throws NullPointerException instanceId / host / topic / group 任一为 null
-     * @throws IllegalArgumentException instanceId 为空白
+     * @throws NullPointerException instanceId / host / topics / group 任一为 null
+     * @throws IllegalArgumentException instanceId 为空白，或 topics 为空
      */
     public BroadcastInstanceLease {
         Objects.requireNonNull(instanceId, "instanceId");
         Objects.requireNonNull(host, "host");
-        Objects.requireNonNull(topic, "topic");
+        Objects.requireNonNull(topics, "topics");
         Objects.requireNonNull(group, "group");
         if (instanceId.isBlank()) {
             throw new IllegalArgumentException("instanceId must not be blank");
         }
+        if (topics.isEmpty()) {
+            throw new IllegalArgumentException("topics must not be empty");
+        }
         instanceId = sanitize(instanceId);
         host = sanitize(host);
-        topic = sanitize(topic);
+        topics = topics.stream().map(BroadcastInstanceLease::sanitize).toList();
         group = sanitize(group);
     }
 
@@ -76,7 +84,7 @@ public record BroadcastInstanceLease(
         StringBuilder sb = new StringBuilder(raw.length());
         for (int i = 0; i < raw.length(); i++) {
             char c = raw.charAt(i);
-            if (c == SEP || c == '\n' || c == '\r') {
+            if (c == SEP || c == TOPIC_SEP || c == '\n' || c == '\r') {
                 sb.append('_');
             } else {
                 sb.append(c);
@@ -93,7 +101,7 @@ public record BroadcastInstanceLease(
      */
     public BroadcastInstanceLease renewed(long nowMillis) {
         return new BroadcastInstanceLease(
-                instanceId, host, topic, group, pid, createdAtMillis, nowMillis, reclaimed);
+                instanceId, host, topics, group, pid, createdAtMillis, nowMillis, reclaimed);
     }
 
     /**
@@ -133,7 +141,7 @@ public record BroadcastInstanceLease(
                 String.valueOf(SEP),
                 instanceId,
                 host,
-                topic,
+                String.join(String.valueOf(TOPIC_SEP), topics),
                 group,
                 Long.toString(pid),
                 Long.toString(createdAtMillis),
@@ -156,10 +164,11 @@ public record BroadcastInstanceLease(
             return null;
         }
         try {
+            List<String> topics = List.of(parts[2].split(String.valueOf(TOPIC_SEP), -1));
             return new BroadcastInstanceLease(
                     parts[0],
                     parts[1],
-                    parts[2],
+                    topics,
                     parts[3],
                     Long.parseLong(parts[4]),
                     Long.parseLong(parts[5]),

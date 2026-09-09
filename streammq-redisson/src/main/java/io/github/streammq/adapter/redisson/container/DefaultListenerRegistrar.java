@@ -5,9 +5,11 @@
  */
 package io.github.streammq.adapter.redisson.container;
 
+import io.github.streammq.adapter.redisson.support.BroadcastGroupNaming;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.annotation.StreamMQConsumer;
 import io.github.streammq.core.annotation.StreamMQDlqConsumer;
+import io.github.streammq.core.broadcast.BroadcastInstanceIdResolver;
 import io.github.streammq.core.consumer.DlqMessageConsumer;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
@@ -67,7 +69,7 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
      * <p>非 null 时，每个 <b>广播模式</b>注册都会向它申请一个<b>跨重启稳定</b>的实例身份， 从而保证广播消费者组名 {@code
      * {group}:{group}-{instanceId}} 在重启后不变、PEL 与消费位点得以复用。
      */
-    private final io.github.streammq.core.broadcast.BroadcastInstanceIdResolver broadcastResolver;
+    private final BroadcastInstanceIdResolver broadcastResolver;
 
     /** 显式配置的广播实例身份提供源（可为 null，表示交由解析器自行读取系统属性/环境变量）。 */
     private final java.util.function.Supplier<String> configuredBroadcastId;
@@ -139,7 +141,7 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
             ConsumeFromWhere defaultConsumeFromWhere,
             ShardLocksFactory shardLocksFactory,
             java.util.function.Consumer<ListenerRegistration<?>> wireIfRunning,
-            io.github.streammq.core.broadcast.BroadcastInstanceIdResolver broadcastResolver,
+            BroadcastInstanceIdResolver broadcastResolver,
             java.util.function.Supplier<String> configuredBroadcastId) {
         this.stateMachine = Objects.requireNonNull(stateMachine);
         this.store = Objects.requireNonNull(store);
@@ -170,7 +172,7 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
         String ns = StringUtils.isEmpty(namespace) ? defaultNamespace : namespace;
         String configured = configuredBroadcastId == null ? null : configuredBroadcastId.get();
         try {
-            io.github.streammq.core.broadcast.BroadcastInstanceIdResolver.Resolution resolution =
+            BroadcastInstanceIdResolver.Resolution resolution =
                     broadcastResolver.resolve(ns, topic, group, configured);
             if (!resolution.isStable()) {
                 LOG.warn(
@@ -312,11 +314,9 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
                 // 广播模式的实例标识必须跨重启稳定：组名 = {group}:{group}-{token}，
                 // 组名漂移会导致旧组成为僵尸组（PEL 泄漏）且重启期间的消息不会被补投。
                 .consumerName(
-                        ann.consumerGroup()
-                                + "-"
-                                + (ann.consumeMode()
-                                                == io.github.streammq.core.enums.ConsumeMode
-                                                        .BROADCASTING
+                        BroadcastGroupNaming.consumerName(
+                                ann.consumerGroup(),
+                                ann.consumeMode() == ConsumeMode.BROADCASTING
                                         ? resolveInstanceToken(
                                                 ann.namespace(), ann.topic(), ann.consumerGroup())
                                         : instanceToken))

@@ -43,7 +43,7 @@ class BroadcastInstanceIdResolverTest {
             return new BroadcastInstanceLease(
                     id,
                     request.host(),
-                    request.topic(),
+                    List.of(request.topic()),
                     request.group(),
                     request.pid(),
                     request.nowMillis(),
@@ -160,13 +160,13 @@ class BroadcastInstanceIdResolverTest {
     void leaseEncodeDecodeRoundTrip() {
         BroadcastInstanceLease lease =
                 new BroadcastInstanceLease(
-                        "i-1", "host|with|pipe", "topic", "group:g", -1, 100, 200, true);
+                        "i-1", "host|with|pipe", List.of("topic"), "group:g", -1, 100, 200, true);
         BroadcastInstanceLease decoded = BroadcastInstanceLease.decode(lease.encode());
         assertThat(decoded).isNotNull();
         assertThat(decoded.instanceId()).isEqualTo("i-1");
         // 分隔符被净化，host 中的 '|' 不应引起字段错位
         assertThat(decoded.host()).isEqualTo("host_with_pipe");
-        assertThat(decoded.topic()).isEqualTo("topic");
+        assertThat(decoded.topics()).containsExactly("topic");
         assertThat(decoded.group()).isEqualTo("group:g");
         assertThat(decoded.reclaimed()).isTrue();
     }
@@ -176,7 +176,8 @@ class BroadcastInstanceIdResolverTest {
     void reclaimGraceWindow() {
         long now = 1_000_000L;
         BroadcastInstanceLease lease =
-                new BroadcastInstanceLease("i-1", "h", "t", "g", -1, now - 1000, now - 1000, false);
+                new BroadcastInstanceLease(
+                        "i-1", "h", List.of("t"), "g", -1, now - 1000, now - 1000, false);
         // 空闲 1000ms：远小于租约，不可回收
         assertThat(lease.isReclaimable(now, LEASE, GRACE)).isFalse();
         // 空闲 30s：超过租约（20s）但在宽限期内 → 可回收

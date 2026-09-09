@@ -15,6 +15,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.Objects;
 import java.util.UUID;
+import lombok.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -98,7 +99,11 @@ public final class BroadcastInstanceIdResolver {
      * @param configuredId 显式配置的身份，可为 null / 空
      * @return 解析结果，永不为 null
      */
-    public Resolution resolve(String namespace, String topic, String group, String configuredId) {
+    public Resolution resolve(
+            @NonNull String namespace,
+            @NonNull String topic,
+            @NonNull String group,
+            String configuredId) {
         String ns = Objects.isNull(namespace) ? "" : namespace;
         String host = resolveHost();
         long pid = resolvePid();
@@ -185,7 +190,8 @@ public final class BroadcastInstanceIdResolver {
      * @param group 消费者组
      * @param instanceId 实例身份
      */
-    public void release(String namespace, String group, String instanceId) {
+    public void release(
+            @NonNull String namespace, @NonNull String group, @NonNull String instanceId) {
         if (registry == null || trimToNull(instanceId) == null) {
             return;
         }

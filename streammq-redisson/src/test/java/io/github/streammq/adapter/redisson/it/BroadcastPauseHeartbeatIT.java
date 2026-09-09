@@ -9,7 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
-import io.github.streammq.adapter.redisson.listener.RedissonStreamListener;
+import io.github.streammq.adapter.redisson.listener.RedissonBroadcastGroupRegistry;
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListenerFactory;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
@@ -103,7 +103,7 @@ class BroadcastPauseHeartbeatIT extends AbstractRedisIT {
             // 将注册表条目回拨到"刚过期"水位：若无暂停期心跳，下一次 sweep 必然回收
             long staleCutoff =
                     System.currentTimeMillis()
-                            - 2 * RedissonStreamListener.BROADCAST_GROUP_STALE_TTL_MS;
+                            - 2 * RedissonBroadcastGroupRegistry.BROADCAST_GROUP_STALE_TTL_MS;
             for (String member :
                     registry.valueRange(
                             Double.NEGATIVE_INFINITY, true, Double.POSITIVE_INFINITY, true)) {
@@ -135,7 +135,9 @@ class BroadcastPauseHeartbeatIT extends AbstractRedisIT {
                                                     }));
 
             // 僵尸回收显式触发：心跳活跃 ⇒ 组必须存活
-            int swept = RedissonStreamListener.sweepStaleBroadcastGroups(redisson, namespace);
+            int swept =
+                    new RedissonBroadcastGroupRegistry(redisson, namespace)
+                            .sweepStaleBroadcastGroups();
             assertThat(swept).isZero();
             assertThat(redisson.getStream(StreamMQKeys.topicStream(namespace, topic)).listGroups())
                     .anySatisfy(

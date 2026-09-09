@@ -6,6 +6,7 @@
 package io.github.streammq.core.broadcast;
 
 import java.util.List;
+import lombok.NonNull;
 
 /**
  * 广播消费实例注册中心的 SPI：为广播消费者分配<b>跨重启稳定</b>的持久化实例身份。
@@ -58,7 +59,7 @@ public interface BroadcastInstanceRegistry {
      * @param request 申请参数（必填）
      * @return 租约；注册中心不可用或无法分配时返回 {@code null}（绝不抛异常）
      */
-    BroadcastInstanceLease acquire(BroadcastInstanceRequest request);
+    BroadcastInstanceLease acquire(@NonNull BroadcastInstanceRequest request);
 
     /**
      * 续租（心跳）。
@@ -68,7 +69,7 @@ public interface BroadcastInstanceRegistry {
      * @param instanceId 实例身份
      * @return true 表示续租成功；槽位不存在或存储不可用时返回 false
      */
-    boolean heartbeat(String namespace, String group, String instanceId);
+    boolean heartbeat(@NonNull String namespace, @NonNull String group, @NonNull String instanceId);
 
     /**
      * 主动释放槽位（优雅停机）。
@@ -80,7 +81,7 @@ public interface BroadcastInstanceRegistry {
      * @param group 消费者组
      * @param instanceId 实例身份
      */
-    void release(String namespace, String group, String instanceId);
+    void release(@NonNull String namespace, @NonNull String group, @NonNull String instanceId);
 
     /**
      * 清扫：销毁超过回收宽限期仍未回收的实例槽位，并销毁其对应的 Redis 消费者组，释放 PEL 与元数据。
@@ -95,8 +96,8 @@ public interface BroadcastInstanceRegistry {
      * @return 本次销毁的槽位数；存储不可用时返回 0
      */
     int sweep(
-            String namespace,
-            String group,
+            @NonNull String namespace,
+            @NonNull String group,
             long leaseTimeoutMillis,
             long reclaimGraceMillis,
             int maxSweep);
@@ -108,7 +109,7 @@ public interface BroadcastInstanceRegistry {
      * @param group 消费者组
      * @return 槽位数；查询失败时返回 -1
      */
-    long countInstances(String namespace, String group);
+    long countInstances(@NonNull String namespace, @NonNull String group);
 
     /**
      * 返回某消费者组下全部租约快照（供运维端点展示）。
@@ -117,5 +118,5 @@ public interface BroadcastInstanceRegistry {
      * @param group 消费者组
      * @return 租约列表；查询失败时返回空列表
      */
-    List<BroadcastInstanceLease> listInstances(String namespace, String group);
+    List<BroadcastInstanceLease> listInstances(@NonNull String namespace, @NonNull String group);
 }

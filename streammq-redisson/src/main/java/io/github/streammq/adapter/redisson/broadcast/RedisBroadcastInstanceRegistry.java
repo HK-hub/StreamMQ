@@ -92,8 +92,11 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
                     + "end                                                            \n"
                     + "local owner = field(cur, 2)                                    \n"
                     + "local lastHb = tonumber(field(cur, 7))                         \n"
-                    + "if owner == ARGV[5] and lastHb and (tonumber(ARGV[3]) - lastHb)"
-                    + " > tonumber(ARGV[4]) then                                      \n"
+                    + "if owner == ARGV[5] then                                      \n"
+                    + "  redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])                \n"
+                    + "  return 1                                                     \n"
+                    + "end                                                            \n"
+                    + "if lastHb and (tonumber(ARGV[3]) - lastHb) > tonumber(ARGV[4]) then \n"
                     + "  redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])                \n"
                     + "  return 1                                                     \n"
                     + "end                                                            \n"
@@ -280,16 +283,21 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
                     continue;
                 }
                 String instanceId = parts[0];
-                String topic = parts[2];
-                try {
-                    redisson.getStream(StreamMQKeys.topicStream(namespace, topic))
-                            .removeGroup(group + ":" + group + "-" + instanceId);
-                } catch (RuntimeException ex) {
-                    // NOGROUP 表示组已不存在，视为已清理
-                    LOG.debug(
-                            "Destroy broadcast consumer group failed (ignored): id={}, {}",
-                            instanceId,
-                            ex.getMessage());
+                String topicsPart = parts[2];
+                for (String ownedTopic : topicsPart.split(",", -1)) {
+                    if (ownedTopic.isEmpty()) {
+                        continue;
+                    }
+                    try {
+                        redisson.getStream(StreamMQKeys.topicStream(namespace, ownedTopic))
+                                .removeGroup(group + ":" + group + "-" + instanceId);
+                    } catch (RuntimeException ex) {
+                        // NOGROUP 表示组已不存在，视为已清理
+                        LOG.debug(
+                                "Destroy broadcast consumer group failed (ignored): id={}, {}",
+                                instanceId,
+                                ex.getMessage());
+                    }
                 }
                 removed++;
             }
@@ -341,19 +349,13 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
 
     // ===================== 内部实现 =====================
 
-    /** 占用偏好身份：不存在则新建；存在但属同 host 且租约已过期则回收。 */
+    /** 占用偏好身份：不存在则新建；存在且属同 host 则续租/复用（合并已覆盖的主题）；异 host 活跃槽位则让出。 */
     private BroadcastInstanceLease claimPreferred(
             String key, BroadcastInstanceRequest request, String preferredId) {
-        BroadcastInstanceLease candidate =
-                new BroadcastInstanceLease(
-                        preferredId,
-                        request.host(),
-                        request.topic(),
-                        request.group(),
-                        request.pid(),
-                        request.nowMillis(),
-                        request.nowMillis(),
-                        false);
+        BroadcastInstanceLease existing = readLease(key, preferredId);
+        List<String> topics = mergeTopics(existing, request.topic());
+        boolean reclaimed = existing != null;
+        BroadcastInstanceLease candidate = buildLease(preferredId, request, topics, reclaimed);
         Long ok =
                 redisson.getScript(StringCodec.INSTANCE)
                         .eval(
@@ -366,19 +368,34 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
                                 Long.toString(request.nowMillis()),
                                 Long.toString(request.leaseTimeoutMillis()),
                                 request.host());
-        if (ok == null || ok != 1L) {
-            return null;
-        }
-        // 若槽位此前已存在且属同主机，则本次是"回收"
+        return ok != null && ok == 1L ? candidate : null;
+    }
+
+    private BroadcastInstanceLease readLease(String key, String id) {
+        String encoded = redisson.<String, String>getMap(key, StringCodec.INSTANCE).get(id);
+        return encoded == null ? null : BroadcastInstanceLease.decode(encoded);
+    }
+
+    private BroadcastInstanceLease buildLease(
+            String id, BroadcastInstanceRequest request, List<String> topics, boolean reclaimed) {
+        long now = request.nowMillis();
         return new BroadcastInstanceLease(
-                preferredId,
-                request.host(),
-                request.topic(),
-                request.group(),
-                request.pid(),
-                request.nowMillis(),
-                request.nowMillis(),
-                false);
+                id, request.host(), topics, request.group(), request.pid(), now, now, reclaimed);
+    }
+
+    private static List<String> mergeTopics(BroadcastInstanceLease existing, String topic) {
+        List<String> result = new ArrayList<>();
+        if (existing != null) {
+            for (String t : existing.topics()) {
+                if (!result.contains(t)) {
+                    result.add(t);
+                }
+            }
+        }
+        if (topic != null && !result.contains(topic)) {
+            result.add(topic);
+        }
+        return List.copyOf(result);
     }
 
     /** 回收同主机、处于可回收窗口内的历史槽位（取最久未心跳者）。 */
@@ -417,7 +434,7 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
                 new BroadcastInstanceLease(
                         best.instanceId(),
                         request.host(),
-                        request.topic(),
+                        mergeTopics(best, request.topic()),
                         request.group(),
                         request.pid(),
                         best.createdAtMillis(),
@@ -455,7 +472,7 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
                     new BroadcastInstanceLease(
                             candidateId,
                             request.host(),
-                            request.topic(),
+                            List.of(request.topic()),
                             request.group(),
                             request.pid(),
                             request.nowMillis(),

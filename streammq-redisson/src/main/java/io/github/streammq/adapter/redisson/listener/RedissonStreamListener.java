@@ -6,8 +6,10 @@
 package io.github.streammq.adapter.redisson.listener;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
+import io.github.streammq.adapter.redisson.support.BroadcastGroupNaming;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.core.broadcast.BroadcastInstanceRegistry;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.enums.ConsumeFromWhere;
 import io.github.streammq.core.enums.DlqReason;
@@ -618,21 +620,14 @@ public class RedissonStreamListener implements StreamMQListener {
     // ===================== 广播组心跳与僵尸组回收 =====================
 
     /**
-     * 广播组心跳过期 TTL（毫秒）。
-     *
-     * <p>实现已迁至 {@link RedissonBroadcastGroupRegistry}，本字段保留为兼容别名。
-     */
-    public static final long BROADCAST_GROUP_STALE_TTL_MS =
-            RedissonBroadcastGroupRegistry.BROADCAST_GROUP_STALE_TTL_MS;
-
-    /**
      * 刷新本广播监听器在注册表中的心跳（ZSet score = 当前时间）。
      *
      * <p>仅 broadcast 且非 dlq/retry 模式时写入；失败静默（最坏情况是组被回收后由 ensureGroup 重建，语义等同旧版 close-destroy
      * 路径，不会更糟）。
      *
-     * <p><b>公开为暂停期保活钩子：</b>消费循环在容器暂停期间不执行拉取，若不补发心跳， 停留超过 {@link #BROADCAST_GROUP_STALE_TTL_MS}
-     * 后组会被僵尸回收任务销毁，resume 时全量重放历史。 {@code ConsumeLoopTask} 在暂停休眠周期内调用本方法维持注册表活性；非广播实例调用为 no-op。
+     * <p><b>公开为暂停期保活钩子：</b>消费循环在容器暂停期间不执行拉取，若不补发心跳， 停留超过 {@link
+     * RedissonBroadcastGroupRegistry#BROADCAST_GROUP_STALE_TTL_MS} 后组会被僵尸回收任务销毁，resume 时全量重放历史。
+     * {@code ConsumeLoopTask} 在暂停休眠周期内调用本方法维持注册表活性；非广播实例调用为 no-op。
      */
     public void heartbeatBroadcastRegistry() {
         if (!broadcast || dlqMode || retryMode) {
@@ -657,8 +652,7 @@ public class RedissonStreamListener implements StreamMQListener {
      * DefaultListenerRegistrar}），此处按同一规则剥离前缀。
      */
     private void heartbeatBroadcastInstanceLease() {
-        io.github.streammq.core.broadcast.BroadcastInstanceRegistry registry =
-                broadcastInstanceRegistry;
+        BroadcastInstanceRegistry registry = broadcastInstanceRegistry;
         if (registry == null) {
             return;
         }
@@ -675,46 +669,11 @@ public class RedissonStreamListener implements StreamMQListener {
 
     /** 从 consumerName 反解实例身份（{@code {group}-{instanceId}}）；格式不匹配时返回 null。 */
     private String broadcastInstanceId() {
-        String prefix = group + "-";
-        if (consumerName == null || !consumerName.startsWith(prefix)) {
-            return null;
-        }
-        String id = consumerName.substring(prefix.length());
-        return id.isEmpty() ? null : id;
+        return BroadcastGroupNaming.instanceIdFromConsumerName(group, consumerName);
     }
 
     private String registryMember() {
         return topic + "|" + getEffectiveGroup();
-    }
-
-    /**
-     * 回收僵尸广播消费者组。
-     *
-     * <p>本方法保留为静态兼容门面，实现已迁至 {@link RedissonBroadcastGroupRegistry}（SPI 接口 {@link
-     * io.github.streammq.core.listener.BroadcastGroupRegistry} 的默认实现）。新代码应通过依赖注入使用 {@code
-     * BroadcastGroupRegistry} 接口，而非调用本静态方法——注入形式允许用户自定义实现。
-     *
-     * @param redisson Redisson 客户端
-     * @param namespace 命名空间
-     * @return 本次回收的组数量
-     */
-    public static int sweepStaleBroadcastGroups(RedissonClient redisson, String namespace) {
-        return new RedissonBroadcastGroupRegistry(redisson, namespace).sweepStaleBroadcastGroups();
-    }
-
-    /**
-     * 返回当前注册表中的广播消费组数量（含活跃与尚未被回收的僵尸组）。
-     *
-     * <p>本方法保留为静态兼容门面，实现已迁至 {@link RedissonBroadcastGroupRegistry}（SPI 接口 {@link
-     * io.github.streammq.core.listener.BroadcastGroupRegistry} 的默认实现）。新代码应通过依赖注入使用 {@code
-     * BroadcastGroupRegistry} 接口。
-     *
-     * @param redisson Redisson 客户端
-     * @param namespace 命名空间
-     * @return 注册表中的广播组条目数
-     */
-    public static long countBroadcastGroups(RedissonClient redisson, String namespace) {
-        return new RedissonBroadcastGroupRegistry(redisson, namespace).countBroadcastGroups();
     }
 
     private void ensureGroup() {

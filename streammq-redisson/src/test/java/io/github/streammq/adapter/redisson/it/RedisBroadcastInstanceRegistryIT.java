@@ -81,7 +81,7 @@ class RedisBroadcastInstanceRegistryIT extends AbstractRedisIT {
                 new BroadcastInstanceLease(
                         old.instanceId(),
                         old.host(),
-                        old.topic(),
+                        old.topics(),
                         old.group(),
                         old.pid(),
                         old.createdAtMillis(),
@@ -143,7 +143,7 @@ class RedisBroadcastInstanceRegistryIT extends AbstractRedisIT {
                 new BroadcastInstanceLease(
                         lease.instanceId(),
                         lease.host(),
-                        lease.topic(),
+                        lease.topics(),
                         lease.group(),
                         lease.pid(),
                         lease.createdAtMillis(),
@@ -167,5 +167,57 @@ class RedisBroadcastInstanceRegistryIT extends AbstractRedisIT {
         List<?> groups =
                 redisson.getStream(StreamMQKeys.topicStream(namespace, topic)).listGroups();
         assertThat(groups).noneMatch(g -> effectiveGroup.equals(String.valueOf(g)));
+    }
+
+    @Test
+    @DisplayName("多 topic 同 group：复用同一身份并合并主题集合，清扫释放全部主题组（修复僵尸组泄漏）")
+    void multiTopicSameGroupMergesTopicsAndSweepDestroysAll() {
+        BroadcastInstanceRegistry reg = registry();
+        String group = "g-multi";
+        // 第一次：分配身份，单主题
+        BroadcastInstanceLease first = reg.acquire(req("t-a", group, "host-A", null));
+        assertThat(first.topics()).containsExactly("t-a");
+        // 第二次（同主机、偏好同一身份）：应复用身份并将主题并入集合，而非覆盖
+        BroadcastInstanceLease second =
+                reg.acquire(req("t-b", group, "host-A", first.instanceId()));
+        assertThat(second.instanceId()).isEqualTo(first.instanceId());
+        assertThat(second.topics()).containsExactlyInAnyOrder("t-a", "t-b");
+
+        // 构造该合并槽位的过期副本（lastHeartbeat 置于回收宽限期之外）
+        String key = StreamMQKeys.broadcastInstances(namespace, group);
+        RMap<String, String> map =
+                redisson.<String, String>getMap(
+                        key, org.redisson.client.codec.StringCodec.INSTANCE);
+        BroadcastInstanceLease stale =
+                new BroadcastInstanceLease(
+                        first.instanceId(),
+                        first.host(),
+                        second.topics(),
+                        group,
+                        first.pid(),
+                        first.createdAtMillis(),
+                        System.currentTimeMillis() - (8L * 24 * 60 * 60 * 1000),
+                        true);
+        map.put(first.instanceId(), stale.encode());
+
+        // 两个主题对应的消费者组先存在，供清扫销毁
+        String effectiveGroup = group + ":" + group + "-" + first.instanceId();
+        for (String t : new String[] {"t-a", "t-b"}) {
+            redisson.getStream(StreamMQKeys.topicStream(namespace, t))
+                    .createGroup(
+                            org.redisson.api.stream.StreamCreateGroupArgs.name(effectiveGroup)
+                                    .makeStream()
+                                    .id(new org.redisson.api.StreamMessageId(0, 0)));
+        }
+
+        int removed = reg.sweep(namespace, group, LEASE, GRACE, 100);
+        assertThat(removed).isEqualTo(1);
+        assertThat(map).doesNotContainKey(first.instanceId());
+        // 修复前只会销毁最后一个主题组，遗留僵尸组；现在两个主题的组均被清理
+        for (String t : new String[] {"t-a", "t-b"}) {
+            List<?> groups =
+                    redisson.getStream(StreamMQKeys.topicStream(namespace, t)).listGroups();
+            assertThat(groups).noneMatch(g -> effectiveGroup.equals(String.valueOf(g)));
+        }
     }
 }

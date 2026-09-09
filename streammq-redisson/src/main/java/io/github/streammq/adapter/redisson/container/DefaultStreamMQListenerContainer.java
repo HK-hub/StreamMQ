@@ -14,13 +14,16 @@ import io.github.streammq.adapter.redisson.lock.RedissonOrderlyShardLockManager;
 import io.github.streammq.adapter.redisson.metrics.RuntimeStatsRegistry;
 import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
+import io.github.streammq.adapter.redisson.support.BroadcastGroupNaming;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.annotation.StreamMQConsumer;
 import io.github.streammq.core.annotation.StreamMQDlqConsumer;
+import io.github.streammq.core.broadcast.BroadcastInstanceIdResolver;
 import io.github.streammq.core.consumer.*;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.enums.ConsumeFromWhere;
+import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.filter.ConsumerFilter;
 import io.github.streammq.core.filter.ConsumerFilterChain;
 import io.github.streammq.core.filter.ConsumerFilterResolver;
@@ -128,8 +131,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      *
      * <p>为 null 时退化为 0.1.1 行为（主机名 + 进程内序号），重启会产生新的广播消费者组。
      */
-    private volatile io.github.streammq.core.broadcast.BroadcastInstanceIdResolver
-            broadcastInstanceResolver;
+    private volatile BroadcastInstanceIdResolver broadcastInstanceResolver;
 
     /** 显式配置的广播实例身份（可为 null，表示交由解析器自行读取系统属性/环境变量）。 */
     private volatile java.util.function.Supplier<String> configuredBroadcastInstanceId;
@@ -207,7 +209,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      * @param configuredId 显式配置的实例身份提供源，可为 null
      */
     public void setBroadcastInstanceResolver(
-            io.github.streammq.core.broadcast.BroadcastInstanceIdResolver resolver,
+            BroadcastInstanceIdResolver resolver,
             java.util.function.Supplier<String> configuredId) {
         assertInitState("broadcastInstanceResolver");
         this.broadcastInstanceResolver = resolver;
@@ -225,8 +227,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
      *
      * @return 解析器
      */
-    public io.github.streammq.core.broadcast.BroadcastInstanceIdResolver
-            getBroadcastInstanceResolver() {
+    public BroadcastInstanceIdResolver getBroadcastInstanceResolver() {
         return broadcastInstanceResolver;
     }
 
@@ -1014,6 +1015,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         LOG.info("Stopping ListenerContainer...");
         // 先取消消费循环，再注销组管理器：避免除名后仍在拉取导致 rebalance 短暂双重消费
         loopSupervisor.cancelAll();
+        for (ListenerRegistration<?> reg : store.registrations()) {
+            releaseBroadcastInstance(reg);
+        }
         store.clearGroupManagers();
         consumerFactory.close();
         if (ownsExecutor) {
@@ -1083,6 +1087,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             loopSupervisor.cancelForRegistration(key);
             store.removeFilters(key);
             store.removeAndUnregisterGroupManager(key);
+            releaseBroadcastInstance(reg);
             LOG.info(
                     "Unregistered StreamMQ listener: topic={}, group={}, wasRunning={}",
                     topic,
@@ -1094,6 +1099,24 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                     "Unregister ignored, no registration found: topic={}, group={}",
                     topic,
                     consumerGroup);
+        }
+    }
+
+    /** 注销广播监听器时刷新实例身份槽位心跳，使其尽快进入可回收窗口（消费者组由清扫任务兜底销毁）。 */
+    private void releaseBroadcastInstance(ListenerRegistration<?> reg) {
+        if (broadcastInstanceResolver == null || reg.getConsumeMode() != ConsumeMode.BROADCASTING) {
+            return;
+        }
+        String instanceId =
+                BroadcastGroupNaming.instanceIdFromConsumerName(
+                        reg.getGroup(), reg.getConsumerName());
+        if (instanceId == null) {
+            return;
+        }
+        try {
+            broadcastInstanceResolver.release(reg.getNamespace(), reg.getGroup(), instanceId);
+        } catch (RuntimeException ignore) {
+            // 优雅释放失败不影响停机：心跳过期后由清扫任务兜底回收
         }
     }
 

@@ -5,7 +5,10 @@
  */
 package io.github.streammq.adapter.redisson.listener;
 
+import io.github.streammq.adapter.redisson.support.BroadcastGroupNaming;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.core.broadcast.BroadcastInstanceLease;
+import io.github.streammq.core.broadcast.BroadcastInstanceRegistry;
 import io.github.streammq.core.listener.BroadcastGroupRegistry;
 import java.util.Collection;
 import java.util.Objects;
@@ -205,7 +208,7 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
      * @return true 表示应保留该组（不得销毁）
      */
     private boolean isProtectedByInstanceLease(String effectiveGroup) {
-        io.github.streammq.core.broadcast.BroadcastInstanceRegistry registry = instanceRegistry;
+        BroadcastInstanceRegistry registry = instanceRegistry;
         if (registry == null) {
             return false;
         }
@@ -214,18 +217,13 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
             return false;
         }
         String group = effectiveGroup.substring(0, colon);
-        String consumerPart = effectiveGroup.substring(colon + 1);
-        String prefix = group + "-";
-        if (!consumerPart.startsWith(prefix)) {
-            return false;
-        }
-        String instanceId = consumerPart.substring(prefix.length());
-        if (instanceId.isEmpty()) {
+        String instanceId =
+                BroadcastGroupNaming.instanceIdFromEffectiveGroup(group, effectiveGroup);
+        if (instanceId == null || instanceId.isEmpty()) {
             return false;
         }
         long now = System.currentTimeMillis();
-        for (io.github.streammq.core.broadcast.BroadcastInstanceLease lease :
-                registry.listInstances(namespace, group)) {
+        for (BroadcastInstanceLease lease : registry.listInstances(namespace, group)) {
             if (lease.instanceId().equals(instanceId)) {
                 return now - lease.lastHeartbeatMillis() <= instanceReclaimGraceMillis;
             }
