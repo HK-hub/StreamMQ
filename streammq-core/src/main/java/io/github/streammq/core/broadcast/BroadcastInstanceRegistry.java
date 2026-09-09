@@ -5,6 +5,7 @@
  */
 package io.github.streammq.core.broadcast;
 
+import java.util.Collection;
 import java.util.List;
 import lombok.NonNull;
 
@@ -82,6 +83,26 @@ public interface BroadcastInstanceRegistry {
      * @param instanceId 实例身份
      */
     void release(@NonNull String namespace, @NonNull String group, @NonNull String instanceId);
+
+    /**
+     * 按 topic 维度主动释放（注销单个/部分主题）。
+     *
+     * <p>从槽位主题集合中移除给定主题；若移除后集合仍非空，槽位与剩余主题的消费者组<b>保留</b> （供同主机实例重启回收，保住 PEL）；若移除后集合为空，则<b>删除槽位</b>
+     * （其消费者组随后由 {@link #sweep} 在超过回收宽限期后销毁）。
+     *
+     * <p>与 {@link #release(String, String, String)} 的区别：后者用于"整个实例暂停/停机"（保留全部主题以保 PEL），
+     * 本方法用于"仅部分主题不再被本持有者消费"（允许这些主题的组被回收）。
+     *
+     * @param namespace 命名空间
+     * @param group 消费者组
+     * @param instanceId 实例身份
+     * @param topics 本次释放的主题（非空，实现应做分隔符净化与去重）
+     */
+    void release(
+            @NonNull String namespace,
+            @NonNull String group,
+            @NonNull String instanceId,
+            @NonNull Collection<String> topics);
 
     /**
      * 清扫：销毁超过回收宽限期仍未回收的实例槽位，并销毁其对应的 Redis 消费者组，释放 PEL 与元数据。

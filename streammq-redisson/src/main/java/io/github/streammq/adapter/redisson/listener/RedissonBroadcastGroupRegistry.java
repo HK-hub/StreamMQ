@@ -158,7 +158,7 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
                     involvedGroups.add(effectiveGroup.substring(0, colon));
                 }
             }
-            Map<String, Map<String, Long>> leaseByGroup = new HashMap<>();
+            Map<String, Map<String, BroadcastInstanceLease>> leaseByGroup = new HashMap<>();
             for (String g : involvedGroups) {
                 leaseByGroup.put(g, instanceLeaseSnapshot(g));
             }
@@ -172,7 +172,7 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
                 String effectiveGroup = member.substring(sepIdx + 1);
                 // 持久化广播身份：槽位仍在回收宽限期内时，其消费者组与 PEL 必须保留，
                 // 否则"重启 10 分钟"就会把位点永久销毁，回收机制随之失去意义。
-                if (isProtectedByInstanceLease(effectiveGroup, leaseByGroup)) {
+                if (isProtectedByInstanceLease(effectiveGroup, topic, leaseByGroup)) {
                     LOG.debug(
                             "Broadcast group retained within reclaim grace window: group={}",
                             effectiveGroup);
@@ -221,22 +221,27 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
     }
 
     /**
-     * 判断某广播消费者组是否仍受实例身份租约保护（即其槽位还在回收宽限期内）。
+     * 判断某广播消费者组是否仍受实例身份租约保护（即其槽位还在回收宽限期内，且仍持有该 topic）。
      *
-     * <p>组名形如 {@code {group}:{group}-{instanceId}}，按此规则反解出 group 与 instanceId， 再查预拉取的租约快照。
+     * <p>组名形如 {@code {group}:{group}-{instanceId}}，按此规则反解出 group 与 instanceId，
+     * 再查预拉取的租约快照。仅当槽位<b>仍持有该 topic</b> 时才保护其消费者组—— 该 topic
+     * 已被某持有者释放（不再被本实例消费）则不再保护，允许清扫销毁，由此避免误伤其它仍在消费的同组主题。
      *
      * @param effectiveGroup 广播消费者的实际 Redis 组名
-     * @param leaseByGroup group → (instanceId → lastHeartbeatMillis) 预拉取快照
+     * @param topic 待判定是否可销毁的主题
+     * @param leaseByGroup group → (instanceId → 租约) 预拉取快照
      * @return true 表示应保留该组（不得销毁）
      */
     private boolean isProtectedByInstanceLease(
-            String effectiveGroup, Map<String, Map<String, Long>> leaseByGroup) {
+            String effectiveGroup,
+            String topic,
+            Map<String, Map<String, BroadcastInstanceLease>> leaseByGroup) {
         int colon = effectiveGroup.indexOf(':');
         if (colon <= 0) {
             return false;
         }
         String group = effectiveGroup.substring(0, colon);
-        Map<String, Long> snapshot = leaseByGroup.get(group);
+        Map<String, BroadcastInstanceLease> snapshot = leaseByGroup.get(group);
         if (snapshot == null) {
             return false;
         }
@@ -245,20 +250,27 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
         if (instanceId == null || instanceId.isEmpty()) {
             return false;
         }
-        Long lastHb = snapshot.get(instanceId);
-        return lastHb != null && System.currentTimeMillis() - lastHb <= instanceReclaimGraceMillis;
+        BroadcastInstanceLease lease = snapshot.get(instanceId);
+        if (lease == null) {
+            return false;
+        }
+        if (System.currentTimeMillis() - lease.lastHeartbeatMillis() > instanceReclaimGraceMillis) {
+            return false;
+        }
+        // 关键：仅当槽位仍持有该 topic 才保护其组；否则该 topic 已释放，允许清扫销毁。
+        return lease.topics().contains(BroadcastInstanceLease.sanitize(topic));
     }
 
-    /** 拉取某 group 下的实例租约快照：instanceId → lastHeartbeatMillis（注册中心不可用/为空时返回空 map）。 */
-    private Map<String, Long> instanceLeaseSnapshot(String group) {
+    /** 拉取某 group 下的实例租约快照：instanceId → 租约（注册中心不可用/为空时返回空 map）。 */
+    private Map<String, BroadcastInstanceLease> instanceLeaseSnapshot(String group) {
         BroadcastInstanceRegistry registry = instanceRegistry;
         if (registry == null) {
             return Map.of();
         }
-        Map<String, Long> snapshot = new HashMap<>();
+        Map<String, BroadcastInstanceLease> snapshot = new HashMap<>();
         try {
             for (BroadcastInstanceLease lease : registry.listInstances(namespace, group)) {
-                snapshot.put(lease.instanceId(), lease.lastHeartbeatMillis());
+                snapshot.put(lease.instanceId(), lease);
             }
         } catch (RuntimeException ex) {
             LOG.debug(

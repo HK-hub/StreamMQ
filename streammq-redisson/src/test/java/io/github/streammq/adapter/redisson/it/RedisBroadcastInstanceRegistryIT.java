@@ -220,4 +220,31 @@ class RedisBroadcastInstanceRegistryIT extends AbstractRedisIT {
             assertThat(groups).noneMatch(g -> effectiveGroup.equals(String.valueOf(g)));
         }
     }
+
+    @Test
+    @DisplayName("按 topic 释放：移除指定主题保留槽位与剩余主题；移除末个主题则删除槽位")
+    void topicReleaseRemovesTopicAndClearsSlot() {
+        BroadcastInstanceRegistry reg = registry();
+        String group = "g-rel";
+        // 同主机、偏好同一身份两次 acquire → 合并主题 {ta, tb}
+        BroadcastInstanceLease first = reg.acquire(req("ta", group, "host-A", null));
+        BroadcastInstanceLease second = reg.acquire(req("tb", group, "host-A", first.instanceId()));
+        assertThat(second.instanceId()).isEqualTo(first.instanceId());
+        assertThat(second.topics()).containsExactlyInAnyOrder("ta", "tb");
+
+        // 释放 ta：槽位保留，仅剩 tb
+        reg.release(namespace, group, first.instanceId(), List.of("ta"));
+        String key = StreamMQKeys.broadcastInstances(namespace, group);
+        RMap<String, String> map =
+                redisson.<String, String>getMap(
+                        key, org.redisson.client.codec.StringCodec.INSTANCE);
+        BroadcastInstanceLease afterPartial =
+                BroadcastInstanceLease.decode(map.get(first.instanceId()));
+        assertThat(afterPartial).isNotNull();
+        assertThat(afterPartial.topics()).containsExactly("tb");
+
+        // 释放 tb：槽位清空被删除
+        reg.release(namespace, group, first.instanceId(), List.of("tb"));
+        assertThat(map).doesNotContainKey(first.instanceId());
+    }
 }

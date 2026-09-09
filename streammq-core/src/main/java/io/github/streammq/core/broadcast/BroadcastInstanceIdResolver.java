@@ -13,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.Collection;
 import java.util.Objects;
 import java.util.UUID;
 import lombok.NonNull;
@@ -199,6 +200,29 @@ public final class BroadcastInstanceIdResolver {
             registry.release(namespace, group, instanceId);
         } catch (RuntimeException ex) {
             LOG.debug("Broadcast instance release failed: {}", ex.toString());
+        }
+    }
+
+    /**
+     * 按 topic 维度主动释放（注销单个/部分主题）：从槽位主题集合中移除给定主题； 若集合清空则删除槽位，使这些主题的消费者组可被清扫任务回收。
+     *
+     * @param namespace 命名空间
+     * @param group 消费者组
+     * @param instanceId 实例身份
+     * @param topics 本次释放的主题（非空）
+     */
+    public void release(
+            @NonNull String namespace,
+            @NonNull String group,
+            @NonNull String instanceId,
+            @NonNull Collection<String> topics) {
+        if (registry == null || trimToNull(instanceId) == null) {
+            return;
+        }
+        try {
+            registry.release(namespace, group, instanceId, topics);
+        } catch (RuntimeException ex) {
+            LOG.debug("Broadcast instance topic release failed: {}", ex.toString());
         }
     }
 

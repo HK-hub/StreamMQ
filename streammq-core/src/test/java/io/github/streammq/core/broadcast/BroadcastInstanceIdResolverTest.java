@@ -9,6 +9,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import org.junit.jupiter.api.DisplayName;
@@ -30,6 +31,7 @@ class BroadcastInstanceIdResolverTest {
     private static final class FakeRegistry implements BroadcastInstanceRegistry {
         final List<String> heartbeats = new ArrayList<>();
         final List<String> releases = new ArrayList<>();
+        final List<String> topicReleases = new ArrayList<>();
         String nextId;
         boolean claimResult = true;
         long sweepRemoved = 0;
@@ -60,6 +62,12 @@ class BroadcastInstanceIdResolverTest {
         @Override
         public void release(String namespace, String group, String instanceId) {
             releases.add(instanceId);
+        }
+
+        @Override
+        public void release(
+                String namespace, String group, String instanceId, Collection<String> topics) {
+            topicReleases.add(instanceId + "->" + String.join(",", topics));
         }
 
         @Override
@@ -153,6 +161,15 @@ class BroadcastInstanceIdResolverTest {
         BroadcastInstanceIdResolver r = resolver(registry, null);
         r.release("", "g", "some-id");
         assertThat(registry.releases).containsExactly("some-id");
+    }
+
+    @Test
+    @DisplayName("释放(按 topic)：调用注册中心 topic 维度 release")
+    void releaseTopicsDelegatesToRegistry() {
+        FakeRegistry registry = new FakeRegistry();
+        BroadcastInstanceIdResolver r = resolver(registry, null);
+        r.release("", "g", "some-id", List.of("t1", "t2"));
+        assertThat(registry.topicReleases).containsExactly("some-id->t1,t2");
     }
 
     @Test

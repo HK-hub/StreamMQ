@@ -1087,7 +1087,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             loopSupervisor.cancelForRegistration(key);
             store.removeFilters(key);
             store.removeAndUnregisterGroupManager(key);
-            releaseBroadcastInstance(reg);
+            releaseBroadcastInstance(reg, topic);
             LOG.info(
                     "Unregistered StreamMQ listener: topic={}, group={}, wasRunning={}",
                     topic,
@@ -1103,7 +1103,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     }
 
     /**
-     * 注销广播监听器时刷新实例身份槽位心跳：把槽位在回收宽限期内保持为活跃，使同主机实例在宽限期内重启能回收同一身份并复用 PEL；消费者组的真正销毁由 sweep 在超过宽限期后执行。
+     * 整机停机释放：刷新实例身份槽位心跳并保留其全部主题，使同主机实例在宽限期内重启能回收同一身份、复用 PEL。 消费者组的真正销毁由 sweep 在超过宽限期后执行（{@code
+     * release} 语义为"释放 ≠ 销毁"）。
      */
     private void releaseBroadcastInstance(ListenerRegistration<?> reg) {
         if (broadcastInstanceResolver == null || reg.getConsumeMode() != ConsumeMode.BROADCASTING) {
@@ -1119,6 +1120,31 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             broadcastInstanceResolver.release(reg.getNamespace(), reg.getGroup(), instanceId);
         } catch (RuntimeException ignore) {
             // 优雅释放失败不影响停机：心跳过期后由清扫任务兜底回收
+        }
+    }
+
+    /**
+     * 注销单个主题时的按 topic 维度释放：仅从槽位主题集合移除该主题。若移除后槽位仍持有其它主题则保留（保 PEL），
+     * 若集合清空则删除槽位，使被注销主题的消费者组可由清扫任务回收，而不会误伤其它仍在消费的同组主题。
+     */
+    private void releaseBroadcastInstance(ListenerRegistration<?> reg, String topic) {
+        if (broadcastInstanceResolver == null
+                || reg.getConsumeMode() != ConsumeMode.BROADCASTING
+                || topic == null
+                || topic.isBlank()) {
+            return;
+        }
+        String instanceId =
+                BroadcastGroupNaming.instanceIdFromConsumerName(
+                        reg.getGroup(), reg.getConsumerName());
+        if (instanceId == null) {
+            return;
+        }
+        try {
+            broadcastInstanceResolver.release(
+                    reg.getNamespace(), reg.getGroup(), instanceId, List.of(topic));
+        } catch (RuntimeException ignore) {
+            // 优雅释放失败不影响注销：心跳过期后由清扫任务兜底回收
         }
     }
 

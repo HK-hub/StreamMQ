@@ -12,10 +12,12 @@ import io.github.streammq.core.broadcast.BroadcastInstanceRegistry;
 import io.github.streammq.core.broadcast.BroadcastInstanceRequest;
 import java.security.SecureRandom;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.stream.Collectors;
 import org.redisson.api.RScript;
 import org.redisson.api.RedissonClient;
 import org.redisson.client.codec.StringCodec;
@@ -183,6 +185,51 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
                     + "end                                                            \n"
                     + "return out                                                     \n";
 
+    /**
+     * 按 topic 维度释放：从槽位主题集合（第 3 字段）移除给定主题，并刷新心跳（第 7 字段）。 ARGV: 1=instanceId 2=now 3..=待移除主题。返回
+     * 0=槽位不存在，1=更新（仍保留主题），2=主题清空已删除槽位。
+     */
+    private static final String LUA_RELEASE_TOPICS =
+            "local function fields(s)                                        \n"
+                    + "  local t = {}                                              \n"
+                    + "  local start = 1                                           \n"
+                    + "  local idx = 1                                             \n"
+                    + "  while true do                                             \n"
+                    + "    local p = string.find(s, '|', start, true)              \n"
+                    + "    if not p then t[idx] = string.sub(s, start) break end  \n"
+                    + "    t[idx] = string.sub(s, start, p - 1)                     \n"
+                    + "    start = p + 1                                           \n"
+                    + "    idx = idx + 1                                           \n"
+                    + "  end                                                       \n"
+                    + "  return t                                                  \n"
+                    + "end                                                         \n"
+                    + "local cur = redis.call('HGET', KEYS[1], ARGV[1])           \n"
+                    + "if not cur then return 0 end                                \n"
+                    + "local f = fields(cur)                                       \n"
+                    + "local remove = {}                                           \n"
+                    + "for i = 3, #ARGV do remove[ARGV[i]] = true end              \n"
+                    + "local topicsStr = f[3]                                      \n"
+                    + "local parts = {}                                            \n"
+                    + "local cnt = 1                                               \n"
+                    + "local start = 1                                             \n"
+                    + "while true do                                               \n"
+                    + "  local p = string.find(topicsStr, ',', start, true)        \n"
+                    + "  local t                                                   \n"
+                    + "  if not p then t = string.sub(topicsStr, start)            \n"
+                    + "  else t = string.sub(topicsStr, start, p - 1) end         \n"
+                    + "  if not remove[t] and t ~= '' then parts[cnt] = t cnt = cnt + 1 end \n"
+                    + "  if not p then break end                                   \n"
+                    + "  start = p + 1                                             \n"
+                    + "end                                                         \n"
+                    + "if cnt == 1 then                                            \n"
+                    + "  redis.call('HDEL', KEYS[1], ARGV[1])                     \n"
+                    + "  return 2                                                  \n"
+                    + "end                                                         \n"
+                    + "f[3] = table.concat(parts, ',')                             \n"
+                    + "f[7] = ARGV[2]                                             \n"
+                    + "redis.call('HSET', KEYS[1], ARGV[1], table.concat(f, '|')) \n"
+                    + "return 1                                                    \n";
+
     private final RedissonClient redisson;
 
     /**
@@ -254,6 +301,53 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
         // 消费者组的真正销毁由 sweep 在超过宽限期后执行——此处绝不 HDEL，
         // 否则重启后的同主机实例无法回收该槽位，PEL 与消费位点随之永久丢失。
         heartbeat(namespace, group, instanceId);
+    }
+
+    @Override
+    public void release(
+            String namespace, String group, String instanceId, Collection<String> topics) {
+        Objects.requireNonNull(topics, "topics");
+        List<String> toRemove =
+                topics.stream()
+                        .filter(t -> t != null && !t.isBlank())
+                        .map(BroadcastInstanceLease::sanitize)
+                        .distinct()
+                        .collect(Collectors.toList());
+        if (toRemove.isEmpty() || instanceId == null || instanceId.isBlank()) {
+            return;
+        }
+        // ARGV: 1=instanceId 2=now 3..=待移除主题（已净化，与槽位中存储的主题一致）
+        Object[] argv = new Object[toRemove.size() + 2];
+        argv[0] = instanceId;
+        argv[1] = Long.toString(System.currentTimeMillis());
+        for (int i = 0; i < toRemove.size(); i++) {
+            argv[i + 2] = toRemove.get(i);
+        }
+        try {
+            Long code =
+                    redisson.getScript(StringCodec.INSTANCE)
+                            .eval(
+                                    RScript.Mode.READ_WRITE,
+                                    LUA_RELEASE_TOPICS,
+                                    RScript.ReturnType.INTEGER,
+                                    Collections.singletonList(
+                                            StreamMQKeys.broadcastInstances(namespace, group)),
+                                    argv);
+            if (code != null && code == 2L) {
+                LOG.info(
+                        "Released all topics for broadcast instance slot: id={}, group={}",
+                        instanceId,
+                        group);
+            } else if (code != null && code == 1L) {
+                LOG.debug(
+                        "Released topics {} from broadcast instance slot: id={}, group={}",
+                        toRemove,
+                        instanceId,
+                        group);
+            }
+        } catch (RuntimeException ex) {
+            LOG.debug("Broadcast instance topic release failed: {}", ex.toString());
+        }
     }
 
     @Override
