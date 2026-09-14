@@ -6,6 +6,7 @@
 package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
+import io.github.streammq.adapter.redisson.support.PayloadTypeSafety;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.converter.MessageConverter;
@@ -199,6 +200,9 @@ public class TransactionScanner implements StreamMQScheduler {
     private final ConcurrentMap<String, TransactionChecker<?>> checkerRegistry =
             new ConcurrentHashMap<>();
 
+    /** 默认事务组名（来自配置 `streammq.transaction.default-group`），当 checkerRegistry 为空时兜底扫描 */
+    private final String defaultGroup;
+
     /** 协作类：原子转投、保留期清理、指标记录 */
     private final TransactionCommitExecutor commitExecutor;
 
@@ -248,11 +252,12 @@ public class TransactionScanner implements StreamMQScheduler {
                 messageConverter,
                 DEFAULT_CHECK_INTERVAL_MS,
                 DEFAULT_MAX_CHECK_TIMES,
-                DEFAULT_BATCH_SIZE);
+                DEFAULT_BATCH_SIZE,
+                null);
     }
 
     /**
-     * 全参构造。
+     * 六参构造（向后兼容：无 defaultGroup 兜底扫描）。
      *
      * @param redisson Redisson 客户端
      * @param namespace 命名空间
@@ -268,12 +273,42 @@ public class TransactionScanner implements StreamMQScheduler {
             long checkIntervalMs,
             int maxCheckTimes,
             int batchSize) {
+        this(
+                redisson,
+                namespace,
+                messageConverter,
+                checkIntervalMs,
+                maxCheckTimes,
+                batchSize,
+                null);
+    }
+
+    /**
+     * 全参构造。
+     *
+     * @param redisson Redisson 客户端
+     * @param namespace 命名空间
+     * @param messageConverter 消息转换器
+     * @param checkIntervalMs 回查间隔（毫秒）
+     * @param maxCheckTimes 最大回查次数（连续 UNKNOWN 后强制 ROLLBACK）
+     * @param batchSize 单次扫描批量
+     * @param defaultGroup 默认事务组名（未注册 checker 时兜底扫描），可为 null
+     */
+    public TransactionScanner(
+            RedissonClient redisson,
+            String namespace,
+            MessageConverter messageConverter,
+            long checkIntervalMs,
+            int maxCheckTimes,
+            int batchSize,
+            String defaultGroup) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
         this.namespace = Objects.isNull(namespace) ? "" : namespace;
         this.messageConverter = Objects.requireNonNull(messageConverter, "messageConverter");
         this.checkIntervalMs = checkIntervalMs > 0 ? checkIntervalMs : DEFAULT_CHECK_INTERVAL_MS;
         this.maxCheckTimes = maxCheckTimes > 0 ? maxCheckTimes : DEFAULT_MAX_CHECK_TIMES;
         this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
+        this.defaultGroup = defaultGroup;
         this.scanExecutor =
                 Executors.newSingleThreadScheduledExecutor(
                         r -> {
@@ -428,7 +463,16 @@ public class TransactionScanner implements StreamMQScheduler {
         ensureScanExecutorAlive();
         scanFuture =
                 scanExecutor.scheduleAtFixedRate(
-                        this::scanAllGroups, 0, checkIntervalMs, TimeUnit.MILLISECONDS);
+                        () -> {
+                            try {
+                                scanAllGroups();
+                            } catch (Throwable t) {
+                                LOG.error("TransactionScanner.scanAllGroups failed fatally", t);
+                            }
+                        },
+                        0,
+                        checkIntervalMs,
+                        TimeUnit.MILLISECONDS);
         LOG.info(
                 "TransactionScanner started, checkIntervalMs={}, maxCheckTimes={}, batchSize={},"
                         + " groups={}",
@@ -677,13 +721,34 @@ public class TransactionScanner implements StreamMQScheduler {
 
     // ===================== 内部扫描逻辑 =====================
 
-    /** 扫描所有已注册 checker 的 txGroup。 */
+    /** 扫描所有已注册 checker 的 txGroup，以及兜底扫描 defaultGroup。 */
     private void scanAllGroups() {
         for (String txGroup : checkerRegistry.keySet()) {
             try {
                 scanTimeoutHalf(txGroup);
             } catch (RuntimeException ex) {
                 LOG.warn("scanTimeoutHalf failed for txGroup={}: {}", txGroup, ex.getMessage(), ex);
+            }
+        }
+        // 兜底扫描 defaultGroup：即使无 checker 注册，也检查默认事务组中是否存在超时半消息。
+        // 典型场景：用户仅通过 @StreamMQTransactionConsumer 注册自定义事务组，使用模板
+        // executeInTransaction 采用了默认配置组（streammq.transaction.default-group），
+        // 此时 checkerRegistry 不包含 defaultGroup → 半消息永不被回查 → 永久悬挂。
+        if (StringUtils.isNotEmpty(defaultGroup) && !checkerRegistry.containsKey(defaultGroup)) {
+            LOG.warn(
+                    "Default txGroup '{}' has no registered checker; scanning it with auto-rollback"
+                        + " fallback (configure streammq.transaction.default-group or register a"
+                        + " @StreamMQTransactionConsumer bean for this group to provide a custom"
+                        + " TransactionChecker)",
+                    defaultGroup);
+            try {
+                scanTimeoutHalf(defaultGroup);
+            } catch (RuntimeException ex) {
+                LOG.warn(
+                        "scanTimeoutHalf failed for default txGroup={}: {}",
+                        defaultGroup,
+                        ex.getMessage(),
+                        ex);
             }
         }
         // 周期性维护：清理超龄终态字段与孤儿半消息，防止 txstate Hash / half Stream 无限增长
@@ -976,7 +1041,14 @@ public class TransactionScanner implements StreamMQScheduler {
         // 解析 bodyType 反序列化 body
         String bodyTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE);
         Class<?> bodyType = Object.class;
-        if (StringUtils.isNotEmpty(bodyTypeName)) {
+        // 安全护栏：半消息载荷可被写入方控制，载荷驱动的类型解析需拒绝 JDK/框架危险命名空间
+        // （与消费回退链共用 PayloadTypeSafety 同一策略，见其类注释）
+        if (StringUtils.isNotEmpty(bodyTypeName) && PayloadTypeSafety.isBlocked(bodyTypeName)) {
+            LOG.warn(
+                    "Payload-driven transaction body type blocked by safety guard (dangerous"
+                            + " namespace): {}, fallback to Object",
+                    bodyTypeName);
+        } else if (StringUtils.isNotEmpty(bodyTypeName)) {
             CLASS_CACHE_LOCK.readLock().lock();
             try {
                 bodyType = CLASS_CACHE.get(bodyTypeName);

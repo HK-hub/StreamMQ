@@ -85,6 +85,6 @@ class SpiResolverTest {
                                 SpiResolver.resolveOrInstantiate(
                                         NoNoArgPolicy.class, RetryPolicy.class, global))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("no-arg constructor");
+                .hasMessageContaining("无参构造器");
     }
 }

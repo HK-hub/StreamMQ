@@ -107,6 +107,7 @@ class DlqRetryRoundtripIT extends AbstractRedisIT {
                         converter,
                         new NoRetryPolicy(),
                         strategy,
+                        DlqConfig.builder().build(),
                         namespace);
 
         AtomicInteger dlqFailures = new AtomicInteger();

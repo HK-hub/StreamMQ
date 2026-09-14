@@ -20,6 +20,7 @@ import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
+import io.github.streammq.core.policy.DlqConfig;
 import io.github.streammq.core.policy.DlqFailureContext;
 import io.github.streammq.core.policy.DlqFailureDecision;
 import io.github.streammq.core.policy.DlqFailureStrategy;
@@ -303,6 +304,7 @@ class DlqConsumerIT extends AbstractRedisIT {
                         converter,
                         noRetryPolicy,
                         recordingStrategy,
+                        DlqConfig.builder().build(),
                         namespace);
 
         // 业务消费者：始终失败

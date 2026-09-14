@@ -65,8 +65,8 @@ mvn spring-boot:run
 - **操作**：
   1. 新建 `pom.xml`，粘贴 StreamMQ BOM + starter 依赖
   2. 新建 `application.yml`，配置 streammq + redisson
-  3. 新建 `DemoApplication.java`，添加 `@EnableStreamMQ`
-- **高亮**：`@EnableStreamMQ` 注解
+  3. 新建 `DemoApplication.java`（启动类，starter 自动装配）
+- **高亮**：starter 自动装配（无需 `@EnableStreamMQ` 等启用注解）
 
 ### Scene 4：发送与消费（18-35 秒）
 

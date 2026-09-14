@@ -150,6 +150,9 @@ public class StreamMQListenerContainerAutoConfiguration {
         container.setDefaultConsumeFromWhere(properties.getConsumer().getConsumeFromWhere());
         container.setDefaultVirtualNodes(properties.getRebalance().getVirtualNodes());
         container.setDefaultRebalanceStrategy(properties.getRebalance().getStrategy());
+        // per-consumer SPI 解析：注入 ApplicationContext 启用「Spring 容器优先 → 反射兜底」
+        // （P1-4 修复：@Component + 注解 Class 声明的 SPI 实现不再被静默忽略）
+        container.setApplicationContext(applicationContext);
         // 统一线程模型：容器消费循环复用 streammqExecutor（仅识别该名称的 Bean，用户可同名覆盖自定义）
         ExecutorService executor = executorProvider.getIfAvailable();
         if (executor != null) {

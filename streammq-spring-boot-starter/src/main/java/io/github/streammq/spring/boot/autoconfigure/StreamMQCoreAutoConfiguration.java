@@ -22,7 +22,6 @@ import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.adapter.redisson.security.DenyAllAuthenticator;
-import io.github.streammq.adapter.redisson.serializer.FurySerializer;
 import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate;
 import io.github.streammq.adapter.redisson.trace.NoopTraceCollector;
 import io.github.streammq.adapter.redisson.trace.Slf4jTraceCollector;
@@ -157,16 +156,19 @@ public class StreamMQCoreAutoConfiguration {
     }
 
     /**
-     * 默认序列化器，从配置 {@code streammq.producer.serializer} 读取 Class 并实例化； 未配置（或配置为空）时使用默认值 Fury （{@link
-     * StreamMQConstants#DEFAULT_SERIALIZER}，{@code requireClassRegistration=false} 宽松模式）。
+     * 默认序列化器，从配置 {@code streammq.producer.serializer} 读取 Class 并实例化； 未配置（或配置为空）时使用默认值 {@link
+     * StreamMQConstants#DEFAULT_SERIALIZER}（0.1.2 起为 {@code JacksonJsonSerializer}）。
      *
-     * <p><b>为什么默认 Fury：</b>消息队列首要诉求是吞吐，Fury 约为 Jackson 的 7~13 倍且任意 POJO 开箱即用。
-     * <b>已知风险：</b>默认宽松模式不强制类注册，Redis 中字节流可反序列化为 classpath 上任意类，共享/多租户 Redis 上是反序列化 RCE 攻击面（详见
-     * {@link FurySerializer} 类注释与 SECURITY.md）。
+     * <p><b>安全默认：</b>0.1.1 曾默认 Fury 宽松模式（吞吐约为 Jackson 的 7~13 倍），但其允许把 Redis 中字节流反序列化为 classpath
+     * 上任意类，在共享/多租户 Redis 上是反序列化 RCE 攻击面，且会通过本 SDK 传播给下游应用。 0.1.2 起默认回退为 Jackson（严格类型、无 gadget
+     * 面、Redis 中人类可读）。需要高吞吐的用户显式 opt-in 到 Fury。
      *
-     * <p>当序列化器为 {@link FurySerializer} 时，按 {@code
-     * streammq.producer.fury-require-class-registration} 决定类注册白名单： {@code false}=宽松模式（默认，仅限受信单租户
-     * Redis），{@code true}=强制白名单（共享/多租户 Redis 建议）。 其它序列化器沿用无参构造实例化。
+     * <p>当序列化器为 Fury 时，按 {@code streammq.producer.fury-require-class-registration} 决定类注册白名单： {@code
+     * false}=宽松模式（仅限受信单租户 Redis），{@code true}=强制白名单（共享/多租户 Redis 建议）。 其它序列化器沿用无参构造实例化。
+     *
+     * <p><b>optional 依赖的优雅失败：</b>Fury / Protostuff 在 {@code streammq-redisson} 中是 optional 依赖（避免把
+     * Guava、Protostuff 强制塞进所有下游应用）。用户显式配置但 classpath 上没有时， 这里给出可直接照做的修复指引，而不是抛一个含义不明的 {@code
+     * NoClassDefFoundError}。
      *
      * @param properties 配置
      * @return 序列化器
@@ -179,20 +181,60 @@ public class StreamMQCoreAutoConfiguration {
             // 配置为显式空值（如 serializer: 留空）时回退到默认序列化器，避免 NPE
             clazz = StreamMQSpringConstants.DEFAULT_SERIALIZER_CLASS;
         }
-        if (FurySerializer.class.equals(clazz)) {
+        if (StreamMQSpringConstants.FURY_SERIALIZER_CLASS_NAME.equals(clazz.getName())) {
             boolean requireClassRegistration =
                     properties.getProducer().isFuryRequireClassRegistration();
             LOG.info(
                     "Using FurySerializer with requireClassRegistration={} (change via"
                             + " streammq.producer.fury-require-class-registration)",
                     requireClassRegistration);
-            return new FurySerializer<>(requireClassRegistration);
+            return instantiateFury(clazz, requireClassRegistration);
         }
         LOG.debug(
                 "Using MessageSerializer: {} (default: {})",
                 clazz.getName(),
                 StreamMQConstants.DEFAULT_SERIALIZER);
-        return BeanUtils.instantiateClass(clazz);
+        return instantiateSerializer(clazz);
+    }
+
+    /**
+     * 按 {@code requireClassRegistration} 实例化 Fury 序列化器。
+     *
+     * <p>通过反射调用而非直接 {@code new FurySerializer<>(...)}：starter 不持有 Fury 的编译期引用， 未引入 Fury 的应用不会被
+     * {@code NoClassDefFoundError} 拖垮。
+     */
+    private MessageSerializer<?> instantiateFury(
+            Class<? extends MessageSerializer> clazz, boolean requireClassRegistration) {
+        try {
+            return clazz.getDeclaredConstructor(boolean.class)
+                    .newInstance(requireClassRegistration);
+        } catch (ReflectiveOperationException | LinkageError e) {
+            throw new IllegalStateException(
+                    "streammq.producer.serializer is set to "
+                            + StreamMQSpringConstants.FURY_SERIALIZER_CLASS_NAME
+                            + " but Apache Fury is not on the classpath. Add the dependency:"
+                            + " org.apache.fury:fury-core (it is an optional dependency of"
+                            + " streammq-redisson). Alternatively use the default"
+                            + " JacksonJsonSerializer, or ProtostuffSerializer with"
+                            + " io.protostuff:protostuff-core + protostuff-runtime.",
+                    e);
+        }
+    }
+
+    /** 实例化序列化器，并对 optional 依赖缺失给出可操作的错误信息。 */
+    private MessageSerializer<?> instantiateSerializer(Class<? extends MessageSerializer> clazz) {
+        try {
+            return BeanUtils.instantiateClass(clazz);
+        } catch (LinkageError e) {
+            throw new IllegalStateException(
+                    "Failed to instantiate MessageSerializer "
+                            + clazz.getName()
+                            + ": a required optional dependency is missing from the classpath."
+                            + " Apache Fury needs org.apache.fury:fury-core; Protostuff needs"
+                            + " io.protostuff:protostuff-core + protostuff-runtime. Or fall back to"
+                            + " the default JacksonJsonSerializer.",
+                    e);
+        }
     }
 
     /**

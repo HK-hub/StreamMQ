@@ -304,8 +304,27 @@ public class DefaultMessageProcessor implements MessageProcessor {
                         ex.getMessage(),
                         ex);
                 interceptorChain.notifyException(message, ex, InvokeTiming.EXECUTING, ctx);
-                finalAction = ConsumeAction.RECONSUME_LATER;
-                handler.handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener, ex);
+                if (reg.getType() == ListenerType.ORDERLY) {
+                    // ORDERLY 没有 retry 消费者循环（DefaultConsumeLoopSupervisor:166-169），
+                    // RECONSUME_LATER 进 retry Stream 永久无人消费 → 直接路由到 DLQ
+                    LOG.warn(
+                            "Orderly consumer has no retry loop, routing exception to DLQ:"
+                                    + " topic={}, group={}, messageId={}",
+                            reg.getTopic(),
+                            reg.getGroup(),
+                            message.getMessageId());
+                    if (handler.routeToDlq(
+                            message,
+                            reg,
+                            message.getMessageId(),
+                            RetryScheduler.DLQ_REASON_MAX_RETRY)) {
+                        listener.ack(message.getMessageId());
+                    }
+                    finalAction = ConsumeAction.SUCCESS;
+                } else {
+                    finalAction = ConsumeAction.RECONSUME_LATER;
+                    handler.handleAction(ConsumeAction.RECONSUME_LATER, message, reg, listener, ex);
+                }
             }
         } finally {
             // 超时路径的 applyAfter/指标已由 processWithTimeout 内部负责（携带真实 action），

@@ -59,9 +59,9 @@ public class FurySerializer<T> implements MessageSerializer<T> {
 
     private final boolean requireClassRegistration;
 
-    /** 创建默认实例：宽松模式（{@code requireClassRegistration=false}），任意 POJO 开箱即用。 */
+    /** 创建默认实例：强制类注册白名单模式（{@code requireClassRegistration=true}），仅允许注册过的类型。 */
     public FurySerializer() {
-        this(false);
+        this(true);
     }
 
     /**
@@ -178,7 +178,18 @@ public class FurySerializer<T> implements MessageSerializer<T> {
             return null;
         }
         try {
-            return (R) fury.deserialize(bytes);
+            Object result = fury.deserialize(bytes);
+            if (Objects.nonNull(result) && !type.isInstance(result)) {
+                throw new io.github.streammq.core.exception.SerializationException(
+                        "Fury deserialized type "
+                                + result.getClass().getName()
+                                + " is not assignable to expected type "
+                                + type.getName()
+                                + "; class mismatch may indicate tampered payload."
+                                + " Use requireClassRegistration=true or switch to"
+                                + " JacksonJsonSerializer which validates type safety.");
+            }
+            return (R) result;
         } catch (RuntimeException ex) {
             throw new io.github.streammq.core.exception.SerializationException(
                     "Fury deserialize failed for "

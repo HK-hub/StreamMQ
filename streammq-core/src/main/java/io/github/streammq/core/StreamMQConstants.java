@@ -47,8 +47,21 @@ public final class StreamMQConstants {
     /** 默认最大重试次数 */
     public static final int DEFAULT_MAX_RECONSUME_TIMES = 16;
 
-    /** 默认消费超时（毫秒） */
-    public static final long DEFAULT_CONSUME_TIMEOUT_MS = 30000L;
+    /**
+     * 默认并发消费超时（毫秒）：{@code 0} = 默认<b>不启用</b>每条消息的超时包装。
+     *
+     * <p><b>为什么默认是 0（0.1.2 起的变更）：</b>启用超时后，框架必须为<b>每一条</b>消息执行一次 {@code executor.submit()} + {@code
+     * Future.get(timeout)}，并在超时后 {@code join} 等待业务线程—— 即每条消息额外承担一次虚拟线程创建、一个 Future、一次 park/unpark
+     * 交接， 而 99.99% 的消息会在毫秒级内完成，这笔开销纯属浪费。 因此把"超时保护"改为显式 opt-in：只有确实存在慢/卡死 handler 的消费者才为它付费。
+     *
+     * <p><b>关闭后消息会不会卡死？不会。</b>未 ACK 的消息始终留在 PEL 中，由 {@code PelClaimScheduler} 在空闲阈值（{@link
+     * #DEFAULT_PEL_CLAIM_MIN_IDLE_MS}，默认 60s）后认领重投， at-least-once 语义不变；代价只是"卡死消息"的恢复延迟从 30s 变为
+     * 60s+。
+     *
+     * <p><b>需要更快的恢复时：</b>设置 {@code streammq.consumer.consume-timeout-millis} 或
+     * {@code @StreamMQConsumer#consumeTimeout()} 为一个正毫秒值。
+     */
+    public static final long DEFAULT_CONSUME_TIMEOUT_MS = 0L;
 
     /** 默认回查间隔（毫秒） */
     public static final long DEFAULT_CHECK_INTERVAL_MS = 60_000L;
@@ -134,21 +147,28 @@ public final class StreamMQConstants {
 
     // ==================== 延时消息边界 ====================
     /**
-     * 单条延时消息允许的最大延时时长（毫秒）：7 天。
+     * 单条延时消息允许的最大延时时长（毫秒）：7 天（产品边界）。
      *
-     * <p>与 {@code RedissonStreamProducer#DELAY_PAYLOAD_TTL} 的来源常量 {@link
-     * #DEFAULT_DELAY_PAYLOAD_TTL_MS} 强绑定——延时 payload 是 Redis Hash + TTL， 一旦延时时长超过 TTL，payload
-     * 会先于投递过期， 调度器只能把该条目移入隔离区（消息事实丢失，仅留痕）。因此这里把"允许配置的最大延时" 显式上界化，在<b>发送侧</b>快速失败，而不是等到投递时才发现消息已经消失。
+     * <p>发送侧对超过该值的延时快速失败。payload 的 TTL 不再与最大延时时长绑定相等—— 实际 TTL = 投递时刻 + {@link
+     * #DEFAULT_DELAY_PAYLOAD_TTL_GRACE_MS} 宽限， 因此在该边界内 payload 永远不会先于投递过期。
      */
     public static final long MAX_DELAY_TIME_MILLIS = 7L * 24 * 60 * 60 * 1000;
 
     /**
-     * 延时消息 payload Hash 的保留时长（毫秒）：7 天。
+     * 延时消息 payload Hash 的基准保留时长（毫秒）：7 天。
      *
-     * <p>正常流程中 payload 在转投成功后即被 DEL；TTL 仅用于兜底清理异常场景残留的孤儿 payload。 该值同时定义了 {@link
-     * #MAX_DELAY_TIME_MILLIS} 的上界，二者必须一致。
+     * <p>正常流程中 payload 在转投成功后即被 DEL；TTL 仅用于兜底清理异常场景残留的孤儿 payload。 发送侧实际写入的 TTL = 延时时长 + {@link
+     * #DEFAULT_DELAY_PAYLOAD_TTL_GRACE_MS}， 保证 payload 覆盖到投递之后（见该常量说明）。
      */
     public static final long DEFAULT_DELAY_PAYLOAD_TTL_MS = MAX_DELAY_TIME_MILLIS;
+
+    /**
+     * 延时 payload TTL 的「投递后宽限」（毫秒）：1 小时。
+     *
+     * <p>TTL 在投递时刻之上再叠加该宽限，覆盖调度扫描间隔、转投耗时与节点间时钟偏差， 确保到期消息的 payload 绝不会先于投递过期（历史上 TTL 与 deliverAt
+     * 重合时， 到期边界存在 payload 先过期、消息被隔离而事实丢失的竞争窗口）。
+     */
+    public static final long DEFAULT_DELAY_PAYLOAD_TTL_GRACE_MS = 3_600_000L;
 
     // ==================== 新消费者组起始位点 ====================
     /**
@@ -214,32 +234,27 @@ public final class StreamMQConstants {
 
     // ==================== 默认序列化器 ====================
     /**
-     * 默认消息体序列化器实现类全限定名：Apache Fury（{@code
-     * io.github.streammq.adapter.redisson.serializer.FurySerializer}）。
+     * 默认消息体序列化器实现类全限定名：{@code JacksonJsonSerializer}。
      *
-     * <p><b>选择 Fury 作为默认的原因：</b>消息队列的首要诉求是吞吐与延迟，Fury 是高性能二进制序列化， 吞吐约为 Jackson 的 7~13 倍、JDK 的约 10
-     * 倍，且无需 {@code .proto} 文件、任意 POJO 开箱即用，是默认序列化的最佳平衡点。
+     * <p><b>为什么默认是 Jackson 而不是 Fury（0.1.2 起的变更）：</b>0.1.1 曾把默认设为 Apache Fury 的宽松模式（{@code
+     * requireClassRegistration=false}）。Fury 吞吐确实约为 Jackson 的 7~13 倍， 但宽松模式下 Redis 中的字节流可被反序列化为
+     * classpath 上的任意类——在<b>共享/多租户 Redis</b> 上是反序列化 RCE 攻击面，而这个风险是通过本 SDK
+     * <b>传播给所有下游应用</b>的。安全默认值不应该依赖用户先读完 README 的警告段， 因此默认值回退为 {@code
+     * JacksonJsonSerializer}：严格类型、无多态反序列化、无 gadget 面， 且消息体在 Redis 中是人类可读的 JSON（便于排障与跨语言消费）。
      *
-     * <p><b>已知安全风险（默认宽松模式）：</b>{@code FurySerializer} 默认<b>不强制类注册</b>（{@code
-     * requireClassRegistration=false}），Redis 中被写入的字节流可被反序列化为 classpath 上的任意类—— 在<b>共享/多租户
-     * Redis</b>场景下这是反序列化攻击面（RCE 向量，依赖 classpath 上的 gadget 链）。 以字符串形式定义此默认值，避免 core 模块反向依赖 redisson
-     * 适配器；Spring Boot Starter 按此默认值装配 {@code streammq.producer.serializer}。
+     * <p><b>需要更高吞吐时：</b>显式配置 {@code streammq.producer.serializer} 为 {@code
+     * io.github.streammq.adapter.redisson.serializer.FurySerializer}（并建议同时开启 {@code
+     * streammq.producer.fury-require-class-registration=true} 与预注册业务类型）， 或 {@code
+     * ProtostuffSerializer}。 二者在 {@code streammq-redisson} 中为 optional 依赖，使用前需自行加入 classpath。
      *
-     * <p><b>风险缓解（按场景选择）：</b>
-     *
-     * <ul>
-     *   <li><b>受信单租户 Redis</b>（最常见内部部署）：保持默认即可，风险可控；
-     *   <li><b>共享/多租户 Redis</b>：开启类注册白名单 {@code
-     *       streammq.producer.fury-require-class-registration=true}，并预注册业务消息体类型；
-     *   <li><b>不能接受任何 RCE 面</b>：切回 {@code JacksonJsonSerializer}（严格类型、无多态反序列化）或 {@code
-     *       ProtostuffSerializer}（schema 由类型决定、无 gadget 面）。
-     * </ul>
+     * <p>以字符串形式定义此默认值，避免 core 模块反向依赖 redisson 适配器； Spring Boot Starter 按此默认值装配 {@code
+     * streammq.producer.serializer}。
      */
     public static final String DEFAULT_SERIALIZER =
-            "io.github.streammq.adapter.redisson.serializer.FurySerializer";
+            "io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer";
 
     /** 默认序列化器名称（对应 {@code MessageSerializer#name()}），用于日志与监控标识 */
-    public static final String DEFAULT_SERIALIZER_NAME = "fury";
+    public static final String DEFAULT_SERIALIZER_NAME = "jackson-json";
 
     // ==================== 消息大小限制 ====================
     /** Redis Stream 单条消息最大大小（字节），512MB。 实际建议不超过 1MB，超大消息会增加网络传输和内存压力。 */

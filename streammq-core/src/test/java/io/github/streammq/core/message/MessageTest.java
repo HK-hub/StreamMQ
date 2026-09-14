@@ -339,11 +339,25 @@ class MessageTest {
         }
 
         @Test
-        @DisplayName("messageId 为 null 时退化为同一性语义：字段相同的两个实例也不相等")
-        void identitySemanticsWhenMessageIdNull() {
-            Message<String> m1 = sample();
+        @DisplayName("messageId 为 null 时退化为基于内容的值比较：字段相同的两个实例相等")
+        void valueEqualityWhenMessageIdNull() {
+            Message<String> m1 =
+                    new Message<String>(
+                            "topic",
+                            "tag",
+                            "keys",
+                            "shard",
+                            null,
+                            null,
+                            "body",
+                            null,
+                            null,
+                            1234567890L,
+                            "host:8080",
+                            null,
+                            0);
             Message<String> m2 =
-                    new Message<>(
+                    new Message<String>(
                             "topic",
                             "tag",
                             "keys",
@@ -358,7 +372,25 @@ class MessageTest {
                             null,
                             0);
             assertThat(m1).isEqualTo(m1);
-            assertThat(m1).isNotEqualTo(m2);
+            // 内容相同且均未分配 ID → 值相等（保持值对象契约，而非退化为同一性）
+            assertThat(m1).isEqualTo(m2);
+            // 内容不同的两个未分配 ID 消息 → 不等（值对象语义）
+            Message<String> m3 =
+                    new Message<String>(
+                            "other-topic",
+                            "tag",
+                            "keys",
+                            "shard",
+                            null,
+                            null,
+                            "body",
+                            null,
+                            null,
+                            1234567890L,
+                            "host:8080",
+                            null,
+                            0);
+            assertThat(m1).isNotEqualTo(m3);
         }
 
         @Test

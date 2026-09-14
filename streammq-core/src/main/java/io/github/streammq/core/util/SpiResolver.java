@@ -41,11 +41,13 @@ public class SpiResolver {
             return clazz.getDeclaredConstructor().newInstance();
         } catch (ReflectiveOperationException e) {
             throw new IllegalArgumentException(
-                    "Failed to instantiate "
+                    "无法实例化 SPI 实现 "
                             + clazz.getName()
-                            + " as "
+                            + "（接口 "
                             + spiType.getName()
-                            + " (requires public no-arg constructor)",
+                            + "）。该实现通常来自注解的 Class 属性或 Spring Bean 覆盖，且必须拥有 public 无参构造器（非 Spring"
+                            + " 用户无法注入依赖）。请检查：(1) 类名/导入是否正确；(2) 实现类是否提供 public 无参构造器；(3) 是否应通过"
+                            + " Spring Bean 覆盖而非注解 Class 属性",
                     e);
         }
     }

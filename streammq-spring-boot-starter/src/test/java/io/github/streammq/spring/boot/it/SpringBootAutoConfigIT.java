@@ -123,7 +123,7 @@ class SpringBootAutoConfigIT {
     // ===================== 核心 Bean 实例验证 =====================
 
     @Test
-    @DisplayName("MessageSerializer Bean 存在且默认为 FurySerializer（宽松模式）")
+    @DisplayName("MessageSerializer Bean 存在且与默认序列化器常量一致（Jackson，安全默认）")
     void messageSerializer_beanExists() {
         MessageSerializer<?> serializer = applicationContext.getBean(MessageSerializer.class);
         assertThat(serializer).isNotNull();

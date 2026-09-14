@@ -106,14 +106,15 @@ class FurySerializerTest {
     }
 
     @Test
-    @DisplayName("默认无参构造为宽松模式：任意 POJO 开箱即用（requireClassRegistration=false）")
-    void defaultConstructorAllowsAnyPojo() {
-        FurySerializer<MyData> open = new FurySerializer<>();
-        assertThat(open.isRequireClassRegistration()).isFalse();
+    @DisplayName("默认无参构造为强制类注册白名单模式（requireClassRegistration=true），注册后正常工作")
+    void defaultConstructorEnforcesRegistration() {
+        FurySerializer<MyData> secure = new FurySerializer<>();
+        assertThat(secure.isRequireClassRegistration()).isTrue();
+        secure.register(MyData.class);
         MyData data = new MyData("Alice", 30, 1719800000L);
-        byte[] bytes = open.serialize(data, MyData.class);
+        byte[] bytes = secure.serialize(data, MyData.class);
         assertThat(bytes).isNotEmpty();
-        assertThat(open.deserialize(bytes, MyData.class)).isEqualTo(data);
+        assertThat(secure.deserialize(bytes, MyData.class)).isEqualTo(data);
     }
 
     @Test

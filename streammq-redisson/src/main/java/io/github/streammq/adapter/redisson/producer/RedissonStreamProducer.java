@@ -17,6 +17,7 @@ import io.github.streammq.core.exception.StreamMQException;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.message.SendResult;
+import io.github.streammq.core.message.SendStatus;
 import io.github.streammq.core.producer.StreamMessageProducer;
 import io.github.streammq.core.util.StringUtils;
 import java.nio.charset.StandardCharsets;
@@ -55,13 +56,6 @@ import org.slf4j.LoggerFactory;
  */
 @Getter
 public class RedissonStreamProducer implements StreamMessageProducer {
-
-    /**
-     * 延时 payload Hash 的保留时长（毫秒）：超期自动过期。
-     *
-     * <p>正常流程中 payload 在转投成功后即被 DEL；TTL 仅用于兜底清理异常场景下 （如调度器 ZREM 后崩溃）残留的孤儿 payload，防止 Redis 中无限累积。
-     */
-    static final long DELAY_PAYLOAD_TTL_MS = StreamMQConstants.DEFAULT_DELAY_PAYLOAD_TTL_MS;
 
     private static final Logger LOG = LoggerFactory.getLogger(RedissonStreamProducer.class);
 
@@ -332,8 +326,19 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             String streamKey = StreamMQKeys.topicStream(namespace, topic);
             RStream<String, String> stream = redisson.getStream(streamKey);
             StreamAddArgs<String, String> args = buildAddArgs(fields);
-            // fire-and-forget：发起异步调用，不等待、不处理结果
-            stream.addAsync(args);
+            // fire-and-forget：不阻塞调用方，但异步失败必须可见——否则 Redis 故障期间
+            // oneway 消息会无声丢失，连一条日志都没有（违背方法契约"异常仅记录日志"）。
+            stream.addAsync(args)
+                    .whenComplete(
+                            (id, ex) -> {
+                                if (Objects.nonNull(ex)) {
+                                    LOG.warn(
+                                            "Oneway send failed asynchronously for topic {}: {}",
+                                            message.getTopic(),
+                                            ex.getMessage(),
+                                            ex);
+                                }
+                            });
         } catch (RuntimeException ex) {
             // oneway 语义：所有异常静默丢弃，仅记录日志，不抛到调用方
             LOG.warn("Oneway send failed for topic {}: {}", message.getTopic(), ex.getMessage());
@@ -423,65 +428,77 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                     "syncSendBatch failed for topic " + firstTopic, null, ex);
         }
 
-        // 从 BatchResult 提取每条 XADD 返回的真实 Stream Entry ID（按命令提交顺序一一对应）。
-        // 若 Redisson 版本未返回可识别结果，则回退生成占位 ID（仅影响调用方拿到非真实 ID，消费侧始终使用 Stream 真实 ID）。
+        // 从 BatchResult 提取每条 XADD 的返回结果（按命令提交顺序一一对应）。
+        // 关键正确性约束：只有拿到真实 Stream Entry ID 才允许构造 SEND_OK；
+        // 响应缺失/非 ID（命令执行失败、连接中断导致的响应丢失）一律构造 SEND_FAILED，
+        // 绝不伪造占位 ID 冒充成功——否则调用方在消息实际未落库时收到「发送成功」。
         List<SendResult> results = new ArrayList<>(messageList.size());
         for (int i = 0; i < messageList.size(); i++) {
-            Message<?> message = messageList.get(i);
-            MessageId messageId = toRealMessageId(responses, i);
-            results.add(
-                    new SendResult(
-                            messageId,
-                            message.getTopic(),
-                            message.getTag(),
-                            message.getBornTimestamp()));
+            results.add(toSendResult(responses, i, messageList.get(i)));
         }
         return results;
     }
 
     /**
-     * 从 {@link BatchResult#getResponses()} 中按索引解析真实 Stream Entry ID；不可识别时回退占位 ID。
+     * 将批处理第 {@code index} 条命令的原始响应映射为 {@link SendResult}。
      *
-     * <p>回退时记录 WARN（含原始返回值），便于调用方/运维识别占位 ID 与真实投递结果。
+     * <p><b>真实性契约：</b>仅当响应为 Redisson {@link StreamMessageId}（XADD 已被 Redis 确认）时返回 {@link
+     * SendStatus#SEND_OK}；其余情况（响应为 null、命令级异常、不可识别对象）一律返回 {@link SendStatus#SEND_FAILED}
+     * 并携带原始响应信息。绝不向调用方谎报成功——宁可报失败让业务按 at-least-once 语义重试，也不静默丢消息。
      *
-     * @param responses 批处理各命令的返回结果
+     * @param responses 批处理各命令的返回结果（按提交顺序）
      * @param index 命令索引
-     * @return 消息 ID
+     * @param message 对应消息（用于回填 Topic/Tag/出生时间戳）
+     * @return 该条消息的发送结果
      */
-    private MessageId toRealMessageId(List<?> responses, int index) {
-        if (Objects.nonNull(responses) && index < responses.size()) {
-            Object response = responses.get(index);
-            if (response instanceof StreamMessageId streamMessageId) {
-                return MessageId.fromStreamMessageId(streamMessageId);
-            }
-            LOG.warn(
-                    "Unrecognized batch response at index {}, fallback to placeholder"
-                            + " messageId: raw={}",
-                    index,
-                    response);
-        } else {
-            LOG.warn(
-                    "Batch response missing at index {} (responses={}), fallback to placeholder"
-                            + " messageId",
-                    index,
-                    Objects.nonNull(responses) ? responses.size() : "null");
+    private SendResult toSendResult(List<?> responses, int index, Message<?> message) {
+        Object response =
+                (Objects.nonNull(responses) && index < responses.size())
+                        ? responses.get(index)
+                        : null;
+        if (response instanceof StreamMessageId streamMessageId) {
+            return new SendResult(
+                    MessageId.fromStreamMessageId(streamMessageId),
+                    message.getTopic(),
+                    message.getTag(),
+                    message.getBornTimestamp());
         }
-        return MessageId.of(System.currentTimeMillis(), 0x7fffffff & UUID.randomUUID().hashCode());
+        String reason;
+        if (Objects.isNull(response)) {
+            reason = "XADD command was not confirmed by Redis (no response in batch result)";
+        } else if (response instanceof Throwable throwable) {
+            reason = "XADD command failed: " + throwable;
+        } else {
+            reason = "Unrecognized XADD response in batch result: " + response;
+        }
+        LOG.warn(
+                "Batch send not confirmed at index {} (topic={}): {} — returning SEND_FAILED",
+                index,
+                message.getTopic(),
+                reason);
+        return new SendResult(
+                MessageId.sentinel(),
+                message.getTopic(),
+                message.getTag(),
+                SendStatus.SEND_FAILED,
+                message.getBornTimestamp(),
+                null,
+                reason);
     }
 
     /**
      * 同步发送延时消息：写入延时 ZSet + payload Hash，不直接写入 Stream。
      *
      * <p><b>原子性：</b>payload Hash（putAll + expire）与 ZSet 调度条目（add）通过 {@link
-     * BatchOptions#transactional()} 包裹在<b>单个 Redis 事务</b>中提交—— 任何一步失败（含进程崩溃）都不会留下「已调度但 payload
-     * 缺失」的孤儿调度条目，也不会留下「有 payload 但无调度」的死 payload（事务整体回滚）。 这是 P1-6 的核心修复：消除了原两步顺序写入之间的崩溃窗口。
+     * BatchOptions.ExecutionMode#REDIS_WRITE_ATOMIC} 包裹在<b>单个 Redis 事务</b>中提交——
+     * 任何一步失败（含进程崩溃）都不会留下「已调度但 payload 缺失」的孤儿调度条目，也不会留下「有 payload 但无调度」的死 payload。 TTL
+     * 一并入事务，杜绝「调度已成功但补设 TTL 失败导致调用方误判失败并重发」的假失败重复窗口。
      *
-     * <p><b>TTL 上界：</b>payload Hash 的 TTL 取 {@code min(DELAY_PAYLOAD_TTL_MS, delay + 1h)}。 延时超过
-     * {@link StreamMQConstants#MAX_DELAY_TIME_MILLIS}（7 天）会被发送侧快速失败—— 因为 TTL 无法覆盖如此长的延时，payload
-     * 会在投递前过期，消息事实丢失。 该上界与常量 {@link StreamMQConstants#DEFAULT_DELAY_PAYLOAD_TTL_MS} 强绑定，二者必须一致。
+     * <p><b>TTL 下界：</b>payload Hash 的 TTL = 投递时刻 + {@link
+     * StreamMQConstants#DEFAULT_DELAY_PAYLOAD_TTL_GRACE_MS}（1 小时宽限）， 保证到期消息的 payload 绝不会先于投递过期。
      *
-     * <p><b>延时边界：</b>{@code delayTimeMillis} 超过 {@link StreamMQConstants#MAX_DELAY_TIME_MILLIS}
-     * 时直接抛 {@link StreamMQException}（fail-fast），避免「发送成功但消息在投递前因 TTL 过期而静默丢失」。
+     * <p><b>延时边界：</b>{@code delayTimeMillis} 超过 {@link StreamMQConstants#MAX_DELAY_TIME_MILLIS} （7
+     * 天，产品上界）时直接抛 {@link StreamMQException}（fail-fast）。
      *
      * <p>发送结果中的 messageId 为占位 ID（{@link MessageId#sentinel()}）： 延时消息的真实 Stream Entry ID 在到期投递时才由
      * Redis 生成。
@@ -521,7 +538,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                                 + delayTimeMillis
                                 + "ms exceeds max allowed "
                                 + StreamMQConstants.MAX_DELAY_TIME_MILLIS
-                                + "ms (payload TTL would expire before delivery) for topic "
+                                + "ms (max supported delay is 7 days) for topic "
                                 + message.getTopic());
             }
             long deliverAt = now + delayTimeMillis;
@@ -575,10 +592,19 @@ public class RedissonStreamProducer implements StreamMessageProducer {
     }
 
     /**
-     * 原子写入延时消息的 payload Hash + 调度条目。
+     * 原子写入延时消息的 payload Hash（含 TTL）+ 调度条目。
      *
-     * <p>通过 {@link BatchOptions#transactional()} 保证两步在单个 Redis 事务中提交， 杜绝崩溃窗口导致的孤儿条目。payload Hash 的
-     * TTL 取 {@code min(DELAY_PAYLOAD_TTL_MS, delayMillis + 1h)}， 既能在正常流程中转投成功后清理，也能在异常残留时兜底过期。
+     * <p><b>原子性：</b>putAll + expire + zset.add 三条命令通过 {@link
+     * BatchOptions.ExecutionMode#REDIS_WRITE_ATOMIC} 在单个 Redis 事务（MULTI/EXEC）中提交：
+     *
+     * <ul>
+     *   <li>杜绝「已调度但 payload 缺失」的崩溃窗口（putAll 与 add 同生同死）；
+     *   <li>TTL 一并入事务——若在事务外补设，补设失败会向调用方抛「发送失败」，而调度条目其实已落库， 调用方重发即产生双份投递（假失败 → 真重复）。
+     * </ul>
+     *
+     * <p><b>TTL 下界（防投递前过期）：</b>TTL = 投递时刻 + {@value
+     * StreamMQConstants#DEFAULT_DELAY_PAYLOAD_TTL_GRACE_MS}ms 宽限。宽限覆盖调度扫描间隔、 转投耗时与节点间时钟偏差，确保
+     * payload 绝不会先于投递过期（此前 7 天上界时 TTL 与 deliverAt 重合、1 秒扫描窗口存在竞争，到期消息可能因 payload 先过期而事实丢失）。
      *
      * @param payloadHashKey payload Hash Key
      * @param fields 待写入字段（已含 targetTopic / deliverAt）
@@ -594,19 +620,16 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             long deliverAt,
             long delayMillis,
             String msgId) {
-        long payloadTtl = Math.min(DELAY_PAYLOAD_TTL_MS, delayMillis + 3_600_000L);
+        long payloadTtl = delayMillis + StreamMQConstants.DEFAULT_DELAY_PAYLOAD_TTL_GRACE_MS;
         try {
-            // 原子事务：putAll + zset.add 在单个 Redis 事务（MULTI/EXEC）中提交，
-            // 杜绝「已调度但 payload 缺失」的崩溃窗口。TTL 作为孤儿保护在事务提交后设置——
-            // 若 TTL 设置失败，payload 将存活至被正常转投后再 DEL（不会丢失），可接受。
             RBatch batch =
                     redisson.createBatch(
                             BatchOptions.defaults()
                                     .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
             batch.getMap(payloadHashKey).putAllAsync(fields);
+            batch.getMap(payloadHashKey).expireAsync(payloadTtl, TimeUnit.MILLISECONDS);
             batch.<String>getScoredSortedSet(zsetKey).addAsync(deliverAt, msgId);
             batch.execute();
-            redisson.getMap(payloadHashKey).expire(java.time.Duration.ofMillis(payloadTtl));
         } catch (RuntimeException ex) {
             throw new StreamMQBrokerException(
                     "storeDelayPayloadAtomically failed for payload " + payloadHashKey, null, ex);

@@ -1,5 +1,5 @@
 /**
- * StreamMQ Spring Boot 自动装配，包含 @EnableStreamMQ 注解处理与 ConfigurationProperties。
+ * StreamMQ Spring Boot 自动装配，包含配置绑定（ConfigurationProperties）与自动配置类。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

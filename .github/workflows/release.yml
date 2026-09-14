@@ -73,7 +73,7 @@ jobs:
           echo "Comparing API compatibility against previous release: ${prev}"
           mvn -pl streammq-core,streammq-redisson,streammq-spring-boot-starter,\
           streammq-tracing-opentelemetry,streammq-diagnostics,streammq-spring-cloud-stream-binder,\
-          streammq-test,streammq-test-support \
+          streammq-test \
               -am verify \
               -Djapicmp.skip=false -Djapicmp.oldVersion="${prev}" \
               -DskipTests -Dspotless.check.skip=true -Djacoco.check.skip=true -B
@@ -245,6 +245,3 @@ jobs:
             streammq-test/target/streammq-test-${{ steps.version.outputs.version }}.jar
             streammq-test/target/streammq-test-${{ steps.version.outputs.version }}-sources.jar
             streammq-test/target/streammq-test-${{ steps.version.outputs.version }}-javadoc.jar
-            streammq-test-support/target/streammq-test-support-${{ steps.version.outputs.version }}.jar
-            streammq-test-support/target/streammq-test-support-${{ steps.version.outputs.version }}-sources.jar
-            streammq-test-support/target/streammq-test-support-${{ steps.version.outputs.version }}-javadoc.jar

@@ -8,7 +8,6 @@ package io.github.streammq.spring.boot.properties;
 import io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy;
 import io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy;
 import io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy;
-import io.github.streammq.adapter.redisson.serializer.FurySerializer;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.ConsumeFromWhere;
@@ -36,7 +35,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *     send-message-timeout: 3000
  *     retry-times: 2
  *     stream-max-len: 10000
- *     serializer: io.github.streammq.adapter.redisson.serializer.FurySerializer
+ *     serializer: io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer
  *     fury-require-class-registration: false
  *   consumer:
  *     poll-timeout: 1s
@@ -155,34 +154,37 @@ public class StreamMQProperties {
         private int streamMaxLen = StreamMQConstants.DEFAULT_STREAM_MAX_LEN;
 
         /**
-         * 消息体序列化器实现类（填写全限定类名），默认 {@link FurySerializer}（宽松模式 {@code
-         * requireClassRegistration=false}）。
+         * 消息体序列化器实现类（填写全限定类名），默认 {@link JacksonJsonSerializer}。
          *
-         * <p><b>为什么默认 Fury：</b>消息队列首要诉求是吞吐，Fury 吞吐约为 Jackson 的 7~13 倍、无需 {@code .proto}，任意 POJO
-         * 开箱即用。
+         * <p><b>为什么默认 Jackson（0.1.2 起）：</b>0.1.1 曾默认 Apache Fury 宽松模式。Fury 吞吐更高（约为 Jackson 的 7~13
+         * 倍），但宽松模式下 Redis 中的字节流可反序列化为 classpath 上的任意类—— 在<b>共享/多租户 Redis</b> 上是反序列化 RCE
+         * 攻击面，并且这个风险会通过本 SDK <b>传播给所有下游应用</b>。 安全默认值不应依赖用户先读完 README 的警告段，故默认值回退为 Jackson：
+         * 严格类型、无多态反序列化、无 gadget 面，且消息体在 Redis 中是人类可读 JSON（便于排障与跨语言消费）。
          *
-         * <p><b>默认宽松模式的安全风险：</b>Fury 默认<b>不强制类注册</b>，Redis 中被写入的字节流可反序列化为 classpath 上的任意类，
-         * 在<b>共享/多租户 Redis</b>上是反序列化 RCE 攻击面。仅当 Redis 为<b>受信单租户</b>实例时默认风险可接受； 否则应开启类注册白名单（{@code
-         * streammq.producer.fury-require-class-registration=true} 并预注册业务类型）， 或切换为无 gadget 面的 {@link
-         * JacksonJsonSerializer}（严格类型、无多态反序列化，需 JSON 可读性时）/ {@code
-         * io.github.streammq.adapter.redisson.serializer.ProtostuffSerializer}（schema 由类型决定）。
-         * 对应全局默认值常量： {@link StreamMQConstants#DEFAULT_SERIALIZER}。
+         * <p><b>需要更高吞吐时显式 opt-in：</b>{@code
+         * io.github.streammq.adapter.redisson.serializer.FurySerializer}（建议同时开启 {@code
+         * fury-require-class-registration=true} 并预注册业务类型）或 {@code
+         * io.github.streammq.adapter.redisson.serializer.ProtostuffSerializer}。 二者在 {@code
+         * streammq-redisson} 中为 <b>optional</b> 依赖，需自行加入 classpath：Fury 需 {@code
+         * org.apache.fury:fury-core}；Protostuff 需 {@code io.protostuff:protostuff-core} 与 {@code
+         * protostuff-runtime}。
+         *
+         * <p>对应全局默认值常量： {@link StreamMQConstants#DEFAULT_SERIALIZER}。
          */
-        private Class<? extends MessageSerializer> serializer = FurySerializer.class;
+        private Class<? extends MessageSerializer> serializer = JacksonJsonSerializer.class;
 
         /**
-         * Fury 是否强制类注册白名单（仅当 {@code producer.serializer} 为 {@link FurySerializer} 时生效）。
+         * Fury 是否强制类注册白名单（仅当 {@code producer.serializer} 为 {@code FurySerializer} 时生效）。
          *
-         * <p>默认 {@code false}（宽松模式）是<b>有意为之</b>：优先保证任意 POJO 开箱即用与最优吞吐，代价是 Redis 中字节流可反序列化为
-         * classpath 上任意类， 在<b>共享/多租户 Redis</b>上是反序列化 RCE 攻击面（依赖 classpath 上的 gadget
-         * 链）。这是项目方在「吞吐优先」与「零 RCE 面」之间做的明确权衡。
+         * <p>默认 {@code false}（宽松模式）：任意 POJO 开箱即用，代价是 Redis 中字节流可反序列化为 classpath 上任意类， 在<b>共享/多租户
+         * Redis</b>上是反序列化 RCE 攻击面（依赖 classpath 上的 gadget 链）。
          *
-         * <p><b>缓解：</b>共享/多租户 Redis 生产环境建议设为 {@code true} 开启类注册白名单，并通过 {@code new
+         * <p><b>缓解：</b>显式选用 Fury 时建议设为 {@code true} 开启类注册白名单，并通过 {@code new
          * FurySerializer<>(Xxx.class)} 或 {@code register(Class)} / {@code registerAll(Class...)}
-         * 预注册业务消息体类型； 若不能接受任何 RCE 面，直接切换为 {@code JacksonJsonSerializer} 或 {@code
-         * io.github.streammq.adapter.redisson.serializer.ProtostuffSerializer}。
+         * 预注册业务消息体类型； 若不能接受任何 RCE 面，保持默认的 {@code JacksonJsonSerializer} 或改用 {@code
+         * ProtostuffSerializer}。
          */
-        private boolean furyRequireClassRegistration = false;
+        private boolean furyRequireClassRegistration = true;
 
         /** 消息体压缩阈值（字节），body 超过此值时触发压缩，0 = 禁用（默认禁用） */
         private int compressThreshold = StreamMQConstants.DEFAULT_COMPRESS_THRESHOLD_BYTES;
@@ -293,10 +295,15 @@ public class StreamMQProperties {
         private ConsumeFromWhere consumeFromWhere = StreamMQConstants.DEFAULT_CONSUME_FROM_WHERE;
 
         /**
-         * 全局并发消费超时（毫秒），默认 {@link StreamMQConstants#DEFAULT_CONSUME_TIMEOUT_MS}（30000ms）。
+         * 全局并发消费超时（毫秒），默认 {@link StreamMQConstants#DEFAULT_CONSUME_TIMEOUT_MS}（{@code 0} = 不启用）。
          *
          * <p>仅作为 {@code @StreamMQConsumer#consumeTimeout()} 未显式声明（为 -1）时的回落值； 注解显式声明 {@code >= 0}
          * 时始终优先，per-consumer 可覆盖全局。
+         *
+         * <p><b>性能含义（务必知悉）：</b>设为正数后，框架会为<b>每一条</b>消息执行一次 {@code executor.submit()} + {@code
+         * Future.get(timeout)}（+ 超时后的 {@code join} 等待），用于中断卡死的 handler。 这是每条消息的固定成本，而绝大多数消息毫秒级即完成。
+         * 因此默认关闭：卡死消息由 {@code PelClaimScheduler} 在空闲阈值（默认 60s）后认领重投兜底，at-least-once 语义不变，仅恢复延迟更长。
+         * 只有确实存在慢/卡死 handler 的场景才应开启。
          */
         private long consumeTimeoutMillis = StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS;
     }

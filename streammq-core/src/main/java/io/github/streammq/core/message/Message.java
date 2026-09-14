@@ -557,10 +557,14 @@ public final class Message<T> implements Serializable {
     }
 
     /**
-     * 基于 topic + messageId 的值相等语义。
+     * 值相等语义（不可变值对象契约）：
      *
-     * <p>两者均非 null 时按值比较；任一实例的 messageId 为 null 时退化为同一性语义（仅同一实例相等）—— 因为发送前消息尚未获得框架分配的 ID，无法与其他同
-     * topic 消息区分。
+     * <ul>
+     *   <li>已分配 messageId 的消息：按 {@code (topic, messageId)} 比较，与发送前后身份一致
+     *   <li>发送前 messageId 为 null 的消息：退化为基于内容（topic/tag/keys/shardingKey/body/延迟/出生时间）
+     *       的值比较，保证两个内容相同但尚未获得 ID 的消息被判定为相等，而非退化为同一性语义
+     *   <li>已分配 ID 与未分配 ID 的消息始终不等（身份不同）
+     * </ul>
      *
      * @param o 比较对象
      * @return true 如果语义上相等
@@ -573,20 +577,34 @@ public final class Message<T> implements Serializable {
         if (!(o instanceof Message<?> other)) {
             return false;
         }
-        if (Objects.isNull(messageId) || Objects.isNull(other.messageId)) {
+        // 身份是否分配 ID 不同 → 必然不等
+        if (Objects.isNull(messageId) != Objects.isNull(other.messageId)) {
             return false;
         }
-        return topic.equals(other.topic) && messageId.equals(other.messageId);
+        if (Objects.nonNull(messageId)) {
+            return topic.equals(other.topic) && messageId.equals(other.messageId);
+        }
+        // 两者 messageId 均为 null：基于内容的值比较（保持值对象契约）
+        return Objects.equals(topic, other.topic)
+                && Objects.equals(tag, other.tag)
+                && Objects.equals(keys, other.keys)
+                && Objects.equals(shardingKey, other.shardingKey)
+                && Objects.equals(body, other.body)
+                && Objects.equals(delayTimeMillis, other.delayTimeMillis)
+                && Objects.equals(bornTimestamp, other.bornTimestamp);
     }
 
     /**
-     * 与 {@link #equals} 一致：messageId 非 null 时为 {@code hash(topic, messageId)}， 否退化为同一性哈希。
+     * 与 {@link #equals} 一致：messageId 非 null 时为 {@code hash(topic, messageId)}， 否则为内容哈希。
      *
      * @return 哈希值
      */
     @Override
     public int hashCode() {
-        return Objects.isNull(messageId) ? super.hashCode() : Objects.hash(topic, messageId);
+        if (Objects.nonNull(messageId)) {
+            return Objects.hash(topic, messageId);
+        }
+        return Objects.hash(topic, tag, keys, shardingKey, body, delayTimeMillis, bornTimestamp);
     }
 
     @Override

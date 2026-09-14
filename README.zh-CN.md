@@ -10,7 +10,7 @@
 [![Java](https://img.shields.io/badge/Java-21%2B-orange.svg)](https://openjdk.java.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.x-green.svg)](https://spring.io/projects/spring-boot)
 [![Redisson](https://img.shields.io/badge/Redisson-3.34.x-red.svg)](https://redisson.org/)
-[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](https://github.com/HK-hub/StreamMQ)
+[![Version](https://img.shields.io/badge/version-0.1.2-blue.svg)](https://github.com/HK-hub/StreamMQ)
 [![CI](https://github.com/HK-hub/StreamMQ/actions/workflows/ci.yml/badge.svg)](https://github.com/HK-hub/StreamMQ/actions/workflows/ci.yml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/HK-hub/StreamMQ/pulls)
 [![Stars](https://img.shields.io/github/stars/HK-hub/StreamMQ?style=social)](https://github.com/HK-hub/StreamMQ)
@@ -23,7 +23,7 @@
 
 ### 为什么要求 JDK 21
 
-StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-plugin` 与 `requireJavaVersion [21,)` 强制）。这是有意为之：
+StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-plugin` 与 `requireJavaVersion [21,)` 强制）。这是有意为之：
 
 - **虚拟线程（JEP 444）**是消费循环的默认执行模型——`Executors.newVirtualThreadPerTaskExecutor()` 在 JDK 21 才是 GA 状态。我们拒绝回退到平台线程池，因为高并发消费者的线程数量会与 Redis 连接池产生 1:N 放大效应。
 - **模式匹配 + Record 模式**简化了 `ConsumeLoopTask` / `ConsumeAction` 等核心胶水代码。
@@ -85,11 +85,11 @@ StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 ### Spring Boot 3 深度集成
 
-自动装配、配置绑定、Actuator 端点、Micrometer 指标——与 Spring 生态无缝衔接，`@EnableStreamMQ` 一键开启。
+自动装配、配置绑定、Actuator 端点、Micrometer 指标——与 Spring 生态无缝衔接，引入 starter 即生效。
 
 ### 深度可扩展
 
-序列化器、转换器、过滤器、拦截器、重试策略、重平衡策略、压缩编解码器、死信失败策略、管理鉴权器、链路追踪采集器——几乎一切可替换。0.1.1 提供 **10 个面向用户的扩展点**（外加 6 个内部装配点，总计 16 个可覆盖 Bean，详见 [SPI 扩展机制](#spi-扩展机制)）。
+序列化器、转换器、过滤器、拦截器、重试策略、重平衡策略、压缩编解码器、死信失败策略、管理鉴权器、链路追踪采集器——几乎一切可替换。0.1.2 提供 **10 个面向用户的扩展点**（外加 6 个内部装配点，总计 16 个可覆盖 Bean，详见 [SPI 扩展机制](#spi-扩展机制)）。
 
 ### 质量与发布姿态
 
@@ -111,7 +111,7 @@ StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 │   ┌───────────────────────────────────────────────────────────────────┐ │
 │   │                    Spring Boot Application                       │ │
 │   │  ┌─────────────┐  ┌──────────────┐  ┌──────────────────────────┐ │ │
-│   │  │@EnableStreamMQ│ │@StreamMQConsumer│ │  StreamMessageTemplate  │ │ │
+│   │  │ auto-config │ │@StreamMQConsumer│ │  StreamMessageTemplate  │ │ │
 │   │  │  (自动装配)   │  │  (声明式消费)  │ │   (统一发送入口)         │ │ │
 │   │  └──────┬──────┘  └──────┬───────┘  └───────────┬──────────────┘ │ │
 │   └─────────┼─────────────────┼─────────────────────┼────────────────┘ │
@@ -174,6 +174,8 @@ StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 | 学习成本 | **低** | 中 | 中 | 中 | 中 |
 | 适用规模 | 中小规模（< 1 亿/天） | 中小规模 | 中小规模 | 大规模 | 超大规模 |
 
+> **背压默认关闭**：`streammq.consumer.inflight-capacity` 默认值为 `0`（禁用）。如需启用限流，请将其设为正整数（背压队列将消息拉取与处理解耦，队列满时拉取阻塞）。
+
 ---
 
 ## 性能基准测试
@@ -192,7 +194,7 @@ StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 ### 性能基线（方法学声明）
 
-> ⚠️ **重要：以下数字是 0.1.1 本地实测快照**（2026-09-02，localhost Redis，JDK 21，笔记本级硬件）：
+> ⚠️ **重要：以下数字是 0.1.2 本地实测快照**（2026-09-02，localhost Redis，JDK 21，笔记本级硬件）：
 > - 序列化基准已加入 JMH `Blackhole` 消费，防止 JIT 死码消除导致吞吐虚高
 > - 消费基准已重写为「XREADGROUP 拉取 → 反序列化 → 业务回调 → XACK」完整端到端路径，并配合持续灌数
 > - 此前 README 引用的 "Stream 消费吞吐 ~269,760 ops/s" 来自一个测量**空 XREADGROUP 网络往返**的破损基准，已移除
@@ -200,7 +202,7 @@ StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 > 我们公开承认 v0.1.0 之前曾发布过有方法学缺陷的基准数字（死码消除、灌数耗尽、缺 ACK）。这种透明度比"假装没发过"更重要。**生产容量规划请以你自己环境的实测为准。**
 
-### 序列化性能 (Throughput, ops/s) — 0.1.1 实测
+### 序列化性能 (Throughput, ops/s) — 0.1.2 实测
 
 测试 1KB 消息体的序列化/反序列化吞吐量（messageCount=1000，含 Blackhole 消费）。JMH fork=1，warmup=1×2s，measurement=2×3s。
 
@@ -212,7 +214,7 @@ StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 > **结论**: Fury 序列化吞吐量是 Jackson 的 **~7-13x**，是 JDK 的 **~10x**（数字会因 JDK/硬件/负载而漂移）。
 
-### 消息发送性能 (Throughput, ops/s) — 0.1.1 实测
+### 消息发送性能 (Throughput, ops/s) — 0.1.2 实测
 
 单实例同步/异步发送，直连 localhost Redis。JMH fork=1，warmup=1×2s，measurement=2×3s。
 
@@ -224,7 +226,7 @@ StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 > **结论**: 异步发送性能约为同步的 **3~4 倍**（同样依赖硬件与 Redis 网络 RTT）。
 
-### 消息消费性能 — 0.1.1 实测
+### 消息消费性能 — 0.1.2 实测
 
 端到端完整消费路径：XREADGROUP + 字段解码 + 回调 + XACK（含持续灌数）。JMH fork=1，warmup=1×2s，measurement=3×3s。
 
@@ -278,7 +280,7 @@ StreamMQ 0.1.1 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
         <dependency>
             <groupId>io.github.streammq</groupId>
             <artifactId>streammq-bom</artifactId>
-            <version>0.1.1</version>
+            <version>0.1.2</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -319,11 +321,12 @@ redisson:
     database: 0
 ```
 
-### 3. 启用
+### 3. 启用（自动）
+
+只需引入 starter 依赖——starter 出现在 classpath 时，StreamMQ 即通过 `META-INF/spring/AutoConfiguration.imports` 自动装配全部核心 Bean（且 `streammq.enabled=true`，默认值）。无需任何 `@Enable*` 注解。
 
 ```java
 @SpringBootApplication
-@EnableStreamMQ
 public class DemoApplication {
     public static void main(String[] args) {
         SpringApplication.run(DemoApplication.class, args);
@@ -331,7 +334,7 @@ public class DemoApplication {
 }
 ```
 
-> 💡 `@EnableStreamMQ` 是一个显式标记注解，**不会**触发额外装配——所有核心 Bean 都通过 `META-INF/spring/AutoConfiguration.imports` 在 starter 出现在 classpath 时自动注册。不写 `@EnableStreamMQ` 也能跑通，添加它仅为了在代码上明确表达"使用 StreamMQ"。
+> 💡 历史上的 `@EnableStreamMQ` 标记注解（空注解、不含 `@Import`）不触发额外装配，已在 0.1.2 移除。自动装配是独立的。
 
 ### 4. 发送消息（推荐：使用 `StreamMessageService` 门面）
 
@@ -354,7 +357,7 @@ public class OrderService {
                 MessageMetadataBuilder.create()
                         .tag("created")
                         .keys(orderId)
-                        .withUserProperty("traceId", "t-001"));
+                        .userProperty("traceId", "t-001"));
     }
 }
 ```
@@ -411,7 +414,7 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 
 `StreamMessageTemplate` 是发送 API 的完整形态——所有拦截器 / 过滤器 / SPI 访问器都在这里暴露。**业务代码建议优先使用 `StreamMessageService` 门面**（见 [快速开始](#4-发送消息推荐使用-streammessageservice-门面)），仅在需要直接操作 SPI 时才注入 `StreamMessageTemplate`。
 
-0.1.1 起 API 已收敛：每个发送模式仅保留一个 `SendOptions` 规范形，此前的 timeout / retry / callback 伸缩重载全部移除；零参便捷形式以 default 方法提供。
+0.1.2 起 API 已收敛：每个发送模式仅保留一个 `SendOptions` 规范形，此前的 timeout / retry / callback 伸缩重载全部移除；零参便捷形式以 default 方法提供。
 
 ```java
 public interface StreamMessageTemplate {
@@ -856,10 +859,12 @@ streammq:
 
 ## SPI 扩展机制
 
-StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换。0.1.1 提供 **16 个可覆盖点**，分两类：
+StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换。0.1.2 提供 **16 个可覆盖点**，分两类：
 
 - **12 个面向用户的扩展点**（业务方最常实现/替换）
 - **4 个内部装配点**（容器内部组件，技术集成方按需覆盖）
+
+> 这些扩展点通过注解的 `Class` 属性或 Spring Bean 覆盖来加载，**不使用 Java `ServiceLoader`**。
 
 | 类别 | SPI/可覆盖接口 | 作用 | 默认实现 |
 |------|------|------|----------|
@@ -1073,7 +1078,7 @@ template.syncSend(message);  // traceId 自动透传到消费者
 
 ### V1.0 功能里程碑（0.1.x 已实现）
 
-> **说明**：以下功能已在 0.1.x 版本中实现并可用。项目当前版本为 **0.1.1**（功能预览版），
+> **说明**：以下功能已在 0.1.x 版本中实现并可用。项目当前版本为 **0.1.2**（功能预览版），
 > API 在 1.0.0 之前仍可能根据社区反馈演进。生产使用前建议在非核心链路灰度验证。
 
 - [x] 注解驱动消费（`@StreamMQConsumer`）

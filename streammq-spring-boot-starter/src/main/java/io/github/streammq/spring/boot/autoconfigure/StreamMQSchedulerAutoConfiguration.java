@@ -168,7 +168,8 @@ public class StreamMQSchedulerAutoConfiguration {
                         messageConverter,
                         interval.toMillis(),
                         maxCheck,
-                        TransactionScanner.DEFAULT_BATCH_SIZE);
+                        TransactionScanner.DEFAULT_BATCH_SIZE,
+                        properties.getTransaction().getDefaultGroup());
         StreamMQMetrics metrics = metricsProvider.getIfAvailable();
         if (metrics != null) {
             scanner.setMetrics(metrics);

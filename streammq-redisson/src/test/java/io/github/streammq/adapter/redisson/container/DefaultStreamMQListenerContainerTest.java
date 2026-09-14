@@ -11,6 +11,7 @@ import static org.mockito.Mockito.mock;
 
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
+import io.github.streammq.core.policy.DlqConfig;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
 import java.util.concurrent.ExecutorService;
@@ -56,6 +57,7 @@ class DefaultStreamMQListenerContainerTest {
                 mock(MessageConverter.class),
                 mock(RetryPolicy.class),
                 mock(DlqFailureStrategy.class),
+                DlqConfig.builder().build(),
                 "test-namespace");
     }
 

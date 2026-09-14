@@ -5,7 +5,6 @@
  */
 package io.github.streammq.spring.boot.autoconfigure;
 
-import io.github.streammq.core.annotation.EnableStreamMQ;
 import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import org.redisson.api.RedissonClient;
@@ -40,9 +39,9 @@ import org.springframework.context.annotation.Import;
  * <p>触发方式：
  *
  * <ul>
- *   <li>Starter 在 classpath 时经 {@code AutoConfiguration.imports} 自动生效（推荐，无需任何注解）
- *   <li>{@link EnableStreamMQ} 为<b>空标记注解</b>（不含 {@code @Import}），不参与装配决策——仅用于向 StreamMQ
- *       团队声明"本应用有意使用 StreamMQ"；装配由自动配置独立完成
+ *   <li>Starter 在 classpath 时经 {@code AutoConfiguration.imports} 自动生效（推荐，无需任何启用注解）
+ *   <li>装配由本配置类独立完成，<b>无需 {@code @EnableStreamMQ} 之类的标记注解</b>——该空标记注解（不含 {@code @Import}、不参与装配决策）已在
+ *       0.1.2 移除；接入仅需保证 starter 在 classpath 且 {@code streammq.enabled=true}（默认）
  * </ul>
  *
  * @author StreamMQ Contributors

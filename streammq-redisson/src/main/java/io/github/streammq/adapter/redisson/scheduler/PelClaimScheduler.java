@@ -277,7 +277,16 @@ public class PelClaimScheduler implements StreamMQScheduler {
         ensureScanExecutorAlive();
         scanFuture =
                 scanExecutor.scheduleAtFixedRate(
-                        this::scanAllTargets, 0, scanIntervalMs, TimeUnit.MILLISECONDS);
+                        () -> {
+                            try {
+                                scanAllTargets();
+                            } catch (Throwable t) {
+                                LOG.error("PelClaimScheduler.scanAllTargets failed fatally", t);
+                            }
+                        },
+                        0,
+                        scanIntervalMs,
+                        TimeUnit.MILLISECONDS);
         LOG.info(
                 "PelClaimScheduler started, scanIntervalMs={}, minIdleMs={}, targets={}",
                 scanIntervalMs,

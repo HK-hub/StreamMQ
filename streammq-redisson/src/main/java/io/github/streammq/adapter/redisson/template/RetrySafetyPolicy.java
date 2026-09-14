@@ -13,7 +13,6 @@ import io.github.streammq.core.message.MessageId;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.message.SendStatus;
 import java.util.Objects;
-import java.util.UUID;
 
 /**
  * 发送重试安全判定与失败结果构造（发送管线专用策略）。
@@ -50,10 +49,8 @@ final class RetrySafetyPolicy {
      * @return 失败 SendResult
      */
     static SendResult buildFailedResult(Message<?> message, StreamMQException error) {
-        // 使用 UUID 后缀确保失败结果在并发场景下也不会产生 MessageId 碰撞
-        String failureId = System.currentTimeMillis() + "-" + UUID.randomUUID();
         return new SendResult(
-                new MessageId(failureId),
+                MessageId.sentinel(),
                 message.getTopic(),
                 message.getTag(),
                 SendStatus.SEND_FAILED,

@@ -33,6 +33,7 @@ import io.github.streammq.core.message.MessageMetadataBuilder;
 import io.github.streammq.core.message.SendOptions;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.message.SendStatus;
+import io.github.streammq.core.policy.DlqConfig;
 import io.github.streammq.core.producer.ProducerConfig;
 import io.github.streammq.core.producer.SendCallback;
 import io.github.streammq.core.serializer.MessageSerializer;
@@ -129,6 +130,7 @@ class CoreRedisIntegrationIT extends StreamMQTestBase {
                         converter,
                         retryPolicy,
                         new LogAndDropDlqFailureStrategy(),
+                        DlqConfig.builder().build(),
                         NAMESPACE);
     }
 

@@ -258,6 +258,13 @@ class ConsumeTimeoutAndBroadcastIT extends AbstractRedisIT {
         container2.start();
 
         try {
+            // 就绪门控：广播组在消费循环首次拉取时才创建（异步），若消息先于某个实例的组创建而到达，
+            // 该实例将从 `$` 起点开始、永久错过原始消息——导致"总调用数=2"的时序竞态假失败。
+            // 等待两个实例的消费者组都出现在 topic Stream 后再发消息。
+            RStream<String, String> topicStream =
+                    redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
+            await().atMost(15, TimeUnit.SECONDS).until(() -> topicStream.listGroups().size() >= 2);
+
             RedissonStreamProducer producer =
                     new RedissonStreamProducer(
                             redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);

@@ -150,8 +150,14 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 注册存储（接口注入，默认实现见构造器；start 前可通过 setter 覆盖） */
     private final RegistrationStore store = new DefaultRegistrationStore();
 
-    /** 消费线程池：默认统一使用虚拟线程池；Spring 环境由自动装配注入用户自定义实现。 所有权规则：容器内部创建的默认池在 stop 时关闭；外部注入的池由提供方管理生命周期。 */
-    private ExecutorService consumeExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    /**
+     * 消费线程池：默认统一使用虚拟线程池；Spring 环境由自动装配注入用户自定义实现。 所有权规则：容器内部创建的默认池在 stop 时关闭；外部注入的池由提供方管理生命周期。
+     *
+     * <p><b>volatile 是必需的：</b>本字段会在 {@code setConsumeExecutor} / {@code ensureRuntimeAlive}（持有
+     * {@code synchronized(this)}）中被替换，而在<b>不持锁</b>的 {@code stop()} / {@code launchLoop()} 中被读取。 非
+     * volatile 时，另一个线程（如调用 stop 的 Spring 生命周期线程）可能读到过期的执行器引用， 导致"关闭了旧池却仍向旧池提交任务"或反之。
+     */
+    private volatile ExecutorService consumeExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     /** 是否拥有消费线程池所有权（决定 stop 是否关闭） */
     private boolean ownsExecutor = true;
@@ -507,6 +513,25 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     private volatile Class<? extends RebalanceStrategy> defaultRebalanceStrategy;
 
     /**
+     * Spring 应用上下文（可选注入，Object 类型以保持 redisson 模块零 Spring 编译依赖）。
+     *
+     * <p>启动器（spring-boot-starter）在装配时通过 {@link #setApplicationContext(Object)} 注入； 用于 per-consumer
+     * SPI 的「容器优先 → 反射兜底」解析（P1-4 修复：避免 Spring Bean 被静默忽略）。
+     */
+    private volatile Object applicationContext;
+
+    /**
+     * 注入 Spring 应用上下文（仅 INIT 状态允许；非 Spring 环境保持 null 即可）。
+     *
+     * @param applicationContext Spring ApplicationContext 实例（反射调用其 getBeanNamesForType / getBean
+     *     方法）
+     */
+    public void setApplicationContext(Object applicationContext) {
+        assertInitState("applicationContext");
+        this.applicationContext = applicationContext;
+    }
+
+    /**
      * 设置全局默认 RebalanceStrategy（仅 INIT 状态允许）。
      *
      * <p>per-consumer 注解未显式指定 rebalanceStrategy 时回退到该值； 传 null 表示回退到 {@code
@@ -654,14 +679,12 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     }
 
     /**
-     * 构造容器（向后兼容：内部创建默认策略实现，per-consumer 启用）。
+     * 构造容器（便捷重载：内部创建默认 DLQ 失败策略与配置，背压容量取 {@link StreamMQConstants#DEFAULT_INFLIGHT_CAPACITY}）。
      *
-     * @deprecated 兼容重载，默认值分散在多个重载间，易产生语义漂移。请使用全参构造 {@link
-     *     #DefaultStreamMQListenerContainer(RedissonClient, StreamMQListenerFactory,
-     *     MessageConverter, RetryPolicy, DlqFailureStrategy, DlqConfig, String, int)}（DLQ
-     *     失败策略与配置按需显式传入）， 计划在 0.2.0 移除。
+     * <p>所有默认值在此显式声明并统一委派给全参构造，避免多重载间默认语义漂移。 需要自定义 DLQ 策略/配置或背压容量时请使用 {@link
+     * #DefaultStreamMQListenerContainer(RedissonClient, StreamMQListenerFactory, MessageConverter,
+     * RetryPolicy, DlqFailureStrategy, DlqConfig, String, int)}。
      */
-    @Deprecated(since = "0.1.1")
     public DefaultStreamMQListenerContainer(
             RedissonClient redisson,
             StreamMQListenerFactory consumerFactory,
@@ -675,42 +698,15 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 retryPolicy,
                 new LogAndDropDlqFailureStrategy(),
                 DlqConfig.builder().build(),
-                defaultNamespace);
+                defaultNamespace,
+                StreamMQConstants.DEFAULT_INFLIGHT_CAPACITY);
     }
 
     /**
-     * 构造容器并注入全局死信消费失败策略（per-consumer 启用）。
+     * 构造容器并注入 DLQ 失败策略与配置（便捷重载，背压容量取 {@link StreamMQConstants#DEFAULT_INFLIGHT_CAPACITY}）。
      *
-     * @deprecated 兼容重载，请使用全参构造 {@link #DefaultStreamMQListenerContainer(RedissonClient,
-     *     StreamMQListenerFactory, MessageConverter, RetryPolicy, DlqFailureStrategy, DlqConfig,
-     *     String, int)}，计划在 0.2.0 移除。
+     * <p>默认值统一委派给全参构造，避免多重载间默认语义漂移。
      */
-    @Deprecated(since = "0.1.1")
-    public DefaultStreamMQListenerContainer(
-            RedissonClient redisson,
-            StreamMQListenerFactory consumerFactory,
-            MessageConverter messageConverter,
-            RetryPolicy retryPolicy,
-            DlqFailureStrategy dlqFailureStrategy,
-            String defaultNamespace) {
-        this(
-                redisson,
-                consumerFactory,
-                messageConverter,
-                retryPolicy,
-                dlqFailureStrategy,
-                DlqConfig.builder().build(),
-                defaultNamespace);
-    }
-
-    /**
-     * 构造容器并注入全局 DLQ 策略与配置（per-consumer 启用）。
-     *
-     * @deprecated 兼容重载，背压容量默认值由本重载硬编码、与全参构造的显式传参并存，改默认值易漏改。 请使用全参构造 {@link
-     *     #DefaultStreamMQListenerContainer(RedissonClient, StreamMQListenerFactory,
-     *     MessageConverter, RetryPolicy, DlqFailureStrategy, DlqConfig, String, int)}，计划在 0.2.0 移除。
-     */
-    @Deprecated(since = "0.1.1", forRemoval = true)
     public DefaultStreamMQListenerContainer(
             RedissonClient redisson,
             StreamMQListenerFactory consumerFactory,
@@ -1019,7 +1015,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             releaseBroadcastInstance(reg);
         }
         store.clearGroupManagers();
-        consumerFactory.close();
+        // C-02 修复：先排空在途消费线程（等消费循环真正退出/消息处理完成），再关闭 listener。
+        // 旧顺序（先 close listener 再 await）的缺陷：停机窗口内 in-flight 消息调用 ack() 必抛
+        // IllegalStateException（listener 已 closed）——SUCCESS 消息滞留 PEL，重启后重复消费。
         if (ownsExecutor) {
             consumeExecutor.shutdown();
             try {
@@ -1031,10 +1029,14 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 consumeExecutor.shutdownNow();
                 Thread.currentThread().interrupt();
             }
+            consumerFactory.close();
         } else {
             // 执行器为外部注入（共享）时绝不可关闭：其生命周期归提供方（如 Spring 的
             // streammqExecutor），误关会中断事件总线/异步发送/事务回查，并拖慢停机。
+            // 共享池场景无法 await 终止；消费循环检测到 isRunning=false 后自然退出，
+            // close 与在途 ack 的竞争窗口极短（at-least-once 下最坏产生一次重复消费，不丢消息）。
             LOG.debug("Injected (shared) consumeExecutor retained on stop; not shutting down");
+            consumerFactory.close();
         }
         paused = false;
         // 停止后清空：历史失败不应影响下一次 start 的健康判定
@@ -1208,7 +1210,20 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             return;
         }
         if (!reg.isDlqMode() && Objects.isNull(store.groupManager(reg.key()))) {
-            store.putGroupManager(reg.key(), groupManagerFactory().createAndRegister(reg));
+            ConsumerGroupManager manager = groupManagerFactory().createAndRegister(reg);
+            store.putGroupManager(reg.key(), manager);
+            // 竞态防护（C-01）：若 put 期间容器已进入停止流程（stop 的 clearGroupManagers 已执行完），
+            // 该 manager 会被漏掉，其心跳持续上报形成僵尸组（daemon 线程虽不致 JVM 挂死，但会污染注册表）。
+            // 复查状态并立即回滚注销——与 stop() 的 clearGroupManagers 二者必有一个先看到对方。
+            if (!lifecycle.isRunning()) {
+                store.removeAndUnregisterGroupManager(reg.key());
+                LOG.warn(
+                        "Container stopped during dynamic registration; orphan group manager"
+                                + " rolled back: topic={}, group={}",
+                        reg.getTopic(),
+                        reg.getGroup());
+                return;
+            }
         }
         loopSupervisor.submitLoops(reg);
         LOG.info(
@@ -1243,6 +1258,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                                     () -> defaultVirtualNodes,
                                     () -> metrics,
                                     defaultRebalanceStrategy,
+                                    applicationContext,
                                     perConsumerEnabled);
                     spiResolver = current;
                 }

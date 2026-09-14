@@ -43,15 +43,8 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
 
     @Override
     public ConsumeAction onMessage(Message<T> message, ConsumeContext context) throws Exception {
-        // 入表与 countDown 必须原子：awaitMessages 在同一锁下建 latch 并补偿存量，
-        // 保证任一消息要么被补偿计数、要么触发新 latch，二者只取其一（消除竞态）
         synchronized (this) {
             receivedMessages.add(message);
-
-            CountDownLatch current = latch;
-            if (current != null) {
-                current.countDown();
-            }
         }
 
         LOG.debug(
@@ -62,14 +55,33 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
 
         if (shouldFail && successCount.get() >= failAfterCount) {
             Exception ex = new RuntimeException("Intentional test failure");
+            // 必须在 countDown 之前完成异常记录：waitForMessages 仅等待 latch，
+            // 若先 countDown 再记录，测试线程可能读到仍处于空的 exceptions（竞态）。
+            // exceptions 写入（synchronized(exceptions)）happens-before countDown（release），
+            // 测试 await（acquire）happens-before 读 exceptions，靠传递性保证读到。
             synchronized (exceptions) {
                 exceptions.add(ex);
             }
             failCount.incrementAndGet();
+            synchronized (this) {
+                CountDownLatch current = latch;
+                if (current != null) {
+                    current.countDown();
+                }
+            }
             throw ex;
         }
 
         successCount.incrementAndGet();
+
+        // 入表与 countDown 必须原子：awaitMessages 在同一锁下建 latch 并补偿存量，
+        // 保证任一消息要么被补偿计数、要么触发新 latch，二者只取其一（消除竞态）
+        synchronized (this) {
+            CountDownLatch current = latch;
+            if (current != null) {
+                current.countDown();
+            }
+        }
 
         return nextAction;
     }

@@ -79,6 +79,36 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
     private static final String SHARD_CSV_DELIMITER = ",";
 
     /**
+     * 跨所有 ConsumerGroupManager 实例共享的心跳调度器。
+     *
+     * <p>早期实现为每个消费者组创建一条独立 {@code ScheduledExecutorService} 单线程，消费者组数量多时线程数线性膨胀。 改为共享一个有界 daemon
+     * 线程池：心跳为轻量 Redis HSET，单池足以承载全部组；线程随 JVM 退出自动回收， 因此 {@link #unregister()} 不再关闭该共享执行器。
+     */
+    private static volatile ScheduledExecutorService sharedHeartbeatExecutor;
+
+    private static ScheduledExecutorService sharedHeartbeatExecutor() {
+        ScheduledExecutorService ex = sharedHeartbeatExecutor;
+        if (ex == null) {
+            synchronized (RedissonConsumerGroupManager.class) {
+                ex = sharedHeartbeatExecutor;
+                if (ex == null) {
+                    int poolSize = Math.max(1, Runtime.getRuntime().availableProcessors());
+                    ex =
+                            Executors.newScheduledThreadPool(
+                                    poolSize,
+                                    r -> {
+                                        Thread t = new Thread(r, "streammq-cg-heartbeat");
+                                        t.setDaemon(true);
+                                        return t;
+                                    });
+                    sharedHeartbeatExecutor = ex;
+                }
+            }
+        }
+        return ex;
+    }
+
+    /**
      * 构造 ConsumerGroupManager。
      *
      * @param redisson Redisson 客户端
@@ -132,7 +162,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
         this.instanceTimeoutMs =
                 instanceTimeoutMs > 0 ? instanceTimeoutMs : DEFAULT_INSTANCE_TIMEOUT_MS;
         this.semaphoreKey = StreamMQKeys.consumerGroupSemaphore(namespace, group);
-        this.heartbeatExecutor = Executors.newSingleThreadScheduledExecutor();
+        this.heartbeatExecutor = sharedHeartbeatExecutor();
     }
 
     /**
@@ -221,7 +251,13 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
         running.set(true);
         heartbeatFuture =
                 heartbeatExecutor.scheduleAtFixedRate(
-                        this::heartbeat,
+                        () -> {
+                            try {
+                                heartbeat();
+                            } catch (Throwable t) {
+                                LOG.error("ConsumerGroupManager.heartbeat failed fatally", t);
+                            }
+                        },
                         heartbeatIntervalMs,
                         heartbeatIntervalMs,
                         TimeUnit.MILLISECONDS);
@@ -253,8 +289,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
         }
         // 从 instances Hash 移除
         instances().remove(instanceId);
-        // 关闭心跳线程池，避免线程泄漏
-        heartbeatExecutor.shutdown();
+        // 注意：心跳执行器为跨实例共享（见 {@link #sharedHeartbeatExecutor()}），此处不关闭，避免误杀其它组的活跃心跳
         LOG.info("Consumer instance unregistered: group={}, instanceId={}", group, instanceId);
     }
 

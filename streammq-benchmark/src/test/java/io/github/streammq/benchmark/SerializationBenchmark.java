@@ -24,9 +24,9 @@ import org.openjdk.jmh.runner.options.TimeValue;
 @State(Scope.Benchmark)
 @BenchmarkMode({Mode.Throughput, Mode.SampleTime})
 @OutputTimeUnit(TimeUnit.SECONDS)
-@Warmup(iterations = 1, time = 1)
-@Measurement(iterations = 2, time = 2)
-@Fork(1)
+@Warmup(iterations = 3, time = 2, timeUnit = TimeUnit.SECONDS)
+@Measurement(iterations = 5, time = 2, timeUnit = TimeUnit.SECONDS)
+@Fork(value = 3, warmups = 2)
 public class SerializationBenchmark {
 
     private static final int PAYLOAD_SIZE = 1024;
@@ -213,7 +213,7 @@ public class SerializationBenchmark {
                         .warmupIterations(3)
                         .measurementTime(TimeValue.seconds(3))
                         .measurementIterations(5)
-                        .forks(1)
+                        .forks(3)
                         .result("target/jmh-serialization.json")
                         .resultFormat(ResultFormatType.JSON)
                         .build();

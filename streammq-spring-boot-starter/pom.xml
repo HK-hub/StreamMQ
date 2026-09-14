@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.github.streammq</groupId>
         <artifactId>streammq-parent</artifactId>
-        <version>0.1.1</version>
+        <version>0.1.2</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -82,6 +82,23 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Fury / Protostuff 在 streammq-redisson 中为 optional（不传递给下游应用），
+             但本模块的装配测试需要验证"显式 opt-in 到 Fury"这条路径，故以 test scope 引入。 -->
+        <dependency>
+            <groupId>org.apache.fury</groupId>
+            <artifactId>fury-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.protostuff</groupId>
+            <artifactId>protostuff-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.protostuff</groupId>
+            <artifactId>protostuff-runtime</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>com.redis</groupId>
             <artifactId>testcontainers-redis</artifactId>
@@ -130,6 +147,34 @@
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>check</id>
+                        <phase>verify</phase>
+                        <goals><goal>check</goal></goals>
+                        <configuration>
+                            <skip>${jacoco.check.skip}</skip>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <!-- 实测 LINE≈0.581 / BRANCH≈0.445；Spring Boot 自动装配分支多，0.40 门禁可拦回归。 -->
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.55</minimum>
+                                        </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.40</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

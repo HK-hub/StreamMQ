@@ -222,7 +222,16 @@ public class RetryScheduler implements StreamMQScheduler {
         ensureScanExecutorAlive();
         scanFuture =
                 scanExecutor.scheduleAtFixedRate(
-                        this::scanAllTargets, 0, scanIntervalMs, TimeUnit.MILLISECONDS);
+                        () -> {
+                            try {
+                                scanAllTargets();
+                            } catch (Throwable t) {
+                                LOG.error("RetryScheduler.scanAllTargets failed fatally", t);
+                            }
+                        },
+                        0,
+                        scanIntervalMs,
+                        TimeUnit.MILLISECONDS);
         LOG.info(
                 "RetryScheduler started, scanIntervalMs={}, batchSize={}, targets={}",
                 scanIntervalMs,

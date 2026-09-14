@@ -391,46 +391,34 @@ public class DefaultStreamMessageTemplate
             try {
                 List<SendResult> results =
                         producer.syncSendBatch(interceptedMessages, timeoutMillis);
-                // 区分：单条失败 vs 整批失败
-                // 1) 若 results 是 partial（个别 SEND_FAILED），直接透传（每条结果独立标识）
-                // 2) 若整批抛异常，进入重试路径
-                int successCount = 0;
-                List<SendResult> finalResults = new ArrayList<>(results.size());
+                // Pipeline 层成功即返回：单条失败已由 producer 以 SEND_FAILED 逐条标识
+                // （SendResult.sendStatus），由调用方按 at-least-once 语义决定补偿。
                 for (int i = 0; i < results.size(); i++) {
-                    SendResult result = results.get(i);
-                    interceptorChain.afterSend(interceptedMessages.get(i), result);
-                    finalResults.add(result);
-                    if (result != null && result.isSuccess()) {
+                    interceptorChain.afterSend(interceptedMessages.get(i), results.get(i));
+                }
+                int successCount = 0;
+                for (SendResult result : results) {
+                    if (result.isSuccess()) {
                         successCount++;
                     }
                 }
-                if (successCount > 0 || results.size() == 0) {
-                    // 至少一条成功，或空 batch——直接返回（per-message 结果由调用方处理）
-                    LOG.debug(
-                            "Batch send completed: topic={}, total={}, success={}",
-                            batch.getTopic(),
-                            results.size(),
-                            successCount);
-                    return finalResults;
-                }
-                // 全部失败但无异常（极少见）——记 lastError 并按重试路径处理
-                lastError =
-                        new StreamMQException(
-                                "Batch send: all "
-                                        + results.size()
-                                        + " messages failed without exception");
-                for (Message<T> msg : interceptedMessages) {
-                    interceptorChain.notifyException(msg, lastError, InvokeTiming.EXECUTING);
-                }
-                LOG.warn(
-                        "syncSendBatch attempt {}/{}: all messages failed for topic {}",
-                        attempt + 1,
-                        retryTimes + 1,
-                        batch.getTopic());
+                LOG.debug(
+                        "Batch send completed: topic={}, total={}, success={}",
+                        batch.getTopic(),
+                        results.size(),
+                        successCount);
+                return results;
             } catch (StreamMQException ex) {
                 lastError = ex;
                 for (Message<T> msg : interceptedMessages) {
                     interceptorChain.notifyException(msg, ex, InvokeTiming.EXECUTING);
+                }
+                // 重试安全规则（与单条路径共用同一策略）：
+                // 仅对「确定未送达」的异常重试（序列化/客户端校验等发送前失败）。
+                // ProducerTimeoutException / StreamMQBrokerException 意味着批中部分 XADD 可能已落库，
+                // 整批重发会把已成功的那部分变成重复消息——立即失败，交由业务按 at-least-once 处理。
+                if (!RetrySafetyPolicy.isSafeToRetry(ex)) {
+                    throw ex;
                 }
                 LOG.warn(
                         "syncSendBatch attempt {}/{} failed for topic {}: {}",
@@ -439,14 +427,16 @@ public class DefaultStreamMessageTemplate
                         batch.getTopic(),
                         ex.getMessage(),
                         ex);
+            } catch (RuntimeException ex) {
+                for (Message<T> msg : interceptedMessages) {
+                    interceptorChain.notifyException(msg, ex, InvokeTiming.EXECUTING);
+                }
+                throw ex;
             }
         }
-        // 重试耗尽：所有消息都标记为失败并发出失败结果
-        List<SendResult> failureResults = new ArrayList<>(interceptedMessages.size());
+        // 重试耗尽（仅重试安全异常会走到这里，即消息确定未送达）：标记失败并抛出
         for (Message<T> msg : interceptedMessages) {
-            SendResult failed = RetrySafetyPolicy.buildFailedResult(msg, lastError);
-            interceptorChain.afterSend(msg, failed);
-            failureResults.add(failed);
+            interceptorChain.afterSend(msg, RetrySafetyPolicy.buildFailedResult(msg, lastError));
         }
         throw Objects.nonNull(lastError)
                 ? lastError

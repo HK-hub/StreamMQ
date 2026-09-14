@@ -94,7 +94,16 @@ public class BroadcastGroupSweeper implements StreamMQScheduler {
         ensureExecutorAlive();
         scanFuture =
                 scanExecutor.scheduleAtFixedRate(
-                        this::sweep, 0, scanIntervalMs, TimeUnit.MILLISECONDS);
+                        () -> {
+                            try {
+                                sweep();
+                            } catch (Throwable t) {
+                                LOG.error("BroadcastGroupSweeper.sweep failed fatally", t);
+                            }
+                        },
+                        0,
+                        scanIntervalMs,
+                        TimeUnit.MILLISECONDS);
         LOG.info("BroadcastGroupSweeper started, scanIntervalMs={}", scanIntervalMs);
     }
 

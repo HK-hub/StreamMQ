@@ -33,9 +33,6 @@ class AnnotationTest {
     @StreamMQTransactionConsumer(transactionGroup = "tg")
     static class TxListenerSample {}
 
-    @EnableStreamMQ
-    static class EnableSample {}
-
     private static Object defaultValue(Annotation annotation, String method) throws Exception {
         Method m = annotation.annotationType().getDeclaredMethod(method);
         return m.getDefaultValue();
@@ -79,11 +76,11 @@ class AnnotationTest {
         @Test
         @DisplayName(
                 "consumeTimeout 默认 -1（=未设置，回落全局 streammq.consumer.consume-timeout-millis，其默认"
-                        + " 30000L）")
+                        + " 0L = 不启用每条消息的超时包装；卡死消息由 PelClaimScheduler 兜底）")
         void consumeTimeoutDefault() {
             StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.consumeTimeout()).isEqualTo(-1L);
-            assertThat(StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS).isEqualTo(30000L);
+            assertThat(StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS).isEqualTo(0L);
         }
 
         @Test
@@ -171,19 +168,6 @@ class AnnotationTest {
             StreamMQTransactionConsumer ann =
                     TxListenerSample.class.getAnnotation(StreamMQTransactionConsumer.class);
             assertThat(ann.namespace()).isEmpty();
-        }
-    }
-
-    @Nested
-    @DisplayName("@EnableStreamMQ 默认值")
-    class EnableStreamMQDefaults {
-
-        @Test
-        @DisplayName("注解存在且不携带任何属性（预留属性已删除，全局行为由 streammq.* 配置表达）")
-        void annotationPresentWithoutAttributes() {
-            EnableStreamMQ ann = EnableSample.class.getAnnotation(EnableStreamMQ.class);
-            assertThat(ann).isNotNull();
-            assertThat(ann.annotationType().getDeclaredMethods()).isEmpty();
         }
     }
 }

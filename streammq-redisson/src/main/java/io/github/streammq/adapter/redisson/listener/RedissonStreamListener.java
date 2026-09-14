@@ -7,6 +7,7 @@ package io.github.streammq.adapter.redisson.listener;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.BroadcastGroupNaming;
+import io.github.streammq.adapter.redisson.support.PayloadTypeSafety;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.broadcast.BroadcastInstanceRegistry;
@@ -262,6 +263,25 @@ public class RedissonStreamListener implements StreamMQListener {
                         ? StreamMQConstants.MAX_BATCH_SIZE_LIMIT
                         : maxBatchSizeLimit;
         this.broadcastInstanceRegistry = broadcastInstanceRegistry;
+        // Fail-fast：广播模式的生效组名由 consumerName 反解实例身份得到（{group}-{instanceId}）。
+        // 若命名不符合约定，旧实现会静默拼出字面量 "g-null" 组名——所有这类实例塌缩进同一个组，
+        // 广播语义静默退化为集群消费，且组名无法反解回身份、清扫任务永远回收不掉。
+        // 这里在建监听器阶段就拒绝，避免把错误语义写进 Redis。
+        if (broadcast && !retryMode && !dlqMode) {
+            String instanceId =
+                    BroadcastGroupNaming.instanceIdFromConsumerName(group, consumerName);
+            if (instanceId == null || instanceId.isBlank()) {
+                throw new IllegalArgumentException(
+                        "Broadcast consumer name must follow '{group}-{instanceId}' so the"
+                            + " broadcast consumer group can be decoded back to a stable instance"
+                            + " identity; got consumerName='"
+                                + consumerName
+                                + "' for group='"
+                                + group
+                                + "'. Build it with BroadcastGroupNaming.consumerName(group,"
+                                + " instanceId).");
+            }
+        }
     }
 
     @Override
@@ -510,10 +530,12 @@ public class RedissonStreamListener implements StreamMQListener {
     @SuppressWarnings({"unchecked", "rawtypes"})
     private Message<?> toMessage(StreamMessageId streamId, Map<String, String> fields) {
         // 反序列化目标类型回退链（对齐 RocketMQ，优先使用消费者声明的泛型类型）：
-        //   1. targetBodyType（容器解析自 Listener 泛型 T，消费者声明的类型优先级最高）
+        //   1. targetBodyType（容器解析自 Listener 泛型 T，消费者声明的类型优先级最高，来自代码可信）
         //   2. bodyTypeName 匹配（仅类名匹配，支持跨包/跨模块场景：发送端 com.foo.UserInfo -> 消费端 com.bar.UserInfo）
         //   3. bodyType（Stream Entry 中的完整类名字段）
         //   4. String.class（最终回退，由消费者自行反序列化）
+        // 2/3 为载荷驱动解析（兼容模式），经 PayloadTypeSafety 护栏拒绝 JDK/框架危险命名空间
+        // （防范类型注入攻击面）；生产环境推荐为消费者声明显式泛型类型（路径 1，不受护栏限制）。
         Class<?> bodyType = targetBodyType;
         if (Objects.isNull(bodyType)) {
             String simpleTypeName = fields.get(DefaultMessageConverter.FIELD_BODY_TYPE_NAME);
@@ -527,7 +549,8 @@ public class RedissonStreamListener implements StreamMQListener {
                 bodyType = loadClassBySimpleName(fullTypeName);
                 if (Objects.isNull(bodyType)) {
                     LOG.warn(
-                            "Body type class not found by full name, fallback to String: {}",
+                            "Body type class not found (or blocked by safety guard) by full name,"
+                                    + " fallback to String: {}",
                             fullTypeName);
                 }
             }
@@ -560,6 +583,21 @@ public class RedissonStreamListener implements StreamMQListener {
                 group,
                 entryId,
                 cause.getMessage());
+
+        // DLQ 模式下的毒丸：目标流（dlqStream）与当前消费的流相同——写回去会自复制无限循环。
+        // 毒丸已到达 DLQ 边界（已经是重试耗尽后的死信），直接 ACK 并记录最完整的可观测信息。
+        if (dlqMode) {
+            LOG.error(
+                    "Poison message in DLQ stream (cannot route to same stream):"
+                            + " topic={}, group={}, entryId={}, fields={}, cause={}",
+                    topic,
+                    group,
+                    entryId,
+                    fields,
+                    cause.toString());
+            return true;
+        }
+
         try {
             Map<String, String> dlqFields = new java.util.LinkedHashMap<>(fields);
             dlqFields.put(FIELD_DLQ_REASON, DlqReason.DESERIALIZE.getCode());
@@ -597,6 +635,15 @@ public class RedissonStreamListener implements StreamMQListener {
      * @return 加载到的类；找不到返回 null（由调用方走回退链）
      */
     private Class<?> loadClassBySimpleName(String simpleName) {
+        // 安全护栏：拒绝 JDK/框架危险命名空间（载荷可写 → 攻击面），业务命名空间不受影响
+        if (PayloadTypeSafety.isBlocked(simpleName)) {
+            LOG.warn(
+                    "Payload-driven body type resolution blocked by safety guard (dangerous"
+                            + " namespace): {}. Declare an explicit generic type on the consumer"
+                            + " instead (annotation generics / targetBodyType).",
+                    simpleName);
+            return null;
+        }
         Class<?> cached = classCache.get(simpleName);
         if (Objects.nonNull(cached)) {
             return cached;

@@ -41,6 +41,9 @@ import org.slf4j.LoggerFactory;
  * {@link PerConsumerSpiResolver} 默认实现。
  *
  * <p>解析结果（路由处理器、过滤器链、转换器实例）写回 {@link RegistrationStore} 与注册模型；重平衡策略一致性哈希支持虚拟节点数配置，失败回退平均策略。
+ *
+ * <p><b>SPI 解析策略</b>（P1-4 修复）：优先从 Spring 容器获取已注册的类型匹配 Bean，找不到时才反射无参实例化。 此前一律反射创建游离实例，导致通过
+ * {@code @Component} + 注解 Class 属性声明的 SPI 实现被静默忽略、 依赖注入失效、运行双实例（一个 Spring 管理 + 一个反射游离）→ 状态漂移且极难排查。
  */
 public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
 
@@ -57,6 +60,12 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
     private final Supplier<Integer> virtualNodesSupplier;
     private final Supplier<StreamMQMetrics> metricsSupplier;
     private final boolean enabled;
+
+    /**
+     * Spring 应用上下文（可选注入，Object 类型避免 core 模块对 spring-context 的直接编译依赖）：用于 per-consumer SPI 优先级 Spring
+     * 容器 → 反射兜底
+     */
+    private final Object applicationContext;
 
     /** 全局默认 RebalanceStrategy（来自 streammq.rebalance.strategy 配置，可为 null）。 */
     private final Class<? extends RebalanceStrategy> globalRebalanceStrategy;
@@ -85,6 +94,7 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
                 virtualNodesSupplier,
                 metricsSupplier,
                 null,
+                null,
                 enabled);
     }
 
@@ -101,6 +111,36 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
             Supplier<StreamMQMetrics> metricsSupplier,
             Class<? extends RebalanceStrategy> globalRebalanceStrategy,
             boolean enabled) {
+        this(
+                redisson,
+                globalConverter,
+                globalRetryPolicy,
+                globalDlqFailureStrategy,
+                dlqConfig,
+                interceptorChain,
+                globalFilterChain,
+                filterResolverSupplier,
+                virtualNodesSupplier,
+                metricsSupplier,
+                globalRebalanceStrategy,
+                null,
+                enabled);
+    }
+
+    public DefaultPerConsumerSpiResolver(
+            RedissonClient redisson,
+            MessageConverter globalConverter,
+            RetryPolicy globalRetryPolicy,
+            DlqFailureStrategy globalDlqFailureStrategy,
+            DlqConfig dlqConfig,
+            ConsumerInterceptorChain interceptorChain,
+            ConsumerFilterChain globalFilterChain,
+            Supplier<ConsumerFilterResolver> filterResolverSupplier,
+            Supplier<Integer> virtualNodesSupplier,
+            Supplier<StreamMQMetrics> metricsSupplier,
+            Class<? extends RebalanceStrategy> globalRebalanceStrategy,
+            Object applicationContext,
+            boolean enabled) {
         this.redisson = Objects.requireNonNull(redisson, "redisson");
         this.globalConverter = Objects.requireNonNull(globalConverter, "globalConverter");
         this.globalRetryPolicy = Objects.requireNonNull(globalRetryPolicy, "globalRetryPolicy");
@@ -114,6 +154,7 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
         this.virtualNodesSupplier = Objects.requireNonNull(virtualNodesSupplier);
         this.metricsSupplier = Objects.requireNonNull(metricsSupplier, "metricsSupplier");
         this.globalRebalanceStrategy = globalRebalanceStrategy;
+        this.applicationContext = applicationContext;
         this.enabled = enabled;
     }
 
@@ -133,13 +174,11 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
         reg.setConverterInstance(converter);
 
         // 2. per-consumer 重试策略
-        RetryPolicy policy =
-                SpiResolver.resolveOrInstantiate(
-                        reg.getRetryPolicy(), RetryPolicy.class, globalRetryPolicy);
+        RetryPolicy policy = resolveSpi(reg.getRetryPolicy(), RetryPolicy.class, globalRetryPolicy);
 
         // 3. per-consumer 死信失败策略
         DlqFailureStrategy dlqStrategy =
-                SpiResolver.resolveOrInstantiate(
+                resolveSpi(
                         reg.getDlqFailureStrategy(),
                         DlqFailureStrategy.class,
                         globalDlqFailureStrategy);
@@ -176,6 +215,36 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
         store.putFilters(reg.key(), buildFilters(reg));
     }
 
+    /**
+     * SPI 解析：优先从 Spring 容器获取类型匹配的 Bean，找不到时回退到反射无参实例化。 防止 {@code @Component} + 注解 Class 的 SPI
+     * 被静默忽略而反射创建游离实例。
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private <T> T resolveSpi(Class<? extends T> clazz, Class<T> spiType, T globalDefault) {
+        if (Objects.isNull(clazz) || clazz == spiType) {
+            return globalDefault;
+        }
+        // 优先从 Spring 容器获取已注册的 Bean（反射调用，避免对 spring-context 的直接编译依赖）
+        if (Objects.nonNull(applicationContext)) {
+            try {
+                java.lang.reflect.Method getBeanNamesMethod =
+                        applicationContext.getClass().getMethod("getBeanNamesForType", Class.class);
+                String[] beanNames =
+                        (String[]) getBeanNamesMethod.invoke(applicationContext, clazz);
+                if (beanNames.length > 0) {
+                    java.lang.reflect.Method getBeanMethod =
+                            applicationContext.getClass().getMethod("getBean", String.class);
+                    T bean = (T) getBeanMethod.invoke(applicationContext, beanNames[0]);
+                    return bean;
+                }
+            } catch (Exception ex) {
+                LOG.debug("Spring SPI resolve failed for {}: {}", clazz.getName(), ex.getMessage());
+            }
+        }
+        // 回退到反射无参实例化
+        return SpiResolver.resolveOrInstantiate(clazz, spiType, globalDefault);
+    }
+
     @Override
     @SuppressWarnings({"unchecked", "rawtypes"})
     public RebalanceStrategy resolveRebalanceStrategy(ListenerRegistration<?> reg) {
@@ -195,8 +264,7 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
                     .ConsistentHashRebalanceStrategy(virtualNodesSupplier.get());
         }
         try {
-            return SpiResolver.resolveOrInstantiate(
-                    (Class) rebalanceClass, RebalanceStrategy.class, null);
+            return resolveSpi((Class) rebalanceClass, RebalanceStrategy.class, null);
         } catch (RuntimeException ex) {
             LOG.warn(
                     "Failed to instantiate rebalanceStrategy for {}, using default: {}",
@@ -218,8 +286,7 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
                     .ConsistentHashRebalanceStrategy(virtualNodesSupplier.get());
         }
         try {
-            return SpiResolver.resolveOrInstantiate(
-                    (Class) rebalanceClass, RebalanceStrategy.class, null);
+            return resolveSpi((Class) rebalanceClass, RebalanceStrategy.class, null);
         } catch (RuntimeException ex) {
             LOG.warn(
                     "Failed to instantiate global rebalanceStrategy {}: {}",
@@ -236,7 +303,7 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
             return;
         }
         try {
-            SpiResolver.resolveOrInstantiate((Class) rebalanceClass, RebalanceStrategy.class, null);
+            resolveSpi((Class) rebalanceClass, RebalanceStrategy.class, null);
         } catch (RuntimeException ex) {
             LOG.warn(
                     "Failed to pre-instantiate rebalanceStrategy for {} ({}): {}",
@@ -251,8 +318,7 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
         Class<? extends MessageConverter> converterClass = reg.getMessageConverter();
         Class<? extends MessageSerializer> serializerClass = reg.getSerializer();
         if (Objects.nonNull(converterClass) && converterClass != MessageConverter.class) {
-            return SpiResolver.resolveOrInstantiate(
-                    (Class) converterClass, MessageConverter.class, globalConverter);
+            return resolveSpi((Class) converterClass, MessageConverter.class, globalConverter);
         }
         if (Objects.nonNull(serializerClass) && serializerClass != MessageSerializer.class) {
             try {

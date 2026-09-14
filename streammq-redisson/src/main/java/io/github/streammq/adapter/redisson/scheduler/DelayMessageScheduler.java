@@ -197,14 +197,28 @@ public class DelayMessageScheduler implements StreamMQScheduler {
         ensureScanExecutorAlive();
         scanFuture =
                 scanExecutor.scheduleAtFixedRate(
-                        this::scanAllLevels, 0, scanIntervalMs, TimeUnit.MILLISECONDS);
+                        () -> {
+                            try {
+                                scanAllLevels();
+                            } catch (Throwable t) {
+                                LOG.error("DelayMessageScheduler.scanAllLevels failed fatally", t);
+                            }
+                        },
+                        0,
+                        scanIntervalMs,
+                        TimeUnit.MILLISECONDS);
         LOG.info(
                 "DelayMessageScheduler started, scanIntervalMs={}, batchSize={}",
                 scanIntervalMs,
                 batchSize);
     }
 
-    /** restart 支持：stop 后 executor 已关闭，start 前按需重建。 */
+    /**
+     * restart 支持：stop 后 executor 已关闭，start 前按需重建。
+     *
+     * <p>本方法持有锁而 {@link #stop()} 不持锁，因此 {@code scanExecutor} 字段必须是 volatile， 否则 stop
+     * 可能读到过期引用、关闭掉已被重建的执行器（或反之）。
+     */
     private synchronized void ensureScanExecutorAlive() {
         if (Objects.nonNull(scanExecutor) && !scanExecutor.isShutdown()) {
             return;
@@ -342,8 +356,9 @@ public class DelayMessageScheduler implements StreamMQScheduler {
 
         String targetTopic = fields.get(FIELD_TARGET_TOPIC);
         if (StringUtils.isEmpty(targetTopic)) {
-            LOG.warn("Delay[{}] message has no targetTopic, skip: msgId={}", label, msgId);
-            zset.remove(msgId);
+            LOG.warn("Delay[{}] message has no targetTopic, quarantining: msgId={}", label, msgId);
+            ScheduleQuarantine.quarantineAndRemove(
+                    redisson, namespace, "delay-no-target", zset, msgId, label);
             return;
         }
 

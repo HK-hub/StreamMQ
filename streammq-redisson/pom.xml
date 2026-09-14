@@ -7,7 +7,7 @@
     <parent>
         <groupId>io.github.streammq</groupId>
         <artifactId>streammq-parent</artifactId>
-        <version>0.1.1</version>
+        <version>0.1.2</version>
         <relativePath>../pom.xml</relativePath>
     </parent>
 
@@ -52,22 +52,30 @@
             <artifactId>jackson-datatype-jsr310</artifactId>
         </dependency>
 
-        <!-- 默认序列化：Apache Fury -->
-        <!-- Fury 是 streammq.producer.serializer 的默认值（见 StreamMQConstants#DEFAULT_SERIALIZER），
-             因此 fury-core 必须随本模块传递，不能声明为 optional，否则默认装配会在运行期抛出 NoClassDefFoundError。 -->
+        <!-- Jackson 是默认序列化器（见 StreamMQConstants#DEFAULT_SERIALIZER），
+             必须随本模块传递；它同时也是 props 字段 JSON 编解码的必需依赖。 -->
+
+        <!-- 可选高性能序列化：Apache Fury。
+             optional=true：Fury 会传递引入 com.google.guava，而 Guava 是下游应用最常见
+             的版本冲突源（Spring Boot 的 BOM 并不管理 Guava）。默认序列化器为 Jackson，
+             Fury 属于显式 opt-in 能力，因此按 optional 提供——选用者自行加入，
+             不选用者不会被迫把 Guava 拖进自己的 classpath。 -->
         <dependency>
             <groupId>org.apache.fury</groupId>
             <artifactId>fury-core</artifactId>
+            <optional>true</optional>
         </dependency>
 
-        <!-- 可选序列化：Protostuff（非 optional 以保证切换默认即可用，无 gadget RCE 面） -->
+        <!-- 可选序列化：Protostuff（schema 由目标类型决定，无 gadget RCE 面）。同为 optional。 -->
         <dependency>
             <groupId>io.protostuff</groupId>
             <artifactId>protostuff-core</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>io.protostuff</groupId>
             <artifactId>protostuff-runtime</artifactId>
+            <optional>true</optional>
         </dependency>
 
         <!-- 测试 -->
@@ -125,6 +133,34 @@
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>check</id>
+                        <phase>verify</phase>
+                        <goals><goal>check</goal></goals>
+                        <configuration>
+                            <skip>${jacoco.check.skip}</skip>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <!-- 实测 LINE≈0.636 / BRANCH≈0.533；门禁贴近实测，仅拦明显回退。 -->
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.60</minimum>
+                                        </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.40</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>

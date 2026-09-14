@@ -25,16 +25,48 @@ public final class BroadcastGroupNaming {
 
     private BroadcastGroupNaming() {}
 
-    /** 构造 Redis 消费者名：{@code {group}-{instanceId}}。 */
+    /**
+     * 构造 Redis 消费者名：{@code {group}-{instanceId}}。
+     *
+     * @param group 消费者组名
+     * @param instanceId 广播实例身份（必填，非空白）
+     * @return 消费者名
+     * @throws IllegalArgumentException 若 instanceId 为 null 或空白
+     */
     public static String consumerName(String group, String instanceId) {
+        validateInstanceId(instanceId);
         return group + "-" + instanceId;
     }
 
-    /** 构造生效 Redis 消费者组名：{@code {group}:{group}-{instanceId}}。 */
+    /**
+     * 构造生效 Redis 消费者组名：{@code {group}:{group}-{instanceId}}。
+     *
+     * @param group 消费者组名
+     * @param instanceId 广播实例身份（必填，非空白）
+     * @return 生效组名
+     * @throws IllegalArgumentException 若 instanceId 为 null 或空白
+     */
     public static String effectiveGroup(String group, String instanceId) {
+        validateInstanceId(instanceId);
         return group
                 + StreamMQConstants.BROADCAST_GROUP_SEPARATOR
                 + consumerName(group, instanceId);
+    }
+
+    /**
+     * Fail-fast 校验：instanceId 缺失会让字符串拼接静默产出字面量 {@code "null"}， 进而把所有未正确命名的广播实例收敛到同一个 Redis
+     * 消费者组（{@code g:g-null}）—— 广播语义静默退化为集群消费，且组名指向一个不存在的实例身份，清扫任务无法回收。 相比"静默错"，这里选择启动期直接失败。
+     */
+    private static void validateInstanceId(String instanceId) {
+        if (instanceId == null || instanceId.isBlank()) {
+            throw new IllegalArgumentException(
+                    "Broadcast instanceId must be non-blank; got: "
+                            + instanceId
+                            + ". Build the consumer name with"
+                            + " BroadcastGroupNaming.consumerName(group, instanceId) so the"
+                            + " broadcast consumer group can be decoded back to a stable"
+                            + " identity.");
+        }
     }
 
     /** 从消费者名反解实例身份；格式不匹配时返回 null。 */

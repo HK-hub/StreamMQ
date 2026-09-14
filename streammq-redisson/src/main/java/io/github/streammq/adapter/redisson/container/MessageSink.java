@@ -62,8 +62,12 @@ final class InflightSink implements MessageSink {
     /** 泵线程处理异常后的退避间隔（毫秒）：防止毒丸消息以 CPU 速度热循环 */
     private static final long PUMP_ERROR_BACKOFF_MILLIS = 200;
 
-    /** dispatch 自旋等待的单次 park 时长（纳秒，约 1ms） */
-    private static final long DISPATCH_PARK_NANOS = 1_000_000L;
+    /**
+     * dispatch 在队列满时的单次阻塞等待时长（毫秒）。
+     *
+     * <p>取值权衡：太大→容器停止时读循环迟迟不退出；太小→退化为空转。 200ms 兼顾停机响应与 CPU 占用。
+     */
+    private static final long DISPATCH_OFFER_TIMEOUT_MS = 200L;
 
     private final java.util.concurrent.BlockingQueue<Message<?>> queue;
 
@@ -97,8 +101,9 @@ final class InflightSink implements MessageSink {
      * 并退避重试，绝不杀死泵线程（旧实现一条消息的处理异常即令 该注册的全部后续消息永久滞留队列）。
      *
      * <p><b>消息不丢失（发布前修复 P1-8）：</b>{@code processMessage} 已在内部兜底，但一旦仍有异常逃逸到 此处，消息已经 {@code poll}
-     * 出队——若仅记录日志，它就既不在内存队列、也不在重试 ZSet 中， 只能等 {@code PelClaimScheduler} 的空闲阈值（默认
-     * 30s+）才被重投，表现为长时间静默停顿。 因此这里显式调用 {@link MessageProcessor#handleFailure} 把消息交回重试/DLQ 路由。
+     * 出队——若仅记录日志，它就既不在内存队列、也不在重试 ZSet 中， 只能等 {@code PelClaimScheduler} 的空闲阈值（默认 60s，见 {@code
+     * streammq.retry.pel-claim-min-idle-ms}）才被重投，表现为长时间静默停顿。 因此这里显式调用 {@link
+     * MessageProcessor#handleFailure} 把消息交回重试/DLQ 路由。
      */
     private void pumpLoop(
             ListenerRegistration<?> reg, StreamMQListener listener, MessageProcessor processor) {
@@ -145,20 +150,21 @@ final class InflightSink implements MessageSink {
 
     @Override
     public void dispatch(Message<?> message) throws InterruptedException {
-        // 有界背压：offer 失败时自旋等待，但始终尊重 running 标志——容器停止后立即返回，
-        // 不再永久阻塞读循环（未投递的消息仍在 PEL 中，由恢复路径补齐 at-least-once）
-        while (!queue.offer(message)) {
-            if (!running.getAsBoolean()) {
-                LOG.debug(
-                        "Sink cancelled while queue full, dropped buffered dispatch of"
-                                + " messageId={} (stays in PEL for redelivery)",
-                        message.getMessageId());
+        // 有界背压：使用带超时的 offer 阻塞等待空位（此前为 1ms parkNanos 自旋，
+        // 队列满时白白空转 CPU）。超时退出是为了周期性检查 running：容器停止后立即返回，
+        // 不再永久阻塞读循环（未投递的消息仍在 PEL 中，由恢复路径补齐 at-least-once）。
+        // offer(e, timeout, unit) 本身会响应中断并抛 InterruptedException，与接口契约一致。
+        while (running.getAsBoolean()) {
+            if (queue.offer(
+                    message,
+                    DISPATCH_OFFER_TIMEOUT_MS,
+                    java.util.concurrent.TimeUnit.MILLISECONDS)) {
                 return;
             }
-            java.util.concurrent.locks.LockSupport.parkNanos(DISPATCH_PARK_NANOS);
-            if (Thread.currentThread().isInterrupted()) {
-                throw new InterruptedException("dispatch interrupted");
-            }
         }
+        LOG.debug(
+                "Sink cancelled while queue full, dropped buffered dispatch of"
+                        + " messageId={} (stays in PEL for redelivery)",
+                message.getMessageId());
     }
 }

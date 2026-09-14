@@ -332,7 +332,8 @@ class StreamMQMessageBinderTest {
         assertThat(props.getConsumeThreadMin()).isEqualTo(1);
         assertThat(props.getConsumeThreadMax()).isEqualTo(64);
         assertThat(props.getMaxReconsumeTimes()).isEqualTo(16);
-        assertThat(props.getConsumeTimeout()).isEqualTo(30000L);
+        assertThat(props.getConsumeTimeout())
+                .isEqualTo(io.github.streammq.core.StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS);
         assertThat(props.getPullBatchSize()).isEqualTo(32);
     }
 

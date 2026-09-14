@@ -12,6 +12,7 @@ import io.github.streammq.adapter.redisson.listener.RedissonStreamListener;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
 import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
+import io.github.streammq.adapter.redisson.support.BroadcastGroupNaming;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.message.MessageBuilder;
 import io.github.streammq.core.transaction.TransactionChecker;
@@ -234,7 +235,10 @@ class RedTeamRegressionIT extends AbstractRedisIT {
     void broadcastGroup_survivesClose_noReplayOnRestart() {
         String topic = "bc-topic";
         String group = "bc-group";
-        String consumer = "bc-consumer-1";
+        // 广播消费者名必须遵循 {group}-{instanceId}：生效组名由它反解实例身份，
+        // 命名不符会让广播组塌缩进同一个 "g-null" 组（广播语义静默退化为集群）。
+        String instanceId = "inst-1";
+        String consumer = BroadcastGroupNaming.consumerName(group, instanceId);
         String streamKey = StreamMQKeys.topicStream(namespace, topic);
         RedissonStreamProducer producer =
                 new RedissonStreamProducer(redisson, namespace, "bc-p", converter, 3000L, 0, 0, 0);

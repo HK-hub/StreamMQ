@@ -27,9 +27,9 @@
 
 ### 序列化器选择
 
-StreamMQ 的**默认序列化器是 `FurySerializer`**（`streammq.producer.serializer` 默认值）。
+StreamMQ 的**默认序列化器是 `JacksonJsonSerializer`**（0.1.2 起；安全优先，无 Gadget RCE 攻击面）。高性能路径可选 `FurySerializer`（需显式配置 `streammq.producer.serializer`，并添加 `fury-core` 依赖——`<optional>true</optional>`）。
 
-**默认不强制类注册（宽松模式，`requireClassRegistration=false`）**：任意 POJO 开箱即用，但 Redis 中被写入的字节流可被反序列化为 classpath 上的任意类——共享/多租户 Redis 场景下是反序列化攻击面（RCE 向量）。Spring Boot 用户可通过 `streammq.producer.fury-require-class-registration` 开关控制是否强制类注册白名单：
+**Fury 宽松模式说明**：若显式选择 `FurySerializer`，其**默认不强制类注册（宽松模式，`requireClassRegistration=false`）**：任意 POJO 开箱即用，但 Redis 中被写入的字节流可被反序列化为 classpath 上的任意类——共享/多租户 Redis 场景下是反序列化攻击面（RCE 向量）。可通过 `streammq.producer.fury-require-class-registration` 开启类注册白名单：
 
 ```yaml
 streammq:
@@ -40,9 +40,15 @@ streammq:
 
 开启白名单后仅允许显式注册过的类反序列化，首次使用前需注册业务消息体类型（`new FurySerializer<>(OrderCreated.class)` 或 `register(Class)` / `registerAll(Class...)`）。
 
-**Java API 说明**：`new FurySerializer()` 为宽松模式（与 Spring 装配默认一致）；`new FurySerializer(true)` 或 `new FurySerializer<>(Xxx.class)` 为强制类注册白名单模式。宽松构造会输出一条 WARN 提醒；已评估并接受风险的场景可设置 `-Dstreammq.security.allowUnrestrictedSerializer=true` 抑制该提醒。
+**Java API 说明**：`new FurySerializer()` 为宽松模式；`new FurySerializer(true)` 或 `new FurySerializer<>(Xxx.class)` 为强制类注册白名单模式。宽松构造会输出一条 WARN 提醒；已评估并接受风险的场景可设置 `-Dstreammq.security.allowUnrestrictedSerializer=true` 抑制该提醒。
 
-若 Redis 实例**可能被不可信方写入（共享实例、多租户场景），请务必开启类注册白名单**以收窄反序列化攻击面。若希望开箱即用任意 POJO 且接受 JSON 的性能与体积开销，可显式切换为 `JacksonJsonSerializer`（无需预注册类型）。
+**传输层 codec 说明**：消息的 Stream/DLQ/重试/延迟/事务半消息等全部 Redis 数据结构经由下游 `RedissonClient` 的默认 codec（`Kryo5Codec`，未经注册限制的 Java 序列化）解码。**这只影响客户端与 Redis 之间的通信层，与消息载荷的序列化无关**——载荷始终以 Base64 文本形式写入 Stream Field。若 Redis 可被不可信方写入，即使使用 `JacksonJsonSerializer` 做消息序列化，攻击者仍可通过传输层 codec 注入 gadget。生产环境**应使用 `StringCodec` 构造 RedissonClient**，或确保 Redis 仅对可信客户端开放。参见父 pom `redisson-spring-boot-starter` 的 codec 配置文档。
+
+若 Redis 实例**可能被不可信方写入（共享实例、多租户场景），请务必开启 Fury 类注册白名单**（若使用 Fury）或确保传输层 codec 已锁定到 `StringCodec`——二者并非同一攻击面，应分别处理。
+
+### 核心库运行时反射（非 Spring 环境）
+
+`streammq-core` 在编译期**不依赖任何 Spring**，但运行时通过**按类名反射**加载 `org.springframework.web.context.request.RequestContextHolder`，用于 Actuator 的 CSRF 同源 / 可信代理来源校验。该反射为**失败开放（fail-open）**，且**仅当 classpath 上存在 Spring Web** 时才会激活；核心库可完全脱离 Spring 独立使用，此时请求来源安全控制自动 no-op（不执行）。
 
 ### 凭据管理
 

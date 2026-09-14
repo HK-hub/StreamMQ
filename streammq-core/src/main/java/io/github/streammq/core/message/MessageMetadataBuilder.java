@@ -26,7 +26,7 @@ import lombok.Getter;
  *     .keys("order-123")
  *     .shardingKey("order-123")
  *     .delayLevel(DelayLevel.LEVEL_5)
- *     .withUserProperty("traceId", "t-001");
+ *     .userProperty("traceId", "t-001");
  *
  * service.send("order-topic", order, metadata);
  * }</pre>

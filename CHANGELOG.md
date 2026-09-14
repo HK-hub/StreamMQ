@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.2] - 2026-09-09 — 持久化广播消费实例
+## [0.1.2] - 2026-09-10 — 持久化广播消费实例 + 安全默认与质量门禁
 
 ### Added
 
@@ -29,17 +29,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **顺序消费全局超时不生效**（发布前红队审查项）：注解 `orderlyConsumeTimeout = 0`（未显式声明）时，
   此前被当作"关闭"而非"继承全局默认"，导致全局 `defaultOrderlyConsumeTimeoutMillis` 对未声明者失效、
   卡死消息不进 DLQ。现语义修正为 **0 = 继承全局默认；>0 = 覆盖；<0 = 显式关闭**。
+- 广播组名在实例身份缺失时静默拼出字面量 `"null"`（真实缺陷）：`BroadcastGroupNaming` 的 `consumerName`/
+  `effectiveGroup` 在 `instanceId` 为 `null`/空白时会生成 `{group}:{group}-null` 这样的组名，
+  使所有未正确命名的广播实例塌缩进同一个 Redis 消费者组——广播语义静默退化为集群消费，且组名无法反解回身份、
+  清扫任务永远回收不掉。现改为 **fail-fast**：`instanceId` 为空直接抛 `IllegalArgumentException`；
+  监听器构造阶段也校验 `{group}-{instanceId}` 命名约定，启动期即失败而非把错误语义写进 Redis。
 - 广播模式集成测试在真实 Redis 下确定性失败（非 flaky）的根因修复：`close()` 不再销毁组（保留 PEL）、
   广播组默认在 `NEWEST` 建组需先建组再发消息、组名带实例标识后注册表成员匹配规则同步更新。
 - **DLQ 样例集成测试（`DlqSampleIT`）预存缺陷修复**：`@BeforeEach` 的 `cleanStreams()` 删除 topic 流会连带销毁 Redis 消费者组，
   监听器随后以 `NEWEST` 重建组、错过测试消息（`receivedMessages` 恒为 0）。现改为仅清理 retry/dlq 流，保留 topic 流与消费者组
   （组位点随消费推进、已 ACK 消息不重复投递，天然隔离）。
-- `streammq-test` 的 `CoreRedisIntegrationIT.consumer_throwException_failCount` 为偶发 flaky（依赖 Redis 残留状态/时序），
-  非回归，复跑稳定通过。
+- **`CoreRedisIntegrationIT.consumer_throwException_failCount` 确定性失败的根因修复**（此前误判为偶发
+  flaky）：`TestStreamMQListener.onMessage` 在持有锁的同步块内先 `countDown` 完成信号、再在锁外记录异常，
+  测试线程 `waitForMessages` 仅等待 latch，存在"读到仍为空 exceptions"的竞态。现改为**先记录异常再发完成信号**
+  （异常写入 happens-before countDown，经传递性保证测试读到），彻底消除竞态。此修复仅针对测试脚手架，
+  不影响产品行为（产品侧异常路由依赖抛出的异常本身，与本测试内部计数无关）。
 
 ### Changed
 
+- **默认序列化器回退为 `JacksonJsonSerializer`（安全默认，0.1.1 起改为 Fury 的回退）**：库的默认反序列化器
+  不应把 RCE 面传播给所有下游应用。0.1.1 把默认设为 Fury 宽松模式（`requireClassRegistration=false`）——
+  该模式允许把 Redis 中字节流反序列化为 classpath 上任意类，在共享/多租户 Redis 上是反序列化 RCE 攻击面。
+  现默认 `JacksonJsonSerializer`（严格类型、无 gadget 面、Redis 中人类可读）。需要高吞吐的用户显式 opt-in 到
+  `FurySerializer`（并建议开启类注册白名单）。
+- **`fury-core` / `protostuff-*` 改为 `optional` 依赖**：不再强制把 Guava / Protostuff 拖入每个下游应用
+  classpath（Guava 是 Spring Boot 应用最常见的版本冲突源）。选用 Fury/Protostuff 时自行加入对应依赖；
+  装配层对"配置了但 classpath 缺失"给出可操作的 `IllegalStateException` 而非含义不明的 `NoClassDefFoundError`。
+- **默认并发消费超时改为 `0`（不启用每条消息的超时包装）**：超时保护此前对每条消息执行一次
+  `executor.submit()` + `Future.get(timeout)` + 超时后 `join`，是每条消息的固定开销，而 99.99% 的消息毫秒级完成。
+  关闭后卡死消息由 `PelClaimScheduler` 在空闲阈值（默认 60s）后认领重投兜底，at-least-once 语义不变，
+  仅恢复延迟更长；需要更快恢复时由 `streammq.consumer.consume-timeout-millis` / `@StreamMQConsumer#consumeTimeout()` 显式开启。
+- **JaCoCo 覆盖率门禁改造为按发布模块设卡**：分支覆盖门禁由 0.15 提升为 **0.40**（消息队列的 Bug 几乎全在分支上，
+  15% 等于没有门禁）；旧"全局 LINE 0.50"阈值因各模块单测覆盖差异极大（脚手架模块仅 17%~36%）而形同虚设或误伤，
+  现改为 `streammq-core` / `redisson` / `starter` / `binder` / `diagnostics` / `tracing` 六个发布模块各自贴合实际覆盖率的
+  LINE+BRANCH 阈值，受 `jacoco.check.skip`（默认 true）控制，CI 用 `-Djacoco.check.skip=false` 启用。
+- **共享执行器字段加 `volatile`**：`DefaultStreamMQListenerContainer.consumeExecutor` 与 `DelayMessageScheduler.scanExecutor`
+  在不持锁的 `stop()` / `launchLoop()` 中被读取、在持锁的 `setConsumeExecutor` / `ensureScanExecutorAlive` 中被替换，
+  非 `volatile` 会让另一线程（如 Spring 生命周期线程）读到过期引用。
+- **`MessageSink.dispatch` 由 1ms `parkNanos` 自旋改为带超时的阻塞 `offer`**：队列满时不再空转 CPU，
+  仍以 200ms 周期检查 `running` 以保证停机响应。
+- **Jackson 版本对齐 Spring Boot 3.3.5 的管理版本（2.17.2）**，避免与 Spring Boot 管理的 Jackson 混用。
 - `RedissonBroadcastGroupRegistry.DEFAULT_MAX_SWEEP` 可见性由 private 提升为 public，供装配层复用。
+- 版本统一为 `0.1.2`（parent / BOM / 各模块 / 两份 README）；`release.yml` 移除对不存在的 `streammq-test-support`
+  模块的引用。
+- **发布面收缩（P2-1/P2-2）**：`streammq-kubernetes` 移出 Maven reactor（不随默认构建编译、不被发布）；`release.yml` 的 `excludeArtifacts` 扩展为 `streammq-tracing-opentelemetry` / `streammq-diagnostics` / `streammq-spring-cloud-stream-binder`，首发只发布 `bom / core / redisson / spring-boot-starter` 4 个构件，把永久 API 兼容承诺从 8 条降到 4 条。
+- **`ConsumeAction` 明确为值对象 + 可 switch（P3-1）**：保留逐消息 `defer` 延迟（框架 `handleDefer` 实际消费 `getDeferDelay()`，纯 `enum` 常量无法携带每实例状态，故不改为 `enum`），新增 `Type` 枚举供 `switch (action.type())` 使用，javadoc 说明。
+- **`Message.equals/hashCode` 值对象语义修正（P3-2）**：messageId 为 null 的两个内容相同消息现在判定为相等（保持值对象契约），已分配 ID 与未分配 ID 的消息始终不等。
+- **`SpiResolver` 错误信息增强（P3-6）**：实例化 SPI 失败时给出中文可操作提示（缺 public 无参构造 / 应走 Spring Bean 覆盖）。
+- **移除空标记注解 `@EnableStreamMQ`（P3-8）**：该注解为空标记（不含 `@Import`、不触发任何装配），首发前清理，自动装配独立生效；更新 EN/ZH README 与 demo 指南（quickstart 不再需要启用注解）。
+- **删除 3 个 `@Deprecated` 构造器（P2-3）**：`DefaultStreamMQListenerContainer` 原 5/6/7 参 @Deprecated 重载全部移除，替换为 2 个干净的便捷构造（5 参、7 参），二者均显式委派给全参 8 参构造（默认 `DlqConfig`/背压容量统一声明，消除多重载默认语义漂移）；2 处 6 参调用方（`DefaultStreamMQListenerContainerTest`、`CoreRedisIntegrationIT`）补齐 `DlqConfig` 参数。
+- **消费者组心跳调度器共享（P3-4）**：`RedissonConsumerGroupManager` 由原"每消费者组一条单线程"改为跨所有组共享的有界 daemon 线程池，`unregister()` 不再关闭共享执行器，消除消费者组数量大时的线程膨胀。
+- **JMH 配置加强（Sec9）**：序列化/模板两类纯 CPU benchmark 的 `fork` 提升至 3、`warmup`/`measurement` 加严；消费者 benchmark 保留 `fork=1`（本地 Windows Redis 抖动，已在注释中说明）。
+- **补充长跑稳定性 IT（P2-6）**：新增 `LongRunStabilityIT`（500 条消息、并发 3，验证不丢不重），与既有 `ConcurrentConsumeIT`/`HighConcurrencyStressIT` 共同覆盖并发不变量。
+- **完整配置参考（D5）**：新增 `docs/configuration-reference.md`，枚举全部 `streammq.*` 配置项（根/生产者/消费者/组/DLQ/重试/延时/事务/健康/重平衡/追踪/管理）及默认值、安全项与 Actuator 暴露说明。
+- **文档**：英文 README 补 `management.endpoints.web.exposure.include=streammq`（否则 `/actuator/streammq` 404，A1/D2）；EN/ZH 统一扩展点口径为"16 个（面向用户 + 内部装配），通过注解 Class 属性或 Spring Bean 覆盖，不使用 ServiceLoader"（D3）；明确背压默认关闭（`inflight-capacity: 0`，D7/P2-12）；移除无意义的纯内存 `messageCreateAndConsume` benchmark 数字（Sec9）；SECURITY.md 注明 `streammq-core` 运行时经反射加载 Spring（无编译期依赖，失败开放，P2-5）。
+
+### Security
+
+- 默认反序列化器由 Fury 宽松模式回退为 `JacksonJsonSerializer`，消除库默认传播的反序列化 RCE 面
+  （详见上方 Changed / 默认序列化器）。共享/多租户 Redis 下如需 Fury 吞吐，务必开启类注册白名单。
+- `release.yml` 流水线修复：此前引用的 `streammq-test-support` 模块不存在，会导致发布 CI 失败。
 
 ## [0.1.1] - 2026-08-29 — 第一个公开发布版本
 
