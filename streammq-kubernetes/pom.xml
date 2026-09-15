@@ -85,6 +85,12 @@
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
             </plugin>
+            <!-- 本模块的 *IT 回归测试（KubernetesHealthRegistrationIT）此前因未声明 failsafe
+                 而从未执行：surefire 默认不匹配 *IT 命名。声明后由 mvn verify 真实执行。 -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+            </plugin>
         </plugins>
     </build>
 

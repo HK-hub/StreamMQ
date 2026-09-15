@@ -267,10 +267,6 @@ public final class StreamMQConstants {
     public static final int DEFAULT_COMPRESS_THRESHOLD_BYTES = 0;
 
     // ==================== DLQ 配置默认值 ====================
-    /** 默认 DLQ 失败策略实现类全限定名（LogAndDropDlqFailureStrategy） */
-    public static final String DEFAULT_DLQ_FAILURE_STRATEGY =
-            "io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy";
-
     /** DLQ 消费失败后的最大重试次数 */
     public static final int DEFAULT_DLQ_MAX_RETRY_ATTEMPTS = 3;
 

@@ -10,7 +10,9 @@ streammq:
   retry:
     max-reconsume-times: 3
 
-redisson:
-  singleServerConfig:
-    address: "redis://127.0.0.1:6379"
-    database: 0
+# Redis 连接：Redisson Spring Boot Starter 依据 spring.data.redis.* 构建客户端。
+# 注意：redisson.singleServerConfig.* 在本 starter 中无属性绑定，写了也不会生效，请勿使用。
+spring.data.redis.host: 127.0.0.1
+spring.data.redis.port: 6379
+spring.data.redis.database: 0
+# 集群/哨兵等高级拓扑：改用 Redisson 原生配置 spring.redis.redisson.config / spring.redis.redisson.file

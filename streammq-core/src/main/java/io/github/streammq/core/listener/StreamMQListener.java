@@ -64,8 +64,14 @@ public interface StreamMQListener {
     /**
      * 确认单条消息（从 PEL 中移除）。
      *
+     * <p><b>实现契约：</b>方法返回<b>不代表</b> XACK 已在 Redis 端完成——默认实现采用<b>有界异步流水线</b>
+     * （避免每条消息一次阻塞往返，这是消费吞吐的硬上限）。XACK 失败会记录 ERROR，消息保留在 PEL 中由 PEL
+     * 认领调度器兜底重投，因此<b>消费端必须幂等</b>；优雅停机（{@code close()}）会对在途 ACK 做有界排空。 需要"返回即已确认"语义时请使用 {@link
+     * #ackBatch(List)}（同步）。
+     *
      * @param messageId 消息 ID
-     * @throws io.github.streammq.core.exception.StreamMQBrokerException 如果 XACK 失败
+     * @throws io.github.streammq.core.exception.StreamMQBrokerException 参数非法、等待 ACK 窗口被中断，
+     *     或提交动作本身失败（如监听器已关闭）
      */
     void ack(MessageId messageId);
 

@@ -147,7 +147,7 @@
                                 <rule>
                                     <element>BUNDLE</element>
                                     <limits>
-                                        <!-- 实测 LINE≈0.816 / BRANCH≈0.724；门禁贴近实测，仅拦明显回退。 -->
+                                        <!-- 实测 LINE≈0.816 / BRANCH≈0.724；门禁取「实测 − 3pt」= 0.69。 -->
                                         <limit>
                                             <counter>LINE</counter>
                                             <value>COVEREDRATIO</value>
@@ -156,7 +156,7 @@
                                         <limit>
                                             <counter>BRANCH</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.40</minimum>
+                                            <minimum>0.69</minimum>
                                         </limit>
                                     </limits>
                                 </rule>

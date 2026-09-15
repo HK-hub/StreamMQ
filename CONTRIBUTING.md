@@ -456,6 +456,16 @@ serializer (`new FurySerializer()` / `new FurySerializer(false)`) logs a WARN; a
 Redis is fully trusted and isolated, set `-Dstreammq.security.allowUnrestrictedSerializer=true`
 to suppress the warning.
 
+## API 兼容性策略（japicmp）
+
+发布通道内置 japicmp 门禁（见 `.github/workflows/release.yml`）：探测 Maven Central 上的上一个发布版本，
+与当前构建产物做二进制/源码兼容性对比，发现破坏性变更即阻断发布。
+
+- **首个公开版本**（Central 上无历史）时该门禁自动跳过——这是唯一容许跳过的情形；
+- 从**第二个版本**起，任何公开 API 的移除、签名变更、可见性收窄都会阻断发布；
+- 需要破坏性变更时先走**弃用期**：在当前版本标记 `@Deprecated` 并在 CHANGELOG 的 Deprecated 段落说明，
+  下个 minor/major 版本再移除；不要在同一次发布里既弃用又移除；
+- 仅供内部使用、不承担兼容承诺的实现请放在 `io.github.streammq.internal.*` 包（japicmp 已排除该包前缀）。
 ## Pull Request Process
 
 1. **Ensure the PR description clearly describes the problem and solution.** Include the relevant issue number if applicable.

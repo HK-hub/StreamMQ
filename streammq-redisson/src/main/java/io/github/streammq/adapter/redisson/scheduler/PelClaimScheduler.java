@@ -185,7 +185,16 @@ public class PelClaimScheduler implements StreamMQScheduler {
      * @param maxReconsumeTimes 最大重试次数
      */
     public void registerTarget(String topic, String group, int maxReconsumeTimes) {
-        registerTarget(topic, group, maxReconsumeTimes, false, 0);
+        registerTarget(namespace, topic, group, maxReconsumeTimes, false, 0, null);
+    }
+
+    /**
+     * 注册 TOPIC 目标（命名空间感知，非顺序）。语义见 {@link #registerTarget(String, String, String, int, boolean, int,
+     * String)}。
+     */
+    public void registerTarget(
+            String namespace, String topic, String group, int maxReconsumeTimes) {
+        registerTarget(namespace, topic, group, maxReconsumeTimes, false, 0, null);
     }
 
     /**
@@ -199,18 +208,37 @@ public class PelClaimScheduler implements StreamMQScheduler {
      */
     public void registerTarget(
             String topic, String group, int maxReconsumeTimes, boolean orderly, int shardCount) {
+        registerTarget(namespace, topic, group, maxReconsumeTimes, orderly, shardCount, null);
+    }
+
+    /**
+     * 注册 TOPIC 目标（命名空间感知 + 分片键字段感知）。
+     *
+     * <p>namespace 必须取注册项自身的 namespace（{@code @StreamMQConsumer#namespace} 可覆盖全局值）， 否则认领会扫描错误的
+     * Stream/Group，使该消费者的 PEL 恢复静默失效。shardingField 取该注册项 Converter 的分片键字段名，保证按与消费端一致的约定计算分片。
+     */
+    public void registerTarget(
+            String namespace,
+            String topic,
+            String group,
+            int maxReconsumeTimes,
+            boolean orderly,
+            int shardCount,
+            String shardingField) {
         Objects.requireNonNull(topic, "topic");
         Objects.requireNonNull(group, "group");
-        String key = targetKey(PelClaimTargetKind.TOPIC, topic, group);
+        String key = targetKey(PelClaimTargetKind.TOPIC, namespace, topic, group);
         targets.put(
                 key,
                 new PelClaimTarget(
                         PelClaimTargetKind.TOPIC,
+                        namespace,
                         topic,
                         group,
                         maxReconsumeTimes,
                         orderly,
-                        shardCount));
+                        shardCount,
+                        shardingField));
         LOG.info(
                 "Registered PelClaim TOPIC target: topic={}, group={}, maxReconsumeTimes={},"
                         + " orderly={}, shardCount={}",
@@ -232,13 +260,26 @@ public class PelClaimScheduler implements StreamMQScheduler {
      * @param maxReconsumeTimes 最大重试次数
      */
     public void registerRetryStreamTarget(String topic, String group, int maxReconsumeTimes) {
+        registerRetryStreamTarget(namespace, topic, group, maxReconsumeTimes);
+    }
+
+    /** 注册 RETRY 目标（命名空间感知，语义见 {@link #registerTarget}）。 */
+    public void registerRetryStreamTarget(
+            String namespace, String topic, String group, int maxReconsumeTimes) {
         Objects.requireNonNull(topic, "topic");
         Objects.requireNonNull(group, "group");
-        String key = targetKey(PelClaimTargetKind.RETRY, topic, group);
+        String key = targetKey(PelClaimTargetKind.RETRY, namespace, topic, group);
         targets.put(
                 key,
                 new PelClaimTarget(
-                        PelClaimTargetKind.RETRY, topic, group, maxReconsumeTimes, false, 0));
+                        PelClaimTargetKind.RETRY,
+                        namespace,
+                        topic,
+                        group,
+                        maxReconsumeTimes,
+                        false,
+                        0,
+                        null));
         LOG.info(
                 "Registered PelClaim RETRY target: topic={}, group={}, maxReconsumeTimes={}",
                 topic,
@@ -256,20 +297,29 @@ public class PelClaimScheduler implements StreamMQScheduler {
      * @param group 死信所属消费者组名
      */
     public void registerDlqTarget(String topic, String group) {
+        registerDlqTarget(namespace, topic, group);
+    }
+
+    /** 注册 DLQ 目标（命名空间感知，语义见 {@link #registerTarget}）。 */
+    public void registerDlqTarget(String namespace, String topic, String group) {
         Objects.requireNonNull(topic, "topic");
         Objects.requireNonNull(group, "group");
-        String key = targetKey(PelClaimTargetKind.DLQ, topic, group);
-        targets.put(key, new PelClaimTarget(PelClaimTargetKind.DLQ, topic, group, 0, false, 0));
+        String key = targetKey(PelClaimTargetKind.DLQ, namespace, topic, group);
+        targets.put(
+                key,
+                new PelClaimTarget(
+                        PelClaimTargetKind.DLQ, namespace, topic, group, 0, false, 0, null));
         LOG.info("Registered PelClaim DLQ target: topic={}, group={}", topic, group);
     }
 
     /** 目标去重键：种类前缀避免不同类别在同一 topic/group 维度上互相覆盖。 */
-    private static String targetKey(PelClaimTargetKind kind, String topic, String group) {
-        return kind.name() + ":" + topic + ":" + group;
+    private static String targetKey(
+            PelClaimTargetKind kind, String namespace, String topic, String group) {
+        return kind.name() + ":" + namespace + ":" + topic + ":" + group;
     }
 
     @Override
-    public void start() {
+    public synchronized void start() {
         if (!running.compareAndSet(false, true)) {
             LOG.warn("PelClaimScheduler already started");
             return;
@@ -310,7 +360,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
 
     /** 停止调度器（取消扫描任务并关闭线程池，线程为 daemon，不阻塞 JVM 退出）。 */
     @Override
-    public void stop() {
+    public synchronized void stop() {
         if (!running.compareAndSet(true, false)) {
             return;
         }
@@ -336,7 +386,85 @@ public class PelClaimScheduler implements StreamMQScheduler {
         return running.get();
     }
 
+    /** 最近一次读取到的 Redis 服务器时钟（毫秒）；0 = 未取到，回退本地时钟。 */
+    private volatile long lastRedisNowMs = 0L;
+
+    /**
+     * 读取 Redis 服务器时钟，与消费者组心跳使用同一时钟源（跨主机本地时钟偏差可达数十秒，会把存活实例判死）。
+     *
+     * <p>每轮扫描刷新一次，避免逐条 pending 判定都发一次 TIME。
+     */
+    private void refreshRedisClock() {
+        try {
+            java.util.List<Long> t =
+                    redisson.getScript(StringCodec.INSTANCE)
+                            .eval(
+                                    org.redisson.api.RScript.Mode.READ_ONLY,
+                                    "local t = redis.call('TIME');"
+                                            + "return tonumber(t[1]) * 1000 +"
+                                            + " math.floor(tonumber(t[2]) / 1000);",
+                                    org.redisson.api.RScript.ReturnType.MULTI,
+                                    java.util.Collections.emptyList());
+            lastRedisNowMs = t.get(0);
+        } catch (RuntimeException ex) {
+            lastRedisNowMs = 0L;
+            LOG.debug("Redis TIME unavailable, falling back to local clock: {}", ex.getMessage());
+        }
+    }
+
+    /**
+     * 判断 PEL 条目所属消费者是否仍存活。
+     *
+     * <p><b>为什么不能只看 idle：</b>并发消费的内联处理跑在读循环线程上，慢回调期间该消费者无法发出任何 Redis 命令（也无法心跳），因此「消息 idle
+     * 超阈值」<b>不等于</b>「消费者已死」。若据此认领，会把仍在正常处理的消息 复制重投（重复副作用），并在 {@code retryTimes}
+     * 累积到上限后把<b>已成功处理</b>的消息误投入 DLQ。
+     *
+     * <p><b>判活依据：</b>消费者组管理器由<b>独立心跳线程</b>周期性写入 instances Hash（{@code instanceId → 心跳毫秒}）， 而 Redis
+     * 消费者名内嵌 instanceId。这里用「存在心跳仍新鲜的 instanceId 是该消费者名的后缀」作为存活证据； 心跳时间与判定时间均取自 Redis 服务器时钟，规避跨主机偏差。
+     *
+     * <p>查询异常时保守返回 {@code true}（视为存活、跳过认领）：宁可延后恢复，也不制造重复投递。
+     */
+    private boolean isOwnerConsumerAlive(PelClaimTarget target, String consumerName) {
+        if (StringUtils.isEmpty(consumerName)) {
+            return false;
+        }
+        try {
+            Map<String, String> instances =
+                    redisson.<String, String>getMap(
+                                    StreamMQKeys.consumerGroupInstances(
+                                            target.namespace, target.group),
+                                    StringCodec.INSTANCE)
+                            .readAllMap();
+            if (CollectionUtils.isEmpty(instances)) {
+                return false;
+            }
+            long now = lastRedisNowMs > 0 ? lastRedisNowMs : System.currentTimeMillis();
+            for (Map.Entry<String, String> instance : instances.entrySet()) {
+                if (!consumerName.endsWith(instance.getKey())) {
+                    continue;
+                }
+                try {
+                    if (now - Long.parseLong(instance.getValue()) < minIdleMs) {
+                        return true;
+                    }
+                } catch (NumberFormatException ignored) {
+                    // 心跳值不可解析：视为无效证据，继续检查其它实例
+                }
+            }
+            return false;
+        } catch (RuntimeException ex) {
+            LOG.debug(
+                    "Consumer liveness lookup failed, assuming alive to avoid duplicate"
+                            + " delivery: group={}, consumer={}, cause={}",
+                    target.group,
+                    consumerName,
+                    ex.getMessage());
+            return true;
+        }
+    }
+
     private void scanAllTargets() {
+        refreshRedisClock();
         for (PelClaimTarget target : targets.values()) {
             try {
                 scanPel(target);
@@ -368,7 +496,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void scanPel(PelClaimTarget target) {
-        String lockKey = StreamMQKeys.pelClaimLock(namespace, target.topic, target.group);
+        String lockKey = StreamMQKeys.pelClaimLock(target.namespace, target.topic, target.group);
         RLock scanLock = redisson.getLock(lockKey);
         // 不等待：其它实例正在扫该目标时直接跳过本轮；lease=-1 启用看门狗续期，持有者崩溃后自动释放
         boolean locked;
@@ -407,9 +535,9 @@ public class PelClaimScheduler implements StreamMQScheduler {
     /** TOPIC 种类扫描：业务流 PEL 认领（既有语义，保持不变——分片锁保护、超限转 DLQ、 递增 retryTimes 重投）。 */
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void doScanTopicPel(PelClaimTarget target) {
-        String streamKey = StreamMQKeys.topicStream(namespace, target.topic);
-        RStream<String, String> stream = redisson.getStream(streamKey);
-        String dlqStreamKey = StreamMQKeys.dlqStream(namespace, target.group);
+        String streamKey = StreamMQKeys.topicStream(target.namespace, target.topic);
+        RStream<String, String> stream = redisson.getStream(streamKey, StringCodec.INSTANCE);
+        String dlqStreamKey = StreamMQKeys.dlqStream(target.namespace, target.group);
 
         // 读取 PEL 中的 pending 消息
         try {
@@ -425,6 +553,16 @@ public class PelClaimScheduler implements StreamMQScheduler {
                     StreamMessageId id = entry.getId();
                     long idleTime = entry.getIdleTime();
                     if (idleTime < minIdleMs) {
+                        continue;
+                    }
+                    if (isOwnerConsumerAlive(target, entry.getConsumerName())) {
+                        LOG.debug(
+                                "Skip claiming pending entry owned by a live consumer:"
+                                        + " topic={}, group={}, id={}, consumer={}",
+                                target.topic,
+                                target.group,
+                                id,
+                                entry.getConsumerName());
                         continue;
                     }
                     // 读取消息内容判断 retryTimes
@@ -531,9 +669,9 @@ public class PelClaimScheduler implements StreamMQScheduler {
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void doScanRetryStreamPel(PelClaimTarget target) {
-        String streamKey = StreamMQKeys.retryStream(namespace, target.topic, target.group);
-        RStream<String, String> stream = redisson.getStream(streamKey);
-        String dlqStreamKey = StreamMQKeys.dlqStream(namespace, target.group);
+        String streamKey = StreamMQKeys.retryStream(target.namespace, target.topic, target.group);
+        RStream<String, String> stream = redisson.getStream(streamKey, StringCodec.INSTANCE);
+        String dlqStreamKey = StreamMQKeys.dlqStream(target.namespace, target.group);
         try {
             var pending =
                     stream.listPending(
@@ -545,6 +683,16 @@ public class PelClaimScheduler implements StreamMQScheduler {
                 try {
                     StreamMessageId id = entry.getId();
                     if (entry.getIdleTime() < minIdleMs) {
+                        continue;
+                    }
+                    if (isOwnerConsumerAlive(target, entry.getConsumerName())) {
+                        LOG.debug(
+                                "Skip claiming pending entry owned by a live consumer:"
+                                        + " topic={}, group={}, id={}, consumer={}",
+                                target.topic,
+                                target.group,
+                                id,
+                                entry.getConsumerName());
                         continue;
                     }
                     var readResult = stream.range(id, id);
@@ -612,8 +760,8 @@ public class PelClaimScheduler implements StreamMQScheduler {
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void doScanDlqPel(PelClaimTarget target) {
-        String streamKey = StreamMQKeys.dlqStream(namespace, target.group);
-        RStream<String, String> stream = redisson.getStream(streamKey);
+        String streamKey = StreamMQKeys.dlqStream(target.namespace, target.group);
+        RStream<String, String> stream = redisson.getStream(streamKey, StringCodec.INSTANCE);
         try {
             var pending =
                     stream.listPending(
@@ -625,6 +773,16 @@ public class PelClaimScheduler implements StreamMQScheduler {
                 try {
                     StreamMessageId id = entry.getId();
                     if (entry.getIdleTime() < minIdleMs) {
+                        continue;
+                    }
+                    if (isOwnerConsumerAlive(target, entry.getConsumerName())) {
+                        LOG.debug(
+                                "Skip claiming pending entry owned by a live consumer:"
+                                        + " topic={}, group={}, id={}, consumer={}",
+                                target.topic,
+                                target.group,
+                                id,
+                                entry.getConsumerName());
                         continue;
                     }
                     var readResult = stream.range(id, id);
@@ -665,7 +823,11 @@ public class PelClaimScheduler implements StreamMQScheduler {
         if (target.shardCount <= 0) {
             return false;
         }
-        String shardingKey = fields.get(DefaultMessageConverter.FIELD_SHARDING_KEY);
+        String shardingField =
+                StringUtils.isEmpty(target.shardingField)
+                        ? DefaultMessageConverter.FIELD_SHARDING_KEY
+                        : target.shardingField;
+        String shardingKey = fields.get(shardingField);
         if (StringUtils.isEmpty(shardingKey)) {
             shardingKey = "";
         }
@@ -674,7 +836,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
             RLock shardLock =
                     redisson.getLock(
                             StreamMQKeys.shardLock(
-                                    namespace, target.topic, target.group, shardIndex));
+                                    target.namespace, target.topic, target.group, shardIndex));
             return shardLock.isLocked();
         } catch (RuntimeException ex) {
             // 锁状态查询失败时保守处理：视为被持有，宁可延迟认领也不重复投递
@@ -736,25 +898,31 @@ public class PelClaimScheduler implements StreamMQScheduler {
 
     private static final class PelClaimTarget {
         final PelClaimTargetKind kind;
+        final String namespace;
         final String topic;
         final String group;
         final int maxReconsumeTimes;
         final boolean orderly;
         final int shardCount;
+        final String shardingField;
 
         PelClaimTarget(
                 PelClaimTargetKind kind,
+                String namespace,
                 String topic,
                 String group,
                 int maxReconsumeTimes,
                 boolean orderly,
-                int shardCount) {
+                int shardCount,
+                String shardingField) {
             this.kind = Objects.requireNonNull(kind, "kind");
+            this.namespace = Objects.isNull(namespace) ? "" : namespace;
             this.topic = topic;
             this.group = group;
             this.maxReconsumeTimes = maxReconsumeTimes;
             this.orderly = orderly;
             this.shardCount = shardCount;
+            this.shardingField = shardingField;
         }
     }
 }

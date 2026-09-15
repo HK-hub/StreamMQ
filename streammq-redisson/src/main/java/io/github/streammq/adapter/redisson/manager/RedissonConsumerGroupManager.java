@@ -234,7 +234,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
 
         // 3. 订阅 Rebalance 通知
         String notifyKey = StreamMQKeys.consumerGroupNotify(namespace, group);
-        RTopic topic = redisson.getTopic(notifyKey);
+        RTopic topic = redisson.getTopic(notifyKey, StringCodec.INSTANCE);
         listenerId =
                 topic.addListener(
                         String.class,
@@ -283,7 +283,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
         // 取消订阅
         if (listenerId >= 0) {
             String notifyKey = StreamMQKeys.consumerGroupNotify(namespace, group);
-            RTopic topic = redisson.getTopic(notifyKey);
+            RTopic topic = redisson.getTopic(notifyKey, StringCodec.INSTANCE);
             topic.removeListener(listenerId);
             listenerId = -1;
         }
@@ -418,7 +418,8 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
                 // 写入 assignment Hash；同时移除已离场实例的残留分配行，
                 // 否则 Hash 随实例更替无限增长，且管理端点会展示幽灵实例的分片
                 String assignmentKey = StreamMQKeys.consumerGroupAssignment(namespace, group);
-                RMap<String, String> assignMap = redisson.getMap(assignmentKey);
+                RMap<String, String> assignMap =
+                        redisson.getMap(assignmentKey, StringCodec.INSTANCE);
                 java.util.Set<String> activeSet = new HashSet<>(activeInstances);
                 for (String known : assignMap.keySet()) {
                     if (!activeSet.contains(known)) {
@@ -434,7 +435,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
                 }
                 // 广播 REBALANCE 通知
                 String notifyKey = StreamMQKeys.consumerGroupNotify(namespace, group);
-                RTopic topic = redisson.getTopic(notifyKey);
+                RTopic topic = redisson.getTopic(notifyKey, StringCodec.INSTANCE);
                 topic.publish(NOTIFY_REBALANCE);
                 LOG.info(
                         "Rebalance completed: group={}, instances={}, assignment={}",
@@ -455,7 +456,7 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
     /** 获取当前实例已分配的 Shard 列表（从 assignment Hash 读取）。 */
     private List<Integer> getAssignedShards() {
         String assignmentKey = StreamMQKeys.consumerGroupAssignment(namespace, group);
-        RMap<String, String> assignMap = redisson.getMap(assignmentKey);
+        RMap<String, String> assignMap = redisson.getMap(assignmentKey, StringCodec.INSTANCE);
         String csv = assignMap.get(instanceId);
         if (StringUtils.isEmpty(csv)) {
             return List.of();

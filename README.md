@@ -135,13 +135,25 @@ Serializers, converters, filters, interceptors, retry policies, rebalance strate
 
 > **Backpressure is OFF by default**: `streammq.consumer.inflight-capacity` defaults to `0` (disabled). Set a positive value to enable throttling (the in-flight queue decouples fetch from processing and blocks fetches when full).
 
+> **Why not Redisson `RTopic` / `RReliableTopic`?** Topics are pub/sub: no consumer group, no per-group
+> offset, no PEL/recovery, no ordered or delayed delivery, and a slow subscriber either drops messages or grows an
+> unbounded listener queue. StreamMQ is built on Redis **Streams** precisely to get at-least-once delivery with
+> replay, DLQ, retry, ordering and transactions.
+>
+> **Why not plain `XADD` + `XREADGROUP`?** That is exactly what StreamMQ does underneath; the SDK adds what the raw
+> commands leave to you — consumer-group lifecycle & rebalance, ACK/PEL orphan recovery, retry with backoff, DLQ
+> (including a secondary DLQ), delayed messages, transaction half-messages with check-back, tag/SQL92 filtering,
+> backpressure, metrics, tracing and a management API. If you need none of those and want zero dependencies, raw
+> `XADD`/`XREADGROUP` is a perfectly reasonable choice.
+
+
 ---
 
 ## Benchmarks — methodology disclosure
 
 > **Important: the numbers below are 0.1.2 locally measured benchmarks** (2026-09-02, localhost Redis, JDK 21, laptop-grade hardware):
 > - Serialization benchmarks now use JMH `Blackhole` consumers (prevents JIT dead-code elimination from inflating throughput)
-> - Consumer benchmarks rewritten to measure the full end-to-end path: XREADGROUP → deserialize → business callback → XACK, with continuous producers
+> - Consumer benchmark drives the **raw Redisson read path** (XREADGROUP → field decode → callback → **batched** XACK, 1 ACK per 100 messages) with continuous producers. It deliberately **bypasses the listener container**, so the filter/interceptor chains, metrics, retry/DLQ handling and per-message ACK of the production path are **not** included — expect real container throughput to be lower. A container-driven benchmark is tracked as follow-up work.
 > - The previous README number "Stream consume ~269,760 ops/s" was removed because it measured an empty XREADGROUP roundtrip — a broken benchmark
 > - Error bars are 99.9% CI; laptop-grade results are for reference only — measure on your own production hardware
 
@@ -171,14 +183,14 @@ Single instance, localhost Redis. JMH fork=1, warmup=1×2s, measurement=2×3s.
 
 ### Consume Throughput (ops/s) — 0.1.2 measured
 
-End-to-end full path: XREADGROUP + field decode + callback + XACK (with continuous feed). JMH fork=1, warmup=1×2s, measurement=3×3s.
+Raw read path: XREADGROUP + field decode + callback + batched XACK (1 ACK per 100 messages, with continuous feed). JMH fork=1, warmup=1×2s, measurement=3×3s. **Not** the container path — see the note above.
 
 | Benchmark | Description | 1KB | 10KB |
 |---|---|---|---|
 | `consumeThroughput` | Full path (network RTT, deserialization, ACK) | **~2,383** | **~2,018** |
 | `serializationRoundTrip` | Jackson round-trip (with network) | ~270,705 | ~19,249 |
 
-> `consumeThroughput` is the single most important MQ capacity metric: it measures the real end-to-end consume path (Redis network round-trip, deserialization, business callback, XACK confirmation), not an empty read roundtrip. Numbers vary significantly across hardware, Redis instances, and network latency.
+> `consumeThroughput` measures the consume path (Redis network round-trip, deserialization, business callback, batched XACK), not an empty read roundtrip — but it is a **lower bound of the SDK container path**, since it omits the container's per-message ACK and its filter/interceptor/metrics chains. Numbers vary significantly across hardware, Redis instances, and network latency.
 
 Run yourself: `mvn -B -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-template exec:exec@benchmark-serialization exec:exec@benchmark-consumer -Dstreammq.benchmark.allowFlush=true`
 Or trigger the CI benchmark job defined in
@@ -200,7 +212,7 @@ artifacts and back-filled into this table.
 
 > ⚠️ `mvn verify` requires a local Redis (`localhost:6379`). Without Redis, IT auto-skips; CI uses Docker service.
 > ⚠️ **Build prerequisites:** JDK **21+** is required (`requireJavaVersion [21,)`) and Maven **3.9+**. The build runs `spotless:check` at the `verify` phase — run `mvn spotless:apply` first, or skip with `-Dspotless.check.skip=true`.
-> ⚠️ **Default serializer is `JacksonJsonSerializer` (strict types, no gadget RCE surface).** As of 0.1.2 the default flipped from Fury (unrestricted mode) to Jackson for **safe-by-default** publishing: a library's default deserializer must not expose an RCE surface to every downstream app. **For higher throughput**, opt in to `FurySerializer` (`streammq.producer.serializer=io.github.streammq.adapter.redisson.serializer.FurySerializer`, then `streammq.producer.fury-require-class-registration=true` on shared/multi-tenant Redis to enable the class-registration whitelist and pre-register payload types), or `ProtostuffSerializer`. Fury/Protostuff are `optional` dependencies of `streammq-redisson` — add them to your classpath only when you use them, so Guava/Protostuff are not force-pulled into every app. See [SECURITY.md](SECURITY.md).
+> ⚠️ **Default serializer is `JacksonJsonSerializer` (strict types, no gadget RCE surface).** As of 0.1.2 the default flipped from Fury (unrestricted mode) to Jackson for **safe-by-default** publishing: a library's default deserializer must not expose an RCE surface to every downstream app. **For higher throughput**, opt in to `FurySerializer` (`streammq.producer.serializer=io.github.streammq.adapter.redisson.serializer.FurySerializer`, then pre-register your payload types (`FurySerializer` enforces the class-registration whitelist by default)), or `ProtostuffSerializer`. Fury/Protostuff are `optional` dependencies of `streammq-redisson` — add them to your classpath only when you use them, so Guava/Protostuff are not force-pulled into every app. See [SECURITY.md](SECURITY.md).
 
 ### 1. Add dependencies
 
@@ -237,16 +249,22 @@ artifacts and back-filled into this table.
 spring:
   application:
     name: streammq-demo
+  # Redis 连接：Redisson Spring Boot Starter 依据 spring.data.redis.* 构建客户端
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      database: 0
+      # password: ${REDIS_PASSWORD:}   # 需要认证时打开
 
 streammq:
   enabled: true
   namespace: streammq
-
-redisson:
-  singleServerConfig:
-    address: "redis://127.0.0.1:6379"
-    database: 0
 ```
+
+> **注意**：`redisson.singleServerConfig.*` 在本 starter 中**没有属性绑定**（它只绑定
+> `spring.redis.redisson.config` / `spring.redis.redisson.file`），写了不会生效，请勿使用。
+> 集群 / 哨兵等高级拓扑请通过 `spring.redis.redisson.config` 提供 Redisson 原生配置。
 
 ### 3. Enable (automatic)
 
@@ -453,15 +471,19 @@ A consumer that "registers successfully but never consumes" is the symptom most 
 
 ## Modules
 
+> ⚠️ In 0.1.x only **`streammq-bom`, `streammq-core`, `streammq-redisson`, `streammq-spring-boot-starter`** (plus
+> `streammq-test`) are published to Maven Central. Rows marked *source-only* are compiled and tested in this
+> repository but **cannot be resolved from Central** — build them from source (`mvn install`) if you need them.
+
 | Module | Description |
 |---|---|
 | **streammq-bom** | Bill of Materials, unified version management |
 | **streammq-core** | Core abstractions, message model, API, SPI interfaces (no Spring dependency) |
 | **streammq-redisson** | Redisson adapter, implements core capabilities on Redis Stream |
 | **streammq-spring-boot-starter** | Spring Boot 3 auto-configuration, configuration binding, Actuator integration |
-| **streammq-tracing-opentelemetry** | OpenTelemetry tracing integration |
-| **streammq-diagnostics** | Message profiling, slow-consume, backlog, DLQ diagnostics |
-| **streammq-kubernetes** | K8s health checks, HPA, graceful shutdown, CRD operator (experimental, default off) |
+| **streammq-tracing-opentelemetry** | OpenTelemetry tracing integration — *source-only in 0.1.x* |
+| **streammq-diagnostics** | Message profiling, slow-consume, backlog, DLQ diagnostics — *source-only in 0.1.x* |
+| **streammq-kubernetes** | K8s health checks, HPA, graceful shutdown, CRD operator (experimental, default off) — *source-only in 0.1.x* |
 | **streammq-spring-cloud-stream-binder** | Spring Cloud Stream Binder implementation |
 | **streammq-benchmark** | JMH benchmarks |
 | **streammq-test** | Test utilities: containerized Redis (Testcontainers, **requires a Docker daemon**), Redis availability probe, assertions, mocks. Import with `test` scope |
@@ -507,11 +529,11 @@ streammq:
 |---|---|---|
 | `MessageSerializer` | Message serialization | **`JacksonJsonSerializer` (default, strict types / no gadget RCE surface)** / `FurySerializer` (opt-in, high throughput) / `ProtostuffSerializer` / `JdkSerializer` |
 | `MessageConverter` | Message-body ↔ business object | `DefaultMessageConverter` / `CompactMessageConverter` / `PassThroughMessageConverter` |
-| `ProducerFilter` | Producer filter chain | `NoopProducerFilter` / `LoggingProducerFilter` |
+| `ProducerFilter` | Producer filter chain | none built-in — implement it and register a Bean |
 | `ConsumerFilter` | Consumer filter chain | `TagSelectorFilter` / `SqlSelectorFilter` |
-| `ProducerInterceptor` | Producer interceptor chain | `LoggingProducerInterceptor` |
-| `ConsumerInterceptor` | Consumer interceptor chain | `LoggingConsumerInterceptor` |
-| `RetryPolicy` | Retry strategy | `FixedArrayRetryPolicy` / `FixedIntervalRetryPolicy` / `ExponentialBackoffRetryPolicy` / `DecorrelatedJitterRetryPolicy` |
+| `ProducerInterceptor` | Producer interceptor chain | `TraceContextProducerInterceptor` / `OpenTelemetryProducerInterceptor` |
+| `ConsumerInterceptor` | Consumer interceptor chain | `TraceContextConsumerInterceptor` / `OpenTelemetryConsumerInterceptor` |
+| `RetryPolicy` | Retry strategy | `FixedArrayRetryPolicy` / `FixedIntervalRetryPolicy` / `ExponentialBackoffRetryPolicy` / `NoRetryPolicy` |
 | `RebalanceStrategy` | Consumer rebalance strategy | `AverageRebalanceStrategy` / `ConsistentHashRebalanceStrategy` / `RangeRebalanceStrategy` |
 | `CompressionCodec` | Message compression | `GzipCompressionCodec` / `Lz4CompressionCodec` (classpath detection) |
 | `TraceCollector` | Trace context collection | `NoopTraceCollector` / `Slf4jTraceCollector` / `RedisTraceCollector` |
@@ -597,12 +619,13 @@ All require `ManagementAuthenticator`. Default is `DenyAllAuthenticator` (reject
 | Document | Description |
 |---|---|
 | [This README](README.md) | Authoritative user manual |
+| [Configuration Reference](docs/configuration-reference.md) | Every `streammq.*` key with its real default value |
 | Javadoc | Bundled with Maven Central artifacts (sources/javadoc jars) |
 | [CHANGELOG](CHANGELOG.md) | Version change log |
 | [CONTRIBUTING](CONTRIBUTING.md) | Contribution process & dev conventions |
 | [SECURITY](SECURITY.md) | Security policy & vulnerability disclosure |
 
-> ⚠️ `docs/historical/` contains V0.1/V1.0 draft design documents; their class names, configuration keys, and some mechanism descriptions have become outdated. Treat as archaeology only.
+> ⚠️ `docs/archived-historical/` contains V0.1/V1.0 draft design documents; their class names, configuration keys, and some mechanism descriptions have become outdated. Treat as archaeology only.
 
 ---
 
@@ -630,10 +653,10 @@ All require `ManagementAuthenticator`. Default is `DenyAllAuthenticator` (reject
 - [x] Management REST API
 - [x] 16 extension points (user-facing + internal assembly points)
 - [x] Spring Boot 3 auto-config + Actuator
-- [x] Spring Cloud Stream Binder
-- [x] Kubernetes integration (experimental)
-- [x] Message profiling & topology visualization
-- [x] OpenTelemetry distributed tracing
+- [x] Spring Cloud Stream Binder (source-only in 0.1.x)
+- [x] Kubernetes integration (experimental; source-only in 0.1.x)
+- [x] Message profiling & topology visualization (source-only in 0.1.x)
+- [x] OpenTelemetry distributed tracing (source-only in 0.1.x)
 
 ### V2.0 (planned)
 
@@ -650,7 +673,7 @@ Welcome to StreamMQ! Please read [CONTRIBUTING](CONTRIBUTING.md) for details.
 
 ```bash
 # 1. Fork & clone
-git clone https://github.com/<your-username>/streammq.git
+git clone https://github.com/HK-hub/StreamMQ.git
 cd streammq
 
 # 2. Create branch
@@ -692,7 +715,7 @@ git commit -m "feat: add your feature"
 | Java | 21+ | Runtime |
 | Spring Boot | 3.3.5 | Framework |
 | Redisson | 3.34.1 | Redis client |
-| Jackson | 2.18.1 | JSON serialization |
+| Jackson | 2.17.2 | JSON serialization (aligned with Spring Boot 3.3.5 managed version) |
 | Fury | 0.9.0 | High-perf serialization (optional; opt-in for throughput) |
 | Protostuff | 1.8.0 | Protobuf serialization (optional alternative) |
 | Lombok | - | Code simplification |
@@ -713,17 +736,17 @@ StreamMQ takes your security seriously. Best practices:
 
 ### Deserialization safety
 
-- `FurySerializer` (opt-in, high throughput; `streammq.producer.serializer` must be explicitly set) — does **not** enforce class registration by default (unrestricted mode, `requireClassRegistration=false`): any POJO works out of the box, but bytes stored in Redis can be deserialized to arbitrary classes on the classpath. For shared/multi-tenant Redis, enable the class registration whitelist:
+- `FurySerializer` (opt-in, high throughput; `streammq.producer.serializer` must be explicitly set) — **enforces class registration by default** (`requireClassRegistration=true`): only explicitly registered types can be deserialized and unregistered POJOs are rejected. Pre-register your payload types:
   ```yaml
   streammq:
     producer:
       fury-require-class-registration: true
   ```
-  In whitelist mode, register application payloads up front with `new FurySerializer<>(OrderCreated.class)` or `new FurySerializer<>(true).register(OrderCreated.class)`. When instantiating directly from Java: `new FurySerializer()` is unrestricted, `new FurySerializer(true)` enforces the whitelist. Constructing an unrestricted serializer logs a WARN; after confirming Redis is fully trusted, set `-Dstreammq.security.allowUnrestrictedSerializer=true` to suppress it.
+  Register application payloads up front with `new FurySerializer<>(OrderCreated.class)` or `new FurySerializer().register(OrderCreated.class)`. From plain Java: `new FurySerializer()` **is the whitelist mode** (same as `new FurySerializer(true)`); `new FurySerializer(false)` is the unrestricted mode and requires `-Dstreammq.security.allowUnrestrictedSerializer=true` (otherwise it throws). Note the post-deserialize `isInstance` check only validates the result type — it cannot stop gadget execution, so the whitelist is the real defense.
 - When the default serializer (`JacksonJsonSerializer`, nested-object safe) is in effect, the underlying Redisson client codec must still be secured separately — see [SECURITY.md](SECURITY.md) for the full security surface.
 - `JdkSerializer` has a JEP 290 class name whitelist filter (target type + JDK basics); use `JdkSerializer.unrestricted()` only as a last resort — gated by `-Dstreammq.security.allowUnrestrictedSerializer=true`.
 
-For shared/multi-tenant Redis, keep the Fury whitelist enabled to narrow the deserialization attack surface. See [SECURITY.md](SECURITY.md) for the full security policy.
+For shared/multi-tenant Redis, keep the Fury class-registration whitelist enabled (it is the default). See [SECURITY.md](SECURITY.md) for the full security policy.
 
 ---
 

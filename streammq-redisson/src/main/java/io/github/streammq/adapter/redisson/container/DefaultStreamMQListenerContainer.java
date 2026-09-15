@@ -955,31 +955,62 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     @Override
     public void start() {
         lifecycle.beginStart();
-        ensureRuntimeAlive();
-        LOG.info("Starting ListenerContainer with {} registration(s)", store.registrationCount());
-        // start 语义为全新启动：复位 pause，避免"pause 后 stop 再 start"重启进静默暂停
-        paused = false;
-        // 清空上一轮遗留的消费循环启动失败：全新启动后失败会重新登记
-        consumeLoopFailures.clear();
-        if (!lifecycle.markRunning()) {
-            // 竞态守卫：启动期间发生并发 stop（状态已离开 STARTING）时必须中止——
-            // 继续登记组管理器/提交读循环会复活已停止的容器并泄漏 Redis 侧注册数据
-            LOG.warn(
-                    "Container start aborted: lifecycle changed to {} during startup (stop won"
-                            + " the race)",
-                    lifecycle.current());
-            return;
+        try {
+            ensureRuntimeAlive();
+            LOG.info(
+                    "Starting ListenerContainer with {} registration(s)",
+                    store.registrationCount());
+            // start 语义为全新启动：复位 pause，避免"pause 后 stop 再 start"重启进静默暂停
+            paused = false;
+            // 清空上一轮遗留的消费循环启动失败：全新启动后失败会重新登记
+            consumeLoopFailures.clear();
+            if (!lifecycle.markRunning()) {
+                // 竞态守卫：启动期间发生并发 stop（状态已离开 STARTING）时必须中止——
+                // 继续登记组管理器/提交读循环会复活已停止的容器并泄漏 Redis 侧注册数据
+                LOG.warn(
+                        "Container start aborted: lifecycle changed to {} during startup (stop"
+                                + " won the race)",
+                        lifecycle.current());
+                return;
+            }
+            for (ListenerRegistration<?> reg : store.registrations()) {
+                if (!reg.isDlqMode()) {
+                    store.putGroupManager(reg.key(), groupManagerFactory().createAndRegister(reg));
+                }
+            }
+            doStartListeners();
+            if (pelClaimScheduler != null) {
+                schedulerBinder().bindPelClaimTargets(pelClaimScheduler);
+            }
+            LOG.info("ListenerContainer started, state=RUNNING");
+        } catch (RuntimeException ex) {
+            rollbackStartOnFailure(ex);
+            throw ex;
         }
-        for (ListenerRegistration<?> reg : store.registrations()) {
-            if (!reg.isDlqMode()) {
-                store.putGroupManager(reg.key(), groupManagerFactory().createAndRegister(reg));
+    }
+
+    /**
+     * 启动中途失败时的状态回滚。
+     *
+     * <p>必须把 STARTING 回滚为 STOPPED：否则容器卡死在 STARTING —— 既无法重新 {@code start()}（要求 INIT），也无法再 {@code
+     * setConsumeExecutor}（要求 INIT），文档给出的补救路径反而不可达。若失败已发生在 RUNNING 之后，则执行一次 stop 释放部分注册状态。
+     */
+    private void rollbackStartOnFailure(RuntimeException cause) {
+        if (lifecycle.current() == ContainerState.STARTING && lifecycle.tryBeginStop()) {
+            lifecycle.finishStop();
+            LOG.warn(
+                    "Container start failed during STARTING; lifecycle rolled back to STOPPED",
+                    cause);
+        } else if (lifecycle.isRunning()) {
+            LOG.warn(
+                    "Container start failed after RUNNING; stopping to release partial state",
+                    cause);
+            try {
+                stop();
+            } catch (RuntimeException stopEx) {
+                LOG.error("Cleanup stop after failed start also failed", stopEx);
             }
         }
-        doStartListeners();
-        if (pelClaimScheduler != null) {
-            schedulerBinder().bindPelClaimTargets(pelClaimScheduler);
-        }
-        LOG.info("ListenerContainer started, state=RUNNING");
     }
 
     /** 确保执行器与监听器工厂可用。执行器为外部注入时不做任何处理（生命周期归提供方）； 内部默认池在 stop 时关闭、restart 由本方法重建。 */
@@ -1088,6 +1119,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             removed = true;
             loopSupervisor.cancelForRegistration(key);
             store.removeFilters(key);
+            store.removeHandler(key);
             store.removeAndUnregisterGroupManager(key);
             releaseBroadcastInstance(reg, topic);
             LOG.info(

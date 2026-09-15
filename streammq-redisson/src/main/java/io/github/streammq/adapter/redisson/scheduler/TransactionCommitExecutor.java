@@ -6,6 +6,7 @@
 package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.core.exception.StreamMQBrokerException;
 import java.util.Arrays;
 import org.redisson.api.RScript;
 import org.redisson.api.RedissonClient;
@@ -90,6 +91,19 @@ public class TransactionCommitExecutor {
                         txId);
         if ("HALF_MISSING".equals(result)) {
             return Outcome.HALF_MISSING;
+        }
+        if (!"PUBLISHED".equals(result)) {
+            // 脚本契约只返回 PUBLISHED / HALF_MISSING；其余结果（含 null）说明协议异常，
+            // 必须显式失败而不是乐观地当作已发布，否则事务会停在 COMMITTING 且消息未投递。
+            throw new StreamMQBrokerException(
+                    "Unexpected transaction commit result: "
+                            + result
+                            + ", txId="
+                            + txId
+                            + ", txGroup="
+                            + txGroup,
+                    null,
+                    null);
         }
         return Outcome.PUBLISHED;
     }

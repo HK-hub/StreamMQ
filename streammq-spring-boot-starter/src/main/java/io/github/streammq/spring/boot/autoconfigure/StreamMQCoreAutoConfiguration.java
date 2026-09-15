@@ -50,6 +50,7 @@ import io.github.streammq.core.template.StreamMessageTemplate;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import io.github.streammq.spring.boot.properties.StreamMQProperties;
 import jakarta.annotation.PostConstruct;
+import java.util.HashSet;
 import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -118,21 +119,26 @@ public class StreamMQCoreAutoConfiguration {
     }
 
     /**
-     * 将 admin 端点配置的客户端地址可信策略同步到 {@link WebRequestAuthSupport}（限流按此聚合来源）。
+     * 客户端地址可信策略（限流按此聚合来源）。
      *
-     * <p>安全默认值：不信任 {@code X-Forwarded-For}，仅按不可伪造的 {@code remoteAddr} 聚合——防止客户端 伪造 XFF
-     * 绕过失败限流。必须在任何端点请求之前执行，故放在上下文刷新期（@PostConstruct）。
+     * <p>安全默认值：不信任 {@code X-Forwarded-For}，仅按不可伪造的 {@code remoteAddr} 聚合——防止客户端伪造 XFF 绕过失败限流。作为
+     * Bean 提供（而不是写入静态全局），使策略具备容器生命周期归属，可被管理端点与 {@code streammq-diagnostics} 端点共同注入复用。
      */
-    @PostConstruct
-    void configureWebRequestAuthSupport() {
-        io.github.streammq.core.util.WebRequestAuthSupport.configure(
-                properties.getAdmin().isTrustForwardedHeaders(),
-                properties.getAdmin().getTrustedProxies());
+    @Bean
+    @ConditionalOnMissingBean(
+            io.github.streammq.core.util.WebRequestAuthSupport.ClientAddressPolicy.class)
+    public io.github.streammq.core.util.WebRequestAuthSupport.ClientAddressPolicy
+            streamMQClientAddressPolicy(StreamMQProperties properties) {
+        io.github.streammq.core.util.WebRequestAuthSupport.ClientAddressPolicy policy =
+                new io.github.streammq.core.util.WebRequestAuthSupport.ClientAddressPolicy(
+                        properties.getAdmin().isTrustForwardedHeaders(),
+                        new HashSet<>(properties.getAdmin().getTrustedProxies()));
         LOG.info(
                 "StreamMQ web auth client-address policy: trustForwardedHeaders={},"
                         + " trustedProxies={}",
-                properties.getAdmin().isTrustForwardedHeaders(),
-                properties.getAdmin().getTrustedProxies());
+                policy.trustForwardedHeaders(),
+                policy.trustedProxyCidrs());
+        return policy;
     }
 
     /**
@@ -184,11 +190,24 @@ public class StreamMQCoreAutoConfiguration {
         if (StreamMQSpringConstants.FURY_SERIALIZER_CLASS_NAME.equals(clazz.getName())) {
             boolean requireClassRegistration =
                     properties.getProducer().isFuryRequireClassRegistration();
+            java.util.List<Class<?>> registered =
+                    properties.getProducer().getFuryRegisteredClasses();
+            if (requireClassRegistration && (registered == null || registered.isEmpty())) {
+                LOG.warn(
+                        "FurySerializer is running in class-registration whitelist mode (default)"
+                            + " but no payload types are registered: every unregistered body type"
+                            + " will fail to deserialize. Declare them via"
+                            + " streammq.producer.fury-registered-classes, or set"
+                            + " streammq.producer.fury-require-class-registration=false (only when"
+                            + " Redis is fully trusted).");
+            }
             LOG.info(
-                    "Using FurySerializer with requireClassRegistration={} (change via"
-                            + " streammq.producer.fury-require-class-registration)",
-                    requireClassRegistration);
-            return instantiateFury(clazz, requireClassRegistration);
+                    "Using FurySerializer with requireClassRegistration={}, registeredTypes={}"
+                            + " (change via streammq.producer.fury-require-class-registration /"
+                            + " streammq.producer.fury-registered-classes)",
+                    requireClassRegistration,
+                    Objects.isNull(registered) ? 0 : registered.size());
+            return instantiateFury(clazz, requireClassRegistration, registered);
         }
         LOG.debug(
                 "Using MessageSerializer: {} (default: {})",
@@ -204,8 +223,15 @@ public class StreamMQCoreAutoConfiguration {
      * {@code NoClassDefFoundError} 拖垮。
      */
     private MessageSerializer<?> instantiateFury(
-            Class<? extends MessageSerializer> clazz, boolean requireClassRegistration) {
+            Class<? extends MessageSerializer> clazz,
+            boolean requireClassRegistration,
+            java.util.List<Class<?>> registeredTypes) {
         try {
+            if (Objects.nonNull(registeredTypes) && !registeredTypes.isEmpty()) {
+                return clazz.getDeclaredConstructor(boolean.class, Class[].class)
+                        .newInstance(
+                                requireClassRegistration, registeredTypes.toArray(new Class<?>[0]));
+            }
             return clazz.getDeclaredConstructor(boolean.class)
                     .newInstance(requireClassRegistration);
         } catch (ReflectiveOperationException | LinkageError e) {

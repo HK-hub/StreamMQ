@@ -9,6 +9,9 @@ on:
     branches:
       - master
       - main
+  schedule:
+    # 每周一 03:17 UTC：依赖漏洞库更新后定期复查（PR 门禁不依赖此扫描）
+    - cron: '17 3 * * 1'
 
 jobs:
   guard:
@@ -257,14 +260,20 @@ jobs:
           java-version: 21
           cache: maven
 
-      - name: Install modules to local repo (simulate staging)
-        run: mvn install -DskipTests -Dspotless.check.skip=true -Djacoco.check.skip=true
+      # 只安装“实际会发布到 Central 的构件集合”（与 release.yml 的 excludeArtifacts 对齐），
+      # 并使用隔离的本地仓库：这样 BOM 里若混入未发布构件，下面的使用方解析会真实失败。
+      - name: Install publishable modules into an isolated local repo (simulate staging)
+        run: |
+          mvn install -DskipTests -Dspotless.check.skip=true -Djacoco.check.skip=true \
+            -Dmaven.repo.local="${RUNNER_TEMP}/streammq-staging-repo" \
+            -pl streammq-bom,streammq-core,streammq-redisson,streammq-spring-boot-starter,streammq-test -am
 
       - name: Compile a consumer app against the BOM
         shell: bash
         run: |
           set -euo pipefail
-          VER="$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)"
+          VER="$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout \
+            -Dmaven.repo.local="${RUNNER_TEMP}/streammq-staging-repo")"
           mkdir -p /tmp/streammq-smoke/src/main/java/com/example
           cat > /tmp/streammq-smoke/pom.xml <<'EOF'
           <project xmlns="http://maven.apache.org/POM/4.0.0"
@@ -320,7 +329,27 @@ jobs:
               }
           }
           EOF
-          mvn -q -f /tmp/streammq-smoke/pom.xml clean compile
+          mvn -q -f /tmp/streammq-smoke/pom.xml clean compile \
+            -Dmaven.repo.local="${RUNNER_TEMP}/streammq-staging-repo"
+
+      # 反向断言：未纳入发布清单的构件必须无法解析（防止再次把“永不发布的构件”写进 BOM——
+      # 那会让使用方按 BOM 版本号依赖时解析到中央仓库不存在的构件）。
+      - name: Assert unpublished modules are NOT resolvable
+        shell: bash
+        run: |
+          set -euo pipefail
+          VER="$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout \
+            -Dmaven.repo.local="${RUNNER_TEMP}/streammq-staging-repo")"
+          for art in streammq-diagnostics streammq-tracing-opentelemetry \
+                     streammq-spring-cloud-stream-binder streammq-kubernetes; do
+            if mvn -q dependency:get -Dartifact="io.github.streammq:${art}:${VER}" \
+                 -Dmaven.repo.local="${RUNNER_TEMP}/streammq-staging-repo" >/dev/null 2>&1; then
+              echo "::error::${art} resolved from the staging repo but is NOT in the published set —"
+              echo "::error::keep the BOM and the release excludeArtifacts list consistent."
+              exit 1
+            fi
+            echo "OK: ${art} is correctly absent from the published set"
+          done
 
   security:
     name: Dependency vulnerability scan (OWASP)
@@ -337,11 +366,23 @@ jobs:
           java-version: 21
           cache: maven
 
-      - name: Run OWASP Dependency-Check
-        run: mvn verify -Dowasp.skip=false -DskipTests
+      - name: Run OWASP Dependency-Check (bounded retry for NVD rate limits)
+        shell: bash
         env:
-          # 可选：仓库 Secret 中配置 NVD_API_KEY 提升 NVD 查询限额；未配置时空串透传（匿名限速模式）
+          # 可选：仓库 Secret 中配置 NVD_API_KEY 提升 NVD 查询限额；未配置时为匿名限速模式，
+          # 此时 NVD 侧偶发 429/超时，用有限次重试消除“与代码无关”的红色构建。
           NVD_API_KEY: ${{ secrets.NVD_API_KEY || '' }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if mvn verify -Dowasp.skip=false -DskipTests; then
+              exit 0
+            fi
+            echo "::warning::OWASP scan attempt ${attempt} failed (NVD rate limits are common without NVD_API_KEY); retrying..."
+            sleep 30
+          done
+          echo "::error::OWASP dependency scan failed after 3 attempts"
+          exit 1
 
       - name: Upload dependency-check reports
         if: always()

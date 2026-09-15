@@ -131,12 +131,15 @@ public class StreamMQHealthAutoConfiguration {
             org.springframework.beans.factory.ObjectProvider<StreamMQHealthIndicator>
                     healthIndicatorProvider,
             ObjectProvider<ManagementAuthenticator> authenticatorProvider,
+            io.github.streammq.core.util.WebRequestAuthSupport.ClientAddressPolicy
+                    clientAddressPolicy,
             io.github.streammq.spring.boot.properties.StreamMQProperties properties) {
         LOG.debug("Creating StreamMQActuatorEndpoint");
         ManagementAuthenticator authenticator =
                 authenticatorProvider.getIfAvailable(DenyAllAuthenticator::new);
         // 包一层失败限流：即使启用 Basic/Token 弱凭据，也能抵御针对管理端点的暴力破解
-        ManagementAuthenticator rateLimited = new RateLimitedAuthenticator(authenticator);
+        ManagementAuthenticator rateLimited =
+                new RateLimitedAuthenticator(authenticator, clientAddressPolicy);
         StreamMQActuatorEndpoint endpoint =
                 new StreamMQActuatorEndpoint(
                         adminEndpoint, healthIndicatorProvider.getIfAvailable(), rateLimited);

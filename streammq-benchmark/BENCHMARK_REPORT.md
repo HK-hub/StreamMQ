@@ -4,6 +4,11 @@
 > **测试环境**: localhost Redis 7.2, JDK 21, 笔记本级硬件 (i7 / 16GB)
 > **JMH 参数**: fork=1, warmup=1×2s / 3×2s, measurement=2×3s / 5×3s
 > **Redis 模式**: local (直连 localhost:6379)
+>
+> **⚠️ 口径说明（勿误读）**：消费者基准跑的是**裸 Redisson 读取路径**（XREADGROUP → 字段解码 → 业务回调 →
+> **攒批 XACK，每 100 条 ACK 一次**），**绕过了 listener 容器**（过滤器/拦截器链、指标、重试/DLQ 处理、
+> 逐消息 ACK）。因此表中的 `consumeThroughput` 是 SDK 容器路径的**下界**，不能直接当作产品端到端吞吐。
+> 容器驱动的基准（含逐消息 ACK 变量）为后续待办项。
 
 ---
 

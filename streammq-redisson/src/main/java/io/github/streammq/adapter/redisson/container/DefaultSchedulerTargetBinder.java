@@ -5,8 +5,10 @@
  */
 package io.github.streammq.adapter.redisson.container;
 
+import io.github.streammq.adapter.redisson.converter.AbstractMessageConverter;
 import io.github.streammq.adapter.redisson.scheduler.PelClaimScheduler;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
+import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.listener.ListenerType;
@@ -32,10 +34,14 @@ public class DefaultSchedulerTargetBinder implements SchedulerTargetBinder {
         for (ListenerRegistration<?> reg : store.registrations()) {
             if (!reg.isDlqMode()) {
                 scheduler.registerRetryTarget(
-                        reg.getTopic(), reg.getGroup(), reg.getMaxReconsumeTimes());
+                        reg.getNamespace(),
+                        reg.getTopic(),
+                        reg.getGroup(),
+                        reg.getMaxReconsumeTimes());
                 count++;
             } else {
-                scheduler.registerRetryTarget(reg.getGroup(), reg.getGroup(), 0);
+                scheduler.registerRetryTarget(
+                        reg.getNamespace(), reg.getGroup(), reg.getGroup(), 0);
                 // 防御性可观测性：注册目标 max 与监听器声明值来自同一 reg，理论上一致；
                 // 若未来任一侧改动导致漂移，此处 INFO 提示双真源分歧
                 if (0 != reg.getMaxReconsumeTimes()) {
@@ -65,29 +71,37 @@ public class DefaultSchedulerTargetBinder implements SchedulerTargetBinder {
             if (reg.isDlqMode()) {
                 // DLQ 流 PEL 恢复：滞留条目尾部复制重投（此前 DLQ 组被整体跳过，
                 // 实例崩溃后的 DLQ pending 永久卡死）
-                scheduler.registerDlqTarget(reg.getTopic(), reg.getGroup());
+                scheduler.registerDlqTarget(reg.getNamespace(), reg.getTopic(), reg.getGroup());
                 dlqCount++;
                 continue;
             }
             if (reg.getType() == ListenerType.ORDERLY) {
                 // 顺序消费失败在分片锁内原地重试、耗尽直接转 DLQ，无 retry Stream
                 scheduler.registerTarget(
+                        reg.getNamespace(),
                         reg.getTopic(),
                         reg.getGroup(),
                         reg.getMaxReconsumeTimes(),
                         true,
-                        reg.getShardCount());
+                        reg.getShardCount(),
+                        shardingFieldOf(reg));
                 topicCount++;
             } else if (reg.getType() == ListenerType.AUTO_ACK
                     && reg.getConsumeMode() != ConsumeMode.BROADCASTING) {
                 scheduler.registerTarget(
-                        reg.getTopic(), reg.getGroup(), reg.getMaxReconsumeTimes());
+                        reg.getNamespace(),
+                        reg.getTopic(),
+                        reg.getGroup(),
+                        reg.getMaxReconsumeTimes());
                 topicCount++;
                 // 并发集群消费的 retry Stream 同样存在 PEL（消费者名含容器随机 token，
                 // 重启后自身排空读不到遗留条目），注册 RETRY 目标补齐跨重启恢复；
                 // 广播模式各实例独立组、无共享 retry 流，不注册
                 scheduler.registerRetryStreamTarget(
-                        reg.getTopic(), reg.getGroup(), reg.getMaxReconsumeTimes());
+                        reg.getNamespace(),
+                        reg.getTopic(),
+                        reg.getGroup(),
+                        reg.getMaxReconsumeTimes());
                 retryCount++;
             }
         }
@@ -97,6 +111,15 @@ public class DefaultSchedulerTargetBinder implements SchedulerTargetBinder {
                 topicCount,
                 retryCount,
                 dlqCount);
+    }
+
+    /** 解析注册项 Converter 的分片键字段名；非 {@link AbstractMessageConverter} 实现返回 null， 由调度器回退到默认字段名。 */
+    private static String shardingFieldOf(ListenerRegistration<?> reg) {
+        MessageConverter converter = reg.getConverterInstance();
+        if (converter instanceof AbstractMessageConverter amc) {
+            return amc.shardingFieldName();
+        }
+        return null;
     }
 
     @Override

@@ -65,9 +65,9 @@ streammq:
 | `group` | `default-producer` | 默认生产者组名（仅字母/数字/`-`/`_`，≤128 字符） |
 | `send-message-timeout` | `3000` | 发送超时（毫秒），必须 > 0 |
 | `retry-times` | `2` | 同步发送重试次数（≤ `MAX_SYNC_RETRY_TIMES=10`） |
-| `stream-max-len` | `10000` | Stream 最大长度，`0`=不限制 |
+| `stream-max-len` | `0` | Stream 最大长度，`0`=不限制 |
 | `serializer` | `JacksonJsonSerializer` | 消息体序列化器全限定类名。**默认 Jackson（0.1.2 起）**：安全严格类型；高吞吐可 opt-in `FurySerializer` / `ProtostuffSerializer`（需自备 classpath） |
-| `fury-require-class-registration` | `false` | 仅 Fury 生效：是否强制类注册白名单（开启可缩小反序列化 RCE 面） |
+| `fury-require-class-registration` | `true` | 仅 Fury 生效：是否强制类注册白名单（默认开启；关闭即宽松模式，扩大反序列化 RCE 面） |
 | `compress-threshold` | `0` | 压缩阈值（字节），`0`=禁用 |
 | `max-message-size` | `536870912`（512MB） | 单条消息最大字节，发送时校验（推荐 ≤1MB） |
 
@@ -80,9 +80,9 @@ streammq:
 | `poll-timeout` | `1s` | 单次拉取阻塞超时，必须 > 0 |
 | `batch-size` | `32` | 单次拉取批量，必须 > 0 |
 | `pull-interval` | `0` | 拉取间隔（毫秒），`0`=不间隔 |
-| `paused-sleep-millis` | `10` | 暂停休眠间隔（毫秒），必须 > 0 |
-| `broker-error-backoff-millis` | `200` | Broker 异常退避间隔（毫秒），必须 > 0 |
-| `max-batch-size-limit` | `64` | 最大拉取批量上界，必须 > 0 |
+| `paused-sleep-millis` | `100` | 暂停休眠间隔（毫秒），必须 > 0 |
+| `broker-error-backoff-millis` | `500` | Broker 异常退避间隔（毫秒），必须 > 0 |
+| `max-batch-size-limit` | `1000` | 最大拉取批量上界，必须 > 0 |
 | `inflight-capacity` | `0` | **背压队列容量**：`>0` 启用拉取/处理解耦（队列满时拉取阻塞），`0` 禁用（默认关闭） |
 | `timeout-cancel-grace-millis` | `2000` | 消费超时取消后的宽限期（毫秒），用于缩小与重试副本的重叠窗口 |
 | `orderly-consume-timeout-millis` | `0` | 全局顺序消费超时（毫秒），`0`=不启用；注解显式 `>0` 优先 |
@@ -131,7 +131,7 @@ streammq:
 | `scan-interval` | `1s` | 重试 ZSet 扫描间隔，必须 > 0 |
 | `batch-size` | `100` | 单次扫描批量，必须 > 0 |
 | `delay-array` | `""` | 自定义重试延时数组（逗号分隔毫秒，如 `1000,5000,10000`） |
-| `stream-max-len` | `10000` | retry Stream 最大长度，`0`=不限制 |
+| `stream-max-len` | `0` | retry Stream 最大长度，`0`=不限制 |
 | `pel-claim-scan-interval` | `5s` | PEL 认领扫描间隔（顺序消费），必须 > 0 |
 | `pel-claim-min-idle-ms` | `60000` | PEL 认领空闲阈值（顺序消费），必须 ≥ `MIN_PEL_CLAIM_MIN_IDLE_MS`（否则仍处理中的消息会被误判为孤儿重投） |
 | `failure-requeue-backoff-ms` | `5000` | 转移失败后的回写退避间隔（毫秒，必须 > 0），避免 Redis 故障时热循环 |
@@ -173,7 +173,7 @@ streammq:
 | Key | 默认 | 说明 |
 |---|---|---|
 | `strategy` | `ConsistentHashRebalanceStrategy` | 重平衡策略实现类 |
-| `virtual-nodes` | `100` | 一致性哈希虚拟节点数 |
+| `virtual-nodes` | `160` | 一致性哈希虚拟节点数 |
 
 ---
 
@@ -184,7 +184,7 @@ streammq:
 | `tracing.enabled` | `false` | 日志级追踪输出开关 |
 | `trace.enabled` | `false` | 追踪数据存储与查询服务开关 |
 | `trace.storage` | `NONE` | 存储方式（`REDIS` 启用 Redis Stream 存储，其他值禁用） |
-| `trace.max-read-count` | `200` | 单日单次追踪查询最大读取条数 |
+| `trace.max-read-count` | `10000` | 单日单次追踪查询最大读取条数 |
 
 ---
 
@@ -195,7 +195,7 @@ streammq:
 | `enabled` | `true` | 管理/运维 REST 端点开关（与 `health.enabled` 解耦） |
 | `list-page-size` | `100` | 列表默认页大小，必须 > 0 |
 | `max-pending-query-size` | `1000` | pending 列表单次最大拉取条数，必须 > 0 |
-| `failure-retry-cooldown-millis` | `3000` | 写操作失败后的重试冷却期（毫秒，≥0） |
+| `failure-retry-cooldown-millis` | `5000` | 写操作失败后的重试冷却期（毫秒，≥0） |
 | `trust-forwarded-headers` | `false` | **⚠️ 安全** 是否信任 `X-Forwarded-For` 用于限流来源聚合。默认 `false`；仅受控代理后才开启 |
 | `trusted-proxies` | `[]`（仅回环） | **⚠️ 安全** 可信代理 CIDR 列表（仅 `trust-forwarded-headers=true` 时生效），如 `10.0.0.0/8`、`2001:db8::/32` |
 

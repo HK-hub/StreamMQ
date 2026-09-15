@@ -20,6 +20,7 @@ import java.util.Objects;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.stream.StreamAddArgs;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -168,7 +169,7 @@ public class RedisTraceCollector implements TraceCollector {
     private void writeTrace(Map<String, String> fields) {
         String date = LocalDate.now().format(DATE_FMT);
         String traceKey = StreamMQKeys.traceStream(namespace, date);
-        RStream<String, String> stream = redisson.getStream(traceKey);
+        RStream<String, String> stream = redisson.getStream(traceKey, StringCodec.INSTANCE);
         int limit = maxStreamLen;
         if (limit > 0) {
             stream.add(StreamAddArgs.entries(fields).trimNonStrict().maxLen(limit).noLimit());

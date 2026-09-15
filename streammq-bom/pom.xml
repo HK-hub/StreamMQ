@@ -10,7 +10,7 @@
     <version>0.1.2</version>
     <packaging>pom</packaging>
     <name>StreamMQ BOM</name>
-    <description>StreamMQ 物料清单 (Bill of Materials)。管理 StreamMQ 全部发布构件与 Redisson 版本，并导入 spring-boot-dependencies 作为基线；不覆盖 Jackson / SLF4J / Micrometer / Spring Cloud 等与使用方业务强相关的第三方版本。本 BOM 独立于 streammq-parent，可被任意项目 import。</description>
+    <description>StreamMQ 物料清单 (Bill of Materials)。仅管理 StreamMQ 全部发布构件与 Redisson 版本；不导入 spring-boot-dependencies，也不覆盖 Spring / Jackson / SLF4J / Micrometer / Spring Cloud 等与使用方业务强相关的第三方版本（避免静默覆盖使用方的 Boot 版本）。本 BOM 独立于 streammq-parent，可被任意项目 import。</description>
 
     <url>https://github.com/HK-hub/StreamMQ</url>
 
@@ -42,37 +42,28 @@
       BOM 的管理范围（有意保持克制）：
 
       · 管理：StreamMQ 自身全部发布构件 + redisson / redisson-spring-boot-starter
-      · 管理：spring-boot-dependencies（提供使用方未显式引入时的基线版本）
-      · **不**管理：Jackson / SLF4J / Micrometer / Fury / Protostuff / Spring Cloud Stream /
-                    Spring Integration / OpenTelemetry
+      · **不**管理：Spring Boot BOM 及 Spring / Jackson / SLF4J / Micrometer / Fury / Protostuff /
+                    Spring Cloud Stream / Spring Integration / OpenTelemetry
 
-      为什么不管第三方传递依赖：BOM 的 import 顺序通常在使用方的 spring-boot-dependencies 之后，
-      即 StreamMQ 的声明会**覆盖**使用方的版本。对 redisson 这是有意的（README 的快速开始片段
-      省略了版本号，需要 BOM 兜底）；但对 Jackson 这类"用户大概率已在用、且与 StreamMQ 无关的"
-      依赖，静默覆盖属于越权——用户会莫名其妙发现自己项目里的 Jackson 被换成了
-      streammq-bom 指定的版本。这些版本交给使用方自己的 BOM 决定。
+      为什么不管第三方传递依赖（包括 **不导入 spring-boot-dependencies**）：BOM 的 import 顺序通常在使用方的
+      spring-boot-dependencies 之后，即 StreamMQ 的声明会**覆盖**使用方的版本。对 redisson 这是有意的
+      （README 的快速开始片段省略了版本号，需要 BOM 兜底）；但导入 Boot BOM 会连带管理 Jackson / SLF4J /
+      Micrometer / Spring 全家桶——对"用户大概率已在用、且与 StreamMQ 无关的"依赖，静默覆盖属于越权，
+      且与本 BOM"只管自己"的意图自相矛盾（历史缺陷：注释声明不管 Jackson，实际却由 Boot BOM 间接管理）。
+      这些版本交给使用方自己的 Boot BOM / parent 决定；StreamMQ 各模块的传递依赖版本由各自 POM 携带，
+      因此使用方即使在【不】导入任何 Boot BOM 的情况下也能解析本 SDK 的依赖树。
     -->
     <properties>
         <!-- StreamMQ 自身版本 -->
         <streammq.version>0.1.2</streammq.version>
 
         <!-- 由本 BOM 管理的第三方版本（与 streammq-parent 保持一致） -->
-        <spring-boot.version>3.3.5</spring-boot.version>
         <redisson.version>3.34.1</redisson.version>
         <lombok.version>1.18.34</lombok.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
-            <!-- Spring Boot BOM -->
-            <dependency>
-                <groupId>org.springframework.boot</groupId>
-                <artifactId>spring-boot-dependencies</artifactId>
-                <version>${spring-boot.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-
             <!-- StreamMQ 自有模块 -->
             <dependency>
                 <groupId>io.github.streammq</groupId>
@@ -89,24 +80,11 @@
                 <artifactId>streammq-spring-boot-starter</artifactId>
                 <version>${streammq.version}</version>
             </dependency>
-            <!-- 注意：streammq-kubernetes 处于实验性阶段，被 release 流程的 excludeArtifacts 排除、
+            <!-- 注意：streammq-kubernetes / streammq-tracing-opentelemetry / streammq-diagnostics /
+                 streammq-spring-cloud-stream-binder 处于实验性阶段，被 release 流程的 excludeArtifacts 排除、
                  不会发布到 Maven Central。BOM 只管理实际发布的构件——若在此声明，使用方按版本号
-                 依赖该模块时会解析到中央仓库中不存在的构件。待其纳入发布清单后再加入。 -->
-            <dependency>
-                <groupId>io.github.streammq</groupId>
-                <artifactId>streammq-tracing-opentelemetry</artifactId>
-                <version>${streammq.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.github.streammq</groupId>
-                <artifactId>streammq-diagnostics</artifactId>
-                <version>${streammq.version}</version>
-            </dependency>
-            <dependency>
-                <groupId>io.github.streammq</groupId>
-                <artifactId>streammq-spring-cloud-stream-binder</artifactId>
-                <version>${streammq.version}</version>
-            </dependency>
+                 依赖该模块时会解析到中央仓库中不存在的构件。待其纳入发布清单后再加入。
+                 （这几个构件仅以源码形式存在于仓库，需自行构建 install 后使用。） -->
             <dependency>
                 <groupId>io.github.streammq</groupId>
                 <artifactId>streammq-test</artifactId>

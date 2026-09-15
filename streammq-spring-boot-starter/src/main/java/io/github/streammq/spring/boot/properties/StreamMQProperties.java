@@ -176,8 +176,9 @@ public class StreamMQProperties {
         /**
          * Fury 是否强制类注册白名单（仅当 {@code producer.serializer} 为 {@code FurySerializer} 时生效）。
          *
-         * <p>默认 {@code false}（宽松模式）：任意 POJO 开箱即用，代价是 Redis 中字节流可反序列化为 classpath 上任意类， 在<b>共享/多租户
-         * Redis</b>上是反序列化 RCE 攻击面（依赖 classpath 上的 gadget 链）。
+         * <p>默认 {@code true}（强制类注册白名单）：仅允许显式注册过的类型反序列化，未注册的业务 POJO 会被拒绝，需通过 {@code new
+         * FurySerializer<>(Xxx.class)} 或 {@code register(Class)} 预注册；设为 {@code false} 即宽松模式（任意 POJO
+         * 可反序列化， Redis 中字节流可解析为 classpath 上任意类，在<b>共享/多租户 Redis</b>上是反序列化 RCE 攻击面）。
          *
          * <p><b>缓解：</b>显式选用 Fury 时建议设为 {@code true} 开启类注册白名单，并通过 {@code new
          * FurySerializer<>(Xxx.class)} 或 {@code register(Class)} / {@code registerAll(Class...)}
@@ -185,6 +186,17 @@ public class StreamMQProperties {
          * ProtostuffSerializer}。
          */
         private boolean furyRequireClassRegistration = true;
+
+        /**
+         * Fury 白名单模式下预注册的业务消息体类型（全限定类名列表）。
+         *
+         * <p>仅当 {@code producer.serializer} 为 {@code FurySerializer} 且 {@code
+         * fury-require-class-registration=true}（默认）时生效：此列表中的类会被注册，<b>其它类型的 body
+         * 反序列化将被拒绝</b>。默认空列表——此时业务 POJO 会反序列化失败（启动/反序列化日志会给出提示），因此 opt-in Fury 时请一并声明。
+         *
+         * <p>示例：{@code streammq.producer.fury-registered-classes=com.acme.Order,com.acme.Payment}
+         */
+        private java.util.List<Class<?>> furyRegisteredClasses = java.util.List.of();
 
         /** 消息体压缩阈值（字节），body 超过此值时触发压缩，0 = 禁用（默认禁用） */
         private int compressThreshold = StreamMQConstants.DEFAULT_COMPRESS_THRESHOLD_BYTES;

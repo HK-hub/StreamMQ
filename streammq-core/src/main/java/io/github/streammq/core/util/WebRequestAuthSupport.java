@@ -30,7 +30,7 @@ import lombok.experimental.UtilityClass;
  * <p>仅当满足以下全部条件时才会采用 {@code X-Forwarded-For} 首值：
  *
  * <ol>
- *   <li>{@link #configure} 显式开启 {@code trustForwardedHeaders}（对应配置 {@code
+ *   <li>装配层注入的 {@link ClientAddressPolicy#trustForwardedHeaders()} 为 true（对应配置 {@code
  *       streammq.admin.trust-forwarded-headers=true}）
  *   <li>直连对端（{@code remoteAddr}）是回环地址，或命中 {@code streammq.admin.trusted-proxies} 配置的可信代理 CIDR 列表
  * </ol>
@@ -63,41 +63,51 @@ public class WebRequestAuthSupport {
     private static final String HEADER_HOST = "Host";
 
     /**
-     * 是否信任 {@code X-Forwarded-For} 请求头。默认 {@code false}：仅使用不可伪造的 {@code remoteAddr}。
+     * 客户端地址可信策略（不可变值对象）。
      *
-     * <p>安全默认值——伪造 XFF 让限流失效的历史问题由此修复（见类 Javadoc）。
-     */
-    private static volatile boolean trustForwardedHeaders = false;
-
-    /**
-     * 可信代理 CIDR 列表（IPv4/IPv6，如 {@code 10.0.0.0/8}、{@code 192.168.1.0/24}）。
-     *
-     * <p>仅当 {@link #trustForwardedHeaders} 为 true 时生效；空集表示只信任回环地址（{@code 127.0.0.1} / {@code ::1}）。
-     */
-    private static volatile Set<String> trustedProxyCidrs = Set.of();
-
-    /**
-     * 配置客户端地址解析策略（由 Spring Boot 装配在上下文刷新时调用）。
+     * <p><b>为什么是值对象而不是静态全局：</b>此前策略存放在 {@code static volatile} 字段里，没有生命周期归属—— 同一 JVM 内多个 Spring
+     * 上下文互相覆盖（last-writer-wins），上下文重启后也不会复位。改为由装配层构造并注入 给使用方（{@code
+     * RateLimitedAuthenticator}），生命周期随容器，行为可预期、可测试。
      *
      * @param trustForwardedHeaders 是否信任 {@code X-Forwarded-For}（对应 {@code
      *     streammq.admin.trust-forwarded-headers}，默认 false）
-     * @param trustedProxyCidrs 可信代理 CIDR 列表（对应 {@code streammq.admin.trusted-proxies}， 可为 null/空）
+     * @param trustedProxyCidrs 可信代理 CIDR 列表（对应 {@code streammq.admin.trusted-proxies}，可为 null/空；
+     *     空集表示只信任回环地址）
      */
-    public static synchronized void configure(
-            boolean trustForwardedHeaders, java.util.Collection<String> trustedProxyCidrs) {
-        WebRequestAuthSupport.trustForwardedHeaders = trustForwardedHeaders;
-        WebRequestAuthSupport.trustedProxyCidrs =
-                trustedProxyCidrs == null ? Set.of() : Set.copyOf(trustedProxyCidrs);
-    }
+    public record ClientAddressPolicy(
+            boolean trustForwardedHeaders, Set<String> trustedProxyCidrs) {
 
-    /** 当前是否信任 {@code X-Forwarded-For}（供诊断端点/启动日志展示）。 */
-    public static boolean isTrustForwardedHeaders() {
-        return trustForwardedHeaders;
-    }
+        /** 安全默认：不信任 {@code X-Forwarded-For}，且没有额外可信代理 CIDR。 */
+        public static final ClientAddressPolicy DEFAULT = new ClientAddressPolicy(false, Set.of());
 
-    /** 当前可信代理 CIDR 集合（不可修改）。 */
-    public static Set<String> getTrustedProxyCidrs() {
-        return trustedProxyCidrs;
+        public ClientAddressPolicy {
+            trustedProxyCidrs =
+                    trustedProxyCidrs == null ? Set.of() : Set.copyOf(trustedProxyCidrs);
+        }
+
+        /**
+         * 判断直连对端是否为可信代理（回环地址，或命中可信 CIDR）。
+         *
+         * <p>仅在 {@link #trustForwardedHeaders()} 为 true 时对 {@code X-Forwarded-For} 生效；解析失败一律 {@code
+         * false}（fail-closed）。
+         *
+         * @param remoteAddr 直连对端地址（不可伪造的 {@code remoteAddr}）
+         * @return true 表示该对端可作为可信代理
+         */
+        public boolean isTrustedPeer(String remoteAddr) {
+            if (StringUtils.isEmpty(remoteAddr)) {
+                return false;
+            }
+            if (isLoopback(remoteAddr)) {
+                return true;
+            }
+            for (String cidr : trustedProxyCidrs) {
+                if (matchesCidr(remoteAddr, cidr)) {
+                    return true;
+                }
+            }
+            return false;
+        }
     }
 
     /**
@@ -122,22 +132,23 @@ public class WebRequestAuthSupport {
      * <p><b>可信规则：</b>
      *
      * <ul>
-     *   <li>{@code trustForwardedHeaders=false}（默认）：忽略 {@code X-Forwarded-For}，直接返回不可伪造的 {@code
-     *       remoteAddr}——反代场景下所有客户端共享代理 IP，限流按代理 IP 聚合（安全优先，宁可误伤不可绕过）
-     *   <li>{@code trustForwardedHeaders=true} 且直连对端命中可信代理（回环或 {@code trusted-proxies} CIDR）： 返回
-     *       {@code X-Forwarded-For} 首值（真实客户端）
+     *   <li>{@code policy.trustForwardedHeaders()=false}（默认）：忽略 {@code X-Forwarded-For}，直接返回不可伪造的
+     *       {@code remoteAddr}——反代场景下所有客户端共享代理 IP，限流按代理 IP 聚合（安全优先，宁可误伤不可绕过）
+     *   <li>{@code policy.trustForwardedHeaders()=true} 且直连对端命中可信代理（回环或 {@code trusted-proxies}
+     *       CIDR）：返回 {@code X-Forwarded-For} 首值（真实客户端）
      *   <li>非 Web 环境或读取失败：返回 null（由调用方退化为全局计数）
      * </ul>
      *
+     * @param policy 客户端地址可信策略（由装配层注入；不可为 null）
      * @return 客户端地址，无法获取时为 null
      */
-    public static String getClientAddressFromRequest() {
+    public static String getClientAddressFromRequest(ClientAddressPolicy policy) {
         Object request = currentRequest();
         if (request == null) {
             return null;
         }
         String remoteAddr = getRemoteAddr(request);
-        if (trustForwardedHeaders && isTrustedPeer(remoteAddr)) {
+        if (policy.trustForwardedHeaders() && policy.isTrustedPeer(remoteAddr)) {
             String forwarded = getHeader(request, HEADER_X_FORWARDED_FOR);
             if (StringUtils.isNotEmpty(forwarded)) {
                 int comma = forwarded.indexOf(',');
@@ -175,22 +186,6 @@ public class WebRequestAuthSupport {
         } catch (IllegalArgumentException ex) {
             return null;
         }
-    }
-
-    /** 判断直连对端是否为可信代理（回环地址或命中可信 CIDR）。 */
-    private static boolean isTrustedPeer(String remoteAddr) {
-        if (StringUtils.isEmpty(remoteAddr)) {
-            return false;
-        }
-        if (isLoopback(remoteAddr)) {
-            return true;
-        }
-        for (String cidr : trustedProxyCidrs) {
-            if (matchesCidr(remoteAddr, cidr)) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private static boolean isLoopback(String addr) {

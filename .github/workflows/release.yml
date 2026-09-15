@@ -53,8 +53,47 @@ jobs:
 
       # 发布门禁：单测 + 集成测试 + Spotless/JaCoCo 全部通过才允许进入 deploy job。
       # 此前发布通道直接 deploy -DskipTests，完全绕过质量门禁，属高危流程缺陷。
-      - name: Run full verify (unit + integration)
-        run: mvn clean verify -B
+      # 注意必须显式 -Djacoco.check.skip=false：该开关默认 true，否则覆盖率门禁形同虚设。
+      - name: Run full verify (unit + integration + coverage gate)
+        run: mvn clean verify -B -Djacoco.check.skip=false
+
+      # Tripwire：集成测试若因 Redis service 异常被整体跳过，mvn verify 仍会"绿色"通过。
+      # 发布通道必须与 PR 通道同等强度，此处解析 failsafe 报告校验实际执行量下限与跳过率上限。
+      - name: Integration test tripwire (detect silent Redis-service breakage)
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob
+          import sys
+          import xml.etree.ElementTree as ET
+
+          files = glob.glob('**/failsafe-reports/*.xml', recursive=True)
+          if not files:
+              print("::error::no failsafe-reports/*.xml found — integration tests never ran")
+              sys.exit(1)
+
+          total = skipped = 0
+          for path in files:
+              root = ET.parse(path).getroot()
+              total += int(root.get('tests', 0))
+              skipped += int(root.get('skipped', 0))
+
+          executed = total - skipped
+          print(f"Failsafe totals: tests={total} skipped={skipped} executed={executed}")
+
+          if executed < 80:
+              print("::error::integration tests executed below floor "
+                    f"(executed={executed} < 80). Likely cause: the Redis service container "
+                    "is unhealthy and ITs were silently skipped. Check redis service logs.")
+              sys.exit(1)
+
+          if skipped * 2 > total:
+              print("::error::more than 50% of integration tests were skipped "
+                    f"(skipped={skipped}/{total}). Likely cause: Redis unavailable to tests.")
+              sys.exit(1)
+
+          print("Tripwire OK: integration tests executed above floor and skip rate within limit.")
+          PY
 
       # P2-13 门禁：API 兼容性检查（japicmp）。
       # 探测 Maven Central 上已发布的上一版本；若存在（即非首个版本），
@@ -208,7 +247,12 @@ jobs:
       - name: Sync BOM version property
         run: mvn versions:set-property -Dproperty=streammq.version -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false
 
-      # 测试已在 test job 通过（needs: test 门禁），此处跳过仅为避免重复执行
+      # 发布门禁（R-39）：versions:set 改写了全部 pom，此前 test job 验证的是"旧版本号"的产物。
+      # 必须对"即将发布的这份产物"重新跑一次完整 verify，保证“被测试的 = 被发布的”。
+      - name: Re-verify after version rewrite (tested bits == published bits)
+        run: mvn clean verify -B -Djacoco.check.skip=false
+
+      # 测试已在上一步通过，此处跳过测试仅执行打包与 deploy（同一份版本号产物）
       - name: Build and deploy to Maven Central
         run: mvn clean deploy -DskipTests -Pgpg
         env:

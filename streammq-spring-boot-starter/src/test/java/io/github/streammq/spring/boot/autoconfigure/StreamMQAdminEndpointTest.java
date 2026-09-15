@@ -73,7 +73,7 @@ class StreamMQAdminEndpointTest {
         assertThat(result.get("created")).isEqualTo(true);
         assertThat(result.get("topic")).isEqualTo("order-topic");
         // 关键断言：不再向业务 Stream 写占位消息（旧实现 XADD __placeholder）
-        verify(redisson, never()).getStream(anyString());
+        verify(redisson, never()).getStream(anyString(), any());
     }
 
     @Test
@@ -115,13 +115,14 @@ class StreamMQAdminEndpointTest {
 
         assertThat(result.get("success")).isEqualTo(false);
         assertThat(result.get("error").toString()).contains("confirm=");
-        verify(redisson, never()).getStream(anyString());
+        verify(redisson, never()).getStream(anyString(), any());
     }
 
     @Test
     @DisplayName("deleteTopic confirm 匹配时删除 Stream 并移除注册表项")
     void deleteTopic_matchingConfirm_deletesStream() {
-        when(redisson.<String, String>getStream(eq(StreamMQKeys.topicStream(NS, "order-topic"))))
+        when(redisson.<String, String>getStream(
+                        eq(StreamMQKeys.topicStream(NS, "order-topic")), any(StringCodec.class)))
                 .thenReturn(stream);
         when(stream.delete()).thenReturn(true);
         when(redisson.<String>getSet(eq(StreamMQKeys.topicRegistry(NS)), any(StringCodec.class)))
@@ -146,10 +147,12 @@ class StreamMQAdminEndpointTest {
         registry.recordRetry("g1", "t1");
         registry.recordDlq("g1", "t1");
         when(container.runtimeStats()).thenReturn(registry);
-        when(redisson.<String, String>getMap(eq(StreamMQKeys.metaStats(NS, "g1", "t1"))))
+        when(redisson.<String, String>getMap(
+                        eq(StreamMQKeys.metaStats(NS, "g1", "t1")), any(StringCodec.class)))
                 .thenReturn(statsMap);
         when(statsMap.readAllMap()).thenReturn(Map.of());
-        when(redisson.<String, String>getStream(eq(StreamMQKeys.topicStream(NS, "t1"))))
+        when(redisson.<String, String>getStream(
+                        eq(StreamMQKeys.topicStream(NS, "t1")), any(StringCodec.class)))
                 .thenReturn(stream);
         when(stream.listPending(anyString(), any(), any(), anyInt()))
                 .thenReturn(java.util.Collections.emptyList());

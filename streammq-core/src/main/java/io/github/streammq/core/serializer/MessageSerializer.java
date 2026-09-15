@@ -12,12 +12,13 @@ import io.github.streammq.core.exception.SerializationException;
  *
  * <p>元信息（topic/tag/keys/shardingKey/properties）始终为 String，不参与序列化。 仅 {@code body} 字段经由此接口序列化。
  *
- * <p>内置实现（默认使用 Fury，宽松模式 {@code requireClassRegistration=false}）：
+ * <p>内置实现（默认使用 {@code JacksonJsonSerializer}：严格类型、无多态反序列化、无 gadget RCE 面）：
  *
  * <ul>
- *   <li>{@code FurySerializer} - 基于 Apache Fury 的二进制序列化（<b>默认</b>，见 {@link
- *       io.github.streammq.core.StreamMQConstants#DEFAULT_SERIALIZER}；吞吐约为 Jackson 的 7~13 倍，任意 POJO
- *       开箱即用， 但默认宽松模式在共享/多租户 Redis 上有反序列化 RCE 面）
+ *   <li>{@code FurySerializer} - 基于 Apache Fury 的二进制序列化（可选，高吞吐；见 {@link
+ *       io.github.streammq.core.StreamMQConstants#DEFAULT_SERIALIZER}；吞吐约为 Jackson 的 7~13
+ *       倍。<b>默认强制类注册白名单</b>， 需预注册业务消息体类型；仅 {@code new FurySerializer(false)} 的宽松模式在共享/多租户 Redis
+ *       上有反序列化 RCE 面）
  *   <li>{@code ProtostuffSerializer} - 基于 Protostuff 的二进制序列化（schema 由目标类型决定，无 gadget RCE 面，需无参构造
  *       POJO）
  *   <li>{@code JacksonJsonSerializer} - 基于 Jackson 的 JSON 序列化（跨语言/可读性优先，严格类型、无多态反序列化）
@@ -25,12 +26,11 @@ import io.github.streammq.core.exception.SerializationException;
  *   <li>{@code StringSerializer} / {@code ByteArraySerializer} - 直通序列化
  * </ul>
  *
- * <p><b>⚠️ 安全提示：</b>{@code FurySerializer}（默认序列化器）<b>默认不强制类注册</b>，任意 POJO 开箱即用；但 Redis 中字节流可被反序列化为
- * classpath 上任意类， 共享/多租户 Redis 场景是反序列化 RCE 攻击面。受信单租户 Redis 风险可控；共享/多租户 Redis 建议开启类注册白名单（{@code new
- * FurySerializer(true)} 或 Spring 配置 {@code
- * streammq.producer.fury-require-class-registration=true}），或切换为无 gadget 面的 {@code
- * JacksonJsonSerializer} / {@code ProtostuffSerializer}。{@code JdkSerializer} 内置 JEP 290 白名单，自定义业务
- * body 类型需显式加白，详见各实现类 Javadoc。
+ * <p><b>⚠️ 安全提示：</b>{@code FurySerializer} <b>默认强制类注册白名单</b>（{@code
+ * requireClassRegistration=true}），需先注册业务消息体类型； 仅当显式创建宽松实例（{@code new
+ * FurySerializer(false)}，受系统属性门禁保护）时，Redis 中字节流才可被反序列化为 classpath 上任意类， 共享/多租户 Redis 场景即反序列化 RCE
+ * 攻击面。默认可用的 {@code JacksonJsonSerializer}（严格类型）与 {@code ProtostuffSerializer}（schema 由目标类型决定）无
+ * gadget 面。{@code JdkSerializer} 内置 JEP 290 白名单，自定义业务 body 类型需显式加白，详见各实现类 Javadoc。
  *
  * @param <T> body 类型
  * @author StreamMQ Contributors

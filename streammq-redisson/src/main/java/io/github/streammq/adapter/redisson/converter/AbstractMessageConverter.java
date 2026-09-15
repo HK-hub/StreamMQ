@@ -128,6 +128,16 @@ public abstract class AbstractMessageConverter implements MessageConverter {
     protected abstract String fieldShardingKey();
 
     /**
+     * 分片键字段名的公开只读访问器：供调度器侧（PEL 认领）按与消费端完全一致的字段约定解析分片， 避免硬编码字段名在切换 Converter 后失效（读到 null → 误判分片 0 →
+     * 活分片保护失效）。
+     *
+     * @return 分片键在 Stream Entry 字段中的键名
+     */
+    public final String shardingFieldName() {
+        return fieldShardingKey();
+    }
+
+    /**
      * 返回出生时间戳字段名。
      *
      * <p>Default / PassThrough: {@code "bornTs"}；Compact: {@code "ts"}。

@@ -166,7 +166,8 @@ public class StreamMQAdminEndpoint {
             // 查询 PEL 大小
             try {
                 String streamKey = StreamMQKeys.topicStream(namespace, meta.topic());
-                RStream<String, String> stream = redisson.getStream(streamKey);
+                RStream<String, String> stream =
+                        redisson.getStream(streamKey, StringCodec.INSTANCE);
                 var pendingInfo =
                         stream.listPending(
                                 meta.consumerGroup(),
@@ -186,7 +187,7 @@ public class StreamMQAdminEndpoint {
     public List<Map<String, Object>> listPending(String group, String topic, int count) {
         List<Map<String, Object>> result = new ArrayList<>();
         String streamKey = StreamMQKeys.topicStream(namespace, topic);
-        RStream<String, String> stream = redisson.getStream(streamKey);
+        RStream<String, String> stream = redisson.getStream(streamKey, StringCodec.INSTANCE);
         try {
             var pendingInfo =
                     stream.listPending(
@@ -214,7 +215,7 @@ public class StreamMQAdminEndpoint {
     public List<Map<String, Object>> listDlq(String group, int count) {
         List<Map<String, Object>> result = new ArrayList<>();
         String dlqKey = StreamMQKeys.dlqStream(namespace, group);
-        RStream<String, String> dlqStream = redisson.getStream(dlqKey);
+        RStream<String, String> dlqStream = redisson.getStream(dlqKey, StringCodec.INSTANCE);
         try {
             var entries = dlqStream.range(count, StreamMessageId.MIN, StreamMessageId.MAX);
             if (entries != null) {
@@ -248,7 +249,7 @@ public class StreamMQAdminEndpoint {
         }
         String dlqKey = StreamMQKeys.dlqStream(namespace, group);
         try {
-            RStream<String, String> dlqStream = redisson.getStream(dlqKey);
+            RStream<String, String> dlqStream = redisson.getStream(dlqKey, StringCodec.INSTANCE);
             StreamMessageId streamMsgId = parseId(msgId);
             // 读取 DLQ 消息
             var entries = dlqStream.range(1, streamMsgId, streamMsgId);
@@ -385,7 +386,7 @@ public class StreamMQAdminEndpoint {
         }
         String dlqKey = StreamMQKeys.dlqStream(namespace, group);
         try {
-            RStream<String, String> dlqStream = redisson.getStream(dlqKey);
+            RStream<String, String> dlqStream = redisson.getStream(dlqKey, StringCodec.INSTANCE);
             StreamMessageId streamMsgId = parseId(msgId);
             long deleted = dlqStream.remove(streamMsgId);
             result.put("success", deleted > 0);
@@ -461,7 +462,8 @@ public class StreamMQAdminEndpoint {
         // 2) Redis 侧持久化聚合（保留向后兼容：用户可自行写入该 Hash 作为跨实例聚合值）
         try {
             RMap<String, String> persisted =
-                    redisson.getMap(StreamMQKeys.metaStats(namespace, group, topic));
+                    redisson.getMap(
+                            StreamMQKeys.metaStats(namespace, group, topic), StringCodec.INSTANCE);
             Map<String, String> persistedValues = persisted.readAllMap();
             if (!persistedValues.isEmpty()) {
                 stats.put("persisted", persistedValues);
@@ -472,7 +474,8 @@ public class StreamMQAdminEndpoint {
         // 3) 实时积压：pending 条数（运维最关心的滞后指标）
         try {
             RStream<String, String> stream =
-                    redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
+                    redisson.getStream(
+                            StreamMQKeys.topicStream(namespace, topic), StringCodec.INSTANCE);
             stats.put(
                     "pendingCount",
                     stream.listPending(
@@ -505,7 +508,7 @@ public class StreamMQAdminEndpoint {
         }
         String streamKey = StreamMQKeys.topicStream(namespace, topic);
         try {
-            RStream<String, String> stream = redisson.getStream(streamKey);
+            RStream<String, String> stream = redisson.getStream(streamKey, StringCodec.INSTANCE);
             StreamMessageId streamMsgId = parseId(msgId);
             long acked = stream.ack(group, streamMsgId);
             result.put("success", acked > 0);
@@ -543,7 +546,7 @@ public class StreamMQAdminEndpoint {
         }
         String instancesKey = StreamMQKeys.consumerGroupInstances(namespace, group);
         try {
-            RMap<String, Long> instances = redisson.getMap(instancesKey);
+            RMap<String, Long> instances = redisson.getMap(instancesKey, StringCodec.INSTANCE);
             int cleared = instances.size();
             instances.delete();
             result.put("clearedInstances", cleared);
@@ -644,7 +647,7 @@ public class StreamMQAdminEndpoint {
         }
         String streamKey = StreamMQKeys.topicStream(namespace, topic);
         try {
-            RStream<String, String> stream = redisson.getStream(streamKey);
+            RStream<String, String> stream = redisson.getStream(streamKey, StringCodec.INSTANCE);
             boolean deleted = stream.delete();
             redisson.getSet(StreamMQKeys.topicRegistry(namespace), StringCodec.INSTANCE)
                     .remove(topic);

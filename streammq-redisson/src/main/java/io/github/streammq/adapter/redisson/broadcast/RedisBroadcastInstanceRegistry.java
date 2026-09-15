@@ -386,7 +386,9 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
                         continue;
                     }
                     try {
-                        redisson.getStream(StreamMQKeys.topicStream(namespace, ownedTopic))
+                        redisson.getStream(
+                                        StreamMQKeys.topicStream(namespace, ownedTopic),
+                                        StringCodec.INSTANCE)
                                 .removeGroup(
                                         BroadcastGroupNaming.effectiveGroup(group, instanceId));
                     } catch (RuntimeException ex) {

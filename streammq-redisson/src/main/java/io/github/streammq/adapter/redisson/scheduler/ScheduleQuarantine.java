@@ -9,6 +9,7 @@ import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import java.util.Objects;
 import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RedissonClient;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -53,7 +54,8 @@ final class ScheduleQuarantine {
             Double dueTime = activeZset.getScore(msgId);
             long score =
                     Objects.nonNull(dueTime) ? dueTime.longValue() : System.currentTimeMillis();
-            redisson.<String>getScoredSortedSet(StreamMQKeys.quarantineZset(namespace, kind))
+            redisson.<String>getScoredSortedSet(
+                            StreamMQKeys.quarantineZset(namespace, kind), StringCodec.INSTANCE)
                     .add(score, msgId + "|" + kind);
         } catch (RuntimeException ex) {
             LOG.debug("Failed to record quarantine entry msgId={}: {}", msgId, ex.getMessage());

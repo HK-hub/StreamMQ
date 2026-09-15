@@ -82,7 +82,7 @@
                                 <rule>
                                     <element>BUNDLE</element>
                                     <limits>
-                                        <!-- 实测 LINE≈0.485 / BRANCH≈0.554；分支门禁按 P2 提升为 0.40。 -->
+                                        <!-- 实测 LINE≈0.485 / BRANCH≈0.554；分支门禁取「实测 − 3pt」= 0.52，可拦截真实分支回退。 -->
                                         <limit>
                                             <counter>LINE</counter>
                                             <value>COVEREDRATIO</value>
@@ -91,7 +91,7 @@
                                         <limit>
                                             <counter>BRANCH</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.40</minimum>
+                                            <minimum>0.52</minimum>
                                         </limit>
                                     </limits>
                                 </rule>

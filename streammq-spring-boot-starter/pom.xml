@@ -158,7 +158,7 @@
                                 <rule>
                                     <element>BUNDLE</element>
                                     <limits>
-                                        <!-- 实测 LINE≈0.581 / BRANCH≈0.445；Spring Boot 自动装配分支多，0.40 门禁可拦回归。 -->
+                                        <!-- 实测 LINE≈0.581 / BRANCH≈0.445；门禁取「实测 − 3pt」= 0.41（自动装配分支天然多）。 -->
                                         <limit>
                                             <counter>LINE</counter>
                                             <value>COVEREDRATIO</value>
@@ -167,7 +167,7 @@
                                         <limit>
                                             <counter>BRANCH</counter>
                                             <value>COVEREDRATIO</value>
-                                            <minimum>0.40</minimum>
+                                            <minimum>0.41</minimum>
                                         </limit>
                                     </limits>
                                 </rule>

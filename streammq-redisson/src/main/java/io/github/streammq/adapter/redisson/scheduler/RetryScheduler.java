@@ -201,10 +201,16 @@ public class RetryScheduler implements StreamMQScheduler {
      * @param maxReconsumeTimes 最大重试次数
      */
     public void registerRetryTarget(String topic, String group, int maxReconsumeTimes) {
+        registerRetryTarget(namespace, topic, group, maxReconsumeTimes);
+    }
+
+    /** 注册重试目标（命名空间感知：namespace 取注册项自身值，避免按消费者覆盖 namespace 时恢复静默失效）。 */
+    public void registerRetryTarget(
+            String namespace, String topic, String group, int maxReconsumeTimes) {
         Objects.requireNonNull(topic, "topic");
         Objects.requireNonNull(group, "group");
-        String key = topic + ":" + group;
-        targets.put(key, new RetryTarget(topic, group, maxReconsumeTimes));
+        String key = namespace + ":" + topic + ":" + group;
+        targets.put(key, new RetryTarget(namespace, topic, group, maxReconsumeTimes));
         LOG.info(
                 "Registered retry target: topic={}, group={}, maxReconsumeTimes={}",
                 topic,
@@ -214,7 +220,7 @@ public class RetryScheduler implements StreamMQScheduler {
 
     /** 启动调度器。 */
     @Override
-    public void start() {
+    public synchronized void start() {
         if (!running.compareAndSet(false, true)) {
             LOG.warn("RetryScheduler already started");
             return;
@@ -255,7 +261,7 @@ public class RetryScheduler implements StreamMQScheduler {
 
     /** 停止调度器（取消扫描任务并关闭线程池；restart 时由 ensureScanExecutorAlive 重建）。 */
     @Override
-    public void stop() {
+    public synchronized void stop() {
         if (!running.compareAndSet(true, false)) {
             return;
         }
@@ -302,8 +308,8 @@ public class RetryScheduler implements StreamMQScheduler {
      * @param target 重试目标
      */
     void scanRetryEntries(RetryTarget target) {
-        String retryKey = StreamMQKeys.retryZSet(namespace, target.topic, target.group);
-        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
+        String retryKey = StreamMQKeys.retryZSet(target.namespace, target.topic, target.group);
+        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey, StringCodec.INSTANCE);
         long now = System.currentTimeMillis();
 
         Collection<String> expired = zset.valueRange(0, true, now, true, 0, batchSize - 1);
@@ -311,8 +317,9 @@ public class RetryScheduler implements StreamMQScheduler {
             return;
         }
 
-        String targetStreamKey = StreamMQKeys.retryStream(namespace, target.topic, target.group);
-        String dlqStreamKey = StreamMQKeys.dlqStream(namespace, target.group);
+        String targetStreamKey =
+                StreamMQKeys.retryStream(target.namespace, target.topic, target.group);
+        String dlqStreamKey = StreamMQKeys.dlqStream(target.namespace, target.group);
 
         for (String msgId : expired) {
             transferOne(msgId, target, targetStreamKey, dlqStreamKey, zset);
@@ -326,12 +333,10 @@ public class RetryScheduler implements StreamMQScheduler {
             String dlqStreamKey,
             RScoredSortedSet<String> zset) {
         String payloadKey =
-                StreamMQKeys.retryPayloadHash(namespace, target.topic, target.group, msgId);
+                StreamMQKeys.retryPayloadHash(target.namespace, target.topic, target.group, msgId);
         try {
             RBucket<String> claim =
-                    redisson.getBucket(
-                            transferClaimKey(target.topic, target.group, msgId),
-                            StringCodec.INSTANCE);
+                    redisson.getBucket(transferClaimKey(target, msgId), StringCodec.INSTANCE);
             if (!Boolean.TRUE.equals(
                     claim.setIfAbsent(instanceId, Duration.ofMillis(claimTtlMs)))) {
                 return;
@@ -339,7 +344,7 @@ public class RetryScheduler implements StreamMQScheduler {
             try {
                 doTransfer(msgId, target, targetStreamKey, dlqStreamKey, zset, payloadKey);
             } finally {
-                releaseClaim(target.topic, target.group, msgId);
+                releaseClaim(target, msgId);
             }
         } catch (RuntimeException ex) {
             LOG.error("Failed to transfer retry message msgId={}: {}", msgId, ex.getMessage(), ex);
@@ -360,13 +365,18 @@ public class RetryScheduler implements StreamMQScheduler {
             String dlqStreamKey,
             RScoredSortedSet<String> zset,
             String payloadKey) {
-        RMap<String, String> payloadMap = redisson.getMap(payloadKey);
+        RMap<String, String> payloadMap = redisson.getMap(payloadKey, StringCodec.INSTANCE);
         Map<String, String> fields = payloadMap.readAllMap();
         if (CollectionUtils.isEmpty(fields)) {
             // payload 已被 TTL 兜底回收：先登记隔离区（可观测）再移除活跃调度条目，
             // 不再静默删除——运维可通过隔离区 ZSet 排查/重放
             ScheduleQuarantine.quarantineAndRemove(
-                    redisson, namespace, "retry", zset, msgId, target.topic + ":" + target.group);
+                    redisson,
+                    target.namespace,
+                    "retry",
+                    zset,
+                    msgId,
+                    target.topic + ":" + target.group);
             return;
         }
 
@@ -435,9 +445,9 @@ public class RetryScheduler implements StreamMQScheduler {
                 redisson.createBatch(
                         BatchOptions.defaults()
                                 .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
-        batch.<String, String>getStream(destStreamKey).addAsync(args);
-        batch.<String, String>getMap(payloadKey).deleteAsync();
-        batch.<String>getScoredSortedSet(zset.getName()).removeAsync(msgId);
+        batch.<String, String>getStream(destStreamKey, StringCodec.INSTANCE).addAsync(args);
+        batch.<String, String>getMap(payloadKey, StringCodec.INSTANCE).deleteAsync();
+        batch.<String>getScoredSortedSet(zset.getName(), StringCodec.INSTANCE).removeAsync(msgId);
         batch.execute();
 
         if (LOG.isDebugEnabled()) {
@@ -465,8 +475,9 @@ public class RetryScheduler implements StreamMQScheduler {
     }
 
     /** 转移执行权 claim Key。scope 多段以 ':' 连接（topic/group 禁止冒号，无碰撞风险）。 */
-    private String transferClaimKey(String topic, String group, String msgId) {
-        return StreamMQKeys.transferClaim(namespace, "retry", topic + ":" + group, msgId);
+    private String transferClaimKey(RetryTarget target, String msgId) {
+        return StreamMQKeys.transferClaim(
+                target.namespace, "retry", target.topic + ":" + target.group, msgId);
     }
 
     /**
@@ -474,14 +485,14 @@ public class RetryScheduler implements StreamMQScheduler {
      *
      * <p>若处理耗时超过 TTL 导致 claim 已被其它实例接管，不得误删他人的 claim。
      */
-    private void releaseClaim(String topic, String group, String msgId) {
+    private void releaseClaim(RetryTarget target, String msgId) {
         try {
             redisson.getScript(StringCodec.INSTANCE)
                     .eval(
                             RScript.Mode.READ_WRITE,
                             LUA_RELEASE_CLAIM,
                             RScript.ReturnType.INTEGER,
-                            Collections.singletonList(transferClaimKey(topic, group, msgId)),
+                            Collections.singletonList(transferClaimKey(target, msgId)),
                             instanceId);
         } catch (RuntimeException ex) {
             LOG.debug("Release transfer claim failed (TTL will expire): {}", ex.getMessage());
@@ -515,16 +526,18 @@ public class RetryScheduler implements StreamMQScheduler {
     public void cleanupOrphanedEntries() {
         int totalCleaned = 0;
         for (RetryTarget target : targets.values()) {
-            String retryKey = StreamMQKeys.retryZSet(namespace, target.topic, target.group);
-            RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey);
+            String retryKey = StreamMQKeys.retryZSet(target.namespace, target.topic, target.group);
+            RScoredSortedSet<String> zset =
+                    redisson.getScoredSortedSet(retryKey, StringCodec.INSTANCE);
             Collection<String> allMembers = zset.readAll();
             if (allMembers.isEmpty()) {
                 continue;
             }
             for (String msgId : allMembers) {
                 String payloadKey =
-                        StreamMQKeys.retryPayloadHash(namespace, target.topic, target.group, msgId);
-                RMap<String, String> payloadMap = redisson.getMap(payloadKey);
+                        StreamMQKeys.retryPayloadHash(
+                                target.namespace, target.topic, target.group, msgId);
+                RMap<String, String> payloadMap = redisson.getMap(payloadKey, StringCodec.INSTANCE);
                 if (!payloadMap.isExists()) {
                     boolean removed = zset.remove(msgId);
                     if (removed) {
@@ -546,11 +559,13 @@ public class RetryScheduler implements StreamMQScheduler {
 
     /** 重试目标信息 */
     static final class RetryTarget {
+        final String namespace;
         final String topic;
         final String group;
         final int maxReconsumeTimes;
 
-        RetryTarget(String topic, String group, int maxReconsumeTimes) {
+        RetryTarget(String namespace, String topic, String group, int maxReconsumeTimes) {
+            this.namespace = Objects.isNull(namespace) ? "" : namespace;
             this.topic = topic;
             this.group = group;
             this.maxReconsumeTimes = maxReconsumeTimes;

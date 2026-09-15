@@ -38,6 +38,7 @@ import org.redisson.api.StreamMessageId;
 import org.redisson.api.stream.StreamAddArgs;
 import org.redisson.api.stream.StreamCreateGroupArgs;
 import org.redisson.api.stream.StreamReadGroupArgs;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -357,16 +358,87 @@ public class RedissonStreamListener implements StreamMQListener {
         }
     }
 
+    /**
+     * 异步 ACK 的未完成窗口上界（有界流水线）。
+     *
+     * <p>此前每条消息都<b>同步</b>等待一次 Redis 往返（XACK），该阻塞 RTT 是消费吞吐的硬上限——局域网 RTT 下约 1~2k
+     * msg/s，且与业务处理时间线性叠加。改为有界流水线后，读循环不再为每条消息等待一次往返； 窗口满时才阻塞等待最老的 ACK 完成，因此形成背压而不是无界堆积。
+     *
+     * <p>语义不变：仍然是"每条消息一次 ACK"，只是不再同步等待结果。ACK 失败仅记录 ERROR，消息仍留在 PEL 由 PEL 认领调度器兜底重投（at-least-once
+     * 成立，消费端需幂等）。
+     */
+    static final int ACK_PIPELINE_WINDOW = 256;
+
+    private static final long ACK_DRAIN_TIMEOUT_SECONDS = 5L;
+
+    /** 未完成异步 ACK 的许可池：许可数 = 流水线窗口。 */
+    private final java.util.concurrent.Semaphore ackWindow =
+            new java.util.concurrent.Semaphore(ACK_PIPELINE_WINDOW);
+
     @Override
     public void ack(MessageId messageId) {
         ensureOpen();
         Objects.requireNonNull(messageId, "messageId");
         RStream<String, String> stream = getStream();
         try {
-            stream.ack(getEffectiveGroup(), toStreamId(messageId));
+            // 窗口满则等待最老的 ACK 完成（背压），避免未完成 ACK 无界堆积
+            ackWindow.acquire();
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new StreamMQBrokerException(
+                    "Interrupted while waiting for the ACK pipeline window: topic=" + topic,
+                    null,
+                    ex);
+        }
+        try {
+            stream.ackAsync(getEffectiveGroup(), toStreamId(messageId))
+                    .whenComplete(
+                            (count, error) -> {
+                                ackWindow.release();
+                                if (Objects.nonNull(error)) {
+                                    // 与同步实现的降级语义一致：ACK 失败不重试，消息留在 PEL，
+                                    // 由 PelClaimScheduler 在 idle 超阈值后重投，消费端必须幂等。
+                                    LOG.error(
+                                            "Async ACK failed (messageId={}): the message stays in"
+                                                + " PEL and will be redelivered once idle exceeds"
+                                                + " the PEL threshold — consumers must be"
+                                                + " idempotent. cause={}",
+                                            messageId,
+                                            error.getMessage());
+                                }
+                            });
         } catch (RuntimeException ex) {
+            ackWindow.release();
             throw new StreamMQBrokerException(
                     "ack failed for topic " + topic + ", messageId=" + messageId, null, ex);
+        }
+    }
+
+    /** 优雅停机：等待未完成的异步 ACK 收尾（有界等待），避免把本可确认的条目留在 PEL 里。 */
+    private void awaitOutstandingAcks() {
+        int acquired = 0;
+        long deadline =
+                System.nanoTime()
+                        + java.util.concurrent.TimeUnit.SECONDS.toNanos(ACK_DRAIN_TIMEOUT_SECONDS);
+        try {
+            while (acquired < ACK_PIPELINE_WINDOW) {
+                long remaining = deadline - System.nanoTime();
+                if (remaining <= 0
+                        || !ackWindow.tryAcquire(
+                                remaining, java.util.concurrent.TimeUnit.NANOSECONDS)) {
+                    LOG.warn(
+                            "Timed out waiting for outstanding ACKs: topic={}, group={} — any"
+                                + " unacknowledged message stays in PEL and will be redelivered",
+                            topic,
+                            group);
+                    return;
+                }
+                acquired++;
+            }
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+        } finally {
+            ackWindow.release(acquired);
         }
     }
 
@@ -393,6 +465,7 @@ public class RedissonStreamListener implements StreamMQListener {
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
+            awaitOutstandingAcks();
             // 广播模式：不再销毁消费者组。此前 close() 直接 removeGroup 会带来两个严重问题：
             //   1. 组的 PEL 一并丢弃 —— 优雅停机时在途消息永久丢失；
             //   2. 重启后 ensureGroup 以 id(0-0) 重建组 —— 全量历史重放。
@@ -589,11 +662,13 @@ public class RedissonStreamListener implements StreamMQListener {
         if (dlqMode) {
             LOG.error(
                     "Poison message in DLQ stream (cannot route to same stream):"
-                            + " topic={}, group={}, entryId={}, fields={}, cause={}",
+                            + " topic={}, group={}, entryId={}, fieldNames={}, fieldCount={},"
+                            + " cause={}",
                     topic,
                     group,
                     entryId,
-                    fields,
+                    fields.keySet(),
+                    fields.size(),
                     cause.toString());
             return true;
         }
@@ -608,7 +683,7 @@ public class RedissonStreamListener implements StreamMQListener {
                             ? cause.getMessage()
                             : cause.getClass().getName());
             String dlqKey = StreamMQKeys.dlqStream(namespace, group);
-            RStream<String, String> dlqStream = redisson.getStream(dlqKey);
+            RStream<String, String> dlqStream = redisson.getStream(dlqKey, StringCodec.INSTANCE);
             dlqStream.add(StreamAddArgs.entries(dlqFields));
             return true;
         } catch (RuntimeException dlqEx) {
@@ -681,7 +756,8 @@ public class RedissonStreamListener implements StreamMQListener {
             return;
         }
         try {
-            redisson.getScoredSortedSet(StreamMQKeys.broadcastRegistry(namespace))
+            redisson.getScoredSortedSet(
+                            StreamMQKeys.broadcastRegistry(namespace), StringCodec.INSTANCE)
                     .add(System.currentTimeMillis(), registryMember());
         } catch (RuntimeException ex) {
             LOG.debug("Broadcast heartbeat failed: {}", ex.getMessage());
@@ -828,7 +904,7 @@ public class RedissonStreamListener implements StreamMQListener {
                 group,
                 dlqMode,
                 retryMode);
-        return redisson.getStream(streamKey);
+        return redisson.getStream(streamKey, StringCodec.INSTANCE);
     }
 
     private static StreamMessageId toStreamId(MessageId messageId) {

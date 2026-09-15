@@ -20,6 +20,8 @@
         <dependency>
             <groupId>io.github.streammq</groupId>
             <artifactId>streammq-diagnostics</artifactId>
+            <!-- 该构件未纳入发布清单（不在 BOM 中），示例在 reactor 内需显式声明版本 -->
+            <version>${project.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>

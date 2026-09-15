@@ -19,6 +19,7 @@ import java.util.Set;
 import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -140,7 +141,8 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
     public int sweepStaleBroadcastGroups() {
         try {
             RScoredSortedSet<String> registry =
-                    redisson.<String>getScoredSortedSet(StreamMQKeys.broadcastRegistry(namespace));
+                    redisson.<String>getScoredSortedSet(
+                            StreamMQKeys.broadcastRegistry(namespace), StringCodec.INSTANCE);
             long cutoff = System.currentTimeMillis() - staleTtlMillis;
             Collection<String> staleMembers =
                     registry.valueRange(0, true, cutoff, true, 0, maxSweep - 1);
@@ -180,7 +182,9 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
                 }
                 try {
                     RStream<String, String> stream =
-                            redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
+                            redisson.getStream(
+                                    StreamMQKeys.topicStream(namespace, topic),
+                                    StringCodec.INSTANCE);
                     stream.removeGroup(effectiveGroup);
                     registry.remove(member);
                     removed++;
@@ -316,7 +320,8 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
     @Override
     public long countBroadcastGroups() {
         RScoredSortedSet<String> registry =
-                redisson.<String>getScoredSortedSet(StreamMQKeys.broadcastRegistry(namespace));
+                redisson.<String>getScoredSortedSet(
+                        StreamMQKeys.broadcastRegistry(namespace), StringCodec.INSTANCE);
         return registry.size();
     }
 }

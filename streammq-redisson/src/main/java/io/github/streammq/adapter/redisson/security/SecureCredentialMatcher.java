@@ -42,6 +42,30 @@ final class SecureCredentialMatcher {
         return MessageDigest.isEqual(sha256(expected), sha256(actual));
     }
 
+    /**
+     * 预算摘要，供调用方持摘要而非明文凭据（避免每请求把 char[] 复制成不可变 String）。
+     *
+     * @param value 明文值
+     * @return SHA-256 摘要（32 字节）
+     */
+    static byte[] digest(String value) {
+        return sha256(value);
+    }
+
+    /**
+     * 常量时间比较「预算摘要」与「运行时明文」。
+     *
+     * @param expectedDigest 预先计算的期望摘要
+     * @param actual 实际明文值
+     * @return true 表示相等；任一侧为 null 时返回 false
+     */
+    static boolean matchesDigest(byte[] expectedDigest, String actual) {
+        if (expectedDigest == null || actual == null) {
+            return false;
+        }
+        return MessageDigest.isEqual(expectedDigest, sha256(actual));
+    }
+
     private static byte[] sha256(String value) {
         try {
             return MessageDigest.getInstance(DIGEST_ALGORITHM)

@@ -96,9 +96,9 @@ public class TransactionScanner implements StreamMQScheduler {
     /** Class.forName 缓存上限：bodyTypeName 来自外部可控的流字段，缓存必须有界，防止无界增长 */
     private static final int CLASS_CACHE_MAX_SIZE = 256;
 
-    /** Class.forName 缓存，避免重复类加载查找（LRU 有界，超出上限淘汰最久未访问项） */
+    /** Class.forName 缓存，避免重复类加载查找（有界 FIFO，超出上限淘汰最早写入项） */
     private static final Map<String, Class<?>> CLASS_CACHE =
-            new LinkedHashMap<String, Class<?>>(16, 0.75f, true) {
+            new LinkedHashMap<String, Class<?>>(16, 0.75f, false) {
                 @Override
                 protected boolean removeEldestEntry(Map.Entry<String, Class<?>> eldest) {
                     return size() > CLASS_CACHE_MAX_SIZE;
@@ -379,7 +379,8 @@ public class TransactionScanner implements StreamMQScheduler {
 
         // XADD 到 half Stream
         String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
-        RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
+        RStream<String, String> halfStream =
+                redisson.getStream(halfStreamKey, StringCodec.INSTANCE);
         StreamMessageId halfId;
         try {
             halfId = halfStream.add(StreamAddArgs.entries(fields));
@@ -396,7 +397,9 @@ public class TransactionScanner implements StreamMQScheduler {
                 stateMap.remove(txId);
                 stateMap.remove(txId + FIELD_TARGET_SUFFIX);
                 stateMap.remove(txId + FIELD_HALF_ID_SUFFIX);
-                redisson.getScoredSortedSet(StreamMQKeys.transactionCheckZSet(namespace, txGroup))
+                redisson.getScoredSortedSet(
+                                StreamMQKeys.transactionCheckZSet(namespace, txGroup),
+                                StringCodec.INSTANCE)
                         .remove(txId);
             } catch (RuntimeException cleanupEx) {
                 LOG.error(
@@ -420,7 +423,9 @@ public class TransactionScanner implements StreamMQScheduler {
             metadataMap.putAsync(txId + FIELD_TARGET_SUFFIX, targetTopic);
             metadataMap.putAsync(txId, STATE_PREPARE);
             metadataBatch
-                    .getScoredSortedSet(StreamMQKeys.transactionCheckZSet(namespace, txGroup))
+                    .getScoredSortedSet(
+                            StreamMQKeys.transactionCheckZSet(namespace, txGroup),
+                            StringCodec.INSTANCE)
                     .addAsync(firstCheckAt, txId);
             metadataBatch.execute();
         } catch (RuntimeException ex) {
@@ -434,7 +439,9 @@ public class TransactionScanner implements StreamMQScheduler {
                 stateMap.remove(txId);
                 stateMap.remove(txId + FIELD_TARGET_SUFFIX);
                 stateMap.remove(txId + FIELD_HALF_ID_SUFFIX);
-                redisson.getScoredSortedSet(StreamMQKeys.transactionCheckZSet(namespace, txGroup))
+                redisson.getScoredSortedSet(
+                                StreamMQKeys.transactionCheckZSet(namespace, txGroup),
+                                StringCodec.INSTANCE)
                         .remove(txId);
             } catch (RuntimeException cleanupEx) {
                 LOG.error("Failed to clean up transaction registration: txId={}", txId, cleanupEx);
@@ -455,7 +462,7 @@ public class TransactionScanner implements StreamMQScheduler {
 
     /** 启动调度器，开始周期扫描回查 ZSet。 */
     @Override
-    public void start() {
+    public synchronized void start() {
         if (!running.compareAndSet(false, true)) {
             LOG.warn("TransactionScanner already started");
             return;
@@ -498,7 +505,7 @@ public class TransactionScanner implements StreamMQScheduler {
 
     /** 停止调度器（取消扫描任务并关闭线程池，线程为 daemon，不阻塞 JVM 退出）。 */
     @Override
-    public void stop() {
+    public synchronized void stop() {
         if (!running.compareAndSet(true, false)) {
             return;
         }
@@ -658,7 +665,8 @@ public class TransactionScanner implements StreamMQScheduler {
         if (Objects.nonNull(halfIdStr)) {
             // XDEL 半消息；失败时不得终结事务（否则半消息永久残留），保持 ROLLBACKING 并重新调度重试
             String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
-            RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
+            RStream<String, String> halfStream =
+                    redisson.getStream(halfStreamKey, StringCodec.INSTANCE);
             try {
                 halfStream.remove(parseStreamId(halfIdStr));
             } catch (RuntimeException ex) {
@@ -783,7 +791,8 @@ public class TransactionScanner implements StreamMQScheduler {
      */
     void scanTimeoutHalf(String txGroup) {
         String checkZSetKey = StreamMQKeys.transactionCheckZSet(namespace, txGroup);
-        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(checkZSetKey);
+        RScoredSortedSet<String> zset =
+                redisson.getScoredSortedSet(checkZSetKey, StringCodec.INSTANCE);
         long now = System.currentTimeMillis();
         Collection<String> timeoutTxIds = zset.valueRange(0, true, now, true, 0, batchSize - 1);
         if (timeoutTxIds.isEmpty()) {
@@ -1017,7 +1026,8 @@ public class TransactionScanner implements StreamMQScheduler {
     /** 将 txId 重新加入回查 ZSet（score = now + checkInterval），用于失败重试。 */
     private void rescheduleCheck(String txId, String txGroup) {
         long nextCheckAt = System.currentTimeMillis() + checkIntervalMs;
-        redisson.getScoredSortedSet(StreamMQKeys.transactionCheckZSet(namespace, txGroup))
+        redisson.getScoredSortedSet(
+                        StreamMQKeys.transactionCheckZSet(namespace, txGroup), StringCodec.INSTANCE)
                 .add(nextCheckAt, txId);
     }
 
@@ -1028,7 +1038,8 @@ public class TransactionScanner implements StreamMQScheduler {
             return null;
         }
         String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
-        RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
+        RStream<String, String> halfStream =
+                redisson.getStream(halfStreamKey, StringCodec.INSTANCE);
         StreamMessageId halfId = parseStreamId(halfIdStr);
         Map<StreamMessageId, Map<String, String>> entries = halfStream.range(1, halfId, halfId);
         if (CollectionUtils.isEmpty(entries)) {
@@ -1085,7 +1096,7 @@ public class TransactionScanner implements StreamMQScheduler {
     /** 从 txcheck ZSet 移除 txId。 */
     private void removeCheckEntry(String txId, String txGroup) {
         String checkZSetKey = StreamMQKeys.transactionCheckZSet(namespace, txGroup);
-        redisson.getScoredSortedSet(checkZSetKey).remove(txId);
+        redisson.getScoredSortedSet(checkZSetKey, StringCodec.INSTANCE).remove(txId);
         // 同时清理回查计数
         String counterKey = StreamMQKeys.transactionCheckCounter(namespace, txGroup);
         redisson.getMap(counterKey, StringCodec.INSTANCE).remove(txId);

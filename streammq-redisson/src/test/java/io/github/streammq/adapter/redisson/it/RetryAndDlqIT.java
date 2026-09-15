@@ -32,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.redisson.api.*;
 import org.redisson.api.stream.StreamAddArgs;
+import org.redisson.client.codec.StringCodec;
 
 /**
  * 重试与死信队列(DLQ)全流程 Redis 联动集成测试。
@@ -357,7 +358,7 @@ class RetryAndDlqIT extends AbstractRedisIT {
         Mockito.doThrow(new RuntimeException("simulated DLQ write failure"))
                 .when(failingStream)
                 .add(Mockito.any(StreamAddArgs.class));
-        Mockito.doReturn(failingStream).when(spyClient).getStream(dlqKey);
+        Mockito.doReturn(failingStream).when(spyClient).getStream(dlqKey, StringCodec.INSTANCE);
 
         RetryPolicy noRetryPolicy = new FastRetryPolicy(100, 0);
         RedissonStreamListenerFactory consumerFactory =

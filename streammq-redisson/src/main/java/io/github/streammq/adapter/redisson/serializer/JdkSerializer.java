@@ -5,6 +5,7 @@
  */
 package io.github.streammq.adapter.redisson.serializer;
 
+import io.github.streammq.adapter.redisson.support.PayloadTypeSafety;
 import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.serializer.MessageSerializer;
 import java.io.ByteArrayInputStream;
@@ -18,6 +19,8 @@ import java.util.Collection;
 import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * JDK 原生序列化器，内置 JEP 290 反序列化过滤器。
@@ -34,9 +37,25 @@ import java.util.Set;
  */
 public class JdkSerializer<T extends java.io.Serializable> implements MessageSerializer<T> {
 
+    private static final Logger LOG = LoggerFactory.getLogger(JdkSerializer.class);
+
     /** 默认放行的 JDK 集合/容器实现（前缀规则之外需要逐一列出的部分） */
     private static final Set<String> DEFAULT_ALLOWED_CLASSES =
             Set.of(
+                    // java.lang 语言标量（刻意不再整包放行 java.lang，避免 java.lang.reflect /
+                    // java.lang.invoke 等 gadget 使能类被放行）
+                    "java.lang.String",
+                    "java.lang.Integer",
+                    "java.lang.Long",
+                    "java.lang.Short",
+                    "java.lang.Byte",
+                    "java.lang.Boolean",
+                    "java.lang.Character",
+                    "java.lang.Double",
+                    "java.lang.Float",
+                    "java.lang.Number",
+                    "java.lang.StringBuilder",
+                    // 集合/容器
                     "java.util.ArrayList",
                     "java.util.LinkedList",
                     "java.util.ArrayDeque",
@@ -50,9 +69,8 @@ public class JdkSerializer<T extends java.io.Serializable> implements MessageSer
                     "java.util.UUID",
                     "java.util.BitSet");
 
-    /** 允许的前缀：JDK 语言基础类型 / 时间 / 大数 */
-    private static final Set<String> ALLOWED_PREFIXES =
-            Set.of("java.lang.", "java.time.", "java.math.");
+    /** 允许的前缀：时间 / 大数（语言标量改为逐类放行，见 {@link #DEFAULT_ALLOWED_CLASSES}） */
+    private static final Set<String> ALLOWED_PREFIXES = Set.of("java.time.", "java.math.");
 
     private final Set<String> allowedClasses = new HashSet<>(DEFAULT_ALLOWED_CLASSES);
 
@@ -150,7 +168,17 @@ public class JdkSerializer<T extends java.io.Serializable> implements MessageSer
     /** 组装本次调用的过滤器：目标类型 + 全局白名单 + 前缀规则 + 数组展开 + 深度/引用上限。 */
     private void installFilter(ObjectInputStream ois, String targetTypeName) {
         Set<String> effective = new HashSet<>(allowedClasses);
-        effective.add(targetTypeName);
+        // 目标类型可能是载荷驱动解析出来的（bodyType），不可无条件信任：
+        // 仅在其通过统一载荷类型护栏时才加入本次放行集，避免“载荷自扩白名单”。
+        if (Objects.nonNull(targetTypeName) && !PayloadTypeSafety.isBlocked(targetTypeName)) {
+            effective.add(PayloadTypeSafety.normalize(targetTypeName));
+        } else if (Objects.nonNull(targetTypeName)) {
+            LOG.warn(
+                    "JDK deserialization target type rejected by payload type guard (dangerous"
+                            + " namespace or malformed name): {} — the type is not added to the"
+                            + " allow-list for this read",
+                    targetTypeName);
+        }
         ObjectInputFilter filter =
                 info -> {
                     Class<?> serialClass = info.serialClass();
@@ -168,6 +196,10 @@ public class JdkSerializer<T extends java.io.Serializable> implements MessageSer
                         }
                     }
                     if (effective.contains(className)) {
+                        return ObjectInputFilter.Status.ALLOWED;
+                    }
+                    // 枚举类型本身不携带 readObject 钩子，放行以保证枚举 body 可用
+                    if (serialClass.isEnum()) {
                         return ObjectInputFilter.Status.ALLOWED;
                     }
                     for (String prefix : ALLOWED_PREFIXES) {

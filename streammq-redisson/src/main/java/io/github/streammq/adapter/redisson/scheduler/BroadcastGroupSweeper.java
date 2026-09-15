@@ -86,7 +86,7 @@ public class BroadcastGroupSweeper implements StreamMQScheduler {
     }
 
     @Override
-    public void start() {
+    public synchronized void start() {
         if (!running.compareAndSet(false, true)) {
             LOG.warn("BroadcastGroupSweeper already started");
             return;
@@ -124,7 +124,7 @@ public class BroadcastGroupSweeper implements StreamMQScheduler {
     }
 
     @Override
-    public void stop() {
+    public synchronized void stop() {
         if (!running.compareAndSet(true, false)) {
             return;
         }

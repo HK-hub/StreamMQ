@@ -45,7 +45,7 @@ class RedisTraceCollectorTest {
     void setUp() {
         redisson = mock(RedissonClient.class);
         stream = mock(RStream.class);
-        doReturn(stream).when(redisson).getStream(anyString());
+        doReturn(stream).when(redisson).getStream(anyString(), any());
         collector = new RedisTraceCollector(redisson, "ns");
     }
 
@@ -78,7 +78,7 @@ class RedisTraceCollectorTest {
 
         collector.recordSend(ctx);
 
-        verify(redisson).getStream(contains(":trace:"));
+        verify(redisson).getStream(contains(":trace:"), any());
         verify(stream, times(1)).add(any());
     }
 
@@ -170,7 +170,7 @@ class RedisTraceCollectorTest {
 
         collector.recordConsume(ctx);
 
-        verify(redisson).getStream(contains(":trace:"));
+        verify(redisson).getStream(contains(":trace:"), any());
         verify(stream, times(1)).add(any());
     }
 
@@ -286,7 +286,7 @@ class RedisTraceCollectorTest {
 
         nullNsCollector.recordSend(ctx);
 
-        verify(redisson).getStream(contains(":trace:"));
+        verify(redisson).getStream(contains(":trace:"), any());
         verify(stream, times(1)).add(any());
     }
 
@@ -315,7 +315,7 @@ class RedisTraceCollectorTest {
 
         collector.recordSend(ctx);
 
-        verify(redisson).getStream(contains("streammq:ns:trace:"));
+        verify(redisson).getStream(contains("streammq:ns:trace:"), any());
     }
 
     // ===================== MAXLEN / EXPIRE 兜底（无界增长修复） =====================

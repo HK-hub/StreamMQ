@@ -59,6 +59,9 @@ public class RateLimitedAuthenticator implements ManagementAuthenticator {
     private final long lockoutMillis;
     private final int maxClients;
 
+    /** 客户端地址可信策略（装配层注入；替代此前的静态全局配置）。 */
+    private final WebRequestAuthSupport.ClientAddressPolicy addressPolicy;
+
     private final ConcurrentHashMap<String, ClientState> states = new ConcurrentHashMap<>();
 
     /**
@@ -67,8 +70,21 @@ public class RateLimitedAuthenticator implements ManagementAuthenticator {
      * @param delegate 被包装的鉴权器（不允许为 null）
      */
     public RateLimitedAuthenticator(ManagementAuthenticator delegate) {
+        this(delegate, WebRequestAuthSupport.ClientAddressPolicy.DEFAULT);
+    }
+
+    /**
+     * 构造并指定客户端地址可信策略。
+     *
+     * @param delegate 被包装的鉴权器（不允许为 null）
+     * @param addressPolicy 客户端地址可信策略（不允许为 null）
+     */
+    public RateLimitedAuthenticator(
+            ManagementAuthenticator delegate,
+            WebRequestAuthSupport.ClientAddressPolicy addressPolicy) {
         this(
                 delegate,
+                addressPolicy,
                 DEFAULT_MAX_FAILURES,
                 DEFAULT_WINDOW_MILLIS,
                 DEFAULT_LOCKOUT_MILLIS,
@@ -90,6 +106,32 @@ public class RateLimitedAuthenticator implements ManagementAuthenticator {
             long windowMillis,
             long lockoutMillis,
             int maxClients) {
+        this(
+                delegate,
+                WebRequestAuthSupport.ClientAddressPolicy.DEFAULT,
+                maxFailures,
+                windowMillis,
+                lockoutMillis,
+                maxClients);
+    }
+
+    /**
+     * 全参构造（含客户端地址可信策略）。
+     *
+     * @param delegate 被包装的鉴权器（不允许为 null）
+     * @param addressPolicy 客户端地址可信策略（不允许为 null）
+     * @param maxFailures 窗口内允许的最大失败次数（必须 &gt; 0）
+     * @param windowMillis 统计窗口毫秒（必须 &gt; 0）
+     * @param lockoutMillis 锁定时长毫秒（必须 &gt;= 0）
+     * @param maxClients 状态表上限（必须 &gt; 0）
+     */
+    public RateLimitedAuthenticator(
+            ManagementAuthenticator delegate,
+            WebRequestAuthSupport.ClientAddressPolicy addressPolicy,
+            int maxFailures,
+            long windowMillis,
+            long lockoutMillis,
+            int maxClients) {
         if (delegate == null) {
             throw new IllegalArgumentException("delegate must not be null");
         }
@@ -98,6 +140,7 @@ public class RateLimitedAuthenticator implements ManagementAuthenticator {
                     "maxFailures/windowMillis/maxClients must be > 0, lockoutMillis must be >= 0");
         }
         this.delegate = delegate;
+        this.addressPolicy = java.util.Objects.requireNonNull(addressPolicy, "addressPolicy");
         this.maxFailures = maxFailures;
         this.windowMillis = windowMillis;
         this.lockoutMillis = lockoutMillis;
@@ -134,9 +177,9 @@ public class RateLimitedAuthenticator implements ManagementAuthenticator {
         return "rate-limited-" + delegate.name();
     }
 
-    /** 解析客户端标识：优先真实地址，无法识别时退化为全局标识。 */
-    private static String resolveClientId() {
-        String addr = WebRequestAuthSupport.getClientAddressFromRequest();
+    /** 解析客户端标识：优先真实地址，无法识别时退化为全局标识。地址解析遵循注入的可信策略。 */
+    private String resolveClientId() {
+        String addr = WebRequestAuthSupport.getClientAddressFromRequest(addressPolicy);
         return StringUtils.isNotEmpty(addr) ? addr : UNKNOWN_CLIENT;
     }
 

@@ -30,6 +30,7 @@ import lombok.NonNull;
 import lombok.Setter;
 import org.redisson.api.*;
 import org.redisson.api.stream.StreamAddArgs;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -262,7 +263,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         }
         applyCompression(fields);
         String streamKey = StreamMQKeys.topicStream(namespace, topic);
-        RStream<String, String> stream = redisson.getStream(streamKey);
+        RStream<String, String> stream = redisson.getStream(streamKey, StringCodec.INSTANCE);
         StreamAddArgs<String, String> args = buildAddArgs(fields);
 
         // 真正的异步 Redis 调用：RFuture → CompletableFuture，无需虚拟线程阻塞
@@ -324,7 +325,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             }
             applyCompression(fields);
             String streamKey = StreamMQKeys.topicStream(namespace, topic);
-            RStream<String, String> stream = redisson.getStream(streamKey);
+            RStream<String, String> stream = redisson.getStream(streamKey, StringCodec.INSTANCE);
             StreamAddArgs<String, String> args = buildAddArgs(fields);
             // fire-and-forget：不阻塞调用方，但异步失败必须可见——否则 Redis 故障期间
             // oneway 消息会无声丢失，连一条日志都没有（违背方法契约"异常仅记录日志"）。
@@ -402,7 +403,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                         null);
             }
             StreamAddArgs<String, String> args = buildAddArgs(fields);
-            batch.<String, String>getStream(streamKey).addAsync(args);
+            batch.<String, String>getStream(streamKey, StringCodec.INSTANCE).addAsync(args);
         }
 
         List<?> responses;
@@ -626,9 +627,11 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                     redisson.createBatch(
                             BatchOptions.defaults()
                                     .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
-            batch.getMap(payloadHashKey).putAllAsync(fields);
-            batch.getMap(payloadHashKey).expireAsync(payloadTtl, TimeUnit.MILLISECONDS);
-            batch.<String>getScoredSortedSet(zsetKey).addAsync(deliverAt, msgId);
+            batch.getMap(payloadHashKey, StringCodec.INSTANCE).putAllAsync(fields);
+            batch.getMap(payloadHashKey, StringCodec.INSTANCE)
+                    .expireAsync(payloadTtl, TimeUnit.MILLISECONDS);
+            batch.<String>getScoredSortedSet(zsetKey, StringCodec.INSTANCE)
+                    .addAsync(deliverAt, msgId);
             batch.execute();
         } catch (RuntimeException ex) {
             throw new StreamMQBrokerException(
@@ -688,7 +691,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
      */
     private StreamMessageId appendStream(
             String streamKey, Map<String, String> fields, long timeoutMillis) {
-        RStream<String, String> stream = redisson.getStream(streamKey);
+        RStream<String, String> stream = redisson.getStream(streamKey, StringCodec.INSTANCE);
         StreamAddArgs<String, String> args = buildAddArgs(fields);
         try {
             // 使用异步 API + 超时控制，确保 timeoutMillis 真正生效

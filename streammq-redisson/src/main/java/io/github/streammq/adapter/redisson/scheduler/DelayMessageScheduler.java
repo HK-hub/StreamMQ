@@ -189,7 +189,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
 
     /** 启动调度器。 */
     @Override
-    public void start() {
+    public synchronized void start() {
         if (!running.compareAndSet(false, true)) {
             LOG.warn("DelayMessageScheduler already started");
             return;
@@ -234,7 +234,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
 
     /** 停止调度器（取消扫描任务并关闭线程池，线程为 daemon，不阻塞 JVM 退出）。 */
     @Override
-    public void stop() {
+    public synchronized void stop() {
         if (!running.compareAndSet(true, false)) {
             return;
         }
@@ -282,7 +282,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
      */
     void scanExpired(DelayLevel level) {
         String zsetKey = StreamMQKeys.delayZSet(namespace, level.name());
-        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
+        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey, StringCodec.INSTANCE);
         long now = System.currentTimeMillis();
 
         Collection<String> expired = zset.valueRange(0, true, now, true, 0, batchSize - 1);
@@ -299,7 +299,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     /** 扫描自定义延时 ZSet 的到期消息并转投（任意延时支持）。 */
     void scanExpiredCustom() {
         String zsetKey = StreamMQKeys.delayCustomZSet(namespace);
-        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
+        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey, StringCodec.INSTANCE);
         long now = System.currentTimeMillis();
 
         Collection<String> expired = zset.valueRange(0, true, now, true, 0, batchSize - 1);
@@ -344,7 +344,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
 
     void doTransferExpired(RScoredSortedSet<String> zset, String msgId, String label) {
         String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
-        RMap<String, String> payloadMap = redisson.getMap(payloadKey);
+        RMap<String, String> payloadMap = redisson.getMap(payloadKey, StringCodec.INSTANCE);
         Map<String, String> fields = payloadMap.readAllMap();
         if (CollectionUtils.isEmpty(fields)) {
             // payload 已被 TTL 兜底回收：先登记隔离区（可观测）再移除活跃调度条目，
@@ -372,9 +372,10 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 redisson.createBatch(
                         BatchOptions.defaults()
                                 .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
-        batch.<String, String>getStream(targetStreamKey).addAsync(StreamAddArgs.entries(fields));
-        batch.<String, String>getMap(payloadKey).deleteAsync();
-        batch.<String>getScoredSortedSet(zset.getName()).removeAsync(msgId);
+        batch.<String, String>getStream(targetStreamKey, StringCodec.INSTANCE)
+                .addAsync(StreamAddArgs.entries(fields));
+        batch.<String, String>getMap(payloadKey, StringCodec.INSTANCE).deleteAsync();
+        batch.<String>getScoredSortedSet(zset.getName(), StringCodec.INSTANCE).removeAsync(msgId);
         batch.execute();
 
         if (LOG.isDebugEnabled()) {
@@ -474,18 +475,45 @@ public class DelayMessageScheduler implements StreamMQScheduler {
      */
     private static final int MAX_ORPHAN_PAYLOAD_SCAN = 1000;
 
+    /**
+     * 引用集容量上限：超过则跳过本轮孤儿清扫。
+     *
+     * <p>孤儿清扫需要把全部延时 ZSet 的 msgId 读进内存做差集；延时消息堆积时该集合可能极大（内存尖峰 ∝ 堆积量）。 这里先做 O(1) 的 {@code size()}
+     * 容量探测，超限即<b>跳过</b>本轮兜底清扫——这是 fail-safe 方向： 宁可漏删孤儿（生产端 payload TTL 是最终兜底），也绝不误删仍被引用的 payload。
+     */
+    private static final long MAX_REFERENCED_IDS_FOR_ORPHAN_SCAN = 100_000L;
+
     private int cleanupOrphanedPayloads() {
         String pattern = StreamMQKeys.delayPayloadHash(namespace, "*");
-        java.util.Set<String> referencedMsgIds = new java.util.HashSet<>();
+        java.util.List<org.redisson.api.RScoredSortedSet<String>> delayZsets =
+                new java.util.ArrayList<>();
         for (DelayLevel level : DelayLevel.values()) {
-            referencedMsgIds.addAll(
-                    redisson.<String>getScoredSortedSet(
-                                    StreamMQKeys.delayZSet(namespace, level.name()))
-                            .readAll());
+            delayZsets.add(
+                    redisson.getScoredSortedSet(
+                            StreamMQKeys.delayZSet(namespace, level.name()), StringCodec.INSTANCE));
         }
-        referencedMsgIds.addAll(
-                redisson.<String>getScoredSortedSet(StreamMQKeys.delayCustomZSet(namespace))
-                        .readAll());
+        delayZsets.add(
+                redisson.getScoredSortedSet(
+                        StreamMQKeys.delayCustomZSet(namespace), StringCodec.INSTANCE));
+
+        // 容量探测（O(1)/ZSet）：引用集过大时跳过本轮兜底清扫，避免把堆积量级的数据一次性物化进内存
+        long referencedCount = 0;
+        for (org.redisson.api.RScoredSortedSet<String> zset : delayZsets) {
+            referencedCount += zset.size();
+            if (referencedCount > MAX_REFERENCED_IDS_FOR_ORPHAN_SCAN) {
+                LOG.warn(
+                        "Skip orphan delay-payload cleanup: referenced id set too large (> {}), "
+                                + "avoiding a memory spike. Producer-side payload TTL remains the "
+                                + "final safety net.",
+                        MAX_REFERENCED_IDS_FOR_ORPHAN_SCAN);
+                return 0;
+            }
+        }
+
+        java.util.Set<String> referencedMsgIds = new java.util.HashSet<>();
+        for (org.redisson.api.RScoredSortedSet<String> zset : delayZsets) {
+            referencedMsgIds.addAll(zset.readAll());
+        }
 
         int cleaned = 0;
         Iterable<String> keys =
@@ -501,7 +529,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 continue;
             }
             try {
-                if (redisson.getMap(key).delete()) {
+                if (redisson.getMap(key, StringCodec.INSTANCE).delete()) {
                     cleaned++;
                 }
             } catch (RuntimeException ex) {
@@ -525,7 +553,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
      * @return 清理的 entry 数量
      */
     private int cleanupOrphanedInZSet(String zsetKey, String label) {
-        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey);
+        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey, StringCodec.INSTANCE);
         // 获取所有 entry（不限时间范围，用于清理）
         Collection<String> allMembers = zset.readAll();
         if (allMembers.isEmpty()) {
@@ -534,7 +562,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
         int cleaned = 0;
         for (String msgId : allMembers) {
             String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
-            RMap<String, String> payloadMap = redisson.getMap(payloadKey);
+            RMap<String, String> payloadMap = redisson.getMap(payloadKey, StringCodec.INSTANCE);
             if (!payloadMap.isExists()) {
                 // payload Hash 不存在，ZSet entry 为孤立条目，安全移除
                 boolean removed = zset.remove(msgId);

@@ -52,7 +52,8 @@ import org.springframework.test.context.TestPropertySource;
 @ActiveProfiles("it")
 @Import(OrderlySampleIT.TestOrderlyMessageCollector.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
-@TestPropertySource(properties = {"spring.redis.host=127.0.0.1", "spring.redis.port=6379"})
+@TestPropertySource(
+        properties = {"spring.data.redis.host=127.0.0.1", "spring.data.redis.port=6379"})
 @DisplayName("顺序消息示例集成测试")
 @EnabledIf(
         value = "io.github.streammq.test.util.RedisAvailability#localhostAvailable",

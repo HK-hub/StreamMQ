@@ -29,7 +29,7 @@ import java.util.Objects;
 public class BasicAuthAuthenticator implements ManagementAuthenticator {
 
     private final String username;
-    private final char[] password;
+    private final byte[] passwordDigest;
 
     /**
      * 构造 Basic Auth 鉴权器。
@@ -39,7 +39,9 @@ public class BasicAuthAuthenticator implements ManagementAuthenticator {
      */
     public BasicAuthAuthenticator(String username, String password) {
         this.username = Objects.requireNonNull(username, "username");
-        this.password = Objects.requireNonNull(password, "password").toCharArray();
+        // 只保留密码摘要，不保留明文/字符数组，避免每请求把 char[] 复制为不可变 String
+        this.passwordDigest =
+                SecureCredentialMatcher.digest(Objects.requireNonNull(password, "password"));
     }
 
     @Override
@@ -47,8 +49,12 @@ public class BasicAuthAuthenticator implements ManagementAuthenticator {
         if (Objects.isNull(username) || Objects.isNull(password)) {
             return false;
         }
-        return SecureCredentialMatcher.matches(this.username, username)
-                && SecureCredentialMatcher.matches(new String(this.password), password);
+        // 刻意使用非短路 & ：先完成两侧比较再合并结果，避免“用户名错误时跳过口令比较”
+        // 形成的用户名有效性时序预言
+        boolean usernameMatches = SecureCredentialMatcher.matches(this.username, username);
+        boolean passwordMatches =
+                SecureCredentialMatcher.matchesDigest(this.passwordDigest, password);
+        return usernameMatches & passwordMatches;
     }
 
     @Override

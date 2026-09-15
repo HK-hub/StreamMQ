@@ -125,7 +125,8 @@ public class TransactionRetentionSweeper {
     /** 维护任务：清除孤儿半消息（half Stream 中超过保留期且无状态引用的条目）。 */
     public int sweepOrphanHalves(String txGroup) {
         String halfStreamKey = StreamMQKeys.halfStream(namespace, txGroup);
-        RStream<String, String> halfStream = redisson.getStream(halfStreamKey);
+        RStream<String, String> halfStream =
+                redisson.getStream(halfStreamKey, StringCodec.INSTANCE);
         long cutoff = System.currentTimeMillis() - orphanHalfRetentionMs;
         int removed = 0;
         try {

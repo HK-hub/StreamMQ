@@ -40,6 +40,7 @@ import org.redisson.api.RBatch;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.stream.StreamAddArgs;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -106,7 +107,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         if (Objects.isNull(action)) {
             action = ConsumeAction.RECONSUME_LATER;
         }
-        LOG.info(
+        LOG.debug(
                 "handleAction: action={}, isSuccess={}, isDefer={}, dlqMode={}, topic={}, group={},"
                         + " messageId={}",
                 action,
@@ -299,9 +300,11 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                 redisson.createBatch(
                         BatchOptions.defaults()
                                 .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
-        batch.<String, String>getMap(payloadKey).putAllAsync(payload);
-        batch.<String, String>getMap(payloadKey).expireAsync(RETRY_PAYLOAD_TTL);
-        batch.<String>getScoredSortedSet(retryKey).addAsync(nextRetryAt, msgIdStr);
+        batch.<String, String>getMap(payloadKey, StringCodec.INSTANCE).putAllAsync(payload);
+        batch.<String, String>getMap(payloadKey, StringCodec.INSTANCE)
+                .expireAsync(RETRY_PAYLOAD_TTL);
+        batch.<String>getScoredSortedSet(retryKey, StringCodec.INSTANCE)
+                .addAsync(nextRetryAt, msgIdStr);
         try {
             batch.execute();
         } catch (RuntimeException ex) {
@@ -346,7 +349,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                             reg.getNamespace(),
                             reg.getGroup(),
                             dlqConfig.getSecondaryDlqKeyPrefix());
-            RStream<String, String> dlq2Stream = redisson.getStream(dlq2Key);
+            RStream<String, String> dlq2Stream = redisson.getStream(dlq2Key, StringCodec.INSTANCE);
             StreamAddArgs<String, String> dlq2Args = StreamAddArgs.entries(fields);
             if (dlqConfig.getStreamMaxLen() > 0) {
                 dlq2Args = dlq2Args.trimNonStrict().maxLen(dlqConfig.getStreamMaxLen()).noLimit();
@@ -514,9 +517,11 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                 redisson.createBatch(
                         BatchOptions.defaults()
                                 .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
-        batch.<String, String>getMap(payloadKey).putAllAsync(payload);
-        batch.<String, String>getMap(payloadKey).expireAsync(RETRY_PAYLOAD_TTL);
-        batch.<String>getScoredSortedSet(retryKey).addAsync(nextRetryAt, msgIdStr);
+        batch.<String, String>getMap(payloadKey, StringCodec.INSTANCE).putAllAsync(payload);
+        batch.<String, String>getMap(payloadKey, StringCodec.INSTANCE)
+                .expireAsync(RETRY_PAYLOAD_TTL);
+        batch.<String>getScoredSortedSet(retryKey, StringCodec.INSTANCE)
+                .addAsync(nextRetryAt, msgIdStr);
         try {
             batch.execute();
         } catch (RuntimeException ex) {
@@ -558,7 +563,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             fields.put(RetryScheduler.FIELD_DLQ_REASON, reason);
             fields.put(FIELD_ORIGINAL_MESSAGE_ID, messageId.getStreamEntryId());
             String dlqKey = StreamMQKeys.dlqStream(reg.getNamespace(), reg.getGroup());
-            RStream<String, String> dlqStream = redisson.getStream(dlqKey);
+            RStream<String, String> dlqStream = redisson.getStream(dlqKey, StringCodec.INSTANCE);
             StreamAddArgs<String, String> dlqArgs = StreamAddArgs.entries(fields);
             if (dlqConfig.getStreamMaxLen() > 0) {
                 dlqArgs = dlqArgs.trimNonStrict().maxLen(dlqConfig.getStreamMaxLen()).noLimit();

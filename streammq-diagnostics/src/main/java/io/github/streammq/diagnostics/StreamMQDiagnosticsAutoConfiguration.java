@@ -207,9 +207,19 @@ public class StreamMQDiagnosticsAutoConfiguration {
     public StreamMQDiagnosticsEndpoint streamMQDiagnosticsEndpoint(
             StreamMQDiagnosticsService diagnosticsService,
             MessageProfileService profileService,
-            ManagementAuthenticator authenticator) {
+            ManagementAuthenticator authenticator,
+            org.springframework.beans.factory.ObjectProvider<
+                            io.github.streammq.core.util.WebRequestAuthSupport.ClientAddressPolicy>
+                    clientAddressPolicyProvider) {
         // 包一层失败限流：即使启用 Basic/Token 弱凭据，也能抵御针对诊断端点的暴力破解
-        ManagementAuthenticator rateLimited = new RateLimitedAuthenticator(authenticator);
+        // 地址可信策略来自上下文 Bean（由 starter 提供）；未装配时退化为安全默认（不信任 XFF）
+        ManagementAuthenticator rateLimited =
+                new RateLimitedAuthenticator(
+                        authenticator,
+                        clientAddressPolicyProvider.getIfAvailable(
+                                () ->
+                                        io.github.streammq.core.util.WebRequestAuthSupport
+                                                .ClientAddressPolicy.DEFAULT));
         return new StreamMQDiagnosticsEndpoint(diagnosticsService, profileService, rateLimited);
     }
 }

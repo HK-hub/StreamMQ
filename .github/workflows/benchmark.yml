@@ -51,12 +51,15 @@ jobs:
           set -euo pipefail
           mkdir -p benchmark-results
           found=0
+          # JMH 以 ResultFormatType.JSON 输出 jmh-*.json（此前 glob 写的是 jmh*.txt，导致产物恒为空）
           while IFS= read -r -d '' f; do
             cp "$f" benchmark-results/
             found=1
-          done < <(find streammq-benchmark/target -maxdepth 1 -type f -name 'jmh*.txt' -print0)
+          done < <(find streammq-benchmark/target -maxdepth 1 -type f \
+                     \( -name 'jmh*.json' -o -name 'jmh*.txt' \) -print0)
           if [ "$found" -eq 0 ]; then
-            echo "::warning::no jmh*.txt result files produced by benchmarks"
+            echo "::error::no jmh*.json result files produced by benchmarks"
+            exit 1
           fi
           ls -la benchmark-results
 

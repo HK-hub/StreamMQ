@@ -8,6 +8,7 @@ package io.github.streammq.adapter.redisson.scheduler;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -23,6 +24,7 @@ import org.mockito.Mockito;
 import org.redisson.api.RMap;
 import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RedissonClient;
+import org.redisson.client.codec.StringCodec;
 
 /**
  * 调度条目隔离区登记回归测试（payload TTL 过期场景）。
@@ -55,10 +57,12 @@ class ScheduleQuarantineTest {
         when(emptyPayload.readAllMap()).thenReturn(Map.of());
         doReturn(quarantineZset)
                 .when(redisson)
-                .<String>getScoredSortedSet(StreamMQKeys.quarantineZset("ns", "delay"));
+                .<String>getScoredSortedSet(
+                        StreamMQKeys.quarantineZset("ns", "delay"), StringCodec.INSTANCE);
         doReturn(emptyPayload)
                 .when(redisson)
-                .<String, String>getMap(StreamMQKeys.delayPayloadHash("ns", "m1"));
+                .<String, String>getMap(
+                        StreamMQKeys.delayPayloadHash("ns", "m1"), StringCodec.INSTANCE);
         when(activeZset.getScore("m1")).thenReturn(555.0);
         when(activeZset.remove("m1")).thenReturn(true);
 
@@ -79,12 +83,16 @@ class ScheduleQuarantineTest {
         when(emptyPayload.readAllMap()).thenReturn(Map.of());
         doReturn(quarantineZset)
                 .when(redisson)
-                .<String>getScoredSortedSet(StreamMQKeys.quarantineZset("ns", "retry"));
-        doReturn(emptyPayload).when(redisson).<String, String>getMap(anyString());
+                .<String>getScoredSortedSet(
+                        StreamMQKeys.quarantineZset("ns", "retry"), StringCodec.INSTANCE);
+        doReturn(emptyPayload)
+                .when(redisson)
+                .<String, String>getMap(anyString(), eq(StringCodec.INSTANCE));
         when(activeZset.getScore("m2")).thenReturn(777.0);
         when(activeZset.remove("m2")).thenReturn(true);
 
-        RetryScheduler.RetryTarget target = new RetryScheduler.RetryTarget("topic", "group", 16);
+        RetryScheduler.RetryTarget target =
+                new RetryScheduler.RetryTarget("ns", "topic", "group", 16);
         scheduler.doTransfer(
                 "m2",
                 target,
@@ -108,10 +116,13 @@ class ScheduleQuarantineTest {
         when(payload.readAllMap())
                 .thenReturn(Map.of(DelayMessageScheduler.FIELD_TARGET_TOPIC, "t"));
         // 原子批走 createBatch；此处只关注隔离区不被触碰
-        doReturn(payload).when(redisson).getMap(StreamMQKeys.delayPayloadHash("ns", "m3"));
+        doReturn(payload)
+                .when(redisson)
+                .getMap(StreamMQKeys.delayPayloadHash("ns", "m3"), StringCodec.INSTANCE);
         doReturn(quarantineZset)
                 .when(redisson)
-                .<String>getScoredSortedSet(StreamMQKeys.quarantineZset("ns", "delay"));
+                .<String>getScoredSortedSet(
+                        StreamMQKeys.quarantineZset("ns", "delay"), StringCodec.INSTANCE);
 
         try {
             scheduler.doTransferExpired(activeZset, "m3", "SEC_1");

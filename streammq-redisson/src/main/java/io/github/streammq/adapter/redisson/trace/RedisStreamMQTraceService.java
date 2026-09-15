@@ -28,6 +28,7 @@ import java.util.Objects;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.StreamMessageId;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -167,7 +168,7 @@ public class RedisStreamMQTraceService implements StreamMQTraceService {
         String traceKey = StreamMQKeys.traceStream(namespace, date);
         List<TraceRecord> records = new ArrayList<>();
         try {
-            RStream<String, String> stream = redisson.getStream(traceKey);
+            RStream<String, String> stream = redisson.getStream(traceKey, StringCodec.INSTANCE);
             var entries = stream.range(maxReadCount, StreamMessageId.MIN, StreamMessageId.MAX);
             if (entries != null) {
                 for (var entry : entries.entrySet()) {

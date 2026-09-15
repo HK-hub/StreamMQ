@@ -5,6 +5,83 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — 发布前红队审查（第二轮）根因修复
+
+> 依据 `docs/fullReview.md` 协议执行第二轮红队审查，结论与逐项处置见 [docs/REPORT.md](docs/REPORT.md)。
+
+### Security
+
+- **传输层 codec 显式化（消除 SDK 侧反序列化 gadget 面）**：SDK 自有 Redis 键（业务 Stream / DLQ /
+  重试 / 延迟 / 事务半消息 / 注册表 / 广播租约）全部显式使用 `StringCodec`，不再继承下游
+  `RedissonClient` 的全局 codec（Redisson 默认 `Kryo5Codec(registrationRequired=false)`，即未注册限制的
+  Java 反序列化）。此前任何可写 Redis 的一方都能投放 gadget 载荷在消费端触发 RCE，且全局 codec 非字符串时
+  会出现静默跨 codec 不兼容。
+- **载荷类型护栏改为「形态归一化 + 危险命名空间拒绝」**：`PayloadTypeSafety` 先归一化 JVM 描述符形态
+  （`[Ljava.lang.Runtime;` → `java.lang.Runtime`），拒绝非法类名 / `$Lambda` / `$Proxy` 形态，并扩充
+  已知 gadget 命名空间黑名单（Commons-Collections / BeanUtils / fastjson / Xalan / SnakeYAML / Groovy /
+  ROME / XStream / Hibernate / 脚本引擎等）。
+- **`JdkSerializer`**：不再把「载荷派生的目标类型名」写入本次 `ObjectInputFilter` 允许集（消除"载荷自扩
+  白名单"）；移除整包 `java.lang.` 放行，改为逐类放行语言标量 + 单独放行枚举，杜绝
+  `java.lang.reflect.Proxy` / `java.lang.invoke.SerializedLambda` 等 gadget 使能类被放行。
+- **BasicAuth 时序与卫生**：改为非短路比较（消除"用户名错误即跳过口令比较"的用户名有效性时序预言），构造期
+  只保留密码 SHA-256 摘要，避免每请求把 `char[]` 复制成不可变 `String`。
+- **毒丸日志脱敏**：DLQ 毒丸不再打印完整载荷与用户属性，改为字段名 + 数量。
+- **Fury 白名单可用性**：新增 `streammq.producer.fury-registered-classes`，白名单模式下可直接声明业务消息体
+  类型；未声明时启动日志给出可操作告警。文档 / Javadoc / SECURITY.md 统一为"默认强制类注册白名单；
+  `new FurySerializer()` 即白名单，`new FurySerializer(false)` 才是宽松模式（受系统属性门禁保护）"。
+
+### Fixed
+
+- **PEL 认领不再误伤活跃慢消费者**：并发消费的内联处理期间消费者无法自行心跳，"idle 超阈值"不等于"已死"。
+  现以消费者组管理器**独立心跳线程**写入的 instances Hash 交叉判活（消费者名内嵌 instanceId，时间取 Redis
+  服务器时钟），避免重复副作用与把已成功处理的消息误投入 DLQ。
+- **顺序分片判活按注册项 Converter 的分片键字段名解析**（此前硬编码 `shardingKey`，切换 Compact/PassThrough
+  Converter 后读到 null → 误判分片 0 → 活分片保护失效）。
+- **按消费者 namespace 注册恢复目标**：此前 `@StreamMQConsumer#namespace` 覆盖全局值时，PEL/重试/DLQ 恢复
+  会扫描错误的 Stream/Group 而静默失效。
+- `TransactionScanner` 类缓存改为插入序 + 读写锁（消除访问序 `LinkedHashMap` 在读锁下结构变更导致的链表损坏）。
+- `unregister` 释放 per-consumer handler（此前 `removeHandler` 无调用方，动态注销后无界泄漏）。
+- `start()` 中途失败回滚 `STARTING → STOPPED`（此前容器卡死，且文档给出的补救路径不可达）。
+- 5 个调度器 `start()`/`stop()` 同步化（消除 start 安装执行器与 stop 关闭执行器的竞态）。
+- `TransactionCommitExecutor` 严格校验 Lua 返回值：非 `PUBLISHED`/`HALF_MISSING` 直接失败，不再乐观当作已发布。
+- **`RBatch` 结构访问补全显式 codec（跨 codec 一致性回归修复）**：事务注册期的
+  `RBatch.getScoredSortedSet(transactionCheckZSet)` 为链式调用、漏传 codec，导致 ZSet 成员按客户端全局 codec
+  编码，而终态清理用 `StringCodec` 删除 —— 二者编码不一致使 ZREM 不匹配，**事务回查条目永久残留**。
+  该缺陷由 `TransactionBinaryCodecIT`（Kryo5 客户端）捕获。另新增 `CodecExplicitnessTest` 架构守卫：
+  静态扫描主源码，任何未显式指定 codec 的 Redis 结构访问直接失败，防止同类问题再次引入。
+- **单条 ACK 改为有界异步流水线（性能 / 语义契约变更）**：`StreamMQListener#ack` 此前每条消息都**同步**等待一次
+  Redis 往返（XACK），该阻塞 RTT 是消费吞吐的硬上限。现改为有界异步流水线（窗口 256）：窗口满时阻塞等待最老的
+  ACK 完成以形成背压，停机时对在途 ACK 做有界排空。**注意语义变化**：`ack` 返回不再代表 Redis 端已确认；
+  XACK 失败会记录 ERROR 且消息保留在 PEL 由认领调度器兜底重投（at-least-once 不变，消费端必须幂等）。
+  需要"返回即已确认"时请用同步的 `ackBatch(List)`。Javadoc 已同步说明该契约。
+
+### Changed
+
+- ACK 热路径逐消息 `LOG.info` 降为 DEBUG（消除热路径对象分配与 appender 竞争）。
+- **Maven（依赖管理语义变更）**：`streammq-bom` **不再导入 `spring-boot-dependencies`**。此前该导入会连带管理
+  Spring / Jackson / SLF4J / Micrometer 等第三方版本，在使用方 import 顺序靠后时**静默覆盖使用方的 Boot 版本**
+  （且与本 BOM 自身注释声明的"不管这些"自相矛盾）。现在 BOM 只管 StreamMQ 自身构件与 Redisson；**使用方需自行
+  管理 Spring Boot 版本**（如 `spring-boot-starter-parent` 或自己的 `spring-boot-dependencies`）。StreamMQ 各模块的
+  传递依赖版本由各自 POM 携带，已用隔离本地仓库的 staging smoke 实测：仅 import 本 BOM 即可正常解析与编译。
+- **Maven**：BOM 与发布集对齐——移除 `streammq-diagnostics` / `streammq-tracing-opentelemetry` /
+  `streammq-spring-cloud-stream-binder` 的管理项（它们被 release `excludeArtifacts` 永久排除，写进 BOM 会让
+  使用方解析到不存在的构件）；`streammq-kubernetes` 重新纳入 reactor 并声明 failsafe（其
+  `KubernetesHealthRegistrationIT` 此前从未执行）；样本模块显式声明未发布构件的版本。
+- **API（`streammq-core` 客户端地址可信策略）**：删除静态全局 API
+  `WebRequestAuthSupport.configure(...)` / `isTrustForwardedHeaders()` / `getTrustedProxyCidrs()` /
+  `getClientAddressFromRequest()`；改为不可变值对象 `WebRequestAuthSupport.ClientAddressPolicy`
+  （`DEFAULT` = 不信任 `X-Forwarded-For`）与 `getClientAddressFromRequest(ClientAddressPolicy)`。
+  装配层把策略注册为 Bean（starter 由 `streammq.admin.trust-forwarded-headers` / `trusted-proxies` 构造），
+  `RateLimitedAuthenticator` 新增接收策略的构造器，`streammq-diagnostics` 未装配时退化为安全默认。
+  消除"同 JVM 多 Spring 上下文 last-writer-wins / 上下文重启后残留"的问题。
+- **发布/CI 门禁**：release 通道启用 JaCoCo 覆盖率门禁（`-Djacoco.check.skip=false`）+ 集成测试执行量
+  tripwire + 版本改写后重新 `verify`（保证"被测试的 = 被发布的"）；staging smoke 使用隔离本地仓库，并新增
+  「未发布构件必须不可解析」的反向断言；OWASP 扫描加有限重试与每周计划触发。
+- **文档**：Quick Start 的 Redis 配置由无绑定的 `redisson.singleServerConfig.*` 改为 `spring.data.redis.*`
+  （示例与样本 IT 同步）；中英文 README 修复默认序列化器 / 默认值 / Fury 安全姿态等相互矛盾的表述；
+  `docs/configuration-reference.md` 纠正 9 处错误默认值；模块表标注 0.1.x 仅源码提供的模块；修复死链。
+- 新增 [docs/REPORT.md](docs/REPORT.md)：第二轮红队审查报告、逐项处置与发布门禁结论。
+
 ## [0.1.2] - 2026-09-10 — 持久化广播消费实例 + 安全默认与质量门禁
 
 ### Added

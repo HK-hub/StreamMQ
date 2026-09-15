@@ -47,7 +47,7 @@ class RedisStreamMQTraceServiceTest {
     void setUp() {
         redisson = mock(RedissonClient.class);
         stream = mock(RStream.class);
-        doReturn(stream).when(redisson).getStream(anyString());
+        doReturn(stream).when(redisson).getStream(anyString(), any());
         service = new RedisStreamMQTraceService(redisson, "ns");
     }
 

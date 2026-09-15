@@ -11,6 +11,7 @@ import java.util.Objects;
 import org.redisson.api.PendingResult;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
+import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -42,7 +43,7 @@ public class RedisBacklogProbe implements BacklogProbe {
         }
         try {
             String streamKey = StreamMQKeys.topicStream(namespace, topic);
-            RStream<String, String> stream = redisson.getStream(streamKey);
+            RStream<String, String> stream = redisson.getStream(streamKey, StringCodec.INSTANCE);
             long streamSize = stream.size();
             long pendingCount = 0;
             try {

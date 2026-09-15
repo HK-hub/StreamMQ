@@ -22,6 +22,7 @@
         <module>streammq-tracing-opentelemetry</module>
         <module>streammq-diagnostics</module>
         <module>streammq-spring-cloud-stream-binder</module>
+        <module>streammq-kubernetes</module>
         <module>streammq-test</module>
         <module>streammq-samples</module>
         <module>streammq-benchmark</module>
@@ -102,7 +103,6 @@
         <maven-failsafe-plugin.version>3.5.2</maven-failsafe-plugin.version>
         <maven-enforcer-plugin.version>3.5.0</maven-enforcer-plugin.version>
         <jacoco-maven-plugin.version>0.8.12</jacoco-maven-plugin.version>
-        <flatten-maven-plugin.version>1.6.0</flatten-maven-plugin.version>
         <spotless-maven-plugin.version>2.43.0</spotless-maven-plugin.version>
         <owasp-dependency-check.version>12.1.1</owasp-dependency-check.version>
         <!-- OWASP Dependency-Check 默认跳过；CI 中通过 -Dowasp.skip=false 显式开启 -->
@@ -521,10 +521,6 @@
                             </excludes>
                         </parameter>
                     </configuration>
-                </plugin>
-                <plugin>
-                    <groupId>org.apache.maven.plugins</groupId>
-                    <artifactId>maven-antrun-plugin</artifactId>
                 </plugin>
                 <plugin>
                     <groupId>com.diffplug.spotless</groupId>

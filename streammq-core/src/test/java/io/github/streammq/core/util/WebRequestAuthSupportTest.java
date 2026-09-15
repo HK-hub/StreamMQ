@@ -7,7 +7,6 @@ package io.github.streammq.core.util;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -118,38 +117,16 @@ class WebRequestAuthSupportTest {
         assertThat(WebRequestAuthSupport.matchesCidr("10.0.0.1", "10.0.0.0/33")).isFalse();
     }
 
-    // ===================== XFF 可信策略 =====================
-
-    @Test
-    @DisplayName("默认不信任 X-Forwarded-For（安全默认值）")
-    void xff_trustOffByDefault() {
-        // 每次测试前复位为默认值，避免类级静态状态串扰
-        WebRequestAuthSupport.configure(false, List.of());
-        assertThat(WebRequestAuthSupport.isTrustForwardedHeaders()).isFalse();
-        assertThat(WebRequestAuthSupport.getTrustedProxyCidrs()).isEmpty();
-    }
-
-    @Test
-    @DisplayName("configure 显式开启后状态可读且 CIDR 集合不可变")
-    void xff_configureReflectsState() {
-        WebRequestAuthSupport.configure(true, List.of("10.0.0.0/8", "2001:db8::/32"));
-        assertThat(WebRequestAuthSupport.isTrustForwardedHeaders()).isTrue();
-        assertThat(WebRequestAuthSupport.getTrustedProxyCidrs())
-                .containsExactlyInAnyOrder("10.0.0.0/8", "2001:db8::/32");
-
-        // null 入参归一为空集合
-        WebRequestAuthSupport.configure(true, null);
-        assertThat(WebRequestAuthSupport.getTrustedProxyCidrs()).isEmpty();
-
-        // 复位为默认，避免影响其他测试
-        WebRequestAuthSupport.configure(false, List.of());
-    }
+    // XFF 可信策略：旧静态 configure/读取 API 已移除，安全语义单测见 ClientAddressPolicyTest
 
     @Test
     @DisplayName("非 Web 环境读取请求上下文返回 null（fail-closed 拒绝）")
     void requestScoped_readersFailClosedWithoutWebContext() {
         // core 模块无 spring-web 依赖：currentRequest() 反射探测失败返回 null
         assertThat(WebRequestAuthSupport.parseBasicCredentialsFromRequest()).isNull();
-        assertThat(WebRequestAuthSupport.getClientAddressFromRequest()).isNull();
+        assertThat(
+                        WebRequestAuthSupport.getClientAddressFromRequest(
+                                WebRequestAuthSupport.ClientAddressPolicy.DEFAULT))
+                .isNull();
     }
 }

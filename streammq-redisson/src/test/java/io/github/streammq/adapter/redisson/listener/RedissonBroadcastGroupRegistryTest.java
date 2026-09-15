@@ -6,6 +6,7 @@
 package io.github.streammq.adapter.redisson.listener;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -76,10 +77,10 @@ class RedissonBroadcastGroupRegistryTest {
     @BeforeEach
     void setUp() {
         // getScoredSortedSet 每次清扫必调用（严格校验）
-        when(redisson.<String>getScoredSortedSet(anyString())).thenReturn(registry);
+        when(redisson.<String>getScoredSortedSet(anyString(), any())).thenReturn(registry);
         // 以下为条件性依赖：是否触发取决于分支（是否销毁组 / 是否遍历实例槽位 / 是否记录残留量），
         // 用 lenient 避免 STRICT_STUBS 对未走分支的桩报 UnnecessaryStubbing。
-        lenient().when(redisson.<String, String>getStream(anyString())).thenReturn(stream);
+        lenient().when(redisson.<String, String>getStream(anyString(), any())).thenReturn(stream);
         // sweepInstanceSlots 遍历注册表去重 group；空迭代器避免误触实例槽位清扫
         lenient().when(registry.iterator()).thenReturn(Collections.emptyIterator());
         lenient().when(registry.size()).thenReturn(0);
