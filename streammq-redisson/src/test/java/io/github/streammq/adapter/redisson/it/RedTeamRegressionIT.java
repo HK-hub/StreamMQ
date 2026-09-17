@@ -327,6 +327,75 @@ class RedTeamRegressionIT extends AbstractRedisIT {
         }
     }
 
+    @Test
+    @DisplayName("P1 回归：PEL 存活判据按实例标识精确匹配——活跃消费者不被认领，心跳过期后才重投")
+    void pelClaim_skipsLiveOwnerThenReclaimsAfterHeartbeatGoesStale() {
+        String topic = "pl-live-topic";
+        String group = "pl-live-group";
+        String streamKey = StreamMQKeys.topicStream(namespace, topic);
+        RStream<String, String> stream = redisson.getStream(streamKey);
+        stream.add(StreamAddArgsEntries.entries(Map.of("f", "v")));
+        stream.createGroup(
+                org.redisson.api.stream.StreamCreateGroupArgs.name(group)
+                        .makeStream()
+                        .id(new org.redisson.api.StreamMessageId(0, 0)));
+        // 消费者名内嵌实例标识（与生产端 BroadcastGroupNaming.consumerName 同源约定）
+        String instanceToken = "live-token-1";
+        stream.readGroup(
+                group,
+                BroadcastGroupNaming.consumerName(group, instanceToken),
+                org.redisson.api.stream.StreamReadGroupArgs.neverDelivered().count(10));
+
+        // instances Hash：key 必须是消费者名内嵌的实例标识（两个身份同源，判活才可能成立）。
+        // 生产端由独立心跳线程每 5s 续写；这里用虚拟线程按 50ms 续写，使心跳在判活窗口（500ms）内始终新鲜。
+        RMap<String, String> instances =
+                redisson.getMap(StreamMQKeys.consumerGroupInstances(namespace, group));
+        java.util.concurrent.atomic.AtomicBoolean beating =
+                new java.util.concurrent.atomic.AtomicBoolean(true);
+        Thread heartbeatThread =
+                Thread.ofVirtual()
+                        .name("it-broadcast-heartbeat")
+                        .start(
+                                () -> {
+                                    while (beating.get()) {
+                                        try {
+                                            instances.put(
+                                                    instanceToken,
+                                                    Long.toString(System.currentTimeMillis()));
+                                            Thread.sleep(50);
+                                        } catch (InterruptedException ex) {
+                                            Thread.currentThread().interrupt();
+                                            return;
+                                        } catch (RuntimeException ignored) {
+                                            // Redis 抖动时不中断续写循环
+                                        }
+                                    }
+                                });
+        PelClaimScheduler scheduler = new PelClaimScheduler(redisson, namespace, 500, 32, 50);
+        scheduler.registerTarget(topic, group, 16, false, 0);
+        scheduler.start();
+        try {
+            // 心跳持续新鲜 ⇒ 视为存活：至少经历若干轮扫描（入口 idle 远超 500ms），绝不 XADD 副本
+            Thread.sleep(1500);
+            assertThat(stream.size()).as("活跃慢消费者（心跳新鲜）不应被复制重投").isEqualTo(1);
+
+            // 停止续写并模拟消费者死亡（心跳过期）⇒ 恢复认领：XADD 副本 + ACK 原条目
+            beating.set(false);
+            heartbeatThread.join(1000);
+            instances.put(instanceToken, Long.toString(System.currentTimeMillis() - 3_600_000L));
+            org.awaitility.Awaitility.await()
+                    .atMost(5, TimeUnit.SECONDS)
+                    .until(() -> stream.size() == 2);
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted while awaiting heartbeat window", ex);
+        } finally {
+            beating.set(false);
+            scheduler.stop();
+            instances.delete();
+        }
+    }
+
     private long targetSize(String topic) {
         RStream<String, String> s = redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
         try {

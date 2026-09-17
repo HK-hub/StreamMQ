@@ -89,7 +89,7 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 ### 深度可扩展
 
-序列化器、转换器、过滤器、拦截器、重试策略、重平衡策略、压缩编解码器、死信失败策略、管理鉴权器、链路追踪采集器——几乎一切可替换。0.1.2 提供 **10 个面向用户的扩展点**（外加 6 个内部装配点，总计 16 个可覆盖 Bean，详见 [SPI 扩展机制](#spi-扩展机制)）。
+序列化器、转换器、过滤器、拦截器、重试策略、重平衡策略、压缩编解码器、死信失败策略、管理鉴权器、链路追踪采集器——几乎一切可替换。0.1.2 提供 **16 个扩展点**（面向用户 + 内部装配，详见 [SPI 扩展机制](#spi-扩展机制)）。
 
 ### 质量与发布姿态
 
@@ -176,6 +176,14 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 > **背压默认关闭**：`streammq.consumer.inflight-capacity` 默认值为 `0`（禁用）。如需启用限流，请将其设为正整数（背压队列将消息拉取与处理解耦，队列满时拉取阻塞）。
 
+> **为什么不直接用 Redisson `RTopic` / `RReliableTopic`？** 它们是发布/订阅语义：没有消费者组、没有按组的消费位点、
+> 没有 PEL/恢复机制、不支持顺序与延时投递，慢订阅者要么丢消息、要么撑大无界的监听队列。StreamMQ 基于 Redis
+> **Stream** 构建，正是为了获得可重放、可恢复的 at-least-once 投递，以及重试、DLQ、顺序与事务能力。
+>
+> **为什么不直接用原生 `XADD` + `XREADGROUP`？** 这正是 StreamMQ 底层的实现方式；SDK 补上了原生命令留给你自己实现的部分——
+> 消费者组生命周期与重平衡、ACK/PEL 孤儿恢复、带退避的重试、DLQ（含二级 DLQ）、延时消息、带回查的事务半消息、
+> Tag/SQL92 过滤、背压、指标、链路追踪与管理 API。如果你不需要这些能力、且希望零依赖，原生 `XADD`/`XREADGROUP` 是完全合理的选择。
+
 ---
 
 ## 性能基准测试
@@ -196,11 +204,13 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 > ⚠️ **重要：以下数字是 0.1.2 本地实测快照**（2026-09-02，localhost Redis，JDK 21，笔记本级硬件）：
 > - 序列化基准已加入 JMH `Blackhole` 消费，防止 JIT 死码消除导致吞吐虚高
-> - 消费基准已重写为「XREADGROUP 拉取 → 反序列化 → 业务回调 → XACK」完整端到端路径，并配合持续灌数
+> - 消费基准驱动的是**原始 Redisson 读路径**（XREADGROUP → 字段解码 → 业务回调 → **批量** XACK，每 100 条消息 1 次 ACK）并配合持续灌数；它**刻意绕过 listener 容器**，因此生产路径的过滤器/拦截器链、指标、重试/DLQ 处理与逐条 ACK **都不包含在内**——真实容器吞吐会更低，容器驱动的基准列为后续工作
 > - 此前 README 引用的 "Stream 消费吞吐 ~269,760 ops/s" 来自一个测量**空 XREADGROUP 网络往返**的破损基准，已移除
 > - 误差栏为 99.9% CI；笔记本级硬件结果仅供参考，生产环境请以自己的实测为准
 
 > 我们公开承认 v0.1.0 之前曾发布过有方法学缺陷的基准数字（死码消除、灌数耗尽、缺 ACK）。这种透明度比"假装没发过"更重要。**生产容量规划请以你自己环境的实测为准。**
+>
+> **注意（0.1.2 默认值变更）：** 下表中的数字是在 0.1.1 时代的默认值下测得的（Fury 为默认序列化器、并发消费超时 30s）。0.1.2 把**默认序列化器切换为 `JacksonJsonSerializer`**、并**默认关闭逐消息消费超时**（由 PEL 认领兜底 at-least-once）。两者都会改变绝对吞吐数字——请在你的环境中重新运行 `mvn -Pbenchmark` 获取当前数字。
 
 ### 序列化性能 (Throughput, ops/s) — 0.1.2 实测
 
@@ -228,16 +238,15 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 ### 消息消费性能 — 0.1.2 实测
 
-端到端完整消费路径：XREADGROUP + 字段解码 + 回调 + XACK（含持续灌数）。JMH fork=1，warmup=1×2s，measurement=3×3s。
+原始读路径：XREADGROUP + 字段解码 + 回调 + 批量 XACK（每 100 条消息 1 次 ACK，配合持续灌数）。JMH fork=1，warmup=1×2s，measurement=3×3s。**不是容器路径**——见上方方法学说明。
 
 | 消费模式 | 说明 | 1KB (ops/s) | 10KB (ops/s) |
 |----------|------|-------------|--------------|
-| `consumeThroughput` | 完整消费路径（含网络往返、反序列化、ACK） | **~2,383** | **~2,018** |
+| `consumeThroughput` | 原始读路径（含网络往返、反序列化、业务回调、批量 XACK） | **~2,383** | **~2,018** |
 | `serializationRoundTrip` | Jackson 序列化/反序列化回环（含网络） | ~270,705 | ~19,249 |
-| `messageCreateAndConsume` | 纯内存消息构建 + 回调（无网络） | ~5,857,147 | ~6,134,699 |
 
-> `consumeThroughput` 是 MQ 最关键的容量指标：它测量的是真实端到端消费路径（含 Redis 网络往返、
-> 反序列化、业务回调、XACK 确认），而非空读往返。不同硬件、Redis 实例、网络延迟下数字会有显著差异。
+> `consumeThroughput` 测量的是消费路径（含 Redis 网络往返、反序列化、业务回调、批量 XACK），并非空读往返——
+> 但它是 **SDK 容器路径的下界**：不含容器的逐条 ACK 与过滤器/拦截器/指标链。不同硬件、Redis 实例、网络延迟下数字会有显著差异。
 
 > 自行运行基准：`mvn -B -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-template exec:exec@benchmark-serialization exec:exec@benchmark-consumer -Dstreammq.benchmark.allowFlush=true`
 > 或按 [`.github/workflows/benchmark.yml`](.github/workflows/benchmark.yml) 手动触发 CI 基准任务，
@@ -245,12 +254,14 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 ### 性能优化建议
 
-1. **序列化选择**: 默认 **Apache Fury**（`streammq.producer.serializer` 默认值即
-   `io.github.streammq.adapter.redisson.serializer.FurySerializer`，该属性类型为 `Class<? extends MessageSerializer>`，
-   需填写**全限定类名**），其吞吐量是 Jackson 的 7 倍以上；Fury 默认不强制类注册，任意 POJO 开箱即用，
-   共享/多租户 Redis 建议开启类注册白名单（见 [反序列化安全](#反序列化安全)）。需要 JSON 可读性/跨语言互通时再切回 `JacksonJsonSerializer`
+1. **序列化选择**: 默认 **`JacksonJsonSerializer`**（安全优先：严格类型、无多态反序列化、无 gadget RCE 面，消息体在 Redis 中是人类可读的 JSON）。
+   需要更高吞吐时可显式 opt-in `FurySerializer`（`streammq.producer.serializer` 属性类型为 `Class<? extends MessageSerializer>`，
+   需填写**全限定类名** `io.github.streammq.adapter.redisson.serializer.FurySerializer`），其底层库为 **Apache Fory（原 Apache Fury）1.7.3**
+   （Maven 坐标 `org.apache.fory:fory-core`，**要求 >= 1.1.0**——更早版本受 CVE-2026-50076 影响，本项目 0.1.2 之前的 `org.apache.fury:fury-core:0.9.0` 即受影响）。
+   `FurySerializer` **默认强制类注册白名单**（`fury-require-class-registration=true`），需预注册业务消息体类型才能反序列化；
+   并发/多租户场景请勿关闭白名单（见 [反序列化安全](#反序列化安全)）。需要 JSON 可读性/跨语言互通时保持默认 Jackson
 2. **发送策略**: 高吞吐场景使用 `asyncSend`，可提升 4~5 倍性能
-3. **负载大小**: 10KB 大消息建议启用 GZIP 压缩（`MessageCompressor` SPI）
+3. **负载大小**: 10KB 大消息建议启用 GZIP 压缩（`CompressionCodec` SPI）
 4. **连接池**: 默认 16 连接可满足多数场景，高并发可调至 32~64。**Sizing 经验**：
    - 公式：`(consumers × consumeThreadMin) + producers + scheduler_threads + 4 headroom`。
    - 100 个 consumer、`consumeThreadMin=4`：需 400+ 连接（虚拟线程会全部并发发起 XREADGROUP）。
@@ -322,6 +333,10 @@ streammq:
   enabled: true
   namespace: streammq
 ```
+
+> **注意**：`redisson.singleServerConfig.*` 在本 starter 中**没有属性绑定**（它只绑定
+> `spring.redis.redisson.config` / `spring.redis.redisson.file`），写了不会生效，请勿使用。
+> 集群 / 哨兵等高级拓扑请通过 `spring.redis.redisson.config` 提供 Redisson 原生配置。
 
 ### 3. 启用（自动）
 
@@ -407,9 +422,9 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 @StreamMQConsumer(topic = "order-topic", consumerGroup = "order-group", dlqMode = true)
 ```
 
-> ⚠️ **广播消费会为每个容器实例创建一个独立的 Redis 消费者组，且组名随实例重启而变。**
-> 这意味着组的总数约等于心跳超时窗口内「实例数 × 重启次数」的累积量，持续增长会占用 Redis 内存
-> （每个组都有自己的 PEL）。生产使用广播模式前，请务必阅读
+> ⚠️ **广播消费会为每个容器实例创建一个独立的 Redis 消费者组，组名由持久化实例身份派生（0.1.2 起）。**
+> 持久化身份可用时，组名跨常规重启保持稳定、PEL 被保留；仅当随机 UUID 兜底生效（Redis 与本地身份文件均不可用）时，
+> 才会每次重启产生新组。生产使用广播模式前，请务必阅读
 > [广播消费的运维注意事项](#广播消费的运维注意事项)。
 
 ### StreamMessageTemplate 编程模型（高级）
@@ -637,25 +652,27 @@ streammq:
 
 ### 行为
 
-Redis 的消费者组天然是"组内竞争消费"。要实现广播（每条消息投递给所有实例），StreamMQ 的做法是：
+Redis 的消费者组天然是"组内竞争消费"。要实现广播（每条消息投递给所有实例），StreamMQ 为**每个容器实例创建一个独立的 Redis 消费者组**，组名由持久化实例身份（`BroadcastInstanceIdResolver`，0.1.2 引入）派生。身份按五级优先级解析：
 
-```
-每个容器实例 → 一个独立的 Redis 消费者组（组名后缀为容器级随机标识）
-```
+1. 显式配置 `streammq.consumer.broadcast-instance-id`（或系统属性 `streammq.instance.id` / 环境变量 `STREAMMQ_INSTANCE_ID`）
+2. 本地持久文件 `${user.home}/.streammq/instance-id`（路径可用 `streammq.consumer.broadcast-instance-id-file` 覆盖；`none`/`false` 禁用）
+3. Redis 注册中心**回收同主机的历史槽位**（跨重启持久，保住 PEL）
+4. Redis 注册中心为全新实例**分配新槽位**
+5. 随机 UUID 兜底（不稳定，等价于 0.1.2 之前的行为）
 
-该标识**跨重启不保证相同**（容器级 UUID，见
-`DefaultStreamMQListenerContainer#instanceToken`）。因此：
+因此**只要 1~4 级来源中任一可用，广播组名就跨常规重启保持稳定**；仅当随机兜底生效时才是旧行为：
 
-- **每次重启都会产生一个新组**，旧组不会立即消失；
-- 旧组由回收任务在心跳超时后清理（`RedissonBroadcastGroupRegistry#sweepStaleBroadcastGroups`）；
-- 清理前的窗口内，组的总数 = 心跳超时窗口内的「实例数 × 重启次数」；
+- **有持久化身份时**：重启后的实例复用同一消费者组 → PEL 保留、停机期间产生的消息在重连后补投、**不会创建新组**；
+  僵尸组仅在实例被永久下线（超出回收宽限期，默认 `streammq.consumer.broadcast-reclaim-grace`=7 天）后才被清扫释放。
+- **无持久化身份（随机 UUID）时**：每次重启都会产生一个新组，旧组在心跳超时（默认 `streammq.group.instance-timeout-ms`）后被清扫；
+  清理前的窗口内，组的总数 ≈ 心跳超时窗口内的「实例数 × 重启次数」。
 - 每个组都持有自己的 PEL，**会占用 Redis 内存**。
 
 ### 容量估算
 
 ```
 稳态组数量 ≈ 实例数
-峰值组数量 ≈ 实例数 × (心跳超时窗口内的最大重启次数)
+峰值组数量 ≈ 实例数 × (实例身份不可用窗口内的最大重启次数)
 ```
 
 心跳超时由 `streammq.group.instance-timeout-ms` 控制（默认见 `StreamMQConstants`）。
@@ -670,11 +687,13 @@ Redis 的消费者组天然是"组内竞争消费"。要实现广播（每条消
 
 ### 建议
 
-1. **不要对频繁重启的工作负载使用广播模式**（如 CI 环境、反复 OOM 的 Pod）。
-2. 为 `broadcastGroups` 建立告警：超过「实例数 × 3」即排查。
-3. 广播模式下消费者组**无法复用消费位点**——重启后新组从当前时间点开始消费，
+1. **生产环境的广播部署请配置持久化身份来源**（显式 `broadcast-instance-id`、可写的本地身份文件，或启动时 Redis 可达）——
+   这样才能保证重启后消费位点可恢复；只有随机 UUID 兜底会每次重启产生新组。
+2. **不要对频繁重启的工作负载使用广播模式**（如 CI 环境、反复 OOM 的 Pod）——至少在依赖 UUID 兜底时不要。
+3. 为 `broadcastGroups` 建立告警：超过「实例数 × 3」即排查。
+4. 广播消费者组**在无持久化身份时无法复用消费位点**——UUID 兜底重启后的新组从当前时间点开始消费，
    重启期间产生的消息**不会**被补投。若需要重启不丢消息，请使用集群消费
-   （`ConsumeMode.CLUSTERING`）或自行实现持久化位点。
+   （`ConsumeMode.CLUSTERING`）或显式配置持久化身份。
 
 ---
 
@@ -727,21 +746,22 @@ streammq:
     send-message-timeout: 3000         # 同步发送超时（毫秒）
     retry-times: 2                     # 同步发送重试次数（0~MAX_SYNC_RETRY_TIMES）
     compress-threshold: 0              # 0=不压缩，>0 时超过该字节数的消息自动压缩
-    serializer: io.github.streammq.adapter.redisson.serializer.FurySerializer  # 序列化器（全限定类名，默认 Fury）
-    fury-require-class-registration: true  # Fury 是否强制类注册白名单（仅对 Fury 生效；共享/多租户 Redis 建议 true）
+    serializer: io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer  # 序列化器（全限定类名，默认 Jackson；高吞吐可改为 ...FurySerializer）
+    fury-require-class-registration: true  # Fory/Fury 是否强制类注册白名单（仅对 FurySerializer 生效；默认 true）
+    fury-registered-classes: ""        # 白名单模式下预注册的业务消息体类型（全限定类名，逗号分隔；空=未注册类型反序列化被拒绝）
     stream-max-len: 0                  # Stream 最大长度（0=不限制）
     max-message-size: 536870912         # 单条消息最大字节数
 
   # ── 消费者 ──────────────────────────────────────────────
   consumer:
     batch-size: 32                     # 单次拉取批量大小（1~max-batch-size-limit；注解未声明时生效）
-    poll-timeout: 2000ms               # 单次拉取阻塞超时（Duration 格式）
+    poll-timeout: 1s                   # 单次拉取阻塞超时（Duration 格式）
     pull-interval: 0                   # 拉取间隔（毫秒），0=不间隔（注解未声明时生效）
     max-batch-size-limit: 1000         # 拉取批量上界（注解/配置与底层校验均以此为准；不可超过）
     inflight-capacity: 0               # 背压队列容量（0=禁用；>0 时拉取与处理解耦，队列满则拉取阻塞）
     paused-sleep-millis: 100           # 暂停状态下的休眠间隔（毫秒）
-    broker-error-backoff-millis: 1000  # Broker 异常退避间隔（毫秒）
-    timeout-cancel-grace-millis: 100   # 消费超时取消宽限期（毫秒），缩小与重试副本的重叠窗口
+    broker-error-backoff-millis: 500   # Broker 异常退避间隔（毫秒）
+    timeout-cancel-grace-millis: 2000  # 消费超时取消宽限期（毫秒），缩小与重试副本的重叠窗口
     consume-timeout-millis: 0      # 全局并发消费超时（毫秒），0=不设超时（注解未声明时生效）
     orderly-consume-timeout-millis: 0  # 全局顺序消费超时（毫秒），0=不启用（注解可 per-consumer 覆盖）
     consume-from-where: CONSUME_FROM_LAST  # 新消费者组起始位点（仅首次建组生效）：CONSUME_FROM_LAST=只消费组创建后消息；CONSUME_FROM_FIRST=重放全量历史
@@ -749,9 +769,9 @@ streammq:
   # ── 重试 ────────────────────────────────────────────────
   retry:
     enabled: true
-    policy: io.github.streammq.adapter.redisson.policy.FixedArrayRetryPolicy   # 重试策略（全限定类名）
+    policy: io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy   # 重试策略（全限定类名）
     max-reconsume-times: 16            # 消费失败最大重试次数（注解未声明时生效；此前该值仅取注解、全局配置失效，已修复）
-    scan-interval: 5s                  # 重试 ZSet 扫描间隔
+    scan-interval: 1s                  # 重试 ZSet 扫描间隔
     batch-size: 100                    # 单次扫描批量
     delay-array: ""                    # 自定义重试延时数组（逗号分隔毫秒，如 1000,5000,10000）
     stream-max-len: 0                  # retry Stream 最大长度（0=不限制）
@@ -762,7 +782,7 @@ streammq:
   # ── 延时 ────────────────────────────────────────────────
   delay:
     enabled: true
-    scan-interval: 5s                  # 延时 ZSet 扫描间隔
+    scan-interval: 1s                  # 延时 ZSet 扫描间隔
     batch-size: 100                    # 单次扫描批量
     failure-requeue-backoff-ms: 5000   # 转移失败后的回写退避间隔（毫秒）
 
@@ -781,7 +801,7 @@ streammq:
     min-retry-delay-ms: 1000          # DLQ 重试最小退避（毫秒）
     stream-max-len: 0                 # DLQ Stream 最大长度（0=不限制，默认）
     secondary-dlq-enabled: false      # 是否启用二级 DLQ（DLQ 再次失败时）
-    secondary-dlq-key-prefix: streammq:dlq2   # 二级 DLQ key 前缀
+    secondary-dlq-key-prefix: dlq2     # 二级 DLQ key 前缀段（完整 key = streammq:{ns}:dlq2:{group}）
     alert-threshold: 1                # DLQ 告警阈值
     # failure-strategy: io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy  # DLQ 失败策略（全限定类名）
 
@@ -800,7 +820,7 @@ streammq:
     enabled: true                     # 与 health.enabled 解耦；false 时仅关闭管理 REST 端点
     list-page-size: 100                # 列表默认页大小
     max-pending-query-size: 1000      # pending 单次最大拉取条数
-    failure-retry-cooldown-ms: 30000  # 写操作失败重试冷却期（毫秒），0=禁用
+    failure-retry-cooldown-millis: 5000  # 写操作失败重试冷却期（毫秒），0=禁用
     startup-warn: true                # 启动暴露面提醒（-Dstreammq.admin.startup-warn=false 可关）
     trust-forwarded-headers: false    # 是否信任 X-Forwarded-For 用于失败限流来源聚合（安全默认 false）
     trusted-proxies:                  # 可信代理 CIDR（仅 trust-forwarded-headers=true 时生效）
@@ -815,7 +835,7 @@ streammq:
   trace:
     enabled: false
     storage: none                     # REDIS=启用 Redis Stream 存储，其他值禁用
-    max-read-count: 1000              # 单次追踪查询最大读取条数
+    max-read-count: 10000             # 单次追踪查询最大读取条数
 
   # ── 健康检查 ────────────────────────────────────────────
   health:
@@ -950,7 +970,7 @@ public class CustomMessageSerializer implements MessageSerializer {
 |------|------|
 | `/actuator/health` | 健康检查（含 StreamMQ 组件状态） |
 | `/actuator/metrics` | Micrometer 指标 |
-| `/actuator/prometheus` | Prometheus 格式指标 |
+| `/actuator/prometheus` | Prometheus 格式指标——**需要 classpath 上有 `io.micrometer:micrometer-registry-prometheus`**（非 StreamMQ 依赖，starter 只带 `micrometer-core`），需自行引入，否则该端点 404 |
 
 ### 管理 REST API
 
@@ -1097,7 +1117,7 @@ template.syncSend(message);  // traceId 自动透传到消费者
 - [x] Micrometer 指标 + MDC 日志
 - [x] 链路追踪（TraceCollector SPI）
 - [x] 管理 REST API
-- [x] 16 个可覆盖点（10 个用户扩展点 + 6 个内部装配点）
+- [x] 16 个可覆盖点（面向用户 + 内部装配）
 - [x] Spring Boot 3 自动装配 + Actuator 集成
 - [x] Spring Cloud Stream Binder（实现 Spring Cloud Stream Binder SPI）
 - [x] Kubernetes 集成（实验性预览：CRD 控制器 / HPA / 配置热更新，默认关闭；需显式开启 `streammq.cloud.k8s.enabled=true`）
@@ -1180,9 +1200,9 @@ git commit -m "feat: add your feature"
 | Java | 21+ | 运行时 |
 | Spring Boot | 3.3.5 | 框架基础 |
 | Redisson | 3.34.1 | Redis 客户端 |
-| Jackson | 2.17.2 | JSON 序列化（对齐 Spring Boot 3.3.5 管理版本） |
-| Fury | 0.9.0 | 高性能序列化（默认，非可选） |
-| Protostuff | 1.8.0 | Protobuf 序列化（非可选替代） |
+| Jackson | 2.17.2 | JSON 序列化（默认序列化器；对齐 Spring Boot 3.3.5 管理版本） |
+| Apache Fory（原 Apache Fury） | 1.7.3 | 高性能序列化（optional 依赖，需显式 opt-in；`org.apache.fory:fory-core`，要求 >= 1.1.0——更早版本受 CVE-2026-50076 影响） |
+| Protostuff | 1.8.0 | Protobuf 序列化（optional 替代实现） |
 | Lombok | - | 代码简化 |
 | Micrometer | - | 指标收集 |
 | SLF4J | - | 日志门面 |
@@ -1218,22 +1238,23 @@ spring:
 
 `JacksonJsonSerializer`（默认序列化器）、`FurySerializer` 与 `JdkSerializer` 的安全姿态如下：
 
-- **默认序列化器是 `JacksonJsonSerializer`**（`streammq.producer.serializer` 默认值，无多态类型激活）；`FurySerializer` 需显式选用，且**默认强制类注册白名单**（`requireClassRegistration=true`），未注册的 POJO 会在反序列化时被拒绝。
+- **默认序列化器是 `JacksonJsonSerializer`**（`streammq.producer.serializer` 默认值，无多态类型激活）；`FurySerializer` 需显式选用，其底层库为 **Apache Fory（原 Apache Fury）1.7.3**（Maven 坐标 `org.apache.fory:fory-core`，**要求 >= 1.1.0**——更早的 fury-core/fory-core 受 CVE-2026-50076 影响；类名与 `name()="fury"` 保持不变以兼容既有配置），且**默认强制类注册白名单**（`requireClassRegistration=true`），未注册的 POJO 会在反序列化时被拒绝。
   ```yaml
   streammq:
     producer:
       fury-require-class-registration: true # 默认即 true（强制类注册白名单）；设为 false 需显式承担反序列化风险
+      fury-registered-classes: com.acme.OrderCreated,com.acme.Payment # 白名单模式下预注册的业务消息体类型
   ```
-  白名单模式下需预注册业务消息体类型（构造器注册或启动阶段调用 `register`/`registerAll`）：
+  白名单模式下需预注册业务消息体类型（构造器注册、启动阶段调用 `register`/`registerAll`，或 Spring 配置声明 `fury-registered-classes`）：
   ```java
   FurySerializer<OrderCreated> serializer = new FurySerializer<>(OrderCreated.class);
   // 等价写法：new FurySerializer<>(true).register(OrderCreated.class);
   ```
-  纯 Java 直接实例化时：`new FurySerializer()` **等价于 `new FurySerializer(true)`，即强制白名单模式**；`new FurySerializer(false)` 才是宽松模式，且需显式设置 `-Dstreammq.security.allowUnrestrictedSerializer=true` 才能创建（否则抛 `SecurityException`）。
+  纯 Java 直接实例化时：`new FurySerializer()` **等价于 `new FurySerializer(true)`，即强制白名单模式**；`new FurySerializer(false)` 才是宽松模式，且需显式设置 `-Dstreammq.security.allowUnrestrictedSerializer=true` 才能创建（否则抛 `SecurityException`；设置该属性后仍会输出 WARN 风险提醒）。
 - `JdkSerializer` 内置 JEP 290 类名白名单过滤器（目标类型 + JDK 基础类型），反序列化前拦截未知类；
   第三方业务类型通过 `addAllowedClasses(...)` 显式放行。切勿使用 `JdkSerializer.unrestricted()`。
 
-Fury 的 `isInstance` 校验发生在 `deserialize` **之后**，只用于校验结果类型而非阻断 gadget 执行——真正的防线是默认开启的类注册白名单。若 Redis 实例可能被不可信方写入（共享实例、多租户场景），请勿关闭该白名单。完整安全策略见 [SECURITY.md](SECURITY.md)。
+`FurySerializer` 的 `isInstance` 校验发生在 `deserialize` **之后**，只用于校验结果类型而非阻断 gadget 执行——真正的防线是默认开启的类注册白名单。若 Redis 实例可能被不可信方写入（共享实例、多租户场景），请勿关闭该白名单。完整安全策略见 [SECURITY.md](SECURITY.md)。
 
 ### 安全策略
 

@@ -63,10 +63,10 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- Fury -->
+        <!-- Fory（原 Fury） -->
         <dependency>
-            <groupId>org.apache.fury</groupId>
-            <artifactId>fury-core</artifactId>
+            <groupId>org.apache.fory</groupId>
+            <artifactId>fory-core</artifactId>
             <scope>test</scope>
         </dependency>
 

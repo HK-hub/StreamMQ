@@ -13,6 +13,10 @@ on:
     # 每周一 03:17 UTC：依赖漏洞库更新后定期复查（PR 门禁不依赖此扫描）
     - cron: '17 3 * * 1'
 
+# 最小权限原则：CI 只需读取仓库内容（artifact 上传走 Actions 运行时 token，不受此处限制）
+permissions:
+  contents: read
+
 jobs:
   guard:
     name: Guards (parent↔BOM property sync)
@@ -70,6 +74,27 @@ jobs:
       - name: Build (compile + enforcer)
         run: mvn clean compile -DskipTests
         # 注：sources/javadoc jar 在 package 阶段才会产出，此处无可上传物，故不配置上传步骤
+
+  format:
+    # 格式门禁：此前所有 mvn 调用都带 -Dspotless.check.skip=true，格式漂移无人拦截。
+    # spotless:check 只读源码、不需要 Redis，因此独立成 job（与 build 并行）。
+    name: Formatting check (Spotless)
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      - name: Check formatting (mvn spotless:check)
+        # 不传 -Dspotless.check.skip=true：这里就是格式门禁本体，必须真实执行
+        run: mvn -q spotless:check
 
   test:
     name: Test
@@ -232,15 +257,18 @@ jobs:
 
       # verify 阶段：单测 + 集成测试（需上方 Redis service）一并执行并收集 jacoco 数据，
       # jacoco:report / jacoco:check 已绑定在 verify 阶段（见根 POM），-Djacoco.check.skip=false 启用门禁。
-      # 集成测试对覆盖率的贡献不可或缺（redisson 实测：仅单测约 33% 行覆盖，含 IT 达 90%+），
+      # 集成测试对覆盖率的贡献不可或缺（redisson 含 IT 实测行覆盖约 0.63、分支约 0.53；
+      # 模块门禁取「实测 − 3pt」= LINE 0.60 / BRANCH 0.50），
       # 因此必须提供 Redis 并运行 verify，而非仅 test。
       # -am 自动带上所选模块的 reactor 依赖（如 core），确保闭环可解析。
+      # 注意：模块清单不能用 YAML 折叠标量（>-）书写——折行会在行尾逗号后插入空格，
+      # Maven 会把后续模块名当作 lifecycle phase 直接失败；此处用 `\` 续行交给 shell 拼接。
       - name: Coverage check on published modules
-        run: >-
-          mvn -pl streammq-core,streammq-redisson,streammq-spring-boot-starter,
-          streammq-tracing-opentelemetry,streammq-diagnostics,
-          streammq-spring-cloud-stream-binder,streammq-test
-          -am verify -Djacoco.check.skip=false -Dspotless.check.skip=true
+        run: |
+          mvn -pl streammq-core,streammq-redisson,streammq-spring-boot-starter,\
+          streammq-tracing-opentelemetry,streammq-diagnostics,\
+          streammq-spring-cloud-stream-binder,streammq-test \
+              -am verify -Djacoco.check.skip=false -Dspotless.check.skip=true
 
   staging-smoke:
     # P2-8：发布预检——把全部模块 install 到本地仓库（模拟 staging），

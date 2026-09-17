@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 /**
  * StreamMQ Spring Cloud Stream Binder 实现，允许 Spring Cloud Stream 用户以零代码改动接入 StreamMQ 作为消息后端。
  *

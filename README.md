@@ -128,7 +128,7 @@ Serializers, converters, filters, interceptors, retry policies, rebalance strate
 | Message compression | **Yes (GZIP)** | No | No | Yes | Yes |
 | Backpressure | **Yes (InflightQueue)** | No | No | Yes | Yes |
 | Spring Boot 3 integration | **Deep** | Average | Average | Average | Average |
-| Extension points | **16** (10 user-facing + 6 internal) | 0 | 0 | Few | Few |
+| Extension points | **16** (user-facing + internal assembly) | 0 | 0 | Few | Few |
 | Management interface | **REST + Actuator** | None | None | Dashboard | None |
 | Tracing | **Yes (TraceCollector SPI + OTel)** | No | No | Yes | No |
 | Recommended scale | Medium/small (< 100M/day) | Medium/small | Medium/small | Large | Very large |
@@ -212,7 +212,7 @@ artifacts and back-filled into this table.
 
 > ⚠️ `mvn verify` requires a local Redis (`localhost:6379`). Without Redis, IT auto-skips; CI uses Docker service.
 > ⚠️ **Build prerequisites:** JDK **21+** is required (`requireJavaVersion [21,)`) and Maven **3.9+**. The build runs `spotless:check` at the `verify` phase — run `mvn spotless:apply` first, or skip with `-Dspotless.check.skip=true`.
-> ⚠️ **Default serializer is `JacksonJsonSerializer` (strict types, no gadget RCE surface).** As of 0.1.2 the default flipped from Fury (unrestricted mode) to Jackson for **safe-by-default** publishing: a library's default deserializer must not expose an RCE surface to every downstream app. **For higher throughput**, opt in to `FurySerializer` (`streammq.producer.serializer=io.github.streammq.adapter.redisson.serializer.FurySerializer`, then pre-register your payload types (`FurySerializer` enforces the class-registration whitelist by default)), or `ProtostuffSerializer`. Fury/Protostuff are `optional` dependencies of `streammq-redisson` — add them to your classpath only when you use them, so Guava/Protostuff are not force-pulled into every app. See [SECURITY.md](SECURITY.md).
+> ⚠️ **Default serializer is `JacksonJsonSerializer` (strict types, no gadget RCE surface).** As of 0.1.2 the default flipped from Fury (unrestricted mode) to Jackson for **safe-by-default** publishing: a library's default deserializer must not expose an RCE surface to every downstream app. **For higher throughput**, opt in to `FurySerializer` (`streammq.producer.serializer=io.github.streammq.adapter.redisson.serializer.FurySerializer`, then pre-register your payload types (`FurySerializer` enforces the class-registration whitelist by default)), or `ProtostuffSerializer`. Fory (`org.apache.fory:fory-core`, >= 1.1.0 — the underlying library is Apache Fory, formerly Apache Fury) and Protostuff are `optional` dependencies of `streammq-redisson` — add them to your classpath only when you use them, so Guava/Protostuff are not force-pulled into every app. See [SECURITY.md](SECURITY.md).
 
 ### 1. Add dependencies
 
@@ -305,7 +305,7 @@ public class OrderService {
 }
 ```
 
-> **Power users**: when you need access to interceptors / filters / SPIs, inject `StreamMessageTemplate` directly (see [Advanced Usage](#advanced-usage)).
+> **Power users**: when you need access to interceptors / filters / SPIs, inject `StreamMessageTemplate` directly (see [Extension Points](#extension-points)).
 
 ### 5. Consume a message
 
@@ -349,9 +349,10 @@ One-line annotation, declaratively defines the consumer; supports concurrent, or
 ```
 
 > ⚠️ **Broadcast consumption creates a separate Redis consumer group per container instance,
-> and the group name changes across restarts.** The total group count is therefore roughly
-> "instance count × restart count" within the heartbeat-timeout window, and it keeps consuming
-> Redis memory (every group owns its own PEL). Before using broadcast mode in production, read
+> and the group name is derived from a persistent instance identity (0.1.2+).** With a persistent
+> identity the group name is stable across typical restarts and the PEL is preserved; only the
+> random-UUID fallback (Redis and the local identity file both unavailable) produces a new group
+> per restart. Before using broadcast mode in production, read
 > [Broadcast Consumption — Operational Notes](#broadcast-consumption--operational-notes).
 
 ### StreamMessageService programming model (recommended)
@@ -417,22 +418,25 @@ GZIP via `CompressionCodec` SPI; auto-compresses when payload exceeds threshold.
 
 Redis consumer groups are inherently "competing consumers within a group". To implement broadcast
 (every instance receives every message), StreamMQ gives **each container instance its own Redis
-consumer group** identified by a persistent instance token (`BroadcastInstanceIdResolver`).
-The token is resolved via a five-level fallback chain:
+consumer group** identified by a persistent instance token (`BroadcastInstanceIdResolver`,
+introduced in 0.1.2). The token is resolved via a five-level fallback chain:
 
-1. Explicit `streammq.consumer.broadcast-instance-id` configuration
-2. Local file (`streammq.{namespace}.broadcast-instance`)
-3. Redis broadcast registry (persistent, survives restarts)
-4. MAC-address based fallback
-5. Random UUID (last resort, non-persistent)
+1. Explicit configuration: `streammq.consumer.broadcast-instance-id` (or system property
+   `streammq.instance.id` / environment variable `STREAMMQ_INSTANCE_ID`)
+2. Local persistent file: `${user.home}/.streammq/instance-id`
+   (path overridable via `streammq.consumer.broadcast-instance-id-file`; `none`/`false` disables it)
+3. Redis broadcast registry **reclaiming this host's previous slot** (persists across restarts, keeps the PEL)
+4. Redis broadcast registry **allocating a fresh slot** for a brand-new instance
+5. Random UUID (last resort, non-persistent — the pre-0.1.2 behaviour)
 
 This means **the broadcast group name is stable across typical restarts** when any of the
-persistent identity sources (1–3) are configured or available. However, **if only the
+persistent identity sources (1–4) are configured or available. However, **if only the
 random fallback applies**, the old behaviour applies:
 
 - **With persistent identity**: restarted instances resume the same consumer group → PEL is
   preserved, messages produced during downtime are delivered on reconnect, **no new group created**.
-  Stale groups still exist only when instances are decommissioned permanently (heartbeat timeout).
+  Stale groups still exist only when instances are decommissioned permanently (slot reclaimed and
+  eventually swept after the reclaim grace period, default `streammq.consumer.broadcast-reclaim-grace` = 7d).
 - **Without persistent identity (random UUID)**: every restart creates a new group; old groups
   are swept after heartbeat expiry (default `streammq.group.instance-timeout-ms`).
   Total group count ≈ instance-count × restarts within the heartbeat window.
@@ -440,8 +444,9 @@ random fallback applies**, the old behaviour applies:
 
 ### Recommendations
 
-1. **Configure a persistent identity source** (federated config or `broadcast-instance-id`) for
-   production broadcast deployments — this ensures restart-safe offset persistence.
+1. **Configure a persistent identity source in production** (explicit `broadcast-instance-id`, a writable
+   local file, or a reachable Redis at startup) — this ensures restart-safe offset persistence; only a
+   random UUID fallback produces a new group per restart.
 2. **Do not use broadcast mode for workloads that restart frequently** (CI environments, Pods that
    repeatedly OOM) when relying on the UUID fallback.
 3. Alert on `broadcastGroups`: investigate above "instance count × 3".
@@ -484,10 +489,10 @@ A consumer that "registers successfully but never consumes" is the symptom most 
 | **streammq-tracing-opentelemetry** | OpenTelemetry tracing integration — *source-only in 0.1.x* |
 | **streammq-diagnostics** | Message profiling, slow-consume, backlog, DLQ diagnostics — *source-only in 0.1.x* |
 | **streammq-kubernetes** | K8s health checks, HPA, graceful shutdown, CRD operator (experimental, default off) — *source-only in 0.1.x* |
-| **streammq-spring-cloud-stream-binder** | Spring Cloud Stream Binder implementation |
-| **streammq-benchmark** | JMH benchmarks |
+| **streammq-spring-cloud-stream-binder** | Spring Cloud Stream Binder implementation — *source-only in 0.1.x* |
+| **streammq-benchmark** | JMH benchmarks — *source-only in 0.1.x* |
 | **streammq-test** | Test utilities: containerized Redis (Testcontainers, **requires a Docker daemon**), Redis availability probe, assertions, mocks. Import with `test` scope |
-| **streammq-samples** | Sample projects covering all features |
+| **streammq-samples** | Sample projects covering all features — *source-only in 0.1.x* |
 
 ---
 
@@ -569,7 +574,7 @@ streammq:
 |---|---|
 | `/actuator/health` | Health check (incl. StreamMQ component status) |
 | `/actuator/metrics` | Micrometer metrics |
-| `/actuator/prometheus` | Prometheus format |
+| `/actuator/prometheus` | Prometheus format — **requires `io.micrometer:micrometer-registry-prometheus` on the classpath** (not a StreamMQ dependency; the starter only brings `micrometer-core`). Add it yourself or the endpoint returns 404 |
 
 > **Exposure note:** `/actuator/streammq` (and the management REST API below) is a Spring Boot `@WebEndpoint`. Spring Boot only exposes `health` and `info` by default, so without the setting below the endpoint returns **404**. Explicitly include it:
 >
@@ -592,10 +597,16 @@ All under `/actuator/streammq`, dispatched by HTTP method + path segment:
 | `/actuator/streammq/topics` | GET | List topics |
 | `/actuator/streammq/pending/{group}/{topic}` | GET | Pending messages |
 | `/actuator/streammq/dlq/{group}` | GET | DLQ messages |
+| `/actuator/streammq/dlq/{group}?messageId&targetTopic` | POST | Requeue a DLQ message |
+| `/actuator/streammq/dlq/{group}/{messageId}` | DELETE | Delete a DLQ message (`confirm={messageId}` required) |
 | `/actuator/streammq/stats/{group}/{topic}` | GET | Runtime stats |
+| `/actuator/streammq/ack/{group}/{topic}?messageId` | POST | Manual ACK |
 | `/actuator/streammq/rebalance/{group}` | POST | Trigger rebalance |
+| `/actuator/streammq/topics?topic=` | POST | Create a topic |
+| `/actuator/streammq/topics/{topic}` | DELETE | Delete a topic (`confirm={topic}` required) |
+| `/actuator/streammq/config/{group}` | POST | Update consumer-group config at runtime |
 
-All require `ManagementAuthenticator`. Default is `DenyAllAuthenticator` (rejects everything, returns 401). Register `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` Bean to open access.
+All require `ManagementAuthenticator`. Default is `DenyAllAuthenticator` (rejects everything, returns 401). Register `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` Bean to open access. Authentication failures are rate-limited (10 failures per 60s → 5-minute lockout per client), and clients are aggregated by the non-spoofable `remoteAddr` by default; the optional `X-Forwarded-For` trust model (`streammq.admin.trust-forwarded-headers` / `trusted-proxies`) — together with the `streammq-diagnostics` MVC-endpoint exposure caveats — is documented in full in the Chinese README's 管理 REST API section.
 
 ---
 
@@ -716,7 +727,7 @@ git commit -m "feat: add your feature"
 | Spring Boot | 3.3.5 | Framework |
 | Redisson | 3.34.1 | Redis client |
 | Jackson | 2.17.2 | JSON serialization (aligned with Spring Boot 3.3.5 managed version) |
-| Fury | 0.9.0 | High-perf serialization (optional; opt-in for throughput) |
+| Apache Fory (formerly Apache Fury) | 1.7.3 | High-perf serialization (optional; opt-in for throughput; `org.apache.fory:fory-core`, required >= 1.1.0 — CVE-2026-50076) |
 | Protostuff | 1.8.0 | Protobuf serialization (optional alternative) |
 | Lombok | - | Code simplification |
 | Micrometer | - | Metrics |
@@ -736,17 +747,18 @@ StreamMQ takes your security seriously. Best practices:
 
 ### Deserialization safety
 
-- `FurySerializer` (opt-in, high throughput; `streammq.producer.serializer` must be explicitly set) — **enforces class registration by default** (`requireClassRegistration=true`): only explicitly registered types can be deserialized and unregistered POJOs are rejected. Pre-register your payload types:
+- `FurySerializer` (opt-in, high throughput; `streammq.producer.serializer` must be explicitly set; underlying library **Apache Fory (formerly Apache Fury) 1.7.3**, Maven coordinates `org.apache.fory:fory-core`, >= 1.1.0 required — earlier versions are affected by CVE-2026-50076) — **enforces class registration by default** (`requireClassRegistration=true`): only explicitly registered types can be deserialized and unregistered POJOs are rejected. Pre-register your payload types:
   ```yaml
   streammq:
     producer:
       fury-require-class-registration: true
+      fury-registered-classes: com.acme.OrderCreated,com.acme.Payment
   ```
-  Register application payloads up front with `new FurySerializer<>(OrderCreated.class)` or `new FurySerializer().register(OrderCreated.class)`. From plain Java: `new FurySerializer()` **is the whitelist mode** (same as `new FurySerializer(true)`); `new FurySerializer(false)` is the unrestricted mode and requires `-Dstreammq.security.allowUnrestrictedSerializer=true` (otherwise it throws). Note the post-deserialize `isInstance` check only validates the result type — it cannot stop gadget execution, so the whitelist is the real defense.
+  Register application payloads up front with `new FurySerializer<>(OrderCreated.class)` or `new FurySerializer().register(OrderCreated.class)`. From plain Java: `new FurySerializer()` **is the whitelist mode** (same as `new FurySerializer(true)`); `new FurySerializer(false)` is the unrestricted mode and requires `-Dstreammq.security.allowUnrestrictedSerializer=true` (otherwise it throws `SecurityException`; with the property set it still logs a WARN). Note the post-deserialize `isInstance` check only validates the result type — it cannot stop gadget execution, so the whitelist is the real defense.
 - When the default serializer (`JacksonJsonSerializer`, nested-object safe) is in effect, the underlying Redisson client codec must still be secured separately — see [SECURITY.md](SECURITY.md) for the full security surface.
 - `JdkSerializer` has a JEP 290 class name whitelist filter (target type + JDK basics); use `JdkSerializer.unrestricted()` only as a last resort — gated by `-Dstreammq.security.allowUnrestrictedSerializer=true`.
 
-For shared/multi-tenant Redis, keep the Fury class-registration whitelist enabled (it is the default). See [SECURITY.md](SECURITY.md) for the full security policy.
+For shared/multi-tenant Redis, keep the `FurySerializer` class-registration whitelist enabled (it is the default). See [SECURITY.md](SECURITY.md) for the full security policy.
 
 ---
 

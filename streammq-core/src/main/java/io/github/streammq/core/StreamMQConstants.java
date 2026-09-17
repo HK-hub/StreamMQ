@@ -363,6 +363,9 @@ public final class StreamMQConstants {
     /** 事务状态 Hash 中终态时间戳字段后缀（值 = 终态写入时的 epoch 毫秒，供保留期清理扫描） */
     public static final String TX_FIELD_DONE_SUFFIX = ".done";
 
+    /** 事务状态 Hash 中「强制终结原因」字段后缀（有界重试耗尽后写入，供运维定位卡死事务） */
+    public static final String TX_FIELD_FAILURE_REASON_SUFFIX = ".failureReason";
+
     // ==================== 消息字段 / 协议常量 ====================
     /** Stream Entry 字段：原始消息 ID（DLQ / 重试场景） */
     public static final String FIELD_ORIGINAL_MESSAGE_ID = "originalMessageId";

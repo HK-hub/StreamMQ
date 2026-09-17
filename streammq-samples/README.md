@@ -35,7 +35,13 @@ docker-compose up -d
 每个示例均为独立 Spring Boot 应用，以 quickstart 为例：
 
 ```bash
-cd streammq-sample-quickstart
+# 0. 先在仓库根目录把 StreamMQ 构件安装到本地仓库
+#    示例通过 BOM 以无版本号方式依赖 io.github.streammq:streammq-spring-boot-starter；
+#    在 0.1.2 正式发布到 Maven Central 之前（或本地开发调试时），必须先 install 否则依赖无法解析；
+#    也可只构建 starter 及其上游模块：mvn -q -DskipTests -pl streammq-spring-boot-starter -am install
+mvn -q -DskipTests install
+
+cd streammq-samples/streammq-sample-quickstart
 mvn spring-boot:run
 ```
 
@@ -43,14 +49,19 @@ mvn spring-boot:run
 
 ## 配置说明
 
-所有示例使用默认 Redis 连接：`localhost:6379`，可通过 `application.yml` 修改：
+所有示例使用默认 Redis 连接：`localhost:6379`，可通过各示例的 `application.yml` 修改。Redisson Spring Boot Starter 依据 `spring.data.redis.*` 构建客户端：
 
 ```yaml
-redisson:
-  singleServerConfig:
-    address: "redis://127.0.0.1:6379"
-    database: 0
+spring:
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      database: 0
+      # password: ${REDIS_PASSWORD:}   # 需要认证时打开
 ```
+
+> **注意**：`redisson.singleServerConfig.*` 在本 starter 中**没有属性绑定**（只绑定 `spring.redis.redisson.config` / `spring.redis.redisson.file`），写了不会生效。集群 / 哨兵等高级拓扑请通过 `spring.redis.redisson.config` 提供 Redisson 原生配置。
 
 ## 停止环境
 

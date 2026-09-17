@@ -45,7 +45,7 @@ class NameValidationTest {
     }
 
     @Test
-    @DisplayName("含 ':' / '*' / 空白字符的名称被拒绝")
+    @DisplayName("含 ':' / '*' / '{' / '}' / '|' / ',' / 空白字符的名称被拒绝")
     void illegalCharactersRejected() {
         assertThatThrownBy(() -> StringUtils.requireValidTopic("a:b"))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -57,6 +57,17 @@ class NameValidationTest {
         assertThatThrownBy(() -> StringUtils.requireValidGroup("g:r"))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> StringUtils.requireValidNamespace("ns:1"))
+                .isInstanceOf(IllegalArgumentException.class);
+        // '{' '}' 是 Redis Cluster Hash Tag 定界符（热点风险）
+        assertThatThrownBy(() -> StringUtils.requireValidTopic("a{b}"))
+                .isInstanceOf(IllegalArgumentException.class);
+        // '|' 与 ',' 是广播租约/注册表的内部编码分隔符：允许会让名称在编码时被静默改写，
+        // 导致「实例租约保护」判定失配（真实缺陷面）
+        assertThatThrownBy(() -> StringUtils.requireValidTopic("a|b"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> StringUtils.requireValidTopic("a,b"))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> StringUtils.requireValidGroup("g,1"))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 

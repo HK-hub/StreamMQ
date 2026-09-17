@@ -11,7 +11,7 @@ This product includes software developed by the following third parties.
    Version: 3.3.5
    Used in: streammq-spring-boot-starter, streammq-diagnostics,
             streammq-tracing-opentelemetry, streammq-kubernetes,
-            streammq-spring-cloud-stream-binder, streammq-test
+            streammq-spring-cloud-stream-binder
 
 ================================================================================
 
@@ -21,7 +21,8 @@ This product includes software developed by the following third parties.
    Copyright: Copyright (c) 2005-2026 VMware, Inc. or its affiliates.
    Version: 6.1.14
    Used in: streammq-spring-boot-starter, streammq-diagnostics,
-            streammq-tracing-opentelemetry, streammq-kubernetes
+            streammq-tracing-opentelemetry, streammq-kubernetes,
+            streammq-spring-cloud-stream-binder
 
 ================================================================================
 
@@ -56,8 +57,9 @@ This product includes software developed by the following third parties.
 
    License: Apache License, Version 2.0
    Copyright: Copyright (c) 2008-2026 FasterXML, LLC
-   Version: 2.18.1
-   Used in: streammq-core (default JSON serializer), all modules
+   Version: 2.17.2
+   Used in: streammq-core (default JSON serializer), streammq-redisson,
+            streammq-diagnostics, streammq-kubernetes, streammq-benchmark
 
 ================================================================================
 
@@ -75,7 +77,7 @@ This product includes software developed by the following third parties.
    License: Apache License, Version 2.0
    Copyright: Copyright (c) 2018-2026 VMware, Inc. or its affiliates.
    Version: 1.13.6
-   Used in: streammq-core (metrics collection), streammq-spring-boot-starter
+   Used in: streammq-redisson, streammq-spring-boot-starter
 
 ================================================================================
 
@@ -102,8 +104,18 @@ This product includes software developed by the following third parties.
     License: Apache License, Version 2.0
     Copyright: Copyright (c) 2015-2026 Testcontainers
     Version: 1.20.3
-    Used in: streammq-spring-boot-starter, streammq-diagnostics,
-             streammq-tracing-opentelemetry (integration testing with Redis)
+    Used in: streammq-redisson, streammq-spring-boot-starter, streammq-test,
+             streammq-benchmark (integration testing with Redis)
+
+    This product also includes the "Testcontainers Redis" module:
+
+    com.redis:testcontainers-redis
+    (https://github.com/redis-developer/testcontainers-redis-build)
+
+    License: Apache License, Version 2.0
+    Version: 2.2.2
+    Used in: streammq-redisson, streammq-spring-boot-starter, streammq-test,
+             streammq-benchmark (Redis container lifecycle for integration tests)
 
 ================================================================================
 
@@ -143,12 +155,13 @@ This product includes software developed by the following third parties.
 
 ================================================================================
 
-16. Apache Fury (https://github.com/apache/fury)
+16. Apache Fory (formerly Apache Fury) (https://github.com/apache/fory)
 
     License: Apache License, Version 2.0
     Copyright: Copyright (c) 2023-2026 Apache Software Foundation
-    Version: 0.9.0
-    Used in: streammq-core (optional high-performance serialization)
+    Version: 1.7.3 (>= 1.1.0 required; CVE-2026-50076 affects earlier versions)
+    Used in: streammq-redisson (optional high-performance serialization),
+             streammq-spring-boot-starter, streammq-benchmark
 
 ================================================================================
 
@@ -157,7 +170,8 @@ This product includes software developed by the following third parties.
     License: Apache License, Version 2.0
     Copyright: Copyright (c) 2013-2026 Protostuff
     Version: 1.8.0
-    Used in: streammq-core (optional Protocol Buffer runtime serialization)
+    Used in: streammq-redisson (optional Protocol Buffer runtime serialization),
+             streammq-spring-boot-starter
 
 ================================================================================
 

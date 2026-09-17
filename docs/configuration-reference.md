@@ -64,10 +64,11 @@ streammq:
 |---|---|---|
 | `group` | `default-producer` | 默认生产者组名（仅字母/数字/`-`/`_`，≤128 字符） |
 | `send-message-timeout` | `3000` | 发送超时（毫秒），必须 > 0 |
-| `retry-times` | `2` | 同步发送重试次数（≤ `MAX_SYNC_RETRY_TIMES=10`） |
+| `retry-times` | `2` | 同步发送重试次数（≤ `MAX_SYNC_RETRY_TIMES=16`） |
 | `stream-max-len` | `0` | Stream 最大长度，`0`=不限制 |
-| `serializer` | `JacksonJsonSerializer` | 消息体序列化器全限定类名。**默认 Jackson（0.1.2 起）**：安全严格类型；高吞吐可 opt-in `FurySerializer` / `ProtostuffSerializer`（需自备 classpath） |
-| `fury-require-class-registration` | `true` | 仅 Fury 生效：是否强制类注册白名单（默认开启；关闭即宽松模式，扩大反序列化 RCE 面） |
+| `serializer` | `JacksonJsonSerializer` | 消息体序列化器全限定类名。**默认 Jackson（0.1.2 起）**：安全严格类型；高吞吐可 opt-in `FurySerializer`（底层库 Apache Fory 1.7.3，坐标 `org.apache.fory:fory-core`，要求 >= 1.1.0）/ `ProtostuffSerializer`（需自备 classpath） |
+| `fury-require-class-registration` | `true` | 仅 `FurySerializer`（底层库 Apache Fory）生效：是否强制类注册白名单（默认开启；关闭即宽松模式，扩大反序列化 RCE 面） |
+| `fury-registered-classes` | `[]`（空） | 仅 `FurySerializer`（底层库 Apache Fory）白名单模式生效：预注册的业务消息体类型（全限定类名列表，逗号分隔），如 `com.acme.Order,com.acme.Payment`；未注册类型反序列化将被拒绝 |
 | `compress-threshold` | `0` | 压缩阈值（字节），`0`=禁用 |
 | `max-message-size` | `536870912`（512MB） | 单条消息最大字节，发送时校验（推荐 ≤1MB） |
 
@@ -196,6 +197,7 @@ streammq:
 | `list-page-size` | `100` | 列表默认页大小，必须 > 0 |
 | `max-pending-query-size` | `1000` | pending 列表单次最大拉取条数，必须 > 0 |
 | `failure-retry-cooldown-millis` | `5000` | 写操作失败后的重试冷却期（毫秒，≥0） |
+| `startup-warn` | `true` | 启动时输出管理端点暴露面提醒（仅日志、零行为影响；`-Dstreammq.admin.startup-warn=false` 可抑制） |
 | `trust-forwarded-headers` | `false` | **⚠️ 安全** 是否信任 `X-Forwarded-For` 用于限流来源聚合。默认 `false`；仅受控代理后才开启 |
 | `trusted-proxies` | `[]`（仅回环） | **⚠️ 安全** 可信代理 CIDR 列表（仅 `trust-forwarded-headers=true` 时生效），如 `10.0.0.0/8`、`2001:db8::/32` |
 
@@ -217,4 +219,4 @@ management:
 
 ## 常见校验失败
 
-自动装配时对以下值做合法性校验（抛 `IllegalArgumentException`）：所有 `>0`/`>=0` 约束（见上表）、`group.instance-timeout-ms >= heartbeat-interval-ms`、`retry.pel-claim-min-idle-ms >= 60s`、`producer.retry-times <= 10`、`admin.trusted-proxies` 必须是合法 CIDR。
+自动装配时对以下值做合法性校验（抛 `IllegalArgumentException`）：所有 `>0`/`>=0` 约束（见上表）、`group.instance-timeout-ms >= heartbeat-interval-ms`、`retry.pel-claim-min-idle-ms >= 35000ms`（`MIN_PEL_CLAIM_MIN_IDLE_MS`，低于该值仍处理中的消息可能被误判为孤儿重投）、`producer.retry-times <= 16`（`MAX_SYNC_RETRY_TIMES`）、`admin.trusted-proxies` 必须是合法 CIDR。

@@ -165,9 +165,9 @@ public class StreamMQProperties {
          * io.github.streammq.adapter.redisson.serializer.FurySerializer}（建议同时开启 {@code
          * fury-require-class-registration=true} 并预注册业务类型）或 {@code
          * io.github.streammq.adapter.redisson.serializer.ProtostuffSerializer}。 二者在 {@code
-         * streammq-redisson} 中为 <b>optional</b> 依赖，需自行加入 classpath：Fury 需 {@code
-         * org.apache.fury:fury-core}；Protostuff 需 {@code io.protostuff:protostuff-core} 与 {@code
-         * protostuff-runtime}。
+         * streammq-redisson} 中为 <b>optional</b> 依赖，需自行加入 classpath：Fory 需 {@code
+         * org.apache.fory:fory-core}（>= 1.1.0）；Protostuff 需 {@code io.protostuff:protostuff-core} 与
+         * {@code protostuff-runtime}。
          *
          * <p>对应全局默认值常量： {@link StreamMQConstants#DEFAULT_SERIALIZER}。
          */

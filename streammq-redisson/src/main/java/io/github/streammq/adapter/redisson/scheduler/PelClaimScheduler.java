@@ -6,6 +6,7 @@
 package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
+import io.github.streammq.adapter.redisson.support.BroadcastGroupNaming;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.DlqReason;
@@ -413,53 +414,75 @@ public class PelClaimScheduler implements StreamMQScheduler {
     }
 
     /**
+     * 加载本目标的实例心跳快照（每轮扫描、每目标一次，避免逐条 pending 重复读整个 Hash）。
+     *
+     * <p>心跳 Hash 的 key 与 Redis 消费者名内嵌的实例标识<b>同源</b>（生产端见 {@code
+     * DefaultConsumerGroupManagerFactory#resolveInstanceId}）——这是判活成立的前提：两处身份若不同源，
+     * 精确匹配永远失败，活跃慢消费者会被复制重投。
+     *
+     * @return 心跳快照；查询异常返回 {@code null}，调用方按「保守视为存活」处理
+     */
+    private Map<String, String> loadInstanceHeartbeats(PelClaimTarget target) {
+        try {
+            Map<String, String> heartbeats =
+                    redisson.<String, String>getMap(
+                                    StreamMQKeys.consumerGroupInstances(
+                                            target.namespace, target.group),
+                                    StringCodec.INSTANCE)
+                            .readAllMap();
+            // 空结果与「键不存在」同义：没有存活实例证据（可认领），不能与查询失败混为一谈
+            return heartbeats == null ? Map.of() : heartbeats;
+        } catch (RuntimeException ex) {
+            LOG.debug(
+                    "Consumer liveness lookup failed, assuming alive to avoid duplicate"
+                            + " delivery: group={}, cause={}",
+                    target.group,
+                    ex.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * 判断 PEL 条目所属消费者是否仍存活。
      *
      * <p><b>为什么不能只看 idle：</b>并发消费的内联处理跑在读循环线程上，慢回调期间该消费者无法发出任何 Redis 命令（也无法心跳），因此「消息 idle
      * 超阈值」<b>不等于</b>「消费者已死」。若据此认领，会把仍在正常处理的消息 复制重投（重复副作用），并在 {@code retryTimes}
      * 累积到上限后把<b>已成功处理</b>的消息误投入 DLQ。
      *
-     * <p><b>判活依据：</b>消费者组管理器由<b>独立心跳线程</b>周期性写入 instances Hash（{@code instanceId → 心跳毫秒}）， 而 Redis
-     * 消费者名内嵌 instanceId。这里用「存在心跳仍新鲜的 instanceId 是该消费者名的后缀」作为存活证据； 心跳时间与判定时间均取自 Redis 服务器时钟，规避跨主机偏差。
+     * <p><b>判活依据：</b>消费者组管理器由<b>独立心跳线程</b>周期性写入 instances Hash（{@code instanceId → 心跳毫秒}）， 且该
+     * {@code instanceId} 与消费者名内嵌标识同源（见 {@link
+     * io.github.streammq.adapter.redisson.container.DefaultConsumerGroupManagerFactory}）。这里按实例标识<b>精确匹配</b>心跳行，
+     * 并以心跳新鲜度作为存活证据；心跳时间与判定时间均取自 Redis 服务器时钟，规避跨主机偏差。
      *
-     * <p>查询异常时保守返回 {@code true}（视为存活、跳过认领）：宁可延后恢复，也不制造重复投递。
+     * <p>查询异常（快照为 {@code null}）时保守返回 {@code true}（视为存活、跳过认领）：宁可延后恢复，也不制造重复投递。
      */
-    private boolean isOwnerConsumerAlive(PelClaimTarget target, String consumerName) {
+    private boolean isOwnerConsumerAlive(
+            Map<String, String> heartbeats,
+            long nowMs,
+            PelClaimTarget target,
+            String consumerName) {
+        if (heartbeats == null) {
+            return true;
+        }
         if (StringUtils.isEmpty(consumerName)) {
             return false;
         }
-        try {
-            Map<String, String> instances =
-                    redisson.<String, String>getMap(
-                                    StreamMQKeys.consumerGroupInstances(
-                                            target.namespace, target.group),
-                                    StringCodec.INSTANCE)
-                            .readAllMap();
-            if (CollectionUtils.isEmpty(instances)) {
-                return false;
-            }
-            long now = lastRedisNowMs > 0 ? lastRedisNowMs : System.currentTimeMillis();
-            for (Map.Entry<String, String> instance : instances.entrySet()) {
-                if (!consumerName.endsWith(instance.getKey())) {
-                    continue;
-                }
-                try {
-                    if (now - Long.parseLong(instance.getValue()) < minIdleMs) {
-                        return true;
-                    }
-                } catch (NumberFormatException ignored) {
-                    // 心跳值不可解析：视为无效证据，继续检查其它实例
-                }
-            }
+        if (heartbeats.isEmpty()) {
             return false;
-        } catch (RuntimeException ex) {
-            LOG.debug(
-                    "Consumer liveness lookup failed, assuming alive to avoid duplicate"
-                            + " delivery: group={}, consumer={}, cause={}",
-                    target.group,
-                    consumerName,
-                    ex.getMessage());
-            return true;
+        }
+        String ownerInstanceId =
+                BroadcastGroupNaming.instanceIdFromConsumerName(target.group, consumerName);
+        if (ownerInstanceId == null) {
+            return false;
+        }
+        String heartbeat = heartbeats.get(ownerInstanceId);
+        if (heartbeat == null) {
+            return false;
+        }
+        try {
+            return nowMs - Long.parseLong(heartbeat) < minIdleMs;
+        } catch (NumberFormatException ignored) {
+            return false;
         }
     }
 
@@ -548,6 +571,8 @@ public class PelClaimScheduler implements StreamMQScheduler {
             if (CollectionUtils.isEmpty(pending)) {
                 return;
             }
+            Map<String, String> heartbeats = loadInstanceHeartbeats(target);
+            long nowMs = lastRedisNowMs > 0 ? lastRedisNowMs : System.currentTimeMillis();
             for (PendingEntry entry : pending) {
                 try {
                     StreamMessageId id = entry.getId();
@@ -555,7 +580,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
                     if (idleTime < minIdleMs) {
                         continue;
                     }
-                    if (isOwnerConsumerAlive(target, entry.getConsumerName())) {
+                    if (isOwnerConsumerAlive(heartbeats, nowMs, target, entry.getConsumerName())) {
                         LOG.debug(
                                 "Skip claiming pending entry owned by a live consumer:"
                                         + " topic={}, group={}, id={}, consumer={}",
@@ -679,13 +704,15 @@ public class PelClaimScheduler implements StreamMQScheduler {
             if (CollectionUtils.isEmpty(pending)) {
                 return;
             }
+            Map<String, String> heartbeats = loadInstanceHeartbeats(target);
+            long nowMs = lastRedisNowMs > 0 ? lastRedisNowMs : System.currentTimeMillis();
             for (PendingEntry entry : pending) {
                 try {
                     StreamMessageId id = entry.getId();
                     if (entry.getIdleTime() < minIdleMs) {
                         continue;
                     }
-                    if (isOwnerConsumerAlive(target, entry.getConsumerName())) {
+                    if (isOwnerConsumerAlive(heartbeats, nowMs, target, entry.getConsumerName())) {
                         LOG.debug(
                                 "Skip claiming pending entry owned by a live consumer:"
                                         + " topic={}, group={}, id={}, consumer={}",
@@ -769,13 +796,15 @@ public class PelClaimScheduler implements StreamMQScheduler {
             if (CollectionUtils.isEmpty(pending)) {
                 return;
             }
+            Map<String, String> heartbeats = loadInstanceHeartbeats(target);
+            long nowMs = lastRedisNowMs > 0 ? lastRedisNowMs : System.currentTimeMillis();
             for (PendingEntry entry : pending) {
                 try {
                     StreamMessageId id = entry.getId();
                     if (entry.getIdleTime() < minIdleMs) {
                         continue;
                     }
-                    if (isOwnerConsumerAlive(target, entry.getConsumerName())) {
+                    if (isOwnerConsumerAlive(heartbeats, nowMs, target, entry.getConsumerName())) {
                         LOG.debug(
                                 "Skip claiming pending entry owned by a live consumer:"
                                         + " topic={}, group={}, id={}, consumer={}",

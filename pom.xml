@@ -79,7 +79,9 @@
         <slf4j.version>2.0.16</slf4j.version>
         <micrometer.version>1.13.6</micrometer.version>
         <lombok.version>1.18.34</lombok.version>
-        <fury.version>0.9.0</fury.version>
+        <!-- Apache Fory（原 Apache Fury）：1.1.0 起修复 CVE-2026-50076（类注册绕过）、
+             0.12.2 起修复 CVE-2025-59328（DoS），且 0.11.0 起坐标由 org.apache.fury 更名为 org.apache.fory -->
+        <fory.version>1.7.3</fory.version>
         <protostuff.version>1.8.0</protostuff.version>
 
         <!-- V2.0 新增依赖 -->
@@ -187,11 +189,11 @@
                 <version>${jackson.version}</version>
             </dependency>
 
-            <!-- Apache Fury（高性能序列化） -->
+            <!-- Apache Fory（高性能序列化，原 Apache Fury） -->
             <dependency>
-                <groupId>org.apache.fury</groupId>
-                <artifactId>fury-core</artifactId>
-                <version>${fury.version}</version>
+                <groupId>org.apache.fory</groupId>
+                <artifactId>fory-core</artifactId>
+                <version>${fory.version}</version>
             </dependency>
 
             <!-- Protostuff（Protocol Buffer 运行时序列化） -->

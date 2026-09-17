@@ -11,6 +11,10 @@ on:
     - cron: "0 0 * * 0"
   workflow_dispatch:
 
+# 最小权限原则：默认仅读仓库内容；分析结果上报所需的 security-events: write 在 analyze job 级声明
+permissions:
+  contents: read
+
 jobs:
   analyze:
     name: Analyze Java
@@ -34,12 +38,18 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+          cache: maven
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3
         with:
           languages: ${{ matrix.language }}
           queries: security-and-quality
+
+      # Java/Kotlin 提取器必须观察到真实编译过程才能抽取源码。
+      # 此前缺少构建步骤，finalize 阶段每次都以 "could not process any of it"（Exit code 32）失败。
+      - name: Autobuild (Maven)
+        uses: github/codeql-action/autobuild@v3
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@v3

@@ -99,6 +99,10 @@ jobs:
       # 探测 Maven Central 上已发布的上一版本；若存在（即非首个版本），
       # 对比当前源码构建产物与上一版本的二进制/源码兼容性，发现破坏性变更则阻断发布。
       # 首个公开版本（Central 无历史）时自动跳过。
+      # 注意：-pl 只能包含"实际发布集合"（core/redisson/spring-boot-starter/test）——
+      # streammq-tracing-opentelemetry / streammq-diagnostics / streammq-spring-cloud-stream-binder
+      # 被 excludeArtifacts 永久排除、Central 上永远没有旧版本，纳入后 japicmp 解析旧版本失败
+      #（插件默认 ignoreMissingOldVersion=false），从第二次发布起会直接中断发布流程。
       - name: API compatibility gate (japicmp vs previous release)
         shell: bash
         run: |
@@ -111,21 +115,30 @@ jobs:
           fi
           echo "Comparing API compatibility against previous release: ${prev}"
           mvn -pl streammq-core,streammq-redisson,streammq-spring-boot-starter,\
-          streammq-tracing-opentelemetry,streammq-diagnostics,streammq-spring-cloud-stream-binder,\
           streammq-test \
               -am verify \
               -Djapicmp.skip=false -Djapicmp.oldVersion="${prev}" \
               -DskipTests -Dspotless.check.skip=true -Djacoco.check.skip=true -B
 
-      # P2-8 门禁：发布预检（staging smoke）——将全部构件 install 到本地仓库（模拟 staging），
-      # 再以"使用方视角"最小工程 import streammq-bom 并编译引用公开 API，
-      # 验证 BOM 与各发布构件在真实消费场景下可解析（覆盖 P0-1：BOM 必须被发布）。
-      - name: Staging smoke (consumer-side resolve)
+      # P2-8 门禁：发布预检（staging smoke）——与 ci.yml 的 staging-smoke 对齐，做到真正隔离：
+      # 只把"实际发布到 Central 的构件集合"（bom/core/redisson/spring-boot-starter/test）install 到
+      # 隔离本地仓库（${RUNNER_TEMP}，不污染 ~/.m2）。若误把永不发布的构件混入发布集合/BOM，
+      # 下面的使用方解析会真实失败，而不是被共享本地仓库里的"意外安装物"掩盖。
+      - name: Install publishable modules into an isolated local repo (simulate staging)
         shell: bash
         run: |
           set -euo pipefail
-          mvn install -DskipTests -Dspotless.check.skip=true -Djacoco.check.skip=true -q
-          VER="$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)"
+          mvn install -DskipTests -Dspotless.check.skip=true -Djacoco.check.skip=true \
+            -Dmaven.repo.local="${RUNNER_TEMP}/streammq-release-staging-repo" \
+            -pl streammq-bom,streammq-core,streammq-redisson,streammq-spring-boot-starter,streammq-test -am
+
+      - name: Compile a consumer app against the BOM
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="${RUNNER_TEMP}/streammq-release-staging-repo"
+          VER="$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout \
+            -Dmaven.repo.local="${REPO}")"
           mkdir -p /tmp/streammq-smoke/src/main/java/com/example
           cat > /tmp/streammq-smoke/pom.xml <<'EOF'
           <project xmlns="http://maven.apache.org/POM/4.0.0"
@@ -181,7 +194,43 @@ jobs:
               }
           }
           EOF
-          mvn -q -f /tmp/streammq-smoke/pom.xml clean compile
+          mvn -q -f /tmp/streammq-smoke/pom.xml clean compile \
+            -Dmaven.repo.local="${REPO}"
+
+      # 反向断言（与 ci.yml 的 staging-smoke 对齐）：excludeArtifacts 中的构件必须解析失败，
+      # 防止 BOM / 发布清单再次漂移，让使用方依赖到"中央仓库永远不会存在"的构件。
+      # 清单直接读自根 pom 的 maven-deploy-plugin <excludeArtifacts>，避免两处清单不一致。
+      - name: Assert unpublished modules are NOT resolvable
+        shell: bash
+        run: |
+          set -euo pipefail
+          REPO="${RUNNER_TEMP}/streammq-release-staging-repo"
+          VER="$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout \
+            -Dmaven.repo.local="${REPO}")"
+          excluded="$(grep -oP '(?<=<excludeArtifacts>)[^<]+' pom.xml)"
+          if [ -z "${excluded}" ]; then
+            echo "::error::could not read <excludeArtifacts> from pom.xml — cannot verify the unpublished set"
+            exit 1
+          fi
+          IFS=',' read -r -a artifacts <<< "${excluded}"
+          for art in "${artifacts[@]}"; do
+            if mvn -q dependency:get -Dartifact="io.github.streammq:${art}:${VER}" \
+                 -Dmaven.repo.local="${REPO}" >/dev/null 2>&1; then
+              echo "::error::${art} resolved from the staging repo but is NOT in the published set —"
+              echo "::error::keep the BOM and the release excludeArtifacts list consistent."
+              exit 1
+            fi
+            echo "OK: ${art} is correctly absent from the published set"
+          done
+
+      # 发布通道 CVE 扫描：根 POM 默认 owasp.skip=true，此前只有 ci.yml 显式开启，
+      # release 通道完全未执行。此处显式 -Dowasp.skip=false，扫描失败即阻断 publish job（needs: test）。
+      # NVD API 需要密钥：未配置 secrets.NVD_API_KEY 时 NVD 侧会以 HTTP 408/429 拒绝请求，属预期失败。
+      - name: Dependency vulnerability scan (OWASP, requires NVD_API_KEY)
+        shell: bash
+        env:
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: mvn verify -B -Dowasp.skip=false -DskipTests
 
   publish:
     name: Publish to Maven Central
@@ -261,7 +310,8 @@ jobs:
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        # 供应链加固：第三方 action 固定到 v2 对应的完整 commit SHA（renovate/dependabot 可识别 # v2）
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           name: StreamMQ ${{ steps.version.outputs.version }}
           tag_name: v${{ steps.version.outputs.version }}

@@ -55,14 +55,16 @@
         <!-- Jackson 是默认序列化器（见 StreamMQConstants#DEFAULT_SERIALIZER），
              必须随本模块传递；它同时也是 props 字段 JSON 编解码的必需依赖。 -->
 
-        <!-- 可选高性能序列化：Apache Fury。
-             optional=true：Fury 会传递引入 com.google.guava，而 Guava 是下游应用最常见
+        <!-- 可选高性能序列化：Apache Fory（原 Apache Fury）。
+             optional=true：Fory 会传递引入 com.google.guava，而 Guava 是下游应用最常见
              的版本冲突源（Spring Boot 的 BOM 并不管理 Guava）。默认序列化器为 Jackson，
-             Fury 属于显式 opt-in 能力，因此按 optional 提供——选用者自行加入，
-             不选用者不会被迫把 Guava 拖进自己的 classpath。 -->
+             Fory 属于显式 opt-in 能力，因此按 optional 提供——选用者自行加入，
+             不选用者不会被迫把 Guava 拖进自己的 classpath。
+             坐标自 Fory 0.11.0 起由 org.apache.fury 更名为 org.apache.fory；
+             版本下限 1.1.0（CVE-2026-50076：类注册白名单可被绕过导致反序列化 RCE）。 -->
         <dependency>
-            <groupId>org.apache.fury</groupId>
-            <artifactId>fury-core</artifactId>
+            <groupId>org.apache.fory</groupId>
+            <artifactId>fory-core</artifactId>
             <optional>true</optional>
         </dependency>
 
@@ -144,7 +146,7 @@
                                 <rule>
                                     <element>BUNDLE</element>
                                     <limits>
-                                        <!-- 实测 LINE≈0.636 / BRANCH≈0.533；门禁取「实测 − 3pt」= 0.50。 -->
+                                        <!-- 实测（0.1.2 发布前，含真实 Redis IT）LINE=0.631 / BRANCH=0.533；门禁取「实测 − 3pt」= 0.60 / 0.50。 -->
                                         <limit>
                                             <counter>LINE</counter>
                                             <value>COVEREDRATIO</value>

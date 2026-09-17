@@ -85,8 +85,8 @@
         <!-- Fury / Protostuff 在 streammq-redisson 中为 optional（不传递给下游应用），
              但本模块的装配测试需要验证"显式 opt-in 到 Fury"这条路径，故以 test scope 引入。 -->
         <dependency>
-            <groupId>org.apache.fury</groupId>
-            <artifactId>fury-core</artifactId>
+            <groupId>org.apache.fory</groupId>
+            <artifactId>fory-core</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

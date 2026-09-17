@@ -483,6 +483,14 @@ public class DelayMessageScheduler implements StreamMQScheduler {
      */
     private static final long MAX_REFERENCED_IDS_FOR_ORPHAN_SCAN = 100_000L;
 
+    /**
+     * 单个延时 ZSet 孤儿清扫的单次扫描上限（{@code ZRANGEBYSCORE ... LIMIT 0 N}）。
+     *
+     * <p>与 {@link #MAX_REFERENCED_IDS_FOR_ORPHAN_SCAN} 同口径：绝不一次性把整个 ZSet materialize
+     * 进内存（历史积压可达百万级）；超额时 WARN 提示分多次调用。
+     */
+    private static final int MAX_ORPHAN_ZSET_SCAN = 1000;
+
     private int cleanupOrphanedPayloads() {
         String pattern = StreamMQKeys.delayPayloadHash(namespace, "*");
         java.util.List<org.redisson.api.RScoredSortedSet<String>> delayZsets =
@@ -554,10 +562,20 @@ public class DelayMessageScheduler implements StreamMQScheduler {
      */
     private int cleanupOrphanedInZSet(String zsetKey, String label) {
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey, StringCodec.INSTANCE);
-        // 获取所有 entry（不限时间范围，用于清理）
-        Collection<String> allMembers = zset.readAll();
+        // R-34 同口径的有界扫描：ZRANGEBYSCORE ... LIMIT 0 N，绝不一次性把整个延时 backlog
+        // materialize 进内存（历史积压可达百万级）；超额时 WARN 提示分多次调用。
+        Collection<String> allMembers =
+                zset.valueRange(0, true, Double.POSITIVE_INFINITY, true, 0, MAX_ORPHAN_ZSET_SCAN);
         if (allMembers.isEmpty()) {
             return 0;
+        }
+        if (allMembers.size() >= MAX_ORPHAN_ZSET_SCAN) {
+            LOG.warn(
+                    "Delay ZSet orphan cleanup truncated at {} entries (more may remain); call"
+                            + " again to continue: zsetKey={}, label={}",
+                    MAX_ORPHAN_ZSET_SCAN,
+                    zsetKey,
+                    label);
         }
         int cleaned = 0;
         for (String msgId : allMembers) {

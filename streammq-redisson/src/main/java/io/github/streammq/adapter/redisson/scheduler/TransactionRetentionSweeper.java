@@ -106,10 +106,11 @@ public class TransactionRetentionSweeper {
             if (doneTime >= cutoff) {
                 continue;
             }
-            // 同时清理主状态字段 + 目标/half 辅助字段
+            // 同时清理主状态字段 + 目标/half/失败原因辅助字段
             stateMap.remove(txId);
             stateMap.remove(txId + StreamMQConstants.TX_FIELD_TARGET_SUFFIX);
             stateMap.remove(txId + StreamMQConstants.TX_FIELD_HALF_ID_SUFFIX);
+            stateMap.remove(txId + StreamMQConstants.TX_FIELD_FAILURE_REASON_SUFFIX);
             stateMap.remove(doneField);
             removed++;
             if (removed >= SWEEP_BATCH_SIZE) {

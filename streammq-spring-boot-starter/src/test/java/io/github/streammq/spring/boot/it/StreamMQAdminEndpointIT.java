@@ -123,12 +123,13 @@ class StreamMQAdminEndpointIT {
         StreamMessageId msgId = read.keySet().iterator().next();
 
         Object pendingCount = adminEndpoint.getStats(GROUP, topic).get("pendingCount");
-        assertThat(pendingCount).isEqualTo(read.size());
+        assertThat(((Number) pendingCount).longValue()).isEqualTo(read.size());
 
         Map<String, Object> ack = adminEndpoint.ackPending(GROUP, topic, msgId.toString());
         assertThat(ack).containsEntry("success", true);
 
-        assertThat(adminEndpoint.getStats(GROUP, topic).get("pendingCount")).isEqualTo(0);
+        assertThat(((Number) adminEndpoint.getStats(GROUP, topic).get("pendingCount")).longValue())
+                .isEqualTo(0L);
 
         // listPending 与 listDlq 在真实 Redis 上也要可用（不抛异常、结构正确）
         List<Map<String, Object>> pending = adminEndpoint.listPending(GROUP, topic, 10);

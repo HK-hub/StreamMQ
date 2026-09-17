@@ -201,7 +201,7 @@ mvn spotless:apply
 4. **Javadoc**: All public API must have Javadoc
 5. **Exceptions**: Use specific exception types (`StreamMQClientException`, `StreamMQBrokerException`)
 6. **Null safety**: Use `@Nullable` / `@NonNull` annotations from JSR 305
-7. **SPI**: Implementations must be registered via Spring `@Component` or Java `ServiceLoader`
+7. **SPI**: Implementations are resolved as Spring beans or referenced via the annotation's `Class` attribute — Java `ServiceLoader` is **not** used
 
 ### Code Quality Tools
 
@@ -349,9 +349,9 @@ streammq-parent
 
 ## SPI Extension Point Guide
 
-StreamMQ provides 12 SPI extension points. All SPI interfaces are in `streammq-core` and can be implemented as Spring beans or registered via Java `ServiceLoader`.
+StreamMQ ships **16 extension points** in total — user-facing SPI interfaces plus internal assembly points (the authoritative table is the [README's Extension Points section](README.md#extension-points)). All extension points are resolved as Spring beans or via the annotation's `Class` attribute — **not** via Java `ServiceLoader`.
 
-### List of SPI Interfaces
+### List of SPI Interfaces (most commonly implemented)
 
 | SPI Interface | Module | Purpose |
 |--------------|--------|---------|
@@ -424,7 +424,7 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 
 | SPI Interface | Default |
 |--------------|---------|
-| `MessageSerializer` | `FurySerializer` |
+| `MessageSerializer` | `JacksonJsonSerializer`（0.1.2 起的默认，严格类型/无 gadget 面）；`FurySerializer` 为 opt-in 高吞吐实现 |
 | `MessageConverter` | `DefaultMessageConverter` |
 | `RetryPolicy` | `FixedArrayRetryPolicy` |
 | `RebalanceStrategy` | `ConsistentHashRebalanceStrategy`（配置默认）/ `AverageRebalanceStrategy`（API 默认） |
@@ -433,15 +433,19 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 | `ManagementAuthenticator` | `DenyAllAuthenticator`（fail-closed，需显式注册鉴权 Bean 开放） |
 | `DlqFailureStrategy` | `LogAndDropDlqFailureStrategy` |
 
-### Fury serializer registration
+### Fory (Fury) serializer registration
 
-`FurySerializer` is the **default serializer** (`streammq.producer.serializer`). By default it
-does **not** enforce class registration (unrestricted mode, `requireClassRegistration=false`):
-any POJO works out of the box, but bytes stored in Redis can be deserialized to arbitrary classes
-on the classpath. For shared/multi-tenant Redis, enable the class registration whitelist via
-`streammq.producer.fury-require-class-registration: true` (Spring Boot) or `new FurySerializer(true)`
-(Java API), then register application payloads before the first send/receive. Prefer constructor
-registration in Spring configuration so startup fails early for a missing type:
+`FurySerializer` is the **opt-in high-throughput serializer** (the default is
+`JacksonJsonSerializer`). Its underlying library is **Apache Fory (formerly Apache Fury) 1.7.3**,
+Maven coordinates `org.apache.fory:fory-core` (**>= 1.1.0** — earlier fury-core/fory-core versions
+are affected by CVE-2026-50076). It is an `optional` dependency of `streammq-redisson`: add it
+explicitly when you opt in. The Java class name `FurySerializer` and `name()="fury"` are stable for
+configuration compatibility.
+
+It **enforces the class-registration whitelist by default** (`requireClassRegistration=true`):
+only registered types can be deserialized; unregistered POJOs are rejected. Register application
+payloads before the first send/receive. Prefer constructor registration in Spring configuration so
+startup fails early for a missing type:
 
 ```java
 @Bean
@@ -451,21 +455,24 @@ MessageSerializer<OrderCreated> orderSerializer() {
 ```
 
 For dynamic setup, call `register(Class<?>)` or `registerAll(Class<?>...)` once during
-initialization. Do not register classes based on untrusted input. Constructing an unrestricted
-serializer (`new FurySerializer()` / `new FurySerializer(false)`) logs a WARN; after confirming
-Redis is fully trusted and isolated, set `-Dstreammq.security.allowUnrestrictedSerializer=true`
-to suppress the warning.
+initialization; in Spring Boot you can instead declare `streammq.producer.fury-registered-classes`.
+Do not register classes based on untrusted input. Unrestricted mode
+(`new FurySerializer(false)`) is gated: it throws `SecurityException` unless
+`-Dstreammq.security.allowUnrestrictedSerializer=true` is set, and it still logs a WARN when the
+property allows construction — never enable it for shared/multi-tenant Redis.
 
 ## API 兼容性策略（japicmp）
 
 发布通道内置 japicmp 门禁（见 `.github/workflows/release.yml`）：探测 Maven Central 上的上一个发布版本，
 与当前构建产物做二进制/源码兼容性对比，发现破坏性变更即阻断发布。
 
-- **首个公开版本**（Central 上无历史）时该门禁自动跳过——这是唯一容许跳过的情形；
-- 从**第二个版本**起，任何公开 API 的移除、签名变更、可见性收窄都会阻断发布；
-- 需要破坏性变更时先走**弃用期**：在当前版本标记 `@Deprecated` 并在 CHANGELOG 的 Deprecated 段落说明，
+- **0.1.x 处于 pre-1.0（功能预览）阶段**：公开 API 仍可能随社区反馈演进。破坏性变更需在 CHANGELOG 中
+  给出说明与升级指引，并优先走一个版本的**弃用期**：在当前版本标记 `@Deprecated` 并在 CHANGELOG 中说明，
   下个 minor/major 版本再移除；不要在同一次发布里既弃用又移除；
-- 仅供内部使用、不承担兼容承诺的实现请放在 `io.github.streammq.internal.*` 包（japicmp 已排除该包前缀）。
+- **japicmp 门禁从第二个 Central 发布版本起生效**：0.1.2 是首个 Central 发布版本（Central 上无历史基线），
+  门禁按设计自动跳过；此后任何公开 API 的移除、签名变更、可见性收窄都会阻断发布；
+- **`io.github.streammq.internal.*` 排除项目前尚未被任何代码使用**（仓库中不存在该包）；POM 已配置该前缀的
+  japicmp 排除，作为**未来内部实现包**的既定机制——仅供内部使用、不承担兼容承诺的实现届时放入该包即可自动免检。
 ## Pull Request Process
 
 1. **Ensure the PR description clearly describes the problem and solution.** Include the relevant issue number if applicable.
@@ -492,12 +499,18 @@ StreamMQ 通过 Maven Central Portal (`org.sonatype.central:central-publishing-m
 
 1. **更新版本号** — 升级根 `pom.xml` 与 `streammq-bom/pom.xml` 中的 `<version>` 与 `<streammq.version>`，保持一致（CI `guard` job 会校验）。
 2. **更新 CHANGELOG** — 将 `[Unreleased]` 段合并入新版本，附日期。
-3. **本地 dry-run** — `mvn clean verify -DskipITs=true -Dspotless.check.skip=true -Dowasp.skip=true`；`mvn verify` 需本地 Redis。
+3. **本地 dry-run（复现发布门禁）** — `mvn clean verify -Djacoco.check.skip=false`；集成测试需要本地 Redis（`localhost:6379`，无 Redis 时 IT 会被整体跳过、门禁形同虚设）。如需一并执行依赖 CVE 扫描，追加 `-Dowasp.skip=false`，并建议设置 `NVD_API_KEY` 环境变量（否则匿名访问 NVD 限流、扫描可能偶发失败）。
 4. **打 tag** — `git tag -s v0.x.y -m "Release v0.x.y"`（签名 tag 满足 GPG 要求）。
 5. **触发 `release.yml`** — `workflow_dispatch` 或推送 tag；`test` job 会运行 `mvn clean verify` 兜底，`publish` job 会上传至 Central Portal。
 6. **人工确认发布** — `parent.pom.xml` 中 `<autoPublish>false</autoPublish>`，首个版本需在 [Central Portal](https://central.sonatype.com/) 人工点击 "Publish"。
 7. **首次发布后** — 将 `<autoPublish>` 翻转为 `true`，提交 PR 并在本节追加 changelog 行；后续发布由 CI 自动完成。
 8. **创建 GitHub Release** — `release.yml` 会基于 tag 自动创建 Release 并附带全部已发布构件（jar + sources + javadoc）。
+
+### 发布前置条件
+
+- **CI Secrets（仓库级）**：见下方[凭据配置](#凭据配置)（Central 上传凭据、GPG 签名密钥与 `NVD_API_KEY`）。
+- **GPG 密钥**：`git tag -s` 与 `mvn deploy -Pgpg` 均需可用的 GPG 私钥。
+- **失败/半程发布处理**：Central Portal 采用 staging 部署，校验失败或部署中断时必须在 [Central Portal](https://central.sonatype.com/) 中**撤销（withdraw/drop）该次部署**后重新发布；不要静默重打 tag 或用同一版本号重发（Central 构件不可变，参见 CHANGELOG 中 `v0.1.0` 标签的处理说明）。
 
 ### 发布门禁
 
@@ -509,6 +522,7 @@ CI 通过 GitHub Secrets 注入：
 
 - `CENTRAL_USERNAME` / `CENTRAL_TOKEN` — Central Portal 凭据
 - `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE` — 签名密钥
+- `NVD_API_KEY` — OWASP Dependency-Check 查询 NVD 的限额（可选；缺失时为匿名限速模式）
 
 本地发布需在 `~/.m2/settings.xml` 中以 `server-id=central` 配置相同凭据。
 

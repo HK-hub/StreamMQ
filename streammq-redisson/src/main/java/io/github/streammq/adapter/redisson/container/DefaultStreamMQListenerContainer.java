@@ -976,6 +976,20 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             for (ListenerRegistration<?> reg : store.registrations()) {
                 if (!reg.isDlqMode()) {
                     store.putGroupManager(reg.key(), groupManagerFactory().createAndRegister(reg));
+                    if (!lifecycle.isRunning()) {
+                        // 竞态守卫（与动态注册路径 wireRegistrationIfRunning 对齐）：
+                        // createAndRegister 内部写 instances Hash + 订阅 RTopic + 启动心跳，
+                        // 期间并发 stop 已清理完毕；此刻若已非 RUNNING，必须撤销刚登记的组管理器，
+                        // 否则心跳线程会永久续写实例行（幽灵成员），且后续 stop 因状态非 RUNNING 直接返回，
+                        // 再也无人回收。
+                        LOG.warn(
+                                "Container start aborted after group-manager registration:"
+                                        + " lifecycle changed to {} (stop won the race);"
+                                        + " unregistering the just-created manager",
+                                lifecycle.current());
+                        store.clearGroupManagers();
+                        return;
+                    }
                 }
             }
             doStartListeners();

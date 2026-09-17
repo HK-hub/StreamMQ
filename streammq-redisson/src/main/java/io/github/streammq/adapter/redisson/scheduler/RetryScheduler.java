@@ -99,6 +99,13 @@ public class RetryScheduler implements StreamMQScheduler {
     private static final long DEFAULT_FAILURE_REQUEUE_BACKOFF_MS =
             StreamMQConstants.DEFAULT_FAILURE_REQUEUE_BACKOFF_MS;
 
+    /**
+     * 单个重试 ZSet 孤儿清扫的单次扫描上限（{@code ZRANGEBYSCORE ... LIMIT 0 N}）。
+     *
+     * <p>与 {@link DelayMessageScheduler} 的同类维护接口同口径：绝不一次性把整个 ZSet materialize 进内存；超额时 WARN 提示分多次调用。
+     */
+    private static final int MAX_ORPHAN_ZSET_SCAN = 1000;
+
     /** 转移失败后的回写退避（毫秒），可通过 {@link #setFailureRequeueBackoffMs(long)} 覆盖 */
     private volatile long failureRequeueBackoffMs = DEFAULT_FAILURE_REQUEUE_BACKOFF_MS;
 
@@ -529,9 +536,19 @@ public class RetryScheduler implements StreamMQScheduler {
             String retryKey = StreamMQKeys.retryZSet(target.namespace, target.topic, target.group);
             RScoredSortedSet<String> zset =
                     redisson.getScoredSortedSet(retryKey, StringCodec.INSTANCE);
-            Collection<String> allMembers = zset.readAll();
+            // 有界扫描：ZRANGEBYSCORE ... LIMIT 0 N（重试积压可达百万级，禁止 readAll 全量物化）
+            Collection<String> allMembers =
+                    zset.valueRange(
+                            0, true, Double.POSITIVE_INFINITY, true, 0, MAX_ORPHAN_ZSET_SCAN);
             if (allMembers.isEmpty()) {
                 continue;
+            }
+            if (allMembers.size() >= MAX_ORPHAN_ZSET_SCAN) {
+                LOG.warn(
+                        "Retry ZSet orphan cleanup truncated at {} entries (more may remain);"
+                                + " call again to continue: retryKey={}",
+                        MAX_ORPHAN_ZSET_SCAN,
+                        retryKey);
             }
             for (String msgId : allMembers) {
                 String payloadKey =

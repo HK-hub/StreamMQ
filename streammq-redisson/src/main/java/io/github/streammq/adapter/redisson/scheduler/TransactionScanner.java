@@ -181,6 +181,10 @@ public class TransactionScanner implements StreamMQScheduler {
     /** txstate Hash 中半消息 Stream Entry ID 字段后缀 */
     private static final String FIELD_HALF_ID_SUFFIX = StreamMQConstants.TX_FIELD_HALF_ID_SUFFIX;
 
+    /** txstate Hash 中强制终结原因字段后缀（有界重试耗尽） */
+    private static final String FIELD_FAILURE_REASON_SUFFIX =
+            StreamMQConstants.TX_FIELD_FAILURE_REASON_SUFFIX;
+
     /** 关闭调度线程池时的等待超时（秒） */
     private static final long AWAIT_TERMINATION_SECONDS =
             StreamMQConstants.DEFAULT_AWAIT_TERMINATION_SECONDS;
@@ -829,14 +833,34 @@ public class TransactionScanner implements StreamMQScheduler {
             removeCheckEntry(txId, txGroup);
             return;
         }
-        // 中间状态（其它实例正在提交/回滚）：重新执行，幂等安全
+        // 中间状态（其它实例正在提交/回滚）：重新执行，幂等安全。
+        // 有界重试：持续失败（目标 key 类型冲突 / ACL 拒绝 / 长期不可用）不得无限重放——
+        // 复用回查计数作为「恢复尝试」预算，耗尽后按「未发布」终结并 ERROR 告警。
         if (STATE_COMMITTING.equals(currentState)) {
-            LOG.debug("Transaction in COMMITTING state, re-executing commit: txId={}", txId);
+            int attempts = getCheckCount(txId, txGroup) + 1;
+            if (attempts > maxCheckTimes) {
+                forceFinalizeStuckCommit(txId, txGroup, stateMap, attempts);
+                return;
+            }
+            incrementCheckCount(txId, txGroup);
+            LOG.debug(
+                    "Transaction in COMMITTING state, re-executing commit: txId={}, attempt={}",
+                    txId,
+                    attempts);
             doMarkCommit(txId, txGroup);
             return;
         }
         if (STATE_ROLLBACKING.equals(currentState)) {
-            LOG.debug("Transaction in ROLLBACKING state, re-executing rollback: txId={}", txId);
+            int attempts = getCheckCount(txId, txGroup) + 1;
+            if (attempts > maxCheckTimes) {
+                forceFinalizeStuckRollback(txId, txGroup, stateMap, attempts);
+                return;
+            }
+            incrementCheckCount(txId, txGroup);
+            LOG.debug(
+                    "Transaction in ROLLBACKING state, re-executing rollback: txId={}, attempt={}",
+                    txId,
+                    attempts);
             doMarkRollback(txId, txGroup);
             return;
         }
@@ -1091,6 +1115,75 @@ public class TransactionScanner implements StreamMQScheduler {
         return messageConverter
                 .fromStreamFields(fields, (Class) bodyType, targetTopic)
                 .withMessageId(MessageId.fromStreamEntry(entry.getKey().toString()));
+    }
+
+    /**
+     * 强制终结长期卡在 COMMITTING 的事务（有界恢复尝试耗尽）。
+     *
+     * <p><b>为什么可以安全终结：</b>转投半消息与写入终态在同一 Lua 脚本中原子完成，状态不是 COMMIT 就等同于「未发布」——因此终态取 ROLLBACK
+     * 是真实语义，不会出现「标记回滚但消息已投递」。
+     *
+     * <p><b>为什么要告警：</b>调用方（本地事务）通常已提交，消息未投递需要业务方按 {@code .failureReason} 字段
+     * 与事务指标对账补偿；同时尽力删除半消息，避免半消息流残留。
+     */
+    private void forceFinalizeStuckCommit(
+            String txId, String txGroup, RMap<String, String> stateMap, int attempts) {
+        LOG.error(
+                "Transaction stuck in COMMITTING after {} attempts, force-finalizing as ROLLBACK"
+                        + " (message NOT published; the local transaction may already be"
+                        + " committed — reconcile manually): txId={}, txGroup={}",
+                attempts,
+                txId,
+                txGroup);
+        removeHalfMessageQuietly(txId, txGroup, stateMap);
+        stateMap.put(txId + FIELD_FAILURE_REASON_SUFFIX, "COMMIT_FAILED_FORCE_ROLLBACK");
+        stateMap.put(txId, STATE_ROLLBACK);
+        removeCheckEntry(txId, txGroup);
+        markTerminalDone(stateMap, txId);
+        cleanupTerminalState(stateMap, txId);
+        metricsRecorder.recordRollback(txGroup);
+    }
+
+    /**
+     * 强制终结长期卡在 ROLLBACKING 的事务（有界恢复尝试耗尽）。
+     *
+     * <p>此时 XDEL 半消息可能未成功：终态仍取 ROLLBACK（语义正确），但半消息可能残留，由 ERROR 日志 提示人工清理（保留期维护任务也会兜底清理孤儿半消息）。
+     */
+    private void forceFinalizeStuckRollback(
+            String txId, String txGroup, RMap<String, String> stateMap, int attempts) {
+        LOG.error(
+                "Transaction stuck in ROLLBACKING after {} attempts, force-finalizing as ROLLBACK;"
+                        + " a half message may still exist and needs manual cleanup: txId={},"
+                        + " txGroup={}",
+                attempts,
+                txId,
+                txGroup);
+        stateMap.put(txId + FIELD_FAILURE_REASON_SUFFIX, "ROLLBACK_FAILED_FORCE_FINALIZE");
+        stateMap.put(txId, STATE_ROLLBACK);
+        removeCheckEntry(txId, txGroup);
+        markTerminalDone(stateMap, txId);
+        cleanupTerminalState(stateMap, txId);
+        metricsRecorder.recordRollback(txGroup);
+    }
+
+    /** 尽力删除半消息（失败仅告警：孤儿半消息由保留期维护任务兜底清理）。 */
+    private void removeHalfMessageQuietly(
+            String txId, String txGroup, RMap<String, String> stateMap) {
+        String halfIdStr = stateMap.get(txId + FIELD_HALF_ID_SUFFIX);
+        if (StringUtils.isEmpty(halfIdStr)) {
+            return;
+        }
+        try {
+            redisson.getStream(StreamMQKeys.halfStream(namespace, txGroup), StringCodec.INSTANCE)
+                    .remove(parseStreamId(halfIdStr));
+        } catch (RuntimeException ex) {
+            LOG.warn(
+                    "XDEL half message failed during force-finalize (orphan half may remain):"
+                            + " txId={}, halfId={}: {}",
+                    txId,
+                    halfIdStr,
+                    ex.getMessage());
+        }
     }
 
     /** 从 txcheck ZSet 移除 txId。 */

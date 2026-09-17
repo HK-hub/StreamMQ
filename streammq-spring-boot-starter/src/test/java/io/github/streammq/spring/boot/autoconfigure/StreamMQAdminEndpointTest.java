@@ -7,7 +7,6 @@ package io.github.streammq.spring.boot.autoconfigure;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
@@ -23,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.redisson.api.PendingResult;
 import org.redisson.api.RMap;
 import org.redisson.api.RSet;
 import org.redisson.api.RStream;
@@ -154,8 +154,9 @@ class StreamMQAdminEndpointTest {
         when(redisson.<String, String>getStream(
                         eq(StreamMQKeys.topicStream(NS, "t1")), any(StringCodec.class)))
                 .thenReturn(stream);
-        when(stream.listPending(anyString(), any(), any(), anyInt()))
-                .thenReturn(java.util.Collections.emptyList());
+        // pendingCount 采用 XPENDING 总数形式（getPendingInfo.getTotal，O(1) 且不被拉取上限截断）
+        when(stream.getPendingInfo(anyString()))
+                .thenReturn(new PendingResult(0L, null, null, java.util.Map.of()));
 
         Map<String, Object> stats = newEndpoint().getStats("g1", "t1");
 
@@ -166,7 +167,7 @@ class StreamMQAdminEndpointTest {
         assertThat(stats.get("dlq")).isEqualTo(1L);
         // 平均耗时 = (20 + 40) / 2 = 30ms
         assertThat((double) stats.get("avgConsumeMillis")).isEqualTo(30.0);
-        assertThat(stats.get("pendingCount")).isEqualTo(0);
+        assertThat(stats.get("pendingCount")).isEqualTo(0L);
     }
 
     // ===================== P1-4: 组配置运行时应用 =====================

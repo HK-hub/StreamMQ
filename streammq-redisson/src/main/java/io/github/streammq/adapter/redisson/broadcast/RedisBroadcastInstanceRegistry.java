@@ -94,8 +94,17 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
                     + "  return 1                                                     \n"
                     + "end                                                            \n"
                     + "local owner = field(cur, 2)                                    \n"
+                    + "local curPid = field(cur, 5)                                   \n"
                     + "local lastHb = tonumber(field(cur, 7))                         \n"
                     + "if owner == ARGV[5] then                                      \n"
+                    // 同主机：心跳仍新鲜、pid 是另一个存活进程、且槽位未被标记为「已释放」→ 身份已被占用。
+                    // 不加这个判定，同一主机上的第二个进程会复用文件中的身份，两个进程共用一个消费者组，
+                    // 广播语义静默退化为集群消费（每个实例只收到部分消息）。
+                    + "  local fresh = lastHb and (tonumber(ARGV[3]) - lastHb) <= tonumber(ARGV[4])"
+                    + " \n"
+                    + "  if fresh and curPid ~= ARGV[6] and curPid ~= ARGV[7] then    \n"
+                    + "    return 0                                                   \n"
+                    + "  end                                                          \n"
                     + "  redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])                \n"
                     + "  return 1                                                     \n"
                     + "end                                                            \n"
@@ -104,6 +113,58 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
                     + "  return 1                                                     \n"
                     + "end                                                            \n"
                     + "return 0                                                       \n";
+
+    /** 「已释放」pid 标记：优雅停机把槽位 pid 置为该值，使同主机新进程可立即回收同一身份（复用 PEL）。 */
+    private static final String RELEASED_PID_MARKER = "0";
+
+    /**
+     * 释放槽位：pid 置为「已释放」标记 + 心跳刷新到停止时刻。
+     *
+     * <p>ARGV: 1=instanceId 2=releasedPid 3=now 4=callerPid。仅当槽位当前 pid 与调用方一致、或已是释放态时才标记，
+     * 避免过期持有者误释放他人槽位（返回 0 时调用方退化为纯心跳）。
+     */
+    private static final String LUA_RELEASE =
+            "local function field(s, n)                                     \n"
+                    + "  local start = 1                                              \n"
+                    + "  local idx = 1                                                \n"
+                    + "  while true do                                                \n"
+                    + "    local p = string.find(s, '|', start, true)                 \n"
+                    + "    if not p then                                              \n"
+                    + "      if idx == n then return string.sub(s, start) end         \n"
+                    + "      return nil                                               \n"
+                    + "    end                                                        \n"
+                    + "    if idx == n then return string.sub(s, start, p - 1) end    \n"
+                    + "    start = p + 1                                              \n"
+                    + "    idx = idx + 1                                              \n"
+                    + "  end                                                          \n"
+                    + "end                                                            \n"
+                    + "local function setfield(s, n, v)                               \n"
+                    + "  local start = 1                                              \n"
+                    + "  local idx = 1                                                \n"
+                    + "  while true do                                                \n"
+                    + "    local p = string.find(s, '|', start, true)                 \n"
+                    + "    if not p then                                              \n"
+                    + "      if idx == n then return string.sub(s, 1, start - 1) .. v \n"
+                    + "      end                                                      \n"
+                    + "      return nil                                               \n"
+                    + "    end                                                        \n"
+                    + "    if idx == n then                                           \n"
+                    + "      return string.sub(s, 1, start - 1) .. v .. string.sub(s, p)\n"
+                    + "    end                                                        \n"
+                    + "    start = p + 1                                              \n"
+                    + "    idx = idx + 1                                              \n"
+                    + "  end                                                          \n"
+                    + "end                                                            \n"
+                    + "local cur = redis.call('HGET', KEYS[1], ARGV[1])               \n"
+                    + "if not cur then return 0 end                                   \n"
+                    + "local curPid = field(cur, 5)                                   \n"
+                    + "if curPid ~= ARGV[4] and curPid ~= ARGV[2] then return 0 end    \n"
+                    + "local updated = setfield(cur, 5, ARGV[2])                      \n"
+                    + "if not updated then return 0 end                               \n"
+                    + "updated = setfield(updated, 7, ARGV[3])                        \n"
+                    + "if not updated then return 0 end                               \n"
+                    + "redis.call('HSET', KEYS[1], ARGV[1], updated)                  \n"
+                    + "return 1                                                       \n";
 
     /** 新分配（仅当 ID 不存在时写入）。ARGV: 1=instanceId 2=newEncoded */
     private static final String LUA_CLAIM_NEW =
@@ -296,11 +357,48 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
 
     @Override
     public void release(String namespace, String group, String instanceId) {
-        // 释放 ≠ 销毁：优雅停机时把槽位心跳刷新到"停止时刻"，将槽位在回收宽限期内保持为活跃，
-        // 使同主机实例在宽限期内重启能回收同一身份、复用 PEL（消费位点连续）。
+        // 释放 ≠ 销毁：优雅停机时把槽位标记为「已释放」（pid=0）并把心跳刷新到"停止时刻"。
+        //  * 同主机新进程（新 pid）在租约超时前即可回收该身份 → 复用 PEL 与消费位点（0.1.2 广播身份持久化语义）；
+        //  * 同主机另一个<b>存活</b>进程（心跳新鲜、pid 不同且槽位未标记释放）不会被判为可复用，
+        //    避免两个进程共用一个消费者组导致广播静默退化为集群消费。
         // 消费者组的真正销毁由 sweep 在超过宽限期后执行——此处绝不 HDEL，
         // 否则重启后的同主机实例无法回收该槽位，PEL 与消费位点随之永久丢失。
-        heartbeat(namespace, group, instanceId);
+        if (!markReleased(namespace, group, instanceId)) {
+            heartbeat(namespace, group, instanceId);
+        }
+    }
+
+    /** 标记槽位为「已释放」；失败（非本进程持有 / 脚本不可用）返回 false，由调用方退化为纯心跳。 */
+    private boolean markReleased(String namespace, String group, String instanceId) {
+        if (instanceId == null || instanceId.isBlank()) {
+            return false;
+        }
+        try {
+            Long ok =
+                    redisson.getScript(StringCodec.INSTANCE)
+                            .eval(
+                                    RScript.Mode.READ_WRITE,
+                                    LUA_RELEASE,
+                                    RScript.ReturnType.INTEGER,
+                                    Collections.singletonList(
+                                            StreamMQKeys.broadcastInstances(namespace, group)),
+                                    instanceId,
+                                    RELEASED_PID_MARKER,
+                                    Long.toString(System.currentTimeMillis()),
+                                    Long.toString(currentPid()));
+            return ok != null && ok == 1L;
+        } catch (RuntimeException ex) {
+            LOG.debug("Broadcast instance release failed: {}", ex.toString());
+            return false;
+        }
+    }
+
+    private static long currentPid() {
+        try {
+            return ProcessHandle.current().pid();
+        } catch (RuntimeException ex) {
+            return -1L;
+        }
     }
 
     @Override
@@ -467,7 +565,9 @@ public class RedisBroadcastInstanceRegistry implements BroadcastInstanceRegistry
                                 candidate.encode(),
                                 Long.toString(request.nowMillis()),
                                 Long.toString(request.leaseTimeoutMillis()),
-                                request.host());
+                                request.host(),
+                                Long.toString(request.pid()),
+                                RELEASED_PID_MARKER);
         return ok != null && ok == 1L ? candidate : null;
     }
 

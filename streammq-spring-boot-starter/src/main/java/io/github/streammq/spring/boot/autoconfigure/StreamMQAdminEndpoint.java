@@ -168,13 +168,14 @@ public class StreamMQAdminEndpoint {
                 String streamKey = StreamMQKeys.topicStream(namespace, meta.topic());
                 RStream<String, String> stream =
                         redisson.getStream(streamKey, StringCodec.INSTANCE);
-                var pendingInfo =
-                        stream.listPending(
-                                meta.consumerGroup(),
-                                StreamMessageId.MIN,
-                                StreamMessageId.MAX,
-                                maxPendingQuerySize);
-                info.put("pendingCount", pendingInfo.size());
+                // XPENDING 总数形式（O(1)）：listPending 会静默截断到 maxPendingQuerySize，
+                // 积压恰超过上限时（最需要告警的场景）反而误报为上限值。
+                PendingResult pendingInfo = stream.getPendingInfo(meta.consumerGroup());
+                info.put(
+                        "pendingCount",
+                        pendingInfo != null && pendingInfo.getTotal() > 0
+                                ? pendingInfo.getTotal()
+                                : 0L);
             } catch (RuntimeException ex) {
                 info.put("pendingCount", "N/A: " + ex.getMessage());
             }
@@ -476,14 +477,13 @@ public class StreamMQAdminEndpoint {
             RStream<String, String> stream =
                     redisson.getStream(
                             StreamMQKeys.topicStream(namespace, topic), StringCodec.INSTANCE);
+            // 同上：XPENDING 总数形式（O(1)、不被 maxPendingQuerySize 截断）
+            PendingResult pendingInfo = stream.getPendingInfo(group);
             stats.put(
                     "pendingCount",
-                    stream.listPending(
-                                    group,
-                                    StreamMessageId.MIN,
-                                    StreamMessageId.MAX,
-                                    maxPendingQuerySize)
-                            .size());
+                    pendingInfo != null && pendingInfo.getTotal() > 0
+                            ? pendingInfo.getTotal()
+                            : 0L);
         } catch (RuntimeException ex) {
             stats.put("pendingCount", "N/A: " + ex.getMessage());
         }

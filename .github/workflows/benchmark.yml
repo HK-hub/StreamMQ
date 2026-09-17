@@ -4,6 +4,10 @@ name: Benchmark
 on:
   workflow_dispatch:
 
+# 最小权限原则：基准任务只需读取仓库内容
+permissions:
+  contents: read
+
 jobs:
   benchmark:
     name: JMH Benchmarks
@@ -62,6 +66,26 @@ jobs:
             exit 1
           fi
           ls -la benchmark-results
+
+      # 性能回归门禁：调用仓库内置比对脚本（此前脚本存在但无人调用，自动保护仅有"产物存在"）。
+      # 基线 bootstrap：benchmark-baseline.json 目前为空 {}，首次发布后才回填真实基线；
+      # 基线缺失/为空时只提示、不失败，避免误拦；基线就绪后由脚本按阈值判定并阻断回归。
+      - name: Check benchmark regression vs baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          baseline="streammq-benchmark/benchmark-baseline.json"
+          has_baseline=false
+          if [ -f "$baseline" ] && python3 -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); d=d.get("benchmarks", d) if isinstance(d, dict) else d; sys.exit(0 if d else 1)' "$baseline"; then
+            has_baseline=true
+          fi
+          if [ "$has_baseline" != true ]; then
+            echo "::notice::No benchmark baseline yet (${baseline} absent, empty or unreadable) — regression comparison skipped. The baseline is bootstrapped after the first release."
+            exit 0
+          fi
+          python3 streammq-benchmark/scripts/check_benchmark_regression.py \
+            --current 'benchmark-results/jmh*.json' \
+            --baseline "$baseline"
 
       - name: Upload benchmark results
         if: always()

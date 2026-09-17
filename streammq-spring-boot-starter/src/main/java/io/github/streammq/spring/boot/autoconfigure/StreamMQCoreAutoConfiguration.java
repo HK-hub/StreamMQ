@@ -238,9 +238,9 @@ public class StreamMQCoreAutoConfiguration {
             throw new IllegalStateException(
                     "streammq.producer.serializer is set to "
                             + StreamMQSpringConstants.FURY_SERIALIZER_CLASS_NAME
-                            + " but Apache Fury is not on the classpath. Add the dependency:"
-                            + " org.apache.fury:fury-core (it is an optional dependency of"
-                            + " streammq-redisson). Alternatively use the default"
+                            + " but Apache Fory (formerly Apache Fury) is not on the classpath."
+                            + " Add the dependency: org.apache.fory:fory-core (it is an optional"
+                            + " dependency of streammq-redisson). Alternatively use the default"
                             + " JacksonJsonSerializer, or ProtostuffSerializer with"
                             + " io.protostuff:protostuff-core + protostuff-runtime.",
                     e);
@@ -256,7 +256,7 @@ public class StreamMQCoreAutoConfiguration {
                     "Failed to instantiate MessageSerializer "
                             + clazz.getName()
                             + ": a required optional dependency is missing from the classpath."
-                            + " Apache Fury needs org.apache.fury:fury-core; Protostuff needs"
+                            + " Apache Fory needs org.apache.fory:fory-core; Protostuff needs"
                             + " io.protostuff:protostuff-core + protostuff-runtime. Or fall back to"
                             + " the default JacksonJsonSerializer.",
                     e);

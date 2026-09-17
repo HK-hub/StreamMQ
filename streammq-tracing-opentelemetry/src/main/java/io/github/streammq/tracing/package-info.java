@@ -1,3 +1,8 @@
+/*
+ * Copyright 2026 StreamMQ Contributors (https://github.com/HK-hub/StreamMQ)
+ *
+ * Licensed under the MIT License.
+ */
 /**
  * StreamMQ OpenTelemetry 追踪模块，提供原生 OpenTelemetry 集成、W3C TraceContext 上下文传播与消息拓扑可视化。
  *

@@ -160,23 +160,32 @@ class FurySerializerTest {
     }
 
     @Test
-    @DisplayName("宽松模式无需 -D 系统属性即可工作（原 SecurityException 门控已移除为 WARN）")
-    void unrestrictedModeWorksWithoutSystemProperty() {
+    @DisplayName("宽松模式受系统属性门禁保护：未设置属性时构造抛 SecurityException")
+    void unrestrictedModeRequiresSystemProperty() {
         String previous = System.getProperty("streammq.security.allowUnrestrictedSerializer");
         System.clearProperty("streammq.security.allowUnrestrictedSerializer");
         try {
-            FurySerializer<MyData> open = new FurySerializer<>(false);
-            assertThat(open.isRequireClassRegistration()).isFalse();
-            MyData data = new MyData("gate-free", 1, 1L);
-            byte[] bytes = open.serialize(data, MyData.class);
-            assertThat(open.deserialize(bytes, MyData.class)).isEqualTo(data);
+            assertThatThrownBy(() -> new FurySerializer<>(false))
+                    .isInstanceOf(SecurityException.class)
+                    .hasMessageContaining("allowUnrestrictedSerializer");
         } finally {
-            if (previous == null) {
-                System.clearProperty("streammq.security.allowUnrestrictedSerializer");
-            } else {
-                System.setProperty("streammq.security.allowUnrestrictedSerializer", previous);
-            }
+            // 其余用例依赖宽松模式可用：恢复（或补回）显式确认属性
+            System.setProperty(
+                    "streammq.security.allowUnrestrictedSerializer",
+                    previous == null ? "true" : previous);
         }
+    }
+
+    @Test
+    @DisplayName("宽松模式在显式确认属性下可用（任意 POJO 开箱即用）")
+    void unrestrictedModeWorksWithSystemProperty() {
+        assertThat(System.getProperty("streammq.security.allowUnrestrictedSerializer"))
+                .isEqualTo("true");
+        FurySerializer<MyData> open = new FurySerializer<>(false);
+        assertThat(open.isRequireClassRegistration()).isFalse();
+        MyData data = new MyData("gate-open", 1, 1L);
+        byte[] bytes = open.serialize(data, MyData.class);
+        assertThat(open.deserialize(bytes, MyData.class)).isEqualTo(data);
     }
 
     @Test

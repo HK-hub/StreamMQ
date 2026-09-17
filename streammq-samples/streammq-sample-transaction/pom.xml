@@ -13,7 +13,7 @@
 
     <artifactId>streammq-sample-transaction</artifactId>
     <name>StreamMQ Sample - Transaction</name>
-    <description>StreamMQ 事务消息示例：演示 TransactionCallback + @StreamMqTransactionListener 回查的完整流程。</description>
+    <description>StreamMQ 事务消息示例：演示 TransactionCallback + @StreamMQTransactionConsumer 回查的完整流程。</description>
 
     <dependencies>
         <dependency>

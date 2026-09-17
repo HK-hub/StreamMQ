@@ -32,9 +32,6 @@ public class SerializationBenchmark {
     private static final int PAYLOAD_SIZE = 1024;
     private static final int BATCH_SIZE = 1000;
 
-    @Param({"100", "1000", "10000"})
-    private int messageCount;
-
     private TestPayload payload;
     private byte[] jacksonBytes;
     private byte[] jdkBytes;
