@@ -66,7 +66,7 @@ streammq:
 | `send-message-timeout` | `3000` | 发送超时（毫秒），必须 > 0 |
 | `retry-times` | `2` | 同步发送重试次数（≤ `MAX_SYNC_RETRY_TIMES=16`） |
 | `stream-max-len` | `0` | Stream 最大长度，`0`=不限制 |
-| `serializer` | `JacksonJsonSerializer` | 消息体序列化器全限定类名。**默认 Jackson（0.1.2 起）**：安全严格类型；高吞吐可 opt-in `FurySerializer`（底层库 Apache Fory 1.7.3，坐标 `org.apache.fory:fory-core`，要求 >= 1.1.0）/ `ProtostuffSerializer`（需自备 classpath） |
+| `serializer` | `JacksonJsonSerializer` | 消息体序列化器全限定类名。**默认 Jackson（0.1.2 起）**：安全严格类型；高吞吐 / 低时延可 opt-in：`FurySerializer`（底层库 Apache Fory 1.7.3，坐标 `org.apache.fory:fory-core`，要求 >= 1.1.0）、`ProtostuffSerializer`（需自备 classpath）、`FlatBuffersSerializer`（零拷贝读，坐标 `com.google.flatbuffers:flatbuffers-java` 24.3.25，免代码生成）、`SbeSerializer`（金融级确定性时延信封模式，坐标 `org.agrona:agrona` 1.17.1；`sbe-tool` 1.18.0 仅构建期生成桩）。后两者为 schema-less / 信封模式，纯数据、**无反序列化 RCE 面**，适合不可信输入 |
 | `fury-require-class-registration` | `true` | 仅 `FurySerializer`（底层库 Apache Fory）生效：是否强制类注册白名单（默认开启；关闭即宽松模式，扩大反序列化 RCE 面） |
 | `fury-registered-classes` | `[]`（空） | 仅 `FurySerializer`（底层库 Apache Fory）白名单模式生效：预注册的业务消息体类型（全限定类名列表，逗号分隔），如 `com.acme.Order,com.acme.Payment`；未注册类型反序列化将被拒绝 |
 | `compress-threshold` | `0` | 压缩阈值（字节），`0`=禁用 |

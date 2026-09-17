@@ -21,6 +21,12 @@ import io.github.streammq.core.exception.SerializationException;
  *       上有反序列化 RCE 面）
  *   <li>{@code ProtostuffSerializer} - 基于 Protostuff 的二进制序列化（schema 由目标类型决定，无 gadget RCE 面，需无参构造
  *       POJO）
+ *   <li>{@code FlatBuffersSerializer} - 基于 FlatBuffers {@code FlexBuffers}
+ *       的动态（schema-less）二进制序列化；零拷贝读取、免代码生成， 经反射处理任意 POJO，纯数据、无反序列化代码执行面（安全）。需添加 {@code
+ *       com.google.flatbuffers:flatbuffers-java}（optional）
+ *   <li>{@code SbeSerializer} - 基于 SBE（Simple Binary Encoding，FIX 社区标准）的信封模式二进制序列化；定长消息头 + 零解析拷贝，
+ *       业务体以严格类型 Jackson 编码后嵌入单一 {@code varData} 字段，无 gadget RCE 面（安全）。需添加 {@code
+ *       org.agrona:agrona}（optional）
  *   <li>{@code JacksonJsonSerializer} - 基于 Jackson 的 JSON 序列化（跨语言/可读性优先，严格类型、无多态反序列化）
  *   <li>{@code JdkSerializer} - 基于 JDK 原生序列化（备选，内置 JEP 290 白名单）
  *   <li>{@code StringSerializer} / {@code ByteArraySerializer} - 直通序列化
@@ -29,7 +35,8 @@ import io.github.streammq.core.exception.SerializationException;
  * <p><b>⚠️ 安全提示：</b>{@code FurySerializer} <b>默认强制类注册白名单</b>（{@code
  * requireClassRegistration=true}），需先注册业务消息体类型； 仅当显式创建宽松实例（{@code new
  * FurySerializer(false)}，受系统属性门禁保护）时，Redis 中字节流才可被反序列化为 classpath 上任意类， 共享/多租户 Redis 场景即反序列化 RCE
- * 攻击面。默认可用的 {@code JacksonJsonSerializer}（严格类型）与 {@code ProtostuffSerializer}（schema 由目标类型决定）无
+ * 攻击面。默认可用的 {@code JacksonJsonSerializer}（严格类型）、{@code ProtostuffSerializer}（schema 由目标类型决定）、
+ * {@code FlatBuffersSerializer}（FlexBuffers 纯数据、零拷贝读）与 {@code SbeSerializer}（信封模式、定长头 + 零解析拷贝）均无
  * gadget 面。{@code JdkSerializer} 内置 JEP 290 白名单，自定义业务 body 类型需显式加白，详见各实现类 Javadoc。
  *
  * @param <T> body 类型

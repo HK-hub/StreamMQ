@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  StreamMQ SBE 消息信封 schema。
+  设计定位：作为内置 SbeSerializer 的「信封」容器——业务消息体不以 schema 字段呈现，
+  而是整体编码为 opaque 字节流塞进单个 varData(payload) 字段。这样 SbeSerializer 即可对任意
+  POJO 透明工作（payload 内部用 Jackson 编码），同时对外展现 SBE 的定长头 + 零解析拷贝优势。
+  如果未来需要「全零拷贝 body」，可在此新增面向具体消息类型的 message 定义并让 SbeSerializer
+  直接操作生成类型。
+
+  说明：
+   - SBE 的 messageHeader 必须是 <types> 中名为 messageHeader 的 composite（生成
+     MessageHeaderEncoder/Decoder，wrapAndApplyHeader 写入）。
+   - 1.18.0 的 varData/varString 不是内置 magic 类型，必须在 <types> 中以 composite 形式声明
+     （遵循 SBE 变长数据编码规范：length + 名为 varData、length=0 的 uint8 数组）。
+-->
+<messageSchema xmlns="https://fixprotocol.io/ns/sbe/1.0"
+               package="io.github.streammq.adapter.redisson.serializer.sbe"
+               id="12345"
+               version="1"
+               semanticVersion="1.0.0"
+               description="StreamMQ message body envelope (SBE encoded).">
+    <types>
+        <composite name="messageHeader" description="SBE fixed message header">
+            <type name="blockLength" primitiveType="uint16"/>
+            <type name="templateId" primitiveType="uint16"/>
+            <type name="schemaId" primitiveType="uint16"/>
+            <type name="version" primitiveType="uint16"/>
+        </composite>
+
+        <composite name="varData">
+            <type name="length" primitiveType="uint32" maxValue="2147483647"/>
+            <type name="varData" primitiveType="uint8" length="0"/>
+        </composite>
+    </types>
+
+    <!-- 信封：唯一字段为变长 payload 字节 -->
+    <message name="StreamMessage" id="1" description="Envelope carrying opaque body bytes">
+        <data name="payload" id="1" type="varData"/>
+    </message>
+</messageSchema>

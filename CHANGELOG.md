@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **内置高性能、安全序列化器：FlatBuffers 与 SBE**（与 Fury / Protostuff / JacksonJson 同属 SDK 内置实现，
+  通过 `streammq.producer.serializer` 全限定类名选择，无需 SPI 注册）：
+  - `FlatBuffersSerializer`：基于 FlatBuffers **FlexBuffers**（schema-less 动态格式）。**零拷贝读取**（直接基于
+    ByteBuffer 偏移量寻址，不解析、不实例化任意类）、**免代码生成**、经反射处理任意 POJO；纯数据、
+    **无反序列化代码执行面（安全）**。选用需添加 `com.google.flatbuffers:flatbuffers-java`（本项目固定 **24.3.25**，optional）。
+  - `SbeSerializer`：基于 **SBE（Simple Binary Encoding，FIX 社区标准）**的信封模式——定长 8 字节消息头 +
+    零解析拷贝；业务体以严格类型 Jackson 编码为 opaque 字节后，整体放入单一 `varData(payload)` 字段，
+    `payloadLength()`/`getPayload()` 直接基于偏移量读取，**无 gadget RCE 面（安全）**。SBE 桩代码由
+    `uk.co.real-logic:sbe-tool`（**1.18.0**，纯 Java 构建期生成，不进运行时）生成；运行时依赖
+    `org.agrona:agrona`（**1.17.1**，optional）。
+  - `streammq-benchmark` 新增 FlatBuffers / SBE 的序列化、反序列化与往返基准（吞吐 + 体积），与 Fury / Protostuff /
+    JacksonJson / JDK 同台对比。
+  - 安全与选型说明见 `SECURITY.md` 与 `docs/configuration-reference.md`。
+
+### Fixed
+
+- `FlatBuffersSerializer`：修复集合中 `null` 元素与 Map 中 `null` value 被静默丢弃的问题——改用 FlexBuffers
+  `putNull()` 显式保留，避免反序列化后集合长度 / 键集不一致。
+- `streammq-benchmark`：补齐此前缺失的序列化依赖（`jackson-datatype-jsr310`、`protostuff-core`/`protostuff-runtime`，
+  并为 `flatbuffers-java`/`agrona` 固定版本）。此前所有序列化基准在 `setup()` 阶段即因 `ClassNotFoundException` 失败
+  （`streammq-redisson` 为 test scope 不传递其依赖，且 `protostuff`/`flatbuffers`/`agrona` 均为 optional 依赖）。
+
+### Docs
+
+- 新增序列化基准报告 `docs/benchmarks/serialization-2026-09-17.md`，并在中英文 README 的「性能基准测试」章节
+  更新序列化吞吐表（新增 FlatBuffers / SBE / Protostuff 行与线长列）。
+
 ## [0.1.2] - 2026-09-10 — 首个 Maven Central 发布：持久化广播消费实例 + 安全默认与质量门禁
 
 > **0.1.2 是 StreamMQ 第一个发布到 Maven Central 的版本**（0.1.0 / 0.1.1 均为内部迭代，从未对外发布，见下文）。

@@ -5,10 +5,12 @@
  */
 package io.github.streammq.benchmark;
 
+import io.github.streammq.adapter.redisson.serializer.FlatBuffersSerializer;
 import io.github.streammq.adapter.redisson.serializer.FurySerializer;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.adapter.redisson.serializer.JdkSerializer;
 import io.github.streammq.adapter.redisson.serializer.ProtostuffSerializer;
+import io.github.streammq.adapter.redisson.serializer.SbeSerializer;
 import io.github.streammq.core.serializer.MessageSerializer;
 import java.io.Serializable;
 import java.util.concurrent.TimeUnit;
@@ -37,11 +39,15 @@ public class SerializationBenchmark {
     private byte[] jdkBytes;
     private byte[] furyBytes;
     private byte[] protostuffBytes;
+    private byte[] flatBuffersBytes;
+    private byte[] sbeBytes;
 
     private MessageSerializer<TestPayload> jacksonSerializer;
     private MessageSerializer<TestPayload> jdkSerializer;
     private MessageSerializer<TestPayload> furySerializer;
     private MessageSerializer<TestPayload> protostuffSerializer;
+    private MessageSerializer<TestPayload> flatBuffersSerializer;
+    private MessageSerializer<TestPayload> sbeSerializer;
 
     @Setup(Level.Trial)
     public void setup() {
@@ -55,11 +61,15 @@ public class SerializationBenchmark {
         jdkSerializer = new JdkSerializer<>();
         furySerializer = new FurySerializer<>(TestPayload.class);
         protostuffSerializer = new ProtostuffSerializer<>();
+        flatBuffersSerializer = new FlatBuffersSerializer<>();
+        sbeSerializer = new SbeSerializer<>();
 
         jacksonBytes = jacksonSerializer.serialize(payload, TestPayload.class);
         jdkBytes = jdkSerializer.serialize(payload, TestPayload.class);
         furyBytes = furySerializer.serialize(payload, TestPayload.class);
         protostuffBytes = protostuffSerializer.serialize(payload, TestPayload.class);
+        flatBuffersBytes = flatBuffersSerializer.serialize(payload, TestPayload.class);
+        sbeBytes = sbeSerializer.serialize(payload, TestPayload.class);
     }
 
     @Benchmark
@@ -199,6 +209,81 @@ public class SerializationBenchmark {
         for (int i = 0; i < BATCH_SIZE; i++) {
             byte[] bytes = protostuffSerializer.serialize(payload, TestPayload.class);
             blackhole.consume(protostuffSerializer.deserialize(bytes, TestPayload.class));
+        }
+    }
+
+    // ===== FlatBuffers（FlexBuffers 动态反射，零拷贝读） =====
+
+    @Benchmark
+    @OperationsPerInvocation(BATCH_SIZE)
+    public void flatBuffersSerialize(Blackhole blackhole) {
+        for (int i = 0; i < BATCH_SIZE; i++) {
+            blackhole.consume(flatBuffersSerializer.serialize(payload, TestPayload.class));
+        }
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(BATCH_SIZE)
+    public void flatBuffersDeserialize(Blackhole blackhole) {
+        for (int i = 0; i < BATCH_SIZE; i++) {
+            blackhole.consume(
+                    flatBuffersSerializer.deserialize(flatBuffersBytes, TestPayload.class));
+        }
+    }
+
+    @Benchmark
+    public byte[] flatBuffersSerializeSingle() {
+        return flatBuffersSerializer.serialize(payload, TestPayload.class);
+    }
+
+    @Benchmark
+    public TestPayload flatBuffersDeserializeSingle() {
+        return flatBuffersSerializer.deserialize(flatBuffersBytes, TestPayload.class);
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(BATCH_SIZE)
+    public void flatBuffersRoundTrip(Blackhole blackhole) {
+        for (int i = 0; i < BATCH_SIZE; i++) {
+            byte[] bytes = flatBuffersSerializer.serialize(payload, TestPayload.class);
+            blackhole.consume(flatBuffersSerializer.deserialize(bytes, TestPayload.class));
+        }
+    }
+
+    // ===== SBE（Simple Binary Encoding，信封模式） =====
+
+    @Benchmark
+    @OperationsPerInvocation(BATCH_SIZE)
+    public void sbeSerialize(Blackhole blackhole) {
+        for (int i = 0; i < BATCH_SIZE; i++) {
+            blackhole.consume(sbeSerializer.serialize(payload, TestPayload.class));
+        }
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(BATCH_SIZE)
+    public void sbeDeserialize(Blackhole blackhole) {
+        for (int i = 0; i < BATCH_SIZE; i++) {
+            blackhole.consume(sbeSerializer.deserialize(sbeBytes, TestPayload.class));
+        }
+    }
+
+    @Benchmark
+    public byte[] sbeSerializeSingle() {
+        return sbeSerializer.serialize(payload, TestPayload.class);
+    }
+
+    @Benchmark
+    public TestPayload sbeDeserializeSingle() {
+        return sbeSerializer.deserialize(sbeBytes, TestPayload.class);
+    }
+
+    @Benchmark
+    @OperationsPerInvocation(BATCH_SIZE)
+    public void sbeRoundTrip(Blackhole blackhole) {
+        for (int i = 0; i < BATCH_SIZE; i++) {
+            byte[] bytes = sbeSerializer.serialize(payload, TestPayload.class);
+            blackhole.consume(sbeSerializer.deserialize(bytes, TestPayload.class));
         }
     }
 

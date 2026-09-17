@@ -84,6 +84,12 @@
         <fory.version>1.7.3</fory.version>
         <protostuff.version>1.8.0</protostuff.version>
 
+        <!-- FlatBuffers（FlexBuffers 动态反射，零拷贝读；可选依赖，按需 opt-in） -->
+        <flatbuffers.version>24.3.25</flatbuffers.version>
+        <!-- SBE（Simple Binary Encoding）：sbe-tool 纯 Java 代码生成，agrona 为生成代码运行时 -->
+        <agrona.version>1.17.1</agrona.version>
+        <sbe-tool.version>1.18.0</sbe-tool.version>
+
         <!-- V2.0 新增依赖 -->
         <spring-cloud-stream.version>4.1.3</spring-cloud-stream.version>
         <spring-integration.version>6.3.4</spring-integration.version>
@@ -206,6 +212,25 @@
                 <groupId>io.protostuff</groupId>
                 <artifactId>protostuff-runtime</artifactId>
                 <version>${protostuff.version}</version>
+            </dependency>
+
+            <!-- FlatBuffers（FlexBuffers 动态反射序列化，零拷贝读取） -->
+            <dependency>
+                <groupId>com.google.flatbuffers</groupId>
+                <artifactId>flatbuffers-java</artifactId>
+                <version>${flatbuffers.version}</version>
+            </dependency>
+
+            <!-- SBE（Simple Binary Encoding）运行时：生成代码依赖 agrona -->
+            <dependency>
+                <groupId>org.agrona</groupId>
+                <artifactId>agrona</artifactId>
+                <version>${agrona.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>uk.co.real-logic</groupId>
+                <artifactId>sbe-tool</artifactId>
+                <version>${sbe-tool.version}</version>
             </dependency>
 
             <!-- V2.0: Spring Cloud Stream -->

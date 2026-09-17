@@ -212,17 +212,20 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 >
 > **注意（0.1.2 默认值变更）：** 下表中的数字是在 0.1.1 时代的默认值下测得的（Fury 为默认序列化器、并发消费超时 30s）。0.1.2 把**默认序列化器切换为 `JacksonJsonSerializer`**、并**默认关闭逐消息消费超时**（由 PEL 认领兜底 at-least-once）。两者都会改变绝对吞吐数字——请在你的环境中重新运行 `mvn -Pbenchmark` 获取当前数字。
 
-### 序列化性能 (Throughput, ops/s) — 0.1.2 实测
+### 序列化性能 (Throughput, ops/s) — 2026-09-17 实测
 
-测试 1KB 消息体的序列化/反序列化吞吐量（messageCount=1000，含 Blackhole 消费）。JMH fork=1，warmup=1×2s，measurement=2×3s。
+测试 1KB 消息体的序列化/反序列化吞吐量（`messageCount=1000`，含 Blackhole 消费）。JMH fork=1，warmup=4×2s，measurement=5×2s，Throughput 模式。覆盖全部 6 个内置序列化器，**含新增的 `FlatBuffersSerializer`（FlexBuffers）与 `SbeSerializer`（SBE 信封）**。完整报告见 [`docs/benchmarks/serialization-2026-09-17.md`](docs/benchmarks/serialization-2026-09-17.md)。
 
-| 序列化器 | Serialize (ops/s) | Deserialize (ops/s) | RoundTrip (ops/s) | 单次序列化 (ops/s) | 单次反序列化 (ops/s) |
-|----------|-------------------|---------------------|-------------------|--------------------|----------------------|
-| **Fury** | **~5,205,112** | **~4,542,655** | **~2,123,210** | **~5,215,574** | **~4,630,521** |
-| Jackson  | ~401,806 | ~914,020 | ~192,823 | ~391,602 | ~912,513 |
-| JDK      | ~455,704 | — | — | ~455,704 | — |
+| 序列化器 | Serialize (ops/s) | Deserialize (ops/s) | RoundTrip (ops/s) | 单次序列化 (ops/s) | 单次反序列化 (ops/s) | 体积 (字节) |
+|----------|-------------------|---------------------|-------------------|--------------------|----------------------|------------|
+| **Fury** | **~3,483,891** | **~3,800,231** | **~1,880,645** | **~4,036,015** | **~3,995,683** | 1,094 |
+| Protostuff | ~351,231 | ~3,945,355 | ~320,724 | ~342,823 | ~3,717,589 | 1,050 |
+| FlatBuffers (FlexBuffers) | ~657,099 | ~763,086 | ~347,640 | ~645,424 | ~785,224 | 1,150 |
+| SBE (信封) | ~358,310 | ~765,708 | ~246,984 | ~354,743 | ~817,930 | 1,104 |
+| Jackson（默认） | ~416,872 | ~893,418 | ~266,364 | ~410,731 | ~875,660 | 1,092 |
+| JDK | ~442,764 | — | — | ~459,824 | — | — |
 
-> **结论**: Fury 序列化吞吐量是 Jackson 的 **~7-13x**，是 JDK 的 **~10x**（数字会因 JDK/硬件/负载而漂移）。
+> **结论/读数说明**：**Fury** 全项最快（序列化约为 Jackson 的 **8×**、反序列化约 **4.3×**），但需类注册白名单并会引入 Guava（需显式 opt-in）；**Protostuff** 反序列化极快（约 **4.4×** Jackson）但序列化偏慢（约 0.85×），适合读多写少；**FlatBuffers**（FlexBuffers，schema-less、安全——纯数据、无 gadget RCE 面）读写均衡，其“零拷贝读”为逐字段特性，`FlatBuffersSerializer` 仍需反射物化 POJO，故端到端反序列化与 Jackson 相当而非显著更快；**SBE** 信封模式受内层 Jackson 编解码限制（约 Jackson 的 0.86×），价值在定长 8 字节头 + `varData` 分帧与可版本化 schema，真正低时延需 schema-first body（生成式 reader）而非信封；**JDK** 反序列化强制反序列化过滤器（安全加固），本基准负载被拒绝，故不测量。体积仅 1KB 字符串负载、差异在 ±10% 内；笔记本级硬件 + IDE 运行，绝对值为参考（数字会因 JDK/硬件/负载而漂移）。
 
 ### 消息发送性能 (Throughput, ops/s) — 0.1.2 实测
 
@@ -890,7 +893,7 @@ StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换。0.1.2 提
 
 | 类别 | SPI/可覆盖接口 | 作用 | 默认实现 |
 |------|------|------|----------|
-| 用户扩展 | `MessageSerializer` | 消息序列化/反序列化 | **`JacksonJsonSerializer`（默认）** / `FurySerializer`（默认强制类注册白名单） / `ProtostuffSerializer` / `JdkSerializer` / `ByteArraySerializer` / `StringSerializer` |
+| 用户扩展 | `MessageSerializer` | 消息序列化/反序列化 | **`JacksonJsonSerializer`（默认）** / `FurySerializer`（默认强制类注册白名单） / `ProtostuffSerializer` / `FlatBuffersSerializer`（FlexBuffers，逐字段零拷贝读） / `SbeSerializer`（定长头信封） / `JdkSerializer` / `ByteArraySerializer` / `StringSerializer` |
 | 用户扩展 | `MessageConverter` | 消息体与业务对象转换 | `DefaultMessageConverter` / `CompactMessageConverter` / `PassThroughMessageConverter` |
 | 用户扩展 | `ProducerFilter` | 生产者过滤器（过滤链） | 无内置实现——自行实现并注册 Bean |
 | 用户扩展 | `ConsumerFilter` | 消费者过滤器（全局+per-consumer） | `TagSelectorFilter` / `SqlSelectorFilter`（共享接口 `ExpressionSelectorFilter`） |

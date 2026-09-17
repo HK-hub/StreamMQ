@@ -80,6 +80,26 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- 可选序列化：FlatBuffers（FlexBuffers 动态反射，零拷贝读；无 gadget RCE 面）。optional。 -->
+        <dependency>
+            <groupId>com.google.flatbuffers</groupId>
+            <artifactId>flatbuffers-java</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- 可选序列化：SBE（Simple Binary Encoding）。运行时依赖 agrona（生成代码引用）；
+             sbe-tool 仅构建期代码生成，不进运行时。同为 optional。 -->
+        <dependency>
+            <groupId>org.agrona</groupId>
+            <artifactId>agrona</artifactId>
+            <optional>true</optional>
+        </dependency>
+        <dependency>
+            <groupId>uk.co.real-logic</groupId>
+            <artifactId>sbe-tool</artifactId>
+            <optional>true</optional>
+        </dependency>
+
         <!-- 测试 -->
         <dependency>
             <groupId>ch.qos.logback</groupId>
@@ -167,6 +187,63 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
+            </plugin>
+
+            <!-- SBE 代码生成：纯 Java 的 sbe-tool 读取 .xml schema，在 generate-sources 阶段
+                 生成信封的 Encoder/Decoder Java 桩（无需 native 编译器）。输出目录加入编译源。 -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.5.0</version>
+                <executions>
+                    <execution>
+                        <id>generate-sbe</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>java</goal>
+                        </goals>
+                        <configuration>
+                            <mainClass>uk.co.real_logic.sbe.SbeTool</mainClass>
+                            <includeProjectDependencies>true</includeProjectDependencies>
+                            <classpathScope>compile</classpathScope>
+                            <arguments>
+                                <argument>${project.basedir}/src/main/resources/sbe/streammq-message.xml</argument>
+                            </arguments>
+                            <systemProperties>
+                                <systemProperty>
+                                    <key>sbe.output.dir</key>
+                                    <value>${project.build.directory}/generated-sources/sbe</value>
+                                </systemProperty>
+                            </systemProperties>
+                        </configuration>
+                    </execution>
+                </executions>
+                <dependencies>
+                    <dependency>
+                        <groupId>uk.co.real-logic</groupId>
+                        <artifactId>sbe-tool</artifactId>
+                        <version>${sbe-tool.version}</version>
+                    </dependency>
+                </dependencies>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>build-helper-maven-plugin</artifactId>
+                <version>3.6.0</version>
+                <executions>
+                    <execution>
+                        <id>add-sbe-generated-sources</id>
+                        <phase>generate-sources</phase>
+                        <goals>
+                            <goal>add-source</goal>
+                        </goals>
+                        <configuration>
+                            <sources>
+                                <source>${project.build.directory}/generated-sources/sbe</source>
+                            </sources>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

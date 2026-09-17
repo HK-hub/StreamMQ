@@ -31,6 +31,13 @@ StreamMQ 的**默认序列化器是 `JacksonJsonSerializer`**（0.1.2 起；安�
 
 `FurySerializer` 底层库为 **Apache Fory（原 Apache Fury）**，Maven 坐标 `org.apache.fory:fory-core`（0.11.0 起由 `org.apache.fury:fury-core` 更名）。**版本下限 1.1.0**：1.1.0 之前的 fury-core / fory-core（含本项目 0.1.2 之前使用的 `org.apache.fury:fury-core:0.9.0`）存在 **CVE-2026-50076**（CVSS 9.1——反序列化时可绕过类注册校验，触发 classpath 上的 resolve/readExternal 钩子），本项目受影响并已升级。Java 类名 `FurySerializer` 与 `name()="fury"` 保持不变，以兼容既有配置写法。
 
+**额外的高性能、安全内置序列化器（0.1.3 起）**：除 Fury/Protostuff 外，本项目新增 `FlatBuffersSerializer` 与 `SbeSerializer`，二者均以**纯数据 / 信封**方式工作，**无反序列化代码执行面（无 gadget RCE）**，适合对吞吐与确定性时延敏感、且要求不可信输入零攻击面的场景：
+
+- `FlatBuffersSerializer`：基于 FlatBuffers 的 **FlexBuffers**（schema-less 动态格式）。读取时**零拷贝**（直接基于 ByteBuffer 偏移量寻址，不解析、不实例化任意类），免代码生成，经反射处理任意 POJO。选用需添加 `com.google.flatbuffers:flatbuffers-java`（本项目固定 **24.3.25**）。
+- `SbeSerializer`：基于 **SBE（Simple Binary Encoding，FIX 社区标准）**。采用**信封模式**——业务体由严格类型 Jackson 编码为 opaque 字节后，整体放入定长 8 字节消息头 + 单一 `varData(payload)` 字段；读取 `payloadLength()`/`getPayload()` 直接基于偏移量，不解释 body 内部结构。选用需添加 `org.agrona:agrona`（本项目固定 **1.17.1**；`uk.co.real-logic:sbe-tool` **1.18.0** 仅在构建期生成信封的 Encoder/Decoder 桩，不进运行时）。
+
+> **Cap'n Proto 暂未内置**：Cap'n Proto 同样是高性能零拷贝格式，但其 Java 绑定需要 native `capnp` 编译器生成桩代码，本仓库构建环境未预装该工具，故本轮未纳入；后续在 CI 安装 `capnp` 后可补齐。
+
 **Fury 类注册白名单（默认开启）**：若显式选择 `FurySerializer`，其**默认强制类注册白名单（`requireClassRegistration=true`）**：只有显式注册过的类型才能反序列化，未注册类型在反序列化时被拒绝（需预注册业务消息体类型）。仅当显式设为 `false`（宽松模式）时，任意 POJO 才可反序列化，但 Redis 中被写入的字节流也可被反序列化为 classpath 上的任意类——共享/多租户 Redis 场景下是反序列化攻击面（RCE 向量），且该宽松构造受系统属性门禁保护。配置示例：
 
 ```yaml
@@ -51,7 +58,7 @@ streammq:
 
 ### 依赖版本与 CVE 策略
 
-- **SDK 自有的可选序列化器依赖由本项目钉版本**：Apache Fory（`org.apache.fory:fory-core`，当前 **1.7.3**，下限 **1.1.0**——见上文 CVE-2026-50076）与 Protostuff 在 `streammq-redisson` 中以 `optional` 声明，版本由本项目父 POM 管理。选用时请遵循本项目声明的版本下限，不要回退到 1.1.0 之前的 `fury-core`/`fory-core`。
+- **SDK 自有的可选序列化器依赖由本项目钉版本**：Apache Fory（`org.apache.fory:fory-core`，当前 **1.7.3**，下限 **1.1.0**——见上文 CVE-2026-50076）、FlatBuffers（`com.google.flatbuffers:flatbuffers-java`，当前 **24.3.25**）、SBE 运行时（`org.agrona:agrona`，当前 **1.17.1**；构建期代码生成工具 `uk.co.real-logic:sbe-tool` **1.18.0**）与 Protostuff 在 `streammq-redisson` 中以 `optional` 声明，版本由本项目父 POM 管理。选用时请遵循本项目声明的版本下限，不要回退到 1.1.0 之前的 `fury-core`/`fory-core`。
 - **Spring / Jackson / Netty 等宿主依赖由使用方自行管理**：本项目父 POM 中的版本（Spring Boot 3.3.5 → Spring 6.1.14、Jackson 2.17.2，Netty 4.1.x 经 Redisson 传递）**仅用于本仓库自身的构建与测试**，不会强加给使用方；`streammq-bom` 也不再导入 `spring-boot-dependencies`。请通过你自己的 BOM（如 `spring-boot-starter-parent` / `spring-boot-dependencies`）管理这些依赖的版本。
 - 上述宿主依赖线（Spring 6.1.x / Jackson 2.17.x / Netty 4.1.x）在 0.1.x 周期内存在上游已披露的安全公告，升级责任与节奏由使用方掌握；本项目将在 **0.2.x** 把自身构建与测试所用的依赖线刷新到当时的新版本。
 

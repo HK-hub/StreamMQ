@@ -62,11 +62,49 @@
             <artifactId>jackson-databind</artifactId>
             <scope>test</scope>
         </dependency>
+        <!-- Jackson JSR-310 时间模块：JacksonJsonSerializer 默认注册 JavaTimeModule，
+             但 streammq-redisson 以 test scope 引入、不会传递其编译期依赖，需在此显式声明 -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+            <scope>test</scope>
+        </dependency>
 
         <!-- Fory（原 Fury） -->
         <dependency>
             <groupId>org.apache.fory</groupId>
             <artifactId>fory-core</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- FlatBuffers（FlexBuffers 动态反射序列化，基准对比） -->
+        <dependency>
+            <groupId>com.google.flatbuffers</groupId>
+            <artifactId>flatbuffers-java</artifactId>
+            <version>24.3.25</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- SBE（Simple Binary Encoding）运行时：生成代码依赖 agrona -->
+        <dependency>
+            <groupId>org.agrona</groupId>
+            <artifactId>agrona</artifactId>
+            <version>1.17.1</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Protostuff（运行时序列化，基准对比）。streammq-redisson 以 optional 声明，
+             不会传递，需在此显式声明才能运行 ProtostuffSerializer 基准 -->
+        <dependency>
+            <groupId>io.protostuff</groupId>
+            <artifactId>protostuff-core</artifactId>
+            <version>1.8.0</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.protostuff</groupId>
+            <artifactId>protostuff-runtime</artifactId>
+            <version>1.8.0</version>
             <scope>test</scope>
         </dependency>
 

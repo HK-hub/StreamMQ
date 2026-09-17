@@ -161,15 +161,26 @@ Serializers, converters, filters, interceptors, retry policies, rebalance strate
 >
 > **Note (0.1.2 defaults changed):** the numbers below were measured under the 0.1.1-era defaults (Fury as default serializer, concurrent consume-timeout = 30s). 0.1.2 flips the **default serializer to `JacksonJsonSerializer`** and **disables the per-message consume-timeout by default** (PEL-reclaim fallback keeps at-least-once). Both change the absolute throughput figures — re-run `mvn -Pbenchmark` in your environment for current numbers.
 
-### Serialization Throughput (ops/s) — 0.1.2 measured
+### Serialization Throughput (ops/s) — 2026-09-17 measured
 
-1KB message body, messageCount=1000, with Blackhole consumer. JMH fork=1, warmup=1×2s, measurement=2×3s.
+1KB message body, `messageCount=1000`, with Blackhole consumer. JMH fork=1, warmup=4×2s, measurement=5×2s, Throughput mode. All six built-in serializers, **including the new `FlatBuffersSerializer` (FlexBuffers) and `SbeSerializer` (SBE envelope)**. Full report: [`docs/benchmarks/serialization-2026-09-17.md`](docs/benchmarks/serialization-2026-09-17.md).
 
-| Serializer | Serialize (ops/s) | Deserialize (ops/s) | RoundTrip (ops/s) | Single Serialize | Single Deserialize |
-|---|---|---|---|---|---|
-| **Fury** | **~5,205,112** | **~4,542,655** | **~2,123,210** | **~5,215,574** | **~4,630,521** |
-| Jackson  | ~401,806 | ~914,020 | ~192,823 | ~391,602 | ~912,513 |
-| JDK      | ~455,704 | — | — | ~455,704 | — |
+| Serializer | Serialize (ops/s) | Deserialize (ops/s) | RoundTrip (ops/s) | Single Serialize | Single Deserialize | Size (bytes) |
+|---|---|---|---|---|---|---|
+| **Fury** | **~3,483,891** | **~3,800,231** | **~1,880,645** | **~4,036,015** | **~3,995,683** | 1,094 |
+| Protostuff | ~351,231 | ~3,945,355 | ~320,724 | ~342,823 | ~3,717,589 | 1,050 |
+| FlatBuffers (FlexBuffers) | ~657,099 | ~763,086 | ~347,640 | ~645,424 | ~785,224 | 1,150 |
+| SBE (envelope) | ~358,310 | ~765,708 | ~246,984 | ~354,743 | ~817,930 | 1,104 |
+| Jackson (default) | ~416,872 | ~893,418 | ~266,364 | ~410,731 | ~875,660 | 1,092 |
+| JDK | ~442,764 | — | — | ~459,824 | — | — |
+
+> **Reading the numbers.**
+> - **Fury** is fastest overall (~8× Jackson on serialize, ~4.3× on deserialize) but requires the class-registration whitelist (safety) and pulls Guava.
+> - **Protostuff** deserializes very fast (~4.4× Jackson) yet serializes slowly (~0.85× Jackson) — good for read-heavy paths.
+> - **FlatBuffers** (FlexBuffers, schema-less, safe — pure data, no gadget RCE surface) is balanced. Its zero-copy read applies *per field*; because `FlatBuffersSerializer` still materializes a POJO via reflection, end-to-end deserialize (~763K) is comparable to Jackson, not dramatically faster.
+> - **SBE** (envelope mode) is bounded by its inner Jackson codec (~0.86× Jackson both ways) plus the fixed 8-byte header + `varData` framing (~10–16 B). Its value is the framed, schema-versioned container; true low-latency gains need schema-first bodies (codegen readers), not the envelope.
+> - **JDK** deserialize is not measured: `JdkSerializer` enforces a deserialization filter (security) that rejects this payload.
+> - `Size` is dominated by the 1KB string; differences are within ±10%. Laptop-grade hardware with an IDE running → reference only.
 
 ### Send Throughput (ops/s) — 0.1.2 measured
 
@@ -532,7 +543,7 @@ streammq:
 
 | Extension Point | Purpose | Default Implementation |
 |---|---|---|
-| `MessageSerializer` | Message serialization | **`JacksonJsonSerializer` (default, strict types / no gadget RCE surface)** / `FurySerializer` (opt-in, high throughput) / `ProtostuffSerializer` / `JdkSerializer` |
+| `MessageSerializer` | Message serialization | **`JacksonJsonSerializer` (default, strict types / no gadget RCE surface)** / `FurySerializer` (opt-in, high throughput) / `ProtostuffSerializer` / `FlatBuffersSerializer` (FlexBuffers, zero-copy field reads) / `SbeSerializer` (fixed-header envelope) / `JdkSerializer` |
 | `MessageConverter` | Message-body ↔ business object | `DefaultMessageConverter` / `CompactMessageConverter` / `PassThroughMessageConverter` |
 | `ProducerFilter` | Producer filter chain | none built-in — implement it and register a Bean |
 | `ConsumerFilter` | Consumer filter chain | `TagSelectorFilter` / `SqlSelectorFilter` |
