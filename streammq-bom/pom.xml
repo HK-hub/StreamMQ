@@ -123,7 +123,8 @@
                 <extensions>true</extensions>
                 <configuration>
                     <publishingServerId>central</publishingServerId>
-                    <deploymentName>StreamMQ-BOM-${project.version}</deploymentName>
+                    <!-- E-24：deploymentName 与根 POM 统一为同一命名规则（此前为 StreamMQ-BOM-*） -->
+                    <deploymentName>StreamMQ-${project.version}</deploymentName>
                     <!-- 与根 POM 保持一致：首个版本先人工在 Portal 点 Publish -->
                     <autoPublish>false</autoPublish>
                     <waitUntil>validated</waitUntil>

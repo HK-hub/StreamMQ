@@ -319,7 +319,9 @@ public class RetryScheduler implements StreamMQScheduler {
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey, StringCodec.INSTANCE);
         long now = System.currentTimeMillis();
 
-        Collection<String> expired = zset.valueRange(0, true, now, true, 0, batchSize - 1);
+        // LIMIT count 必须等于 batchSize：此前写成 batchSize - 1，每轮少转投一条（B-18）。
+        // 无游标语义依赖（本处按 score 一次性取窗口，不推进分页游标），改动不影响重试顺序。
+        Collection<String> expired = zset.valueRange(0, true, now, true, 0, batchSize);
         if (expired.isEmpty()) {
             return;
         }

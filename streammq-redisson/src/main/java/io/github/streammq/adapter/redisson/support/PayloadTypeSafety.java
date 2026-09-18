@@ -27,6 +27,11 @@ import java.util.regex.Pattern;
  *
  * <p>业务命名空间（{@code com.*} / {@code io.*} / {@code org.mycompany.*} 等）不受影响，跨模块兼容特性保留。
  *
+ * <p><b>定位（重要）：</b>本护栏是<b>命名空间拒绝式黑名单</b>，属于<b>纵深防御</b>，<b>不是完整性边界</b>—— 它只阻断已知危险命名空间，无法枚举所有
+ * gadget；对<b>消费者显式声明的类型不做检查</b>（显式声明来自代码，可信）。 该护栏对<b>所有</b>序列化器的载荷驱动类型解析生效（消费者回退链 / 事务回查半消息共用，不仅
+ * {@code JdkSerializer}）： 任何把载荷字段当作“反序列化目标类的来源”的实现都必须先经过 {@link #isBlocked(String)}。
+ * 生产环境仍应始终为消费者显式声明类型 （注解泛型或 {@code targetBodyType}），把目标类固定在代码里、而非由载荷驱动。
+ *
  * <p><b>推荐用法：</b>生产环境应为消费者声明显式目标类型（注解泛型或 {@code targetBodyType}），
  * 显式声明的类型<b>不经过</b>本护栏（来自代码而非载荷，可信）。
  *
@@ -39,16 +44,22 @@ public final class PayloadTypeSafety {
      * 载荷驱动的类型解析禁用前缀。
      *
      * <ul>
-     *   <li>{@code java.*} / {@code javax.*} / {@code jdk.*}：JDK 平台类（Runtime、ProcessBuilder、JNDI、
-     *       {@code java.lang.reflect}、{@code java.lang.invoke}、各类 readObject gadget 入口）
-     *   <li>{@code sun.*} / {@code com.sun.*}：JDK 内部实现类（历史 gadget 链高发区）
+     *   <li>{@code java.*} / {@code javax.*} / {@code jdk.*}：JDK 平台类（Runtime、ProcessBuilder、JNDI
+     *       {@code javax.management}/LDAP、{@code java.lang.reflect}、{@code java.lang.invoke}、各类
+     *       readObject gadget 入口）
+     *   <li>{@code sun.*} / {@code com.sun.*}：JDK 内部实现类（历史 gadget 链高发区，含 JdbcRowSetImpl 所在的 {@code
+     *       com.sun.rowset}）
      *   <li>{@code org.springframework.*}：Spring 框架类（Jackson/JDK 反序列化 gadget 链常见来源）
-     *   <li>第三方知名 gadget 链命名空间：Commons-Collections / BeanUtils / fastjson / Xalan / SnakeYAML /
-     *       Groovy / ROME / XStream / Hibernate / Quartz / 脚本引擎等
+     *   <li>第三方知名 gadget 链命名空间：Commons-Collections / BeanUtils / Commons-IO / fastjson / Xalan /
+     *       SnakeYAML / Groovy / ROME / XStream / Hibernate / Quartz / cglib / Javassist / Struts2
+     *       / 脚本引擎等
      * </ul>
+     *
+     * <p>黑名单是纵深防御、不是完整性边界：未列出但存在 readObject/readResolve 钩子的业务类仍可能成为 gadget，因此正确的用法是消费者显式声明类型（见类
+     * javadoc）。
      */
     private static final String[] BLOCKED_PREFIXES = {
-        // JDK 平台
+        // JDK 平台（javax.* 已覆盖 javax.management/JNDI，com.sun.* 已覆盖 com.sun.rowset/JdbcRowSetImpl）
         "java.",
         "javax.",
         "jdk.",
@@ -61,32 +72,42 @@ public final class PayloadTypeSafety {
         "org.apache.commons.collections4.",
         "org.apache.commons.beanutils.",
         "org.apache.commons.configuration.",
+        "org.apache.commons.io.",
         "org.apache.commons.jelly.",
         "org.apache.commons.fileupload.",
         "org.apache.commons.dbcp.",
         "org.apache.commons.dbcp2.",
+        "org.apache.commons.text.",
         "org.apache.xalan.",
         "org.apache.xpath.",
         "org.apache.velocity.",
         "org.apache.ignite.",
         "org.apache.activemq.",
         "org.apache.myfaces.",
+        "org.apache.struts.",
         "org.apache.tomcat.",
+        "org.apache.log4j.",
         "org.yaml.snakeyaml.",
         "com.alibaba.fastjson.",
         "com.alibaba.fastjson2.",
         "com.thoughtworks.xstream.",
         "com.rometools.rome.",
         "com.google.common.collect.",
+        "com.mchange.v2.",
+        "com.zaxxer.hikari.",
         "net.sf.json.",
+        "net.sf.cglib.",
+        "net.sf.ehcache.",
         "org.json.",
         "org.hibernate.",
         "org.quartz.",
         "org.jboss.",
+        "org.javassist.",
         "org.codehaus.groovy.",
         "groovy.util.",
         "org.mozilla.javascript.",
-        "org.python."
+        "org.python.",
+        "ch.qos.logback."
     };
 
     /** 合法 Java 类名（含内部类 {@code $}、包名点分） */

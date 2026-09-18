@@ -121,10 +121,12 @@ class MessageIdTest {
         }
 
         @Test
-        @DisplayName("hashCode 与 streamEntryId 的 hashCode 一致")
+        @DisplayName("hashCode 基于 (timestamp, sequence)：与等价 ID 一致，且与 equals 自洽")
         void hashCodeConsistent() {
             MessageId a = new MessageId("100-5");
-            assertThat(a.hashCode()).isEqualTo("100-5".hashCode());
+            MessageId b = MessageId.of(100L, 5L);
+            assertThat(a).isEqualTo(b);
+            assertThat(a.hashCode()).isEqualTo(b.hashCode());
         }
     }
 

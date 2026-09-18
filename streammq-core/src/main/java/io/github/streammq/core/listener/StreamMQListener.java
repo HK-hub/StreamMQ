@@ -25,7 +25,7 @@ import java.util.List;
  *   <li>{@code StreamMessageConcurrentlyConsumer<T>} - 用户实现，onMessage 业务处理
  * </ul>
  *
- * <p>实现类位于 {@code streammq-redisson-adapter} 模块。
+ * <p>实现类位于 {@code streammq-redisson} 模块。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

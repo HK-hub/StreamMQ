@@ -9,8 +9,10 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.streammq.core.exception.SerializationException;
 import io.github.streammq.core.serializer.MessageSerializer;
 import java.math.BigDecimal;
 import java.util.ArrayList;
@@ -73,9 +75,99 @@ class SbeSerializerTest {
     }
 
     @Test
-    void nullReturnsNull() {
+    void nullAndEmptyReturnNull() {
         assertNull(serializer.serialize(null, Sample.class));
         assertNull(serializer.deserialize(null, Sample.class));
+        assertNull(serializer.deserialize(new byte[0], Sample.class));
+    }
+
+    // ============================================================
+    // 畸形字节（不可信输入）边界测试：一律抛 SerializationException
+    // 信封布局：8 字节消息头（blockLength@0 / templateId@2 / schemaId@4 / version@6，小端）
+    // + 4 字节 varData 长度（@8，小端）+ payload（@12）
+    // ============================================================
+
+    @Test
+    void truncatedEnvelopeIsRejected() {
+        byte[] valid = serializer.serialize(sample(), Sample.class);
+        byte[] onlyFourBytes = Arrays.copyOf(valid, 4);
+        byte[] headerOnly = Arrays.copyOf(valid, 8);
+        byte[] missingLengthByte = Arrays.copyOf(valid, 11);
+        byte[] zeroLength = new byte[12]; // 只有头与长度字段，templateId/schemaId 均为 0
+
+        for (byte[] broken : new byte[][] {onlyFourBytes, headerOnly, missingLengthByte}) {
+            SerializationException ex =
+                    assertThrows(
+                            SerializationException.class,
+                            () -> serializer.deserialize(broken, Sample.class));
+            assertTrue(
+                    ex.getMessage().contains("truncated"),
+                    "截断载荷应给出 truncated 提示，实际: " + ex.getMessage());
+        }
+        assertThrows(
+                SerializationException.class,
+                () -> serializer.deserialize(zeroLength, Sample.class));
+    }
+
+    @Test
+    void mismatchedTemplateOrSchemaIdIsRejected() {
+        byte[] valid = serializer.serialize(sample(), Sample.class);
+
+        byte[] badTemplateId = valid.clone();
+        badTemplateId[2] = (byte) 99; // templateId 低字节（小端 @2）
+        SerializationException templateEx =
+                assertThrows(
+                        SerializationException.class,
+                        () -> serializer.deserialize(badTemplateId, Sample.class));
+        assertTrue(
+                templateEx.getMessage().contains("templateId")
+                        && templateEx.getMessage().contains("99"),
+                "模板不匹配应报告实际值，实际: " + templateEx.getMessage());
+
+        byte[] badSchemaId = valid.clone();
+        badSchemaId[4] = (byte) 99; // schemaId 低字节（小端 @4）
+        SerializationException schemaEx =
+                assertThrows(
+                        SerializationException.class,
+                        () -> serializer.deserialize(badSchemaId, Sample.class));
+        assertTrue(schemaEx.getMessage().contains("schemaId"), "实际: " + schemaEx.getMessage());
+    }
+
+    @Test
+    void oversizedDeclaredPayloadLengthIsRejectedWithoutHugeAllocation() {
+        byte[] valid = serializer.serialize(sample(), Sample.class);
+
+        // 0x7FFFFFFF：旧实现会直接 new byte[2147483647]（约 2GB 分配）后再越界读
+        byte[] maxInt = valid.clone();
+        maxInt[8] = (byte) 0xFF;
+        maxInt[9] = (byte) 0xFF;
+        maxInt[10] = (byte) 0xFF;
+        maxInt[11] = (byte) 0x7F;
+        SerializationException ex =
+                assertThrows(
+                        SerializationException.class,
+                        () -> serializer.deserialize(maxInt, Sample.class));
+        assertTrue(ex.getMessage().contains("payloadLength"), "实际: " + ex.getMessage());
+
+        // 0xFFFFFFFF：读为 int 即 -1，必须按“负数”拒绝
+        byte[] allOnes = valid.clone();
+        allOnes[8] = (byte) 0xFF;
+        allOnes[9] = (byte) 0xFF;
+        allOnes[10] = (byte) 0xFF;
+        allOnes[11] = (byte) 0xFF;
+        assertThrows(
+                SerializationException.class, () -> serializer.deserialize(allOnes, Sample.class));
+
+        // 声明长度 = 实际可用长度 + 1（翻转长度字段，仍在校验范围内但超出现有字节）
+        byte[] onePastEnd = valid.clone();
+        int declared = valid.length - 12 + 1;
+        onePastEnd[8] = (byte) (declared & 0xFF);
+        onePastEnd[9] = (byte) ((declared >>> 8) & 0xFF);
+        onePastEnd[10] = (byte) ((declared >>> 16) & 0xFF);
+        onePastEnd[11] = (byte) ((declared >>> 24) & 0xFF);
+        assertThrows(
+                SerializationException.class,
+                () -> serializer.deserialize(onePastEnd, Sample.class));
     }
 
     private Sample sample() {

@@ -19,7 +19,7 @@ import io.github.streammq.core.message.Message;
  *   <li>{@link DlqFailureDecision#secondaryDlq()} - 转投到二级死信队列
  * </ul>
  *
- * <p>内置策略（参见 {@code streammq-redisson-adapter} 模块）：
+ * <p>内置策略（参见 {@code streammq-redisson} 模块）：
  *
  * <ul>
  *   <li>{@code LogAndDropDlqFailureStrategy} - 始终丢弃（仅记录日志）

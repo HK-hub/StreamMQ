@@ -14,7 +14,6 @@ import io.github.streammq.core.util.StringUtils;
 import java.util.Objects;
 import lombok.Builder;
 import lombok.Getter;
-import lombok.NonNull;
 
 /**
  * 监听器配置，替代弱类型 {@code Map<String, Object>} 的强类型值对象。
@@ -34,6 +33,9 @@ import lombok.NonNull;
  *     .build();
  * }</pre>
  *
+ * <p><b>与注册模型的校验策略差异（有意保留）：</b>本类在构造器内对非法值直接抛 {@link IllegalArgumentException}（配置错误尽早暴露）； {@link
+ * io.github.streammq.core.listener.DefaultListenerRegistration} 对同类参数采取「夹取（clamp）」策略以保证注册期弹性。
+ *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
@@ -42,15 +44,21 @@ import lombok.NonNull;
 public class ListenerConfig {
 
     /** 主题（必填） */
-    @NonNull private final String topic;
+    private final String topic;
 
     /** 消费者组名（必填） */
-    @NonNull private final String consumerGroup;
+    private final String consumerGroup;
 
     /** 消费者实例名（可选，默认自动生成 UUID 后缀） */
     private final String consumerName;
 
-    /** 命名空间（可选，默认空字符串） */
+    /**
+     * 命名空间（可选，默认空字符串表示使用全局命名空间）。
+     *
+     * <p>构造时由 {@link io.github.streammq.core.util.StringUtils#requireValidNamespace(String)} 校验：
+     * 非空时不得含 {@code ':'}、{@code '*'}、{@code '{'}、{@code '}'}、{@code '|'}、{@code ','} 或空白字符（这些字符会破坏
+     * Redis Key 结构）。
+     */
     @Builder.Default private final String namespace = "";
 
     /** 每次拉取批量大小（可选，默认 {@link StreamMQConstants#DEFAULT_CONSUME_BATCH_SIZE}） */
@@ -125,16 +133,33 @@ public class ListenerConfig {
     /** 顺序消费单条消息消费超时（毫秒），0 表示不启用（仅对 ORDERLY 生效，默认关闭） */
     @lombok.Builder.Default private final long orderlyConsumeTimeoutMillis = 0L;
 
-    @lombok.Builder.Default private final int consumeThreadMin = 1;
-
-    @lombok.Builder.Default
-    private final int consumeThreadMax = StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX;
+    /**
+     * 并发消费循环数（0.1.2 起唯一并发度入口，默认 1）。
+     *
+     * <p>仅 CONCURRENT 集群消费生效；每个循环独立 XREADGROUP 拉取（共享同一 consumer name，分配互不相交）。 合法区间 {@code [1,
+     * StreamMQConstants#DEFAULT_CONSUME_THREAD_MAX]}，越界抛 {@link IllegalArgumentException}。
+     *
+     * <p>该字段取代 0.1.0 的 {@code consumeThreadMin}/{@code consumeThreadMax} 双字段：旧命名语义与生态相反 （实际并发数 =
+     * min，max 只是夹取上界），只配置 max 的用户会静默得到单循环消费。
+     *
+     * @since 0.1.2
+     */
+    @Builder.Default private final int consumeThreads = 1;
 
     @lombok.Builder.Default
     private final long suspendCurrentQueueTimeMillis =
             StreamMQConstants.DEFAULT_SUSPEND_CURRENT_QUEUE_TIME_MS;
 
-    @lombok.Builder.Default private final int shardCount = StreamMQConstants.DEFAULT_SHARD_COUNT;
+    /**
+     * 顺序消费分片数（默认 {@link StreamMQConstants#DEFAULT_SHARD_COUNT}）。
+     *
+     * <p><b>语义（0.1.2 明确）：</b>{@code > 0} 表示顺序消费的分片数（同 shardingKey 路由到同一分片串行消费）； {@code 0}
+     * 表示<b>未分片</b>（不创建分片锁，单循环串行消费），消费端据此判定；{@code < 0} 非法。
+     *
+     * <p>此前 {@link #from(ListenerRegistration, boolean)} 会把 0 强制夹取为 1，导致注册模型的"未分片"状态在派生视图中丢失， 与消费端
+     * {@code shardId() <= 0 → 0} 的判定矛盾。
+     */
+    @Builder.Default private final int shardCount = StreamMQConstants.DEFAULT_SHARD_COUNT;
 
     @lombok.Builder.Default
     private final int streamMaxLen = StreamMQConstants.DEFAULT_STREAM_MAX_LEN;
@@ -157,14 +182,17 @@ public class ListenerConfig {
      * <p>验证规则：
      *
      * <ul>
-     *   <li>topic 不能为空
-     *   <li>consumerGroup 不能为空
+     *   <li>topic 不能为空且不含 {@code ':'}/{@code '*'}/{@code '{}'}/{@code '|'}/{@code ','}/空白
+     *   <li>consumerGroup 同上
+     *   <li>namespace 允许空串（= 使用全局命名空间），非空时同上校验
      *   <li>pullBatchSize 必须 > 0
-     *   <li>consumeThreadMin 必须 >= 1
-     *   <li>consumeThreadMax 必须 >= consumeThreadMin
+     *   <li>consumeThreads 必须在 {@code [1, 64]} 区间内
      *   <li>maxReconsumeTimes 必须 >= 0
-     *   <li>shardCount 必须 >= 1（顺序消费时）
+     *   <li>shardCount 必须 >= 0（{@code 0} 表示未分片）
      * </ul>
+     *
+     * <p><b>签名变更（0.1.2）：</b>原 {@code consumeThreadMin}/{@code consumeThreadMax} 两个参数已收敛为单个 {@code
+     * consumeThreads}（并发消费循环数）。
      */
     public ListenerConfig(
             String topic,
@@ -183,8 +211,7 @@ public class ListenerConfig {
             int maxReconsumeTimes,
             long consumeTimeoutMillis,
             long orderlyConsumeTimeoutMillis,
-            int consumeThreadMin,
-            int consumeThreadMax,
+            int consumeThreads,
             long suspendCurrentQueueTimeMillis,
             int shardCount,
             int streamMaxLen,
@@ -195,23 +222,20 @@ public class ListenerConfig {
         if (pullBatchSize <= 0) {
             throw new IllegalArgumentException("pullBatchSize must be > 0, got: " + pullBatchSize);
         }
-        if (consumeThreadMin < 1) {
+        if (consumeThreads < 1 || consumeThreads > StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX) {
             throw new IllegalArgumentException(
-                    "consumeThreadMin must be >= 1, got: " + consumeThreadMin);
-        }
-        if (consumeThreadMax < consumeThreadMin) {
-            throw new IllegalArgumentException(
-                    "consumeThreadMax must be >= consumeThreadMin, got: max="
-                            + consumeThreadMax
-                            + ", min="
-                            + consumeThreadMin);
+                    "consumeThreads must be in [1, "
+                            + StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX
+                            + "], got: "
+                            + consumeThreads);
         }
         if (maxReconsumeTimes < 0) {
             throw new IllegalArgumentException(
                     "maxReconsumeTimes must be >= 0, got: " + maxReconsumeTimes);
         }
-        if (shardCount < 1) {
-            throw new IllegalArgumentException("shardCount must be >= 1, got: " + shardCount);
+        if (shardCount < 0) {
+            throw new IllegalArgumentException(
+                    "shardCount must be >= 0 (0 = unsharded), got: " + shardCount);
         }
         if (consumeTimeoutMillis < 0) {
             throw new IllegalArgumentException(
@@ -237,7 +261,7 @@ public class ListenerConfig {
         }
 
         this.consumerName = consumerName;
-        this.namespace = Objects.isNull(namespace) ? "" : namespace;
+        this.namespace = StringUtils.requireValidNamespace(namespace);
         this.pullBatchSize = pullBatchSize;
         this.pullBlockTimeoutMillis = pullBlockTimeoutMillis;
         this.pullIntervalMillis = pullIntervalMillis;
@@ -250,8 +274,7 @@ public class ListenerConfig {
         this.maxReconsumeTimes = maxReconsumeTimes;
         this.consumeTimeoutMillis = consumeTimeoutMillis;
         this.orderlyConsumeTimeoutMillis = orderlyConsumeTimeoutMillis;
-        this.consumeThreadMin = consumeThreadMin;
-        this.consumeThreadMax = consumeThreadMax;
+        this.consumeThreads = consumeThreads;
         this.suspendCurrentQueueTimeMillis = suspendCurrentQueueTimeMillis;
         this.shardCount = shardCount;
         this.streamMaxLen = streamMaxLen;
@@ -267,6 +290,9 @@ public class ListenerConfig {
      *
      * <p>0.1.0 起 {@link ListenerRegistration} 是唯一的注册持有模型；本类降级为底层 {@link StreamMQListenerFactory}
      * SPI 的派生视图——所有声明式字段一律从注册读取， 不再允许旁路构造导致两份模型各自漂移。
+     *
+     * <p><b>透传语义（0.1.2）：</b>{@code shardCount} 原样透传（{@code 0} 表示未分片，不再强制夹取为 1）； {@code
+     * consumeThreads} 取注册模型解析后的并发消费循环数。命名空间在此路径上由构造器再次校验。
      *
      * @param reg 注册模型
      * @param retryMode 是否为 retry Stream 监听（同一注册的 original/retry 双监听复用此方法）
@@ -292,10 +318,9 @@ public class ListenerConfig {
                 .maxReconsumeTimes(reg.getMaxReconsumeTimes())
                 .consumeTimeoutMillis(reg.getConsumeTimeoutMillis())
                 .orderlyConsumeTimeoutMillis(reg.getOrderlyConsumeTimeoutMillis())
-                .consumeThreadMin(reg.getConsumeThreadMin())
-                .consumeThreadMax(reg.getConsumeThreadMax())
+                .consumeThreads(reg.getConsumeThreads())
                 .suspendCurrentQueueTimeMillis(reg.getSuspendCurrentQueueTimeMillis())
-                .shardCount(Math.max(1, reg.getShardCount()))
+                .shardCount(reg.getShardCount())
                 .streamMaxLen(reg.getStreamMaxLen())
                 .consumeFromWhere(reg.getConsumeFromWhere())
                 .enableMsgTrace(reg.isEnableMsgTrace())

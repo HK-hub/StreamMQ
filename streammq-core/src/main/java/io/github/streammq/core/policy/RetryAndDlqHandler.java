@@ -30,8 +30,7 @@ import java.time.Duration;
  *
  * <p>重试超时路由：当 {@link RetryPolicy#nextRetryDelay} 返回 null（不再重试）时， 路由到 DLQ Stream。
  *
- * <p>设计模式：策略模式，将 ACK/重试/DLQ 路由逻辑从容器中分离。 默认实现位于 {@code streammq-redisson-adapter}
- * 模块，可通过容器构造器注入自定义实现。
+ * <p>设计模式：策略模式，将 ACK/重试/DLQ 路由逻辑从容器中分离。 默认实现位于 {@code streammq-redisson} 模块，可通过容器构造器注入自定义实现。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

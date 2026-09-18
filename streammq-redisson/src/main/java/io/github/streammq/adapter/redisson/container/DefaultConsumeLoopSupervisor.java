@@ -5,6 +5,7 @@
  */
 package io.github.streammq.adapter.redisson.container;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.listener.ListenerType;
@@ -16,9 +17,13 @@ import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Future;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** {@link ConsumeLoopSupervisor} 默认实现。并发度决策同样收拢于此。 */
 public class DefaultConsumeLoopSupervisor implements ConsumeLoopSupervisor {
+
+    private static final Logger LOG = LoggerFactory.getLogger(DefaultConsumeLoopSupervisor.class);
 
     static final String RETRY_FUTURE_SUFFIX = ":retry";
     static final String CONCURRENCY_FUTURE_SUFFIX = ":cc-";
@@ -35,6 +40,11 @@ public class DefaultConsumeLoopSupervisor implements ConsumeLoopSupervisor {
     public void submitLoops(ListenerRegistration<?> reg) {
         // 幂等守卫必须覆盖全部循环形态：基础、retry、以及 :cc-N 并发扩展循环——
         // 此前仅检查前两者，consumeThreadMin>1 时部分并发循环仍在运行也会重复提交
+        //
+        // 清理顺序不可颠倒（B-09 修复）：putIfAbsent 不会覆盖已结束循环的陈旧登记项，
+        // 若先判 hasActiveLoops/先提交，陈旧项会让本注册被误判为"已在消费"而跳过提交，
+        // 或让刚提交的新循环被 cancel 且无任何日志——该注册永久静默不消费。
+        evictDoneFutures(reg.key());
         if (hasActiveLoops(reg.key())) {
             return;
         }
@@ -44,58 +54,88 @@ public class DefaultConsumeLoopSupervisor implements ConsumeLoopSupervisor {
             submitRetryWithConcurrency(reg, concurrency);
         } else {
             Future<?> future = loopFactory.launch(reg, false, true, 0);
-            if (Objects.nonNull(futures.putIfAbsent(reg.key(), future))) {
-                future.cancel(true);
-            }
+            registerLoopFuture(reg.key(), future);
         }
     }
 
     /** 该注册的任一读循环（基础 / retry / 并发扩展）是否仍在运行。 */
     private boolean hasActiveLoops(String baseKey) {
-        String retryKey = baseKey + RETRY_FUTURE_SUFFIX;
         for (Map.Entry<String, Future<?>> entry : futures.entrySet()) {
-            String k = entry.getKey();
-            boolean isLoop =
-                    k.equals(baseKey)
-                            || k.equals(retryKey)
-                            || k.startsWith(baseKey + CONCURRENCY_FUTURE_SUFFIX)
-                            || k.startsWith(retryKey + CONCURRENCY_FUTURE_SUFFIX);
-            if (isLoop && !entry.getValue().isDone()) {
+            if (isLoopKeyOf(entry.getKey(), baseKey) && !entry.getValue().isDone()) {
                 return true;
             }
         }
         return false;
     }
 
+    /**
+     * 清理该注册已完成（正常结束 / 异常终止 / 已取消）的循环登记项。
+     *
+     * <p>读循环登记表用 {@code putIfAbsent} 维护幂等，但 putIfAbsent 不会覆盖已结束循环遗留的陈旧条目： 陈旧条目既不会被 {@link
+     * #hasActiveLoops} 视为活跃（{@code isDone()} 为 true），又会在 {@code putIfAbsent}
+     * 时把新提交的循环顶掉——表现为该注册永久不再消费且无日志。按注册键前缀 （基础 / {@code :retry} / {@code
+     * :cc-N}）过滤，仅清理已结束项，绝不触碰仍在运行的循环。
+     */
+    private void evictDoneFutures(String baseKey) {
+        for (Iterator<Map.Entry<String, Future<?>>> it = futures.entrySet().iterator();
+                it.hasNext(); ) {
+            Map.Entry<String, Future<?>> entry = it.next();
+            if (isLoopKeyOf(entry.getKey(), baseKey) && entry.getValue().isDone()) {
+                it.remove();
+            }
+        }
+    }
+
+    /** 判断登记键是否属于该注册的读循环（基础 / retry / 并发扩展；inflight 泵另见 {@link #isInflightPumpOf}）。 */
+    private static boolean isLoopKeyOf(String futureKey, String baseKey) {
+        String retryKey = baseKey + RETRY_FUTURE_SUFFIX;
+        return futureKey.equals(baseKey)
+                || futureKey.equals(retryKey)
+                || futureKey.startsWith(baseKey + CONCURRENCY_FUTURE_SUFFIX)
+                || futureKey.startsWith(retryKey + CONCURRENCY_FUTURE_SUFFIX);
+    }
+
+    /**
+     * 登记循环 Future；同键已有活跃登记时不覆盖，取消新提交的循环并 WARN。
+     *
+     * <p>调用前必须已执行 {@link #evictDoneFutures(String)}，因此此处的冲突只可能来自与其它线程 并发提交同一注册。取消必须留痕：静默 cancel
+     * 会让"提交成功但永不消费"无从排查。
+     *
+     * @return true 新循环登记成功；false 冲突（新循环已被取消）
+     */
+    private boolean registerLoopFuture(String key, Future<?> future) {
+        if (Objects.nonNull(futures.putIfAbsent(key, future))) {
+            LOG.warn(
+                    "Duplicate consume loop cancelled: key={} — an active loop with the same"
+                            + " registration is already running (finished futures are evicted"
+                            + " before submission, so this is a concurrent submit race)",
+                    key);
+            future.cancel(true);
+            return false;
+        }
+        return true;
+    }
+
     private void submitPrimaryWithConcurrency(ListenerRegistration<?> reg, int concurrency) {
         Future<?> primary = loopFactory.launch(reg, false, true, 0);
-        if (Objects.nonNull(futures.putIfAbsent(reg.key(), primary))) {
-            primary.cancel(true);
-        }
+        registerLoopFuture(reg.key(), primary);
         for (int i = 1; i < concurrency; i++) {
             final int idx = i;
             Future<?> f = loopFactory.launch(reg, false, false, idx);
-            if (Objects.nonNull(
-                    futures.putIfAbsent(reg.key() + CONCURRENCY_FUTURE_SUFFIX + idx, f))) {
-                f.cancel(true);
-            }
+            registerLoopFuture(reg.key() + CONCURRENCY_FUTURE_SUFFIX + idx, f);
         }
     }
 
     private void submitRetryWithConcurrency(ListenerRegistration<?> reg, int concurrency) {
         Future<?> retry = loopFactory.launch(reg, true, true, 0);
         String retryKey = reg.key() + RETRY_FUTURE_SUFFIX;
-        if (Objects.nonNull(futures.putIfAbsent(retryKey, retry))) {
-            retry.cancel(true);
+        if (!registerLoopFuture(retryKey, retry)) {
             return;
         }
         for (int i = 1; i < concurrency; i++) {
             final int idx = i;
             Future<?> f = loopFactory.launch(reg, true, false, idx);
-            if (Objects.nonNull(
-                    futures.putIfAbsent(retryKey + CONCURRENCY_FUTURE_SUFFIX + idx, f))) {
-                f.cancel(true);
-            }
+            registerLoopFuture(retryKey + CONCURRENCY_FUTURE_SUFFIX + idx, f);
         }
     }
 
@@ -159,8 +199,8 @@ public class DefaultConsumeLoopSupervisor implements ConsumeLoopSupervisor {
     }
 
     /**
-     * 计算注册的并发消费循环数：仅 CONCURRENT 集群消费生效，取 {@code consumeThreadMin} 夹取到 {@code [1,
-     * consumeThreadMax]}；顺序 / DLQ / 广播固定为 1。
+     * 计算注册的并发消费循环数：仅 CONCURRENT 集群消费生效，取 {@code getConsumeThreads()} 夹取到 {@code [1, 64]}；顺序 / DLQ /
+     * 广播固定为 1。
      */
     static int effectiveConcurrency(ListenerRegistration<?> reg) {
         if (reg.getType() != ListenerType.AUTO_ACK
@@ -169,7 +209,7 @@ public class DefaultConsumeLoopSupervisor implements ConsumeLoopSupervisor {
                 || reg.getType() == ListenerType.ORDERLY) {
             return 1;
         }
-        int max = Math.max(1, reg.getConsumeThreadMax());
-        return Math.max(1, Math.min(max, reg.getConsumeThreadMin()));
+        return Math.max(
+                1, Math.min(StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX, reg.getConsumeThreads()));
     }
 }

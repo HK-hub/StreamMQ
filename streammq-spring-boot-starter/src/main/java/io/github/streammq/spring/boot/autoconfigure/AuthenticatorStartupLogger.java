@@ -61,7 +61,8 @@ public class AuthenticatorStartupLogger {
                                 + " register one of: AllowAllAuthenticator,"
                                 + " BasicAuthAuthenticator, TokenAuthenticator, or your own"
                                 + " ManagementAuthenticator implementation. See"
-                                + " docs/historical/02-architecture.md or README for examples.");
+                                + " docs/archived-historical/02-architecture.md or README for"
+                                + " examples.");
             }
         }
     }

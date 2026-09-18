@@ -8,8 +8,7 @@ package io.github.streammq.core.listener;
 /**
  * StreamMQ 监听器工厂接口。
  *
- * <p>根据 {@link ListenerConfig} 创建 {@link StreamMQListener} 实例。 实现类位于 {@code
- * streammq-redisson-adapter} 模块。
+ * <p>根据 {@link ListenerConfig} 创建 {@link StreamMQListener} 实例。 实现类位于 {@code streammq-redisson} 模块。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

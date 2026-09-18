@@ -55,6 +55,10 @@ public class JdkSerializer<T extends java.io.Serializable> implements MessageSer
                     "java.lang.Float",
                     "java.lang.Number",
                     "java.lang.StringBuilder",
+                    // java.lang.Object：集合/数组的**结构性**元素类型（ArrayList 的 Object[] 后备数组、
+                    // 异构数组元素等）。JDK 在 checkArray 时会以组件类型回调过滤器，拒绝它会让任何
+                    // List/数组载荷无法反序列化；Object 本身无 readObject/readResolve 钩子，放行不引入 gadget 面。
+                    "java.lang.Object",
                     // 集合/容器
                     "java.util.ArrayList",
                     "java.util.LinkedList",
@@ -124,10 +128,15 @@ public class JdkSerializer<T extends java.io.Serializable> implements MessageSer
         return s;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>{@code object == null} 时返回 {@code null}（与 {@code MessageSerializer} 的统一 null 契约一致）。
+     */
     @Override
     public byte[] serialize(T object, Class<T> type) throws SerializationException {
         if (object == null) {
-            return new byte[0];
+            return null;
         }
         try (ByteArrayOutputStream bos = new ByteArrayOutputStream();
                 ObjectOutputStream oos = new ObjectOutputStream(bos)) {
@@ -184,7 +193,12 @@ public class JdkSerializer<T extends java.io.Serializable> implements MessageSer
                     Class<?> serialClass = info.serialClass();
                     String className = Objects.isNull(serialClass) ? null : serialClass.getName();
                     if (Objects.isNull(className)) {
-                        return ObjectInputFilter.Status.REJECTED;
+                        // serialClass == null 表示 JDK 正在做「深度 / 引用计数」检查，而不是类检查：
+                        // 反序列化含对象回引用（同一实例被写入多次，线格式 TC_REFERENCE）的合法载荷时，
+                        // JDK 21 会以 class=null、arrayLength=-1 调用过滤器；此处返回 REJECTED 会让
+                        // 合法载荷抛 InvalidClassException: filter status: REJECTED。
+                        // 返回 UNDECIDED 交由 merge 进来的 maxdepth/maxrefs/maxbytes 兜底过滤器裁决。
+                        return ObjectInputFilter.Status.UNDECIDED;
                     }
                     // 数组类型：校验组件类名
                     while (className.startsWith("[")) {

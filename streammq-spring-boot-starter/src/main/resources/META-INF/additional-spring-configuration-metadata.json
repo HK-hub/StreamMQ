@@ -4,20 +4,36 @@
       "name": "streammq.producer.serializer",
       "values": [
         {
-          "value": "io.github.streammq.adapter.redisson.serializer.FurySerializer",
-          "description": "Apache Fury 二进制序列化（默认），吞吐量约为 Jackson 的 7 倍；默认不强制类注册，可配 fury-require-class-registration=true 开启类注册白名单"
+          "value": "io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer",
+          "description": "JSON 序列化（默认）：严格类型、无多态反序列化、无 gadget RCE 面，消息体在 Redis 中人类可读，跨语言通用，无需预注册类型"
         },
         {
-          "value": "io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer",
-          "description": "JSON 序列化，可读性好、跨语言通用，无需预注册类型"
+          "value": "io.github.streammq.adapter.redisson.serializer.FurySerializer",
+          "description": "Apache Fory（原 Fury）二进制序列化（opt-in 高吞吐）：坐标 org.apache.fory:fory-core ≥ 1.1.0（更早版本受 CVE-2026-50076 影响），宽松模式需系统属性门禁 -Dstreammq.security.allowUnrestrictedSerializer=true；默认强制类注册白名单（fury-require-class-registration=true），需预注册业务消息体类型"
         },
         {
           "value": "io.github.streammq.adapter.redisson.serializer.ProtostuffSerializer",
-          "description": "Protostuff 二进制序列化，兼容 Protocol Buffer 生态"
+          "description": "Protostuff 二进制序列化（schema 由目标类型决定，无 gadget RCE 面）：需自备 io.protostuff:protostuff-core 与 protostuff-runtime"
+        },
+        {
+          "value": "io.github.streammq.adapter.redisson.serializer.FlatBuffersSerializer",
+          "description": "FlatBuffers FlexBuffers 动态（schema-less）二进制序列化，逐字段零拷贝读取、免代码生成，纯数据无 gadget RCE 面：需自备 com.google.flatbuffers:flatbuffers-java"
+        },
+        {
+          "value": "io.github.streammq.adapter.redisson.serializer.SbeSerializer",
+          "description": "SBE（Simple Binary Encoding）信封模式二进制序列化：定长 8 字节头 + varData 分帧，业务体为严格类型 Jackson 编码，无 gadget RCE 面；需自备 org.agrona:agrona"
         },
         {
           "value": "io.github.streammq.adapter.redisson.serializer.JdkSerializer",
-          "description": "JDK 原生序列化，带 JEP 290 白名单过滤"
+          "description": "JDK 原生序列化（备选）：内置 JEP 290 类名白名单过滤器，自定义业务 body 类型需显式放行"
+        },
+        {
+          "value": "io.github.streammq.adapter.redisson.serializer.StringSerializer",
+          "description": "String 直通序列化（UTF-8 编码，仅适合 String body）"
+        },
+        {
+          "value": "io.github.streammq.adapter.redisson.serializer.ByteArraySerializer",
+          "description": "字节数组直通序列化（仅适合 byte[] body，零拷贝语义）"
         }
       ]
     },
@@ -26,11 +42,15 @@
       "values": [
         {
           "value": "io.github.streammq.adapter.redisson.rebalance.ConsistentHashRebalanceStrategy",
-          "description": "一致性哈希分配（默认，虚拟节点数可配）"
+          "description": "一致性哈希分配（默认，虚拟节点数可通过 rebalance.virtual-nodes 配置）"
         },
         {
-          "value": "io.github.streammq.adapter.redisson.rebalance.RoundRobinRebalanceStrategy",
-          "description": "轮询均分分配"
+          "value": "io.github.streammq.adapter.redisson.rebalance.AverageRebalanceStrategy",
+          "description": "平均分配（按实例数均分分片）"
+        },
+        {
+          "value": "io.github.streammq.adapter.redisson.rebalance.RangeRebalanceStrategy",
+          "description": "区间分配（按分片区间连续切分）"
         }
       ]
     },
@@ -68,14 +88,14 @@
     {
       "name": "streammq.producer.serializer",
       "type": "java.lang.Class",
-      "description": "消息体序列化器实现类（全限定类名）。默认 Apache Fury（不强制类注册，任意 POJO 开箱即用）；需要跨语言可读性时切换为 JacksonJsonSerializer。",
-      "defaultValue": "io.github.streammq.adapter.redisson.serializer.FurySerializer"
+      "description": "消息体序列化器实现类（全限定类名）。默认 JacksonJsonSerializer（严格类型、无多态反序列化、无 gadget RCE 面，消息体人类可读）；需要更高吞吐时可 opt-in FurySerializer 或 ProtostuffSerializer（二者在 streammq-redisson 中为 optional 依赖，需自行加入 classpath）。",
+      "defaultValue": "io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer"
     },
     {
       "name": "streammq.producer.fury-require-class-registration",
       "type": "java.lang.Boolean",
-      "description": "Fury 是否强制类注册白名单（仅当 producer.serializer 为 FurySerializer 时生效）。默认 false=宽松模式，任意 POJO 开箱即用；共享/多租户 Redis 建议设为 true 并注册业务类型，以收窄反序列化攻击面。",
-      "defaultValue": false
+      "description": "Fory/Fury 是否强制类注册白名单（仅当 producer.serializer 为 FurySerializer 时生效）。默认 true=强制白名单，未注册的业务 POJO 会被拒绝，需通过 new FurySerializer<>(Xxx.class)、register(Class) 或 producer.fury-registered-classes 预注册；设为 false 即宽松模式（任意 POJO 可反序列化），需系统属性 -Dstreammq.security.allowUnrestrictedSerializer=true 门禁，共享/多租户 Redis 请勿关闭。",
+      "defaultValue": true
     },
     {
       "name": "streammq.tracing.enabled",

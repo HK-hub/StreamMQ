@@ -13,7 +13,10 @@ import io.github.streammq.core.enums.DlqReason;
 import io.github.streammq.core.scheduler.StreamMQScheduler;
 import io.github.streammq.core.util.CollectionUtils;
 import io.github.streammq.core.util.StringUtils;
+import java.time.Duration;
 import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,12 +26,16 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import org.redisson.api.PendingEntry;
 import org.redisson.api.RLock;
+import org.redisson.api.RMap;
 import org.redisson.api.RScript;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.StreamMessageId;
+import org.redisson.api.stream.StreamAddArgs;
 import org.redisson.client.codec.StringCodec;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -97,22 +104,46 @@ public class PelClaimScheduler implements StreamMQScheduler {
      */
     private static final long PEL_CLAIM_LOCK_LEASE_MS = -1L;
 
+    /** 认领补偿时隔离 payload 的保留期（与调度 payload TTL 一致：7 天，给运维留出重放窗口）。 */
+    private static final Duration QUARANTINE_PAYLOAD_TTL = Duration.ofDays(7);
+
+    /** 目的键类型异常（WRONGTYPE）告警的最小间隔，避免每轮扫描刷屏。 */
+    private static final long DESTINATION_WARN_INTERVAL_MS = 300_000L;
+
     /**
-     * 原子「XADD 副本 + XACK 旧条目」脚本。
+     * 原子「XACK 旧条目 + XADD 副本」脚本。
      *
      * <p>KEYS[1]=源 stream（XACK 目标），KEYS[2]=目标 stream（XADD 目标）。 ARGV[1]=消费组，ARGV[2]=旧 entry
      * id，ARGV[3..]=XADD 的 field/value 对。
      *
-     * <p>先 XACK 再 XADD 且整体原子：仅当本次 XACK 真正移除该 pending（返回 1，即本实例成功认领）时才写副本； 若该条目已被其它实例/消费者先行 ACK（返回
-     * 0），直接跳过，<b>杜绝重复投递</b>。 整个脚本在 Redis 端单线程原子执行， 消除了此前「XADD 成功但 XACK 失败 → 下一轮重复重投」的窗口（见 P1-A）。
+     * <p>先 XACK 再 XADD：仅当本次 XACK 真正移除该 pending（返回 1，即本实例成功认领）时才写副本； 若该条目已被其它实例/消费者先行 ACK（返回
+     * 0），直接跳过，<b>杜绝重复投递</b>。
+     *
+     * <p><b>XADD 失败可恢复（R4-B01）：</b>Redis Lua 无回滚语义——一旦 XADD 抛错，先前的 XACK 已生效， 消息会从 PEL
+     * 消失且副本未写入（静默丢失）。因此 XADD 用 {@code pcall} 包裹：失败时返回 {@link #XADD_FAILED_MARKER}，由 Java 侧用内存中仍持有的
+     * fields 做补偿（直接重试 → 隔离区持久化），保证「认领了就必须有下落」。
      */
     private static final String LUA_XADD_AND_ACK =
             "local acked = redis.call('XACK', KEYS[1], ARGV[1], ARGV[2])\n"
                     + "if acked == 1 then\n"
-                    + "  return redis.call('XADD', KEYS[2], '*', unpack(ARGV, 3))\n"
+                    + "  local ok, res = pcall(function() return redis.call('XADD', KEYS[2], '*',"
+                    + " unpack(ARGV, 3)) end)\n"
+                    + "  if ok then return res end\n"
+                    + "  return 'XADD_FAILED'\n"
                     + "else\n"
                     + "  return '0'\n"
                     + "end";
+
+    /** {@link #LUA_XADD_AND_ACK} 的 XADD 失败标记（Java 侧据此触发补偿）。 */
+    static final String XADD_FAILED_MARKER = "XADD_FAILED";
+
+    /**
+     * 目标键类型自检脚本：返回 {@code TYPE} 的字符串（{@code none} / {@code stream} / 其它）。
+     *
+     * <p>认领前先自检，可在「DLQ 键被非 stream 占用（WRONGTYPE）」这类必然失败的目标上 <b>提前放弃认领</b>——条目继续留在 PEL
+     * 等待人工修复，而不是认领后被迫走隔离区。
+     */
+    private static final String LUA_TYPE_CHECK = "return redis.call('TYPE', KEYS[1])['ok']";
 
     private final long minIdleMs;
     private volatile ScheduledExecutorService scanExecutor;
@@ -561,14 +592,17 @@ public class PelClaimScheduler implements StreamMQScheduler {
         String streamKey = StreamMQKeys.topicStream(target.namespace, target.topic);
         RStream<String, String> stream = redisson.getStream(streamKey, StringCodec.INSTANCE);
         String dlqStreamKey = StreamMQKeys.dlqStream(target.namespace, target.group);
+        if (!warnIfDestinationUnwritable(target, dlqStreamKey)) {
+            return;
+        }
 
-        // 读取 PEL 中的 pending 消息
+        // 读取 PEL 中的 pending 消息（游标分页：头部被存活消费者长期占据时，尾部条目仍会被检查到）
         try {
-            // listPending 返回 PendingEntry 列表，包含 messageId 和 idleTime
             var pending =
                     stream.listPending(
-                            target.group, StreamMessageId.MIN, StreamMessageId.MAX, batchSize);
+                            target.group, target.scanCursor.get(), StreamMessageId.MAX, batchSize);
             if (CollectionUtils.isEmpty(pending)) {
+                target.scanCursor.set(StreamMessageId.MIN);
                 return;
             }
             Map<String, String> heartbeats = loadInstanceHeartbeats(target);
@@ -671,6 +705,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
                     LOG.warn("Failed to process pending entry: {}", ex.getMessage());
                 }
             }
+            advanceCursor(target, pending);
         } catch (RuntimeException ex) {
             LOG.warn(
                     "listPending failed for topic={}, group={}: {}",
@@ -697,11 +732,15 @@ public class PelClaimScheduler implements StreamMQScheduler {
         String streamKey = StreamMQKeys.retryStream(target.namespace, target.topic, target.group);
         RStream<String, String> stream = redisson.getStream(streamKey, StringCodec.INSTANCE);
         String dlqStreamKey = StreamMQKeys.dlqStream(target.namespace, target.group);
+        if (!warnIfDestinationUnwritable(target, dlqStreamKey)) {
+            return;
+        }
         try {
             var pending =
                     stream.listPending(
-                            target.group, StreamMessageId.MIN, StreamMessageId.MAX, batchSize);
+                            target.group, target.scanCursor.get(), StreamMessageId.MAX, batchSize);
             if (CollectionUtils.isEmpty(pending)) {
+                target.scanCursor.set(StreamMessageId.MIN);
                 return;
             }
             Map<String, String> heartbeats = loadInstanceHeartbeats(target);
@@ -771,6 +810,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
                     LOG.warn("Failed to process pending retry entry: {}", ex.getMessage());
                 }
             }
+            advanceCursor(target, pending);
         } catch (RuntimeException ex) {
             LOG.warn(
                     "listPending failed for retry stream, topic={}, group={}: {}",
@@ -792,8 +832,9 @@ public class PelClaimScheduler implements StreamMQScheduler {
         try {
             var pending =
                     stream.listPending(
-                            target.group, StreamMessageId.MIN, StreamMessageId.MAX, batchSize);
+                            target.group, target.scanCursor.get(), StreamMessageId.MAX, batchSize);
             if (CollectionUtils.isEmpty(pending)) {
+                target.scanCursor.set(StreamMessageId.MIN);
                 return;
             }
             Map<String, String> heartbeats = loadInstanceHeartbeats(target);
@@ -839,6 +880,7 @@ public class PelClaimScheduler implements StreamMQScheduler {
                     LOG.warn("Failed to process pending DLQ entry: {}", ex.getMessage());
                 }
             }
+            advanceCursor(target, pending);
         } catch (RuntimeException ex) {
             LOG.warn(
                     "listPending failed for DLQ stream, group={}: {}",
@@ -889,12 +931,15 @@ public class PelClaimScheduler implements StreamMQScheduler {
     /**
      * 原子地「认领旧条目 + 写副本」：在 Redis 端先 {@code XACK}（认领），仅当认领成功（返回 1）才 {@code XADD} 副本，整个脚本单线程原子执行。
      *
+     * <p><b>失败补偿（R4-B01）：</b>XADD 在脚本内失败时返回 {@link #XADD_FAILED_MARKER}（XACK 已生效、条目已不在 PEL），由
+     * {@link #compensateFailedXadd} 用内存中的 fields 重写或落盘隔离区——认领后消息必须有下落， 不允许静默丢失。
+     *
      * @param sourceStreamKey 源 stream（XACK 目标）
      * @param destStreamKey 目标 stream（XADD 目标，重投时与源相同）
      * @param group 消费组名
      * @param id 待认领的旧 entry id
      * @param fields XADD 副本的字段表
-     * @return 新写入的 entry id；若旧条目已被其它实例/消费者先行认领（XACK 返回 0）则返回 {@code null}
+     * @return 新写入的 entry id；若旧条目已被其它实例/消费者先行认领（XACK 返回 0）或补偿失败则返回 {@code null}
      */
     private String xaddAndAck(
             String sourceStreamKey,
@@ -918,7 +963,157 @@ public class PelClaimScheduler implements StreamMQScheduler {
                                 RScript.ReturnType.STATUS,
                                 Arrays.asList(sourceStreamKey, destStreamKey),
                                 (Object[]) argv);
-        return "0".equals(result) ? null : result;
+        if (Objects.isNull(result) || "0".equals(result)) {
+            return null;
+        }
+        if (XADD_FAILED_MARKER.equals(result)) {
+            return compensateFailedXadd(destStreamKey, group, id, fields);
+        }
+        return result;
+    }
+
+    /**
+     * 认领后 XADD 失败的补偿：直接重试 → 隔离区落盘（保证消息可被运维重放）。
+     *
+     * <p>触发条件（脚本内 XADD 失败）：目标键被非 stream 类型占用（WRONGTYPE）、maxmemory OOM、ACL 拒绝 XADD。此时旧条目已被
+     * XACK，若不做补偿即静默丢失，因此按以下顺序兜底：
+     *
+     * <ol>
+     *   <li>直接用内存中的 fields 重试一次 {@code XADD}（瞬时故障 / 键刚被修复）；
+     *   <li>仍失败 → 把完整 fields 写入隔离区 Hash 并在隔离区 ZSet 登记索引（7 天 TTL），ERROR 日志给出 key 便于运维重放；
+     *   <li>连隔离区也写不进去（Redis 整体不可写）→ ERROR 明确记录"消息丢失"，不再静默。
+     * </ol>
+     *
+     * @return 补偿成功（重试写回）时返回新 entry id；落盘隔离区或彻底失败返回 {@code null}
+     */
+    private String compensateFailedXadd(
+            String destStreamKey, String group, StreamMessageId id, Map<String, String> fields) {
+        LOG.error(
+                "Claimed pending entry but XADD failed inside script (XACK already applied):"
+                        + " dest={}, group={}, id={} — compensating",
+                destStreamKey,
+                group,
+                id);
+        try {
+            RStream<String, String> destStream =
+                    redisson.getStream(destStreamKey, StringCodec.INSTANCE);
+            StreamMessageId newId = destStream.add(StreamAddArgs.entries(fields));
+            LOG.warn(
+                    "Claim compensation succeeded on direct retry: dest={}, group={}, oldId={},"
+                            + " newId={}",
+                    destStreamKey,
+                    group,
+                    id,
+                    newId);
+            return newId.toString();
+        } catch (RuntimeException retryEx) {
+            LOG.error(
+                    "Claim compensation retry failed, persisting payload to quarantine:"
+                            + " dest={}, group={}, id={}, cause={}",
+                    destStreamKey,
+                    group,
+                    id,
+                    retryEx.getMessage());
+        }
+        String quarantineKind = "pel-claim";
+        String payloadKey = StreamMQKeys.quarantinePayloadHash(namespace, group, id.toString());
+        try {
+            RMap<String, String> quarantinePayload =
+                    redisson.getMap(payloadKey, StringCodec.INSTANCE);
+            quarantinePayload.putAll(fields);
+            quarantinePayload.expire(QUARANTINE_PAYLOAD_TTL);
+            redisson.getScoredSortedSet(
+                            StreamMQKeys.quarantineZset(namespace, quarantineKind),
+                            StringCodec.INSTANCE)
+                    .add(System.currentTimeMillis(), id + "|" + quarantineKind);
+            LOG.error(
+                    "Message payload preserved in quarantine for manual replay: key={}, group={},"
+                            + " id={}",
+                    payloadKey,
+                    group,
+                    id);
+        } catch (RuntimeException quarantineEx) {
+            LOG.error(
+                    "Message LOST — claimed entry {} could not be rewritten to {} nor quarantined"
+                            + " (group={}): {}",
+                    id,
+                    destStreamKey,
+                    group,
+                    quarantineEx.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * 目标键类型自检：键不存在或为 stream 才允许认领写入。
+     *
+     * <p>某目标若类型冲突（例如 DLQ 键被非 stream 值占用），认领脚本必然 XADD 失败；提前放弃认领可让条目 留在 PEL
+     * 等待人工修复，而不是被认领后只能进隔离区。自检失败（脚本/网络异常）时保守返回 true， 由失败补偿兜底。
+     */
+    private boolean isDestinationWritable(String destStreamKey) {
+        try {
+            String type =
+                    (String)
+                            redisson.getScript(StringCodec.INSTANCE)
+                                    .eval(
+                                            RScript.Mode.READ_ONLY,
+                                            LUA_TYPE_CHECK,
+                                            RScript.ReturnType.STATUS,
+                                            Collections.singletonList(destStreamKey));
+            return Objects.isNull(type) || "none".equals(type) || "stream".equals(type);
+        } catch (RuntimeException ex) {
+            LOG.debug(
+                    "Destination type self-check failed for {}: {}",
+                    destStreamKey,
+                    ex.getMessage());
+            return true;
+        }
+    }
+
+    /**
+     * 目的键自检 + 限频告警：不可写时返回 {@code false}（本轮放弃该目标的全部认领）。
+     *
+     * <p>放弃认领不会丢消息——条目仍在 PEL 中，运维把目的键改回 stream 后自动恢复认领； 告警间隔 {@link
+     * #DESTINATION_WARN_INTERVAL_MS}，避免每轮扫描刷屏。
+     */
+    private boolean warnIfDestinationUnwritable(PelClaimTarget target, String destStreamKey) {
+        if (isDestinationWritable(destStreamKey)) {
+            return true;
+        }
+        long now = System.currentTimeMillis();
+        long last = target.lastDestinationWarnMs.get();
+        if (now - last >= DESTINATION_WARN_INTERVAL_MS
+                && target.lastDestinationWarnMs.compareAndSet(last, now)) {
+            LOG.warn(
+                    "Destination key {} exists but is not a stream (WRONGTYPE?); skipping PEL"
+                            + " claims for topic={}, group={} until fixed — pending entries stay"
+                            + " in PEL and are not lost",
+                    destStreamKey,
+                    target.topic,
+                    target.group);
+        }
+        return false;
+    }
+
+    /**
+     * 推进 PEL 扫描游标：本页取满时从最后一条之后继续，页未满说明已到 PEL 尾部（下一轮回到 MIN）。
+     *
+     * <p>修复「头部饥饿」：此前每轮都从 MIN 取固定窗口，头部被存活消费者长期占据时，其后的死亡实例 遗留条目永远不进入扫描窗口；游标分页保证全量 PEL 会被逐轮遍历到。
+     */
+    private void advanceCursor(PelClaimTarget target, List<PendingEntry> pending) {
+        if (pending.size() < batchSize) {
+            target.scanCursor.set(StreamMessageId.MIN);
+            return;
+        }
+        target.scanCursor.set(nextAfter(pending.get(pending.size() - 1).getId()));
+    }
+
+    /** 返回严格大于给定 ID 的下一个 Stream ID（用于 XPENDING 分页起点）。 */
+    private static StreamMessageId nextAfter(StreamMessageId id) {
+        if (id.getId1() == Long.MAX_VALUE) {
+            return new StreamMessageId(id.getId0() + 1, 0);
+        }
+        return new StreamMessageId(id.getId0(), id.getId1() + 1);
     }
 
     public int getTargetCount() {
@@ -934,6 +1129,13 @@ public class PelClaimScheduler implements StreamMQScheduler {
         final boolean orderly;
         final int shardCount;
         final String shardingField;
+
+        /** PEL 扫描游标（分页起点；到达 PEL 尾部后回到 MIN）。 */
+        final AtomicReference<StreamMessageId> scanCursor =
+                new AtomicReference<>(StreamMessageId.MIN);
+
+        /** 目的键类型异常告警的限频时间戳（毫秒）。 */
+        final AtomicLong lastDestinationWarnMs = new AtomicLong(0L);
 
         PelClaimTarget(
                 PelClaimTargetKind kind,

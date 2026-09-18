@@ -18,7 +18,7 @@ import org.springframework.web.servlet.HandlerExecutionChain;
 import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandlerMapping;
 
 /**
- * K8s 健康组件注册集成测试。
+ * K8s 健康组件注册回归测试（原 {@code KubernetesHealthRegistrationIT}）。
  *
  * <p>回归背景：{@code CloudK8sAutoConfiguration} 此前仅注册 Operator 相关 3 个 Bean， {@link
  * StreamMQHealthController} / {@link StreamMQHealthIndicator} / {@link GracefulShutdownHandler}
@@ -26,9 +26,12 @@ import org.springframework.web.servlet.mvc.method.annotation.RequestMappingHandl
  *
  * <p>验证：启用模块后三个 Bean 均存在，且 Servlet Web 环境下 readiness 路径能被 {@link RequestMappingHandlerMapping} 解析到
  * {@code StreamMQHealthController.readiness} 方法。
+ *
+ * <p>命名说明：本用例为纯 {@link WebApplicationContextRunner} 上下文测试，不依赖 Redis / Kubernetes 等基础设施， 因此遵循
+ * surefire 的 {@code *Test} 命名（{@code IT} 后缀会让人误以为需要外部环境，并干扰 IT 数量核对）。
  */
-@DisplayName("K8s 健康组件注册集成测试")
-class KubernetesHealthRegistrationIT {
+@DisplayName("K8s 健康组件注册测试")
+class KubernetesHealthRegistrationTest {
 
     private final WebApplicationContextRunner runner =
             new WebApplicationContextRunner()

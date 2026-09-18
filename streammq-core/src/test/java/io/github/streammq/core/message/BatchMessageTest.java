@@ -47,11 +47,11 @@ class BatchMessageTest {
         }
 
         @Test
-        @DisplayName("add null 消息抛 NPE")
+        @DisplayName("add null 消息抛 IllegalArgumentException（与 addAll 同类错误统一）")
         void addNull() {
             BatchMessage.Builder<String> builder = BatchMessage.withTopic("topic");
             assertThatThrownBy(() -> builder.add(null))
-                    .isInstanceOf(NullPointerException.class)
+                    .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("message");
         }
 
@@ -107,10 +107,10 @@ class BatchMessageTest {
     class BuildEmpty {
 
         @Test
-        @DisplayName("build 空列表抛 IllegalStateException")
+        @DisplayName("build 空列表抛 IllegalArgumentException（与 javadoc 契约一致）")
         void buildEmptyThrows() {
             assertThatThrownBy(() -> BatchMessage.<String>withTopic("topic").build())
-                    .isInstanceOf(IllegalStateException.class)
+                    .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("batch messages is empty");
         }
     }

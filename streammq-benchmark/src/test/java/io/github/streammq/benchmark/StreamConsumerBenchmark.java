@@ -285,6 +285,23 @@ public class StreamConsumerBenchmark {
         }
     }
 
+    /**
+     * 补货端吞吐探针（口径有效性守卫，R4-38）：与 {@code feeder} 线程完全相同的 {@code template.syncSend} 路径。
+     *
+     * <p>消费测量值只有在"补货端显著快于消费端"时才代表消费能力；若补货端本身更慢， 该数字只是补货端下界，对消费侧回归不敏感。{@link #main(String[])}
+     * 在测量结束后用本探针 结果做有效性判定（feeder ≥ 3 × consume），不满足时把该轮结果标记为无效并以非零码退出。
+     */
+    @Benchmark
+    public void feederSanityThroughput(Blackhole blackhole) {
+        Message<String> msg =
+                MessageBuilder.<String>withTopic(TOPIC)
+                        .tag("consumer-test")
+                        .keys("feeder-" + System.nanoTime())
+                        .body(payload)
+                        .build();
+        blackhole.consume(template.syncSend(msg));
+    }
+
     private ConsumeContext createContext(String topic, String consumerGroup) {
         return new ConsumeContext() {
             @Override
@@ -338,5 +355,64 @@ public class StreamConsumerBenchmark {
                         .resultFormat(ResultFormatType.JSON)
                         .build();
         new Runner(opt).run();
+        verifyFeederNotBottleneck();
+    }
+
+    /**
+     * 口径有效性判定（R4-38）：消费测量值必须显著低于补货端上限，否则该轮只是"补货端下界"， 不能用于宣称消费能力或做消费侧回归对比。
+     *
+     * <p>判定规则：{@code feederSanityThroughput ≥ 3 × consumeThroughput}；不满足时打印醒目提示 并以非零码退出（调用方/CI
+     * 应把该轮结果标记为无效）。解析失败（无结果文件/字段缺失）时仅提示不失败—— 判定是"诚实性增强"，不应把基准基础设施问题伪装成有效结论。
+     */
+    private static void verifyFeederNotBottleneck() {
+        java.io.File resultFile = new java.io.File("target/jmh-consumer.json");
+        if (!resultFile.isFile()) {
+            System.out.println(
+                    "[StreamMQ benchmark] Validity check skipped: " + resultFile + " not found.");
+            return;
+        }
+        try {
+            com.fasterxml.jackson.databind.JsonNode root =
+                    new com.fasterxml.jackson.databind.ObjectMapper().readTree(resultFile);
+            double consume = -1;
+            double feeder = -1;
+            for (com.fasterxml.jackson.databind.JsonNode node : root) {
+                String benchmark = node.path("benchmark").asText("");
+                double score = node.path("primaryMetric").path("score").asDouble(-1);
+                if (benchmark.endsWith(".consumeThroughput")) {
+                    consume = score;
+                } else if (benchmark.endsWith(".feederSanityThroughput")) {
+                    feeder = score;
+                }
+            }
+            if (consume <= 0 || feeder <= 0) {
+                System.out.println(
+                        "[StreamMQ benchmark] Validity check skipped: missing consume/feeder score"
+                                + " (consume="
+                                + consume
+                                + ", feeder="
+                                + feeder
+                                + ").");
+                return;
+            }
+            double ratio = feeder / consume;
+            System.out.printf(
+                    "[StreamMQ benchmark] consume=%s ops/s, feeder=%s ops/s,"
+                            + " feeder/consume=%.2fx%n",
+                    String.format("%.1f", consume), String.format("%.1f", feeder), ratio);
+            if (ratio < 3.0) {
+                System.err.println(
+                        "[StreamMQ benchmark] INVALID RUN: the feeder path is the bottleneck ("
+                                + String.format("%.2f", ratio)
+                                + "x < 3x). consumeThroughput is a lower bound of the feeder, NOT a"
+                                + " measurement of consumption capacity — do not use it for"
+                                + " capacity planning or regression comparison.");
+                System.exit(1);
+            }
+        } catch (java.io.IOException | RuntimeException ex) {
+            System.out.println(
+                    "[StreamMQ benchmark] Validity check skipped (result parse failed): "
+                            + ex.getMessage());
+        }
     }
 }

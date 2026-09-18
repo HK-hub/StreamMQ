@@ -285,14 +285,18 @@ public class DelayMessageScheduler implements StreamMQScheduler {
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey, StringCodec.INSTANCE);
         long now = System.currentTimeMillis();
 
-        Collection<String> expired = zset.valueRange(0, true, now, true, 0, batchSize - 1);
+        // LIMIT count 必须等于 batchSize：此前写成 batchSize - 1，每轮少转投一条（B-18）
+        Collection<String> expired = zset.valueRange(0, true, now, true, 0, batchSize);
         for (String msgId : expired) {
-            transferExpired(
+            if (transferExpired(
                     zset,
                     msgId,
                     level.name(),
-                    StreamMQKeys.transferClaim(namespace, "delay", level.name(), msgId));
-            recordDelayMetrics(level.name());
+                    StreamMQKeys.transferClaim(namespace, "delay", level.name(), msgId))) {
+                recordDelayMetrics(level.name());
+            } else {
+                debugSkippedDelayDelivery(level.name(), msgId);
+            }
         }
     }
 
@@ -302,14 +306,32 @@ public class DelayMessageScheduler implements StreamMQScheduler {
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey, StringCodec.INSTANCE);
         long now = System.currentTimeMillis();
 
-        Collection<String> expired = zset.valueRange(0, true, now, true, 0, batchSize - 1);
+        // LIMIT count 必须等于 batchSize（B-18，同 scanExpired）
+        Collection<String> expired = zset.valueRange(0, true, now, true, 0, batchSize);
         for (String msgId : expired) {
-            transferExpired(
+            if (transferExpired(
                     zset,
                     msgId,
                     DELAY_CUSTOM_LEVEL,
-                    StreamMQKeys.transferClaim(namespace, "delay", DELAY_CUSTOM_LEVEL, msgId));
-            recordDelayMetrics(DELAY_CUSTOM_LEVEL);
+                    StreamMQKeys.transferClaim(namespace, "delay", DELAY_CUSTOM_LEVEL, msgId))) {
+                recordDelayMetrics(DELAY_CUSTOM_LEVEL);
+            } else {
+                debugSkippedDelayDelivery(DELAY_CUSTOM_LEVEL, msgId);
+            }
+        }
+    }
+
+    /**
+     * 未投递路径的降噪观测：claim 未拿到（其它实例正在转投）、payload 缺失被隔离、原子批失败回退， 都属于"本轮未投递"，不得计入投递指标（B-20）；DEBUG
+     * 记录以便排查，不 WARN 避免每轮刷屏。
+     */
+    private void debugSkippedDelayDelivery(String label, String msgId) {
+        if (LOG.isDebugEnabled()) {
+            LOG.debug(
+                    "Delay[{}] message not delivered this round (claim held elsewhere, payload"
+                            + " quarantined, or atomic batch failed): msgId={}",
+                    label,
+                    msgId);
         }
     }
 
@@ -317,17 +339,19 @@ public class DelayMessageScheduler implements StreamMQScheduler {
      * 单条到期延时消息的互斥转投：claim 保护下执行「XADD + DEL payload + ZREM」原子批。
      *
      * <p>批失败时整体不生效，entry 仍在 ZSet；写入退避 score 防止热循环。 批成功则消息已投递且调度状态一致清理——任何时刻崩溃都不丢消息。
+     *
+     * @return true 仅当消息真正投递（原子批成功）；claim 未拿到、payload 被隔离、批失败均返回 false （调用方据此决定是否计入投递指标，见 B-20）
      */
-    private void transferExpired(
+    private boolean transferExpired(
             RScoredSortedSet<String> zset, String msgId, String label, String claimKey) {
         try {
             RBucket<String> claim = redisson.getBucket(claimKey, StringCodec.INSTANCE);
             if (!Boolean.TRUE.equals(
                     claim.setIfAbsent(instanceId, Duration.ofMillis(transferClaimTtlMs)))) {
-                return;
+                return false;
             }
             try {
-                doTransferExpired(zset, msgId, label);
+                return doTransferExpired(zset, msgId, label);
             } finally {
                 releaseClaim(claimKey);
             }
@@ -339,10 +363,16 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                     ex.getMessage(),
                     ex);
             requeueWithBackoff(zset, msgId, label);
+            return false;
         }
     }
 
-    void doTransferExpired(RScoredSortedSet<String> zset, String msgId, String label) {
+    /**
+     * 读取 payload 并原子转投（XADD + DEL payload + ZREM）。
+     *
+     * @return true 仅当原子批提交成功（消息已投递）
+     */
+    boolean doTransferExpired(RScoredSortedSet<String> zset, String msgId, String label) {
         String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
         RMap<String, String> payloadMap = redisson.getMap(payloadKey, StringCodec.INSTANCE);
         Map<String, String> fields = payloadMap.readAllMap();
@@ -351,7 +381,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
             // 不再静默删除——运维可通过隔离区 ZSet 排查/重放
             ScheduleQuarantine.quarantineAndRemove(
                     redisson, namespace, "delay", zset, msgId, label);
-            return;
+            return false;
         }
 
         String targetTopic = fields.get(FIELD_TARGET_TOPIC);
@@ -359,7 +389,7 @@ public class DelayMessageScheduler implements StreamMQScheduler {
             LOG.warn("Delay[{}] message has no targetTopic, quarantining: msgId={}", label, msgId);
             ScheduleQuarantine.quarantineAndRemove(
                     redisson, namespace, "delay-no-target", zset, msgId, label);
-            return;
+            return false;
         }
 
         // 移除调度元数据字段，只保留 Stream Entry 字段
@@ -385,6 +415,8 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                     msgId,
                     targetTopic);
         }
+        // 只有走到这里才代表 XADD 真正生效（原子批整体提交），调用方据此计投递指标
+        return true;
     }
 
     /** 转移失败后的退避回写：仅调整 score 推迟下一轮处理（entry 本身仍在 ZSet 中）。 */

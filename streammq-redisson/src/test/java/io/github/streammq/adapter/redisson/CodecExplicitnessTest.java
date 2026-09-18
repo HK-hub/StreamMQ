@@ -40,18 +40,80 @@ import org.junit.jupiter.api.Test;
  *
  * <p><b>防空转保护：</b>断言扫描到的受保护调用点数量不低于 {@link #MIN_EXPECTED_GUARDED_SITES}； 否则一次重构（改接收者名/新增未列出的
  * getter）会让扫描匹配为零而"绿着漏过"。
+ *
+ * <p><b>getter 清单口径（B-11）：</b>{@link #RISKY_GETTERS} 为 pinned Redisson 3.34.1 的 {@code
+ * RedissonClient} 上"可显式传入 codec"的结构访问 getter 全集（即存在 {@code (String name, Codec codec)}
+ * 形参的重载）。刻意<b>不</b>纳入以下两类：
+ *
+ * <ul>
+ *   <li>无 codec 形参的 getter（{@code getAtomicLong} / {@code getAtomicDouble} / {@code getBitSet} /
+ *       {@code getLexSortedSet} / {@code getCountDownLatch} / {@code getRateLimiter} 等）：其内部固定使用
+ *       StringCodec/LongCodec，客户端全局 codec 无法渗入，纳入只会产生误报；
+ *   <li>该版本不存在的历史名（{@code getBitmap} / {@code getCachedMap} / {@code getGeoSortedSet}）：现代等价名 {@code
+ *       getBitSet} / {@code getLocalCachedMap} / {@code getGeo} 已覆盖。
+ * </ul>
  */
 @DisplayName("编解码显式性守卫")
 class CodecExplicitnessTest {
 
-    /** 参与值（反）序列化的 Redis 结构访问；名字型操作（getLock/getSemaphore/getScript/getKeys）不在此列。 */
+    /**
+     * 参与值（反）序列化的 Redis 结构访问；名字型操作（getLock/getSemaphore/getScript/getKeys）不在此列。
+     *
+     * <p>清单来源：{@code RedissonClient}（Redisson 3.34.1）中所有带 {@code Codec} 形参的结构 getter 与 {@code
+     * RBatch}/{@code RedissonClient} 的结构访问同名重载。
+     */
+    private static final List<String> RISKY_GETTERS =
+            List.of(
+                    // Key-Value / 容器
+                    "getBucket",
+                    "getMap",
+                    "getMapCache",
+                    "getMapCacheNative",
+                    "getJsonBucket",
+                    "getLocalCachedMap",
+                    "getSet",
+                    "getSetCache",
+                    "getList",
+                    "getQueue",
+                    "getBlockingQueue",
+                    "getBlockingDeque",
+                    "getBoundedBlockingQueue",
+                    "getDeque",
+                    "getPriorityQueue",
+                    "getPriorityBlockingQueue",
+                    "getPriorityDeque",
+                    "getPriorityBlockingDeque",
+                    "getSortedSet",
+                    "getScoredSortedSet",
+                    "getRingBuffer",
+                    "getTransferQueue",
+                    "getDelayedQueue",
+                    // 多维 / 特殊结构
+                    "getMultimap",
+                    "getListMultimap",
+                    "getListMultimapCache",
+                    "getSetMultimap",
+                    "getSetMultimapCache",
+                    "getTimeSeries",
+                    "getBloomFilter",
+                    "getHyperLogLog",
+                    "getGeo",
+                    // Stream / 消息通道
+                    "getStream",
+                    "getReliableTopic",
+                    "getShardedTopic");
+
+    /** 结构访问 getter 的正则前缀（接收者任意，含泛型调用形式 {@code client.<K,V>getMap(...)}）。 */
+    private static final String RISKY_GETTER_PREFIX =
+            "[A-Za-z_][A-Za-z0-9_]*\\s*\\.\\s*(?:<[^()]*>\\s*)?(";
+
+    /** 结构访问 getter 的正则：前缀 + 全部 getter 名（捕获组 1 为命中的 getter 名，供违规信息展示）。 */
     private static final Pattern RISKY_GETTER =
-            Pattern.compile(
-                    "[A-Za-z_][A-Za-z0-9_]*\\s*\\.\\s*(?:<[^()]*>\\s*)?"
-                        + "(getStream|getMap|getScoredSortedSet|getSet|getBucket|getList|getQueue"
-                        + "|getBlockingQueue|getBlockingDeque|getMapCache|getMultimap|getSortedSet"
-                        + "|getJsonBucket|getDeque|getPriorityQueue|getDelayedQueue"
-                        + "|getRingBuffer|getSetCache|getLocalCachedMap)\\s*\\(");
+            structureAccessPattern(RISKY_GETTERS, RISKY_GETTER_PREFIX);
+
+    private static Pattern structureAccessPattern(List<String> getters, String prefix) {
+        return Pattern.compile(prefix + String.join("|", getters) + ")\\s*\\(");
+    }
 
     /**
      * Redisson 发布/订阅主题访问：{@code getTopic} 与业务对象的 {@code message.getTopic()} 同名， 因此单独用接收者名 {@code
@@ -67,8 +129,10 @@ class CodecExplicitnessTest {
     private static final List<String> EXCLUDED_PATH_SEGMENTS =
             List.of("target", "streammq-samples", "streammq-benchmark");
 
-    /** 受保护调用点数量下限：低于该值说明扫描本身失效（正则失配 / 目录遍历失败），必须让测试失败而不是静默通过。 当前实测约 90+，取保守下限 60。 */
-    private static final int MIN_EXPECTED_GUARDED_SITES = 60;
+    /**
+     * 受保护调用点数量下限：低于该值说明扫描本身失效（正则失配 / 目录遍历失败），必须让测试失败而不是静默通过。 当前实测 98（B-11 补齐 getter 清单后），取保守下限 75。
+     */
+    private static final int MIN_EXPECTED_GUARDED_SITES = 75;
 
     @Test
     @DisplayName("全部模块主源码中不存在未显式指定 codec 的 Redis 结构访问")

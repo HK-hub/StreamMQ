@@ -32,13 +32,14 @@ StreamMQ 0.1.2 hard-depends on **JDK 21+** (enforced in `pom.xml` via `maven-enf
 - [Why StreamMQ](#why-streammq)
 - [Architecture](#architecture)
 - [Comparison](#comparison)
-- [Benchmarks](#benchmarks)
+- [Benchmarks](#benchmarks--methodology-disclosure)
 - [Quick Start](#quick-start)
 - [Core Features](#core-features)
 - [Broadcast Consumption — Operational Notes](#broadcast-consumption--operational-notes)
 - [Troubleshooting: a consumer that never consumes](#troubleshooting-a-consumer-that-never-consumes)
 - [Modules](#modules)
 - [Configuration Reference](#configuration-reference)
+- [Minimum dependency matrix](#minimum-dependency-matrix)
 - [Extension Points](#extension-points)
 - [Observability](#observability)
 - [Sample Projects](#sample-projects)
@@ -68,7 +69,7 @@ Transactional messages, 18-level delayed delivery, ordered messages, batch sendi
 
 Auto-configuration, configuration binding, Actuator endpoints, Micrometer metrics — just add the starter.
 
-### 16 Extension Points (user-facing + internal assembly)
+### 18 Extension Points (user-facing + internal assembly)
 
 Serializers, converters, filters, interceptors, retry policies, rebalance strategies, compression codecs, DLQ failure strategies, management authenticators, trace collectors — almost everything is pluggable. They are resolved via the annotation's `Class` attribute or a Spring Bean override — **not** Java `ServiceLoader`.
 
@@ -128,7 +129,7 @@ Serializers, converters, filters, interceptors, retry policies, rebalance strate
 | Message compression | **Yes (GZIP)** | No | No | Yes | Yes |
 | Backpressure | **Yes (InflightQueue)** | No | No | Yes | Yes |
 | Spring Boot 3 integration | **Deep** | Average | Average | Average | Average |
-| Extension points | **16** (user-facing + internal assembly) | 0 | 0 | Few | Few |
+| Extension points | **18** (user-facing + internal assembly) | 0 | 0 | Few | Few |
 | Management interface | **REST + Actuator** | None | None | Dashboard | None |
 | Tracing | **Yes (TraceCollector SPI + OTel)** | No | No | Yes | No |
 | Recommended scale | Medium/small (< 100M/day) | Medium/small | Medium/small | Large | Very large |
@@ -163,7 +164,7 @@ Serializers, converters, filters, interceptors, retry policies, rebalance strate
 
 ### Serialization Throughput (ops/s) — 2026-09-17 measured
 
-1KB message body, `messageCount=1000`, with Blackhole consumer. JMH fork=1, warmup=4×2s, measurement=5×2s, Throughput mode. All six built-in serializers, **including the new `FlatBuffersSerializer` (FlexBuffers) and `SbeSerializer` (SBE envelope)**. Full report: [`docs/benchmarks/serialization-2026-09-17.md`](docs/benchmarks/serialization-2026-09-17.md).
+1KB message body, `messageCount=1000`, with Blackhole consumer. JMH profile **declared in `SerializationBenchmark`**: `@Fork(3, warmups = 2)`, `@Warmup(3×2s)`, `@Measurement(5×2s)`, `@BenchmarkMode(Throughput, SampleTime)`; the table below was collected with the CLI overrides `-f 1 -wi 4 -i 5 -w 2s -r 2s -bm thrpt` (single-fork run — see §2 of the [full report](docs/benchmarks/serialization-2026-09-17.md) for the exact command). All six built-in serializers, **including the new `FlatBuffersSerializer` (FlexBuffers) and `SbeSerializer` (SBE envelope)**. Full report: [`docs/benchmarks/serialization-2026-09-17.md`](docs/benchmarks/serialization-2026-09-17.md).
 
 | Serializer | Serialize (ops/s) | Deserialize (ops/s) | RoundTrip (ops/s) | Single Serialize | Single Deserialize | Size (bytes) |
 |---|---|---|---|---|---|---|
@@ -184,7 +185,8 @@ Serializers, converters, filters, interceptors, retry policies, rebalance strate
 
 ### Send Throughput (ops/s) — 0.1.2 measured
 
-Single instance, localhost Redis. JMH fork=1, warmup=1×2s, measurement=2×3s.
+Single instance, localhost Redis. JMH profile declared in `StreamMessageTemplateBenchmark`: `@Fork(3, warmups = 2)`, `@Warmup(3×2s)`, `@Measurement(5×2s)`, `@BenchmarkMode(Throughput, SampleTime)`.
+**Disclosure:** the 0.1.2 numbers below were collected with an earlier, lighter profile (fork=1, warmup=1×2s, measurement=2×3s — as recorded in `streammq-benchmark/BENCHMARK_REPORT.md` §4) and were not re-measured after the profile was tightened; treat them as indicative and re-run the reproducible command at the end of this section for full-profile numbers.
 
 | Send Mode | 100B | 1KB | 10KB |
 |---|---|---|---|
@@ -203,7 +205,21 @@ Raw read path: XREADGROUP + field decode + callback + batched XACK (1 ACK per 10
 
 > `consumeThroughput` measures the consume path (Redis network round-trip, deserialization, business callback, batched XACK), not an empty read roundtrip — but it is a **lower bound of the SDK container path**, since it omits the container's per-message ACK and its filter/interceptor/metrics chains. Numbers vary significantly across hardware, Redis instances, and network latency.
 
-Run yourself: `mvn -B -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-template exec:exec@benchmark-serialization exec:exec@benchmark-consumer -Dstreammq.benchmark.allowFlush=true`
+Run yourself (same reproducible command as the benchmark report — run the JMH CLI directly so `test-compile` is not skipped and stale bytecode cannot be measured):
+
+```bash
+mvn -q -pl streammq-benchmark test-compile dependency:build-classpath \
+    -Dmdep.includeScope=test -Dmdep.outputFile=target/cp.txt
+cd streammq-benchmark
+java -Djmh.ignoreLock=true \
+     -cp "target/test-classes:target/classes:$(cat target/cp.txt)" \
+     org.openjdk.jmh.Main "SerializationBenchmark" \
+     -f 1 -wi 4 -i 5 -w 2s -r 2s -bm thrpt \
+     -rf json -rff target/jmh-serialization.json
+```
+
+Send/consume benchmarks run the same way with `org.openjdk.jmh.Main "StreamMessageTemplateBenchmark"` / `"StreamConsumerBenchmark"`
+(the classpath separator is `:` on Linux/macOS and `;` on Windows).
 Or trigger the CI benchmark job defined in
 [`.github/workflows/benchmark.yml`](.github/workflows/benchmark.yml); results are published as JMH
 artifacts and back-filled into this table.
@@ -252,7 +268,7 @@ artifacts and back-filled into this table.
 </dependencies>
 ```
 
-> ⚠️ You must also add `redisson-spring-boot-starter` to provide a `RedissonClient` Bean; missing it will fail at startup with `NoSuchBeanDefinitionException`.
+> ⚠️ You must also add `redisson-spring-boot-starter` to provide a `RedissonClient` Bean; missing it will fail at startup with `NoSuchBeanDefinitionException`. See [Minimum dependency matrix](#minimum-dependency-matrix) for which coordinates each usage path must supply itself.
 
 ### 2. Configure
 
@@ -260,26 +276,27 @@ artifacts and back-filled into this table.
 spring:
   application:
     name: streammq-demo
-  # Redis 连接：Redisson Spring Boot Starter 依据 spring.data.redis.* 构建客户端
+  # Redis connection: the Redisson Spring Boot Starter builds the client from spring.data.redis.*
   data:
     redis:
       host: 127.0.0.1
       port: 6379
       database: 0
-      # password: ${REDIS_PASSWORD:}   # 需要认证时打开
+      # password: ${REDIS_PASSWORD:}   # uncomment when authentication is required
 
 streammq:
   enabled: true
   namespace: streammq
 ```
 
-> **注意**：`redisson.singleServerConfig.*` 在本 starter 中**没有属性绑定**（它只绑定
-> `spring.redis.redisson.config` / `spring.redis.redisson.file`），写了不会生效，请勿使用。
-> 集群 / 哨兵等高级拓扑请通过 `spring.redis.redisson.config` 提供 Redisson 原生配置。
+> **Note:** `redisson.singleServerConfig.*` has **no property binding** in this starter (it only binds
+> `spring.redis.redisson.config` / `spring.redis.redisson.file`), so writing it has no effect — do not use it.
+> For cluster / sentinel and other advanced topologies, supply Redisson's native configuration through
+> `spring.redis.redisson.config`.
 
 ### 3. Enable (automatic)
 
-Just add the starter dependency — StreamMQ auto-configures all core Beans via `META-INF/spring/AutoConfiguration.imports` when the starter is on the classpath (and `streammq.enabled=true`, the default). No `@Enable*` annotation is required.
+Just add the starter dependency — StreamMQ auto-configures all core Beans via `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` when the starter is on the classpath (and `streammq.enabled=true`, the default). No `@Enable*` annotation is required.
 
 ```java
 @SpringBootApplication
@@ -399,6 +416,11 @@ Message<String> msg = MessageBuilder.<String>withTopic("delay-topic")
         .build();
 ```
 
+> ⚠️ **Delay ceiling: 7 days.** `delayTimeMillis` must not exceed
+> `StreamMQConstants.MAX_DELAY_TIME_MILLIS` (7 days); a larger value **fails fast at send time**
+> (`StreamMQException`), it is not silently truncated. The 18 fixed levels are far below this ceiling
+> (max `HOUR_2` = 2h); **arbitrary millisecond delays are bounded by the same 7-day ceiling**.
+
 ### Ordered messages
 
 ShardingKey-based sharded ordered consumption; strict ordering within a shard.
@@ -434,8 +456,12 @@ introduced in 0.1.2). The token is resolved via a five-level fallback chain:
 
 1. Explicit configuration: `streammq.consumer.broadcast-instance-id` (or system property
    `streammq.instance.id` / environment variable `STREAMMQ_INSTANCE_ID`)
-2. Local persistent file: `${user.home}/.streammq/instance-id`
-   (path overridable via `streammq.consumer.broadcast-instance-id-file`; `none`/`false` disables it)
+2. Local persistent file: `${user.home}/.streammq/instance-id-<namespace>_<group>` — **scoped per
+   application/consumer group** (multiple StreamMQ apps under the same OS user never share an
+   identity file). The file stores one record per process (`id pid timestamp`), so a restart reuses
+   the identity of an **exited** process and never overwrites the identity of a still-running one.
+   Path overridable via `streammq.consumer.broadcast-instance-id-file` (a single file for all
+   consumers; `none`/`false` disables the local file entirely)
 3. Redis broadcast registry **reclaiming this host's previous slot** (persists across restarts, keeps the PEL)
 4. Redis broadcast registry **allocating a fresh slot** for a brand-new instance
 5. Random UUID (last resort, non-persistent — the pre-0.1.2 behaviour)
@@ -448,9 +474,12 @@ random fallback applies**, the old behaviour applies:
   preserved, messages produced during downtime are delivered on reconnect, **no new group created**.
   Stale groups still exist only when instances are decommissioned permanently (slot reclaimed and
   eventually swept after the reclaim grace period, default `streammq.consumer.broadcast-reclaim-grace` = 7d).
-- **Without persistent identity (random UUID)**: every restart creates a new group; old groups
-  are swept after heartbeat expiry (default `streammq.group.instance-timeout-ms`).
-  Total group count ≈ instance-count × restarts within the heartbeat window.
+- **Without persistent identity (random UUID)**: every restart creates a new group; the abandoned
+  groups (a group is "stale" once its heartbeat stops) are destroyed by
+  `RedissonBroadcastGroupRegistry` after a **fixed 10-minute TTL**
+  (`BROADCAST_GROUP_STALE_TTL_MS`, not configurable) — identity slots, which carry the PEL, are
+  reclaimed only after the 7-day reclaim grace.
+  Total group count ≈ instance-count × restarts within that 10-minute window.
 - Each group holds its own PEL and **occupies Redis memory**.
 
 ### Recommendations
@@ -480,8 +509,10 @@ A consumer that "registers successfully but never consumes" is the symptom most 
    or a namespace mismatch.
 4. **Check container state**: the `containerRunning` field in `/actuator/streammq/groups`.
 
-> A failed consume loop is **not** retried automatically. After fixing the root cause you must
-> restart the application (or trigger rebalance via the management endpoint).
+> A failed consume loop is **not** retried automatically, and the rebalance endpoint **cannot** recover it:
+> `POST /actuator/streammq/rebalance/{group}` only re-assigns shards for **already-running ORDERLY containers**
+> (`StreamMQAdminEndpoint#triggerRebalance` → `container.rebalanceGroup(group)`), so it does nothing when the
+> consume loop never started. After fixing the root cause you **must restart the application**.
 
 ---
 
@@ -535,15 +566,37 @@ streammq:
     enabled: false
 ```
 
+### Two keys that are easy to miss
+
+- **`streammq.diagnostics.enabled`** (default `false`) — turns on the `streammq-diagnostics` module
+  (message profiling, slow-consume, backlog and DLQ diagnostics). It lives in a **separate module**:
+  you must add `streammq-diagnostics` to the classpath *and* set the key to `true`; a
+  `StreamMQTraceService` bean is also required for the analyzers to bind (enable it via
+  `streammq.trace.enabled=true` + `streammq.trace.storage=redis`; without a Redisson client the
+  backlog probe silently falls back to trace-window estimation).
+  **If the module is not on the classpath, Spring silently ignores `streammq.diagnostics.*`** — no
+  warning, no failure: nothing binds the key (an unknown property is ignored by default). The same
+  applies to `streammq.tracing.otel.*` (needs `streammq-tracing-opentelemetry`) and to any other
+  module-scoped key. **Troubleshooting when the key seems to have no effect:** confirm the coordinate is
+  really on the classpath (`mvn dependency:tree | grep streammq-diagnostics`) and that `enabled=true` took
+  effect (the auto-configuration is gated by `@ConditionalOnProperty(..., matchIfMissing=false)`).
+- **`@StreamMQConsumer(enable = false)`** (annotation attribute, default `true`) — the consumer is
+  **skipped entirely at registration time**: `StreamMQListenerRegistrar` logs
+  `Skip disabled @StreamMQConsumer: bean=..., topic=...`, no listener/consume loop is created, and the
+  `(topic, group)` registration key is **not** occupied (so another bean may claim it meanwhile). The
+  consumer Bean itself is still created by Spring. Useful for gating a consumer behind an
+  environment/flag (e.g. feature toggle) without removing the class. It is per-consumer only; there is
+  no global counterpart. (The same attribute exists on `@StreamMQDlqConsumer`.)
+
 ---
 
 ## Extension Points
 
-0.1.2 ships with **16 extension points** (user-facing + internal assembly points):
+0.1.2 ships with **18 extension points** (user-facing + internal assembly points):
 
 | Extension Point | Purpose | Default Implementation |
 |---|---|---|
-| `MessageSerializer` | Message serialization | **`JacksonJsonSerializer` (default, strict types / no gadget RCE surface)** / `FurySerializer` (opt-in, high throughput) / `ProtostuffSerializer` / `FlatBuffersSerializer` (FlexBuffers, zero-copy field reads) / `SbeSerializer` (fixed-header envelope) / `JdkSerializer` |
+| `MessageSerializer` | Message serialization | **`JacksonJsonSerializer` (default, strict types / no gadget RCE surface)** / `FurySerializer` (opt-in, high throughput) / `ProtostuffSerializer` / `FlatBuffersSerializer` (FlexBuffers, zero-copy field reads) / `SbeSerializer` (fixed-header envelope) / `JdkSerializer` / `StringSerializer` / `ByteArraySerializer` |
 | `MessageConverter` | Message-body ↔ business object | `DefaultMessageConverter` / `CompactMessageConverter` / `PassThroughMessageConverter` |
 | `ProducerFilter` | Producer filter chain | none built-in — implement it and register a Bean |
 | `ConsumerFilter` | Consumer filter chain | `TagSelectorFilter` / `SqlSelectorFilter` |
@@ -559,6 +612,24 @@ streammq:
 | `ConsumerFilterResolver` | Per-consumer filter resolver | `ReflectiveConsumerFilterResolver` (default) / Spring container resolver |
 | `OrderlyShardLockManager` | Ordered-consume shard distributed lock | `RedissonOrderlyShardLockManager` |
 | `ConsumerGroupManager` | Consumer group instance management | `RedissonConsumerGroupManager` |
+| `BroadcastInstanceRegistry` | Broadcast instance identity registry (stable slot + reclaim/lease, 0.1.2) | `RedisBroadcastInstanceRegistry` |
+| `CompressionCodecRegistry` | Codec registry (register/lookup by name; consumers resolve the codec to decompress with) | `DefaultCompressionCodecRegistry` (GZIP built in, LZ4 by classpath detection) |
+
+---
+
+## Minimum dependency matrix
+
+`streammq-core` and `streammq-redisson` declare their adapters/optional libraries as `provided` / `optional`
+on purpose, so you can pick the client version. That also means **you must supply some coordinates yourself**:
+
+| Path | Coordinates you must add yourself | Scope facts (verified in the module POMs) |
+|---|---|---|
+| **core-only** (framework-agnostic use) | `org.slf4j:slf4j-api` | `streammq-core` declares SLF4J as `provided` (the logging facade is not shipped transitively); Jackson is `optional` in core and core's runtime path does not use it |
+| **redisson-only** (no Spring) | `org.redisson:redisson` (add the Jackson/SLF4J coordinates explicitly only if you override or exclude them) | `redisson` is `provided`; `org.slf4j:slf4j-api`, `com.fasterxml.jackson.core:jackson-databind` and `com.fasterxml.jackson.datatype:jackson-datatype-jsr310` are **compile** dependencies of `streammq-redisson` and therefore arrive transitively (the two Jackson artifacts back the default `JacksonJsonSerializer` and the `props` field codec). Serializers that are `optional` are needed only when you opt in: `org.apache.fory:fory-core` (>= 1.1.0) / `io.protostuff:protostuff-core`+`protostuff-runtime` / `com.google.flatbuffers:flatbuffers-java` / `org.agrona:agrona` |
+| **starter** (Spring Boot 3) | `org.redisson:redisson-spring-boot-starter` (its version is managed by `streammq-bom`) + your own Spring Boot parent/BOM | the starter declares `redisson-spring-boot-starter` and `spring-boot-starter` as `provided`; `spring-boot-starter-actuator` and `micrometer-core` are `optional` (add them for health checks/metrics); `spring-boot-autoconfigure` is a regular compile dependency |
+
+Optional-but-recommended extras: `io.micrometer:micrometer-registry-prometheus` for `/actuator/prometheus`,
+and `streammq-diagnostics` / `streammq-tracing-opentelemetry` (source-only in 0.1.x) when you want their endpoints.
 
 ---
 
@@ -617,7 +688,12 @@ All under `/actuator/streammq`, dispatched by HTTP method + path segment:
 | `/actuator/streammq/topics/{topic}` | DELETE | Delete a topic (`confirm={topic}` required) |
 | `/actuator/streammq/config/{group}` | POST | Update consumer-group config at runtime |
 
-All require `ManagementAuthenticator`. Default is `DenyAllAuthenticator` (rejects everything, returns 401). Register `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` Bean to open access. Authentication failures are rate-limited (10 failures per 60s → 5-minute lockout per client), and clients are aggregated by the non-spoofable `remoteAddr` by default; the optional `X-Forwarded-For` trust model (`streammq.admin.trust-forwarded-headers` / `trusted-proxies`) — together with the `streammq-diagnostics` MVC-endpoint exposure caveats — is documented in full in the Chinese README's 管理 REST API section.
+All require `ManagementAuthenticator`. Default is `DenyAllAuthenticator` (rejects everything, returns 401). Register `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` Bean to open access. Authentication failures are rate-limited (10 failures per 60s → 5-minute lockout per client), and clients are aggregated by the non-spoofable `remoteAddr` by default. `X-Forwarded-For` is **not** trusted unless you opt in with `streammq.admin.trust-forwarded-headers=true` **and** declare `streammq.admin.trusted-proxies` (IPv4/IPv6 CIDR, e.g. `10.0.0.0/8`; loopback is trusted by default) — only a direct peer that matches the list may contribute the first XFF value, because an unvalidated XFF lets a single header bypass the lockout. Two more exposure caveats:
+>
+> - `/streammq/diagnostics/**` (the `streammq-diagnostics` module's plain MVC endpoints, mounted on the **application's main port**) is **not** governed by `management.endpoints.web.exposure.*` — once the module is on the classpath and enabled, those endpoints stay reachable even if Actuator only exposes `health`.
+> - If JMX exposure is on, exclude the StreamMQ endpoints from it (`management.endpoints.jmx.exposure.exclude: streammq`).
+>
+> Restrict both endpoint families by network layer (security group / Ingress) and see [SECURITY.md](SECURITY.md) for the full policy.
 
 ---
 
@@ -673,7 +749,7 @@ All require `ManagementAuthenticator`. Default is `DenyAllAuthenticator` (reject
 - [x] Micrometer metrics + MDC logging
 - [x] TraceCollector SPI
 - [x] Management REST API
-- [x] 16 extension points (user-facing + internal assembly points)
+- [x] 18 extension points (user-facing + internal assembly points)
 - [x] Spring Boot 3 auto-config + Actuator
 - [x] Spring Cloud Stream Binder (source-only in 0.1.x)
 - [x] Kubernetes integration (experimental; source-only in 0.1.x)
@@ -737,9 +813,12 @@ git commit -m "feat: add your feature"
 | Java | 21+ | Runtime |
 | Spring Boot | 3.3.5 | Framework |
 | Redisson | 3.34.1 | Redis client |
-| Jackson | 2.17.2 | JSON serialization (aligned with Spring Boot 3.3.5 managed version) |
+| Jackson | 2.18.10 | JSON serialization (default serializer; upgraded from 2.17.2 for GHSA-r7wm-3cxj-wff9 / GHSA-72hv-8253-57qq — the `jackson-bom` import is declared **before** the Spring Boot BOM so Boot's managed 2.17.2 cannot override it) |
 | Apache Fory (formerly Apache Fury) | 1.7.3 | High-perf serialization (optional; opt-in for throughput; `org.apache.fory:fory-core`, required >= 1.1.0 — CVE-2026-50076) |
 | Protostuff | 1.8.0 | Protobuf serialization (optional alternative) |
+| FlatBuffers | 24.3.25 | FlexBuffers dynamic binary serialization (optional; `com.google.flatbuffers:flatbuffers-java`, for `FlatBuffersSerializer`) |
+| Agrona | 1.17.1 | Runtime library for SBE generated code (optional; `org.agrona:agrona`) |
+| SBE (sbe-tool) | 1.18.0 | Build-time code generation for the SBE envelope (`uk.co.real-logic:sbe-tool`, runs at `generate-sources`) |
 | Lombok | - | Code simplification |
 | Micrometer | - | Metrics |
 | SLF4J | - | Logging facade |

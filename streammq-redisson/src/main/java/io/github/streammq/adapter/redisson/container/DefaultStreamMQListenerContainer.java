@@ -974,22 +974,25 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 return;
             }
             for (ListenerRegistration<?> reg : store.registrations()) {
-                if (!reg.isDlqMode()) {
-                    store.putGroupManager(reg.key(), groupManagerFactory().createAndRegister(reg));
-                    if (!lifecycle.isRunning()) {
-                        // 竞态守卫（与动态注册路径 wireRegistrationIfRunning 对齐）：
-                        // createAndRegister 内部写 instances Hash + 订阅 RTopic + 启动心跳，
-                        // 期间并发 stop 已清理完毕；此刻若已非 RUNNING，必须撤销刚登记的组管理器，
-                        // 否则心跳线程会永久续写实例行（幽灵成员），且后续 stop 因状态非 RUNNING 直接返回，
-                        // 再也无人回收。
-                        LOG.warn(
-                                "Container start aborted after group-manager registration:"
-                                        + " lifecycle changed to {} (stop won the race);"
-                                        + " unregistering the just-created manager",
-                                lifecycle.current());
-                        store.clearGroupManagers();
-                        return;
-                    }
+                // DLQ 注册同样要建组管理器（B-10）：PelClaimScheduler 的 DLQ 目标按
+                // consumerGroupInstances(ns, group) 判断 pending 属主是否存活，而该实例心跳行只能
+                // 由组管理器写入。此前整体跳过 DLQ 注册 → 独立部署的 DLQ 消费者心跳缺行 →
+                // isOwnerConsumerAlive 恒 false → 活跃慢 DLQ 消费者的 pending 被尾部复制重投。
+                // DLQ 消费者名（{group}-{instanceToken}）与实例行 instanceId 同源，登记后判活可精确命中。
+                store.putGroupManager(reg.key(), groupManagerFactory().createAndRegister(reg));
+                if (!lifecycle.isRunning()) {
+                    // 竞态守卫（与动态注册路径 wireRegistrationIfRunning 对齐）：
+                    // createAndRegister 内部写 instances Hash + 订阅 RTopic + 启动心跳，
+                    // 期间并发 stop 已清理完毕；此刻若已非 RUNNING，必须撤销刚登记的组管理器，
+                    // 否则心跳线程会永久续写实例行（幽灵成员），且后续 stop 因状态非 RUNNING 直接返回，
+                    // 再也无人回收。
+                    LOG.warn(
+                            "Container start aborted after group-manager registration:"
+                                    + " lifecycle changed to {} (stop won the race);"
+                                    + " unregistering the just-created manager",
+                            lifecycle.current());
+                    store.clearGroupManagers();
+                    return;
                 }
             }
             doStartListeners();
@@ -1255,7 +1258,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         if (!lifecycle.isRunning()) {
             return;
         }
-        if (!reg.isDlqMode() && Objects.isNull(store.groupManager(reg.key()))) {
+        // DLQ 注册与业务注册一致地建组管理器：DLQ 消费者同样需要实例心跳行，
+        // 否则 PelClaim 的 DLQ 目标判活恒为 false（活跃慢 DLQ 消费者被复制重投，见 B-10）。
+        if (Objects.isNull(store.groupManager(reg.key()))) {
             ConsumerGroupManager manager = groupManagerFactory().createAndRegister(reg);
             store.putGroupManager(reg.key(), manager);
             // 竞态防护（C-01）：若 put 期间容器已进入停止流程（stop 的 clearGroupManagers 已执行完），

@@ -9,6 +9,7 @@ import io.github.streammq.core.util.StringUtils;
 import io.github.streammq.core.util.WebRequestAuthSupport;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -23,9 +24,13 @@ import org.slf4j.LoggerFactory;
  * <p>设计约束：
  *
  * <ul>
- *   <li>客户端地址不可信（可伪造 {@code X-Forwarded-For}）：因此状态表<b>有界</b>，超出上限时淘汰过期条目， 防止来源地址抖动导致无界增长
+ *   <li>客户端地址不可信（可伪造 {@code X-Forwarded-For}）：因此状态表<b>有界</b>，超出上限时淘汰过期条目， 防止来源地址抖动导致无界增长；
+ *       若淘汰后仍无空间，则<b>拒绝新客户端</b>（fail-closed）并节流告警，绝不无界增长
+ *   <li>淘汰与扫描均为有界操作（{@link #MAX_EVICT_SCAN_PER_CALL} / {@link #MAX_EVICT_PER_CALL}），
+ *       单次鉴权请求的成本为常数级，不会被"海量来源地址"放大
  *   <li>非 Web 环境无法识别来源时退化为全局计数（{@code "unknown"}），仍具备基本防护
  *   <li>限流只拦截失败的暴力尝试，不影响正常凭据的成功鉴权（成功后复位）
+ *   <li>统计窗口与锁定期的起始时间取<b>鉴权返回之后</b>的时间戳，慢鉴权不会让窗口计时偏早
  * </ul>
  *
  * @author StreamMQ Contributors
@@ -53,6 +58,17 @@ public class RateLimitedAuthenticator implements ManagementAuthenticator {
     /** 每次调用最多淘汰的过期条目数（限制摊还成本） */
     private static final int MAX_EVICT_PER_CALL = 128;
 
+    /**
+     * 每次调用最多<b>扫描</b>的条目数（限制单次请求的最坏成本）。
+     *
+     * <p>历史缺陷：只限制淘汰数（{@link #MAX_EVICT_PER_CALL}）而不限制扫描数，表满时每个请求都要遍历整张表 （最坏
+     * O(表大小)），攻击者可用海量来源地址把鉴权路径放大成 CPU 放大器。 现在扫描与淘汰双上限，单请求成本为常数级。
+     */
+    private static final int MAX_EVICT_SCAN_PER_CALL = 256;
+
+    /** "客户端表已满并拒绝新客户端"告警的最小间隔（毫秒），避免 fail-closed 期间日志洪泛 */
+    private static final long TABLE_FULL_WARN_INTERVAL_MILLIS = 60_000L;
+
     private final ManagementAuthenticator delegate;
     private final int maxFailures;
     private final long windowMillis;
@@ -63,6 +79,9 @@ public class RateLimitedAuthenticator implements ManagementAuthenticator {
     private final WebRequestAuthSupport.ClientAddressPolicy addressPolicy;
 
     private final ConcurrentHashMap<String, ClientState> states = new ConcurrentHashMap<>();
+
+    /** 上次"表满拒绝新客户端"告警时间（毫秒），用于告警节流；仅告警路径读写，无需原子性保证。 */
+    private volatile long lastTableFullWarnMillis;
 
     /**
      * 使用默认参数构造：10 次失败/60s 窗口，锁定 5 分钟，状态表上限 10000。
@@ -150,12 +169,22 @@ public class RateLimitedAuthenticator implements ManagementAuthenticator {
     @Override
     public boolean authenticate(String username, String password, String resource) {
         String clientId = resolveClientId();
-        ClientState state = states.compute(clientId, (k, v) -> v == null ? new ClientState() : v);
-        long now = System.currentTimeMillis();
-        if (state.isLocked(now)) {
+        ClientState state = states.get(clientId);
+        if (Objects.isNull(state)) {
+            // fail-closed：状态表已满且有限扫描无法释放空间时，拒绝尚未登记的新客户端
+            if (!admitNewClient(System.currentTimeMillis(), clientId, resource)) {
+                return false;
+            }
+            state = states.computeIfAbsent(clientId, k -> new ClientState());
+        }
+        long nowBefore = System.currentTimeMillis();
+        if (state.isLocked(nowBefore)) {
             return false;
         }
         boolean ok = delegate.authenticate(username, password, resource);
+        // 时间基准在 delegate 之后重取：鉴权本身可能很慢（远端校验 / 慢哈希），
+        // 用调用前的时间会让窗口计时与锁定期整体偏早，等于放宽了限流。
+        long now = System.currentTimeMillis();
         if (ok) {
             state.reset();
         } else {
@@ -183,15 +212,58 @@ public class RateLimitedAuthenticator implements ManagementAuthenticator {
         return StringUtils.isNotEmpty(addr) ? addr : UNKNOWN_CLIENT;
     }
 
-    /** 状态表超限时淘汰非锁定且窗口过期的条目，限制内存占用。 */
+    /**
+     * 新客户端准入判定（fail-closed 兜底）。
+     *
+     * <p>表未满直接放行；已满时先做一次<b>有界</b>扫描尝试淘汰过期条目（见 {@link #evictExpired(long)}），
+     * 仍无空间则拒绝该新客户端，避免无界内存增长——状态表无界比拒绝少量新来源更危险。拒绝时按 {@link #TABLE_FULL_WARN_INTERVAL_MILLIS} 节流告警一次。
+     *
+     * @param now 当前时间毫秒
+     * @param clientId 客户端标识
+     * @param resource 受保护资源
+     * @return true 允许登记该客户端
+     */
+    private boolean admitNewClient(long now, String clientId, String resource) {
+        if (states.size() < maxClients) {
+            return true;
+        }
+        evictExpired(now);
+        if (states.size() < maxClients) {
+            return true;
+        }
+        long lastWarn = lastTableFullWarnMillis;
+        if (now - lastWarn >= TABLE_FULL_WARN_INTERVAL_MILLIS) {
+            lastTableFullWarnMillis = now;
+            LOG.warn(
+                    "Management auth client table is full ({} entries, detected within a {}-entry"
+                            + " bounded scan) and no expired entry could be evicted: rejecting new"
+                            + " client '{}' (resource={}, limiter=fail-closed)",
+                    maxClients,
+                    MAX_EVICT_SCAN_PER_CALL,
+                    clientId,
+                    resource);
+        }
+        return false;
+    }
+
+    /** 状态表超限时淘汰非锁定且窗口过期的条目（扫描与淘汰均为有界，单请求成本常数级）。 */
     private void evictIfNeeded(long now) {
         if (states.size() <= maxClients) {
             return;
         }
+        evictExpired(now);
+    }
+
+    /** 有界扫描并淘汰过期条目：最多检查 {@link #MAX_EVICT_SCAN_PER_CALL} 个、最多淘汰 {@link #MAX_EVICT_PER_CALL} 个。 */
+    private void evictExpired(long now) {
+        int scanned = 0;
         int evicted = 0;
         for (Iterator<Map.Entry<String, ClientState>> it = states.entrySet().iterator();
-                it.hasNext() && evicted < MAX_EVICT_PER_CALL; ) {
+                it.hasNext()
+                        && scanned < MAX_EVICT_SCAN_PER_CALL
+                        && evicted < MAX_EVICT_PER_CALL; ) {
             Map.Entry<String, ClientState> e = it.next();
+            scanned++;
             if (!e.getValue().isLocked(now) && !e.getValue().isActiveInWindow(now, windowMillis)) {
                 it.remove();
                 evicted++;

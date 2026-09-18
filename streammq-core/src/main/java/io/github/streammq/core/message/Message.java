@@ -5,6 +5,7 @@
  */
 package io.github.streammq.core.message;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.util.StringUtils;
 import java.io.Serializable;
@@ -95,11 +96,12 @@ public final class Message<T> implements Serializable {
      * @param userProperties 用户属性
      * @param body 消息体
      * @param delayLevel 延时级别
-     * @param delayTimeMillis 延时毫秒数
+     * @param delayTimeMillis 自定义延时毫秒数，可为 null（未设置）；非 null 时必须 &gt; 0 且 &le; 7 天
      * @param bornTimestamp 出生时间戳
      * @param bornHost 出生主机
      * @param transactionId 事务 ID
      * @param reconsumeTimes 已重试消费次数
+     * @throws IllegalArgumentException 如果 delayTimeMillis 不在 {@code (0, 7 天]} 区间内（0.1.2 起校验）
      */
     public Message(
             String topic,
@@ -160,12 +162,42 @@ public final class Message<T> implements Serializable {
                         : new LinkedHashMap<>(userProperties);
         this.body = body;
         this.delayLevel = delayLevel;
-        this.delayTimeMillis = delayTimeMillis;
+        this.delayTimeMillis = requireValidDelayTimeMillis(delayTimeMillis);
         this.messageId = messageId;
         this.bornTimestamp = bornTimestamp;
         this.bornHost = bornHost;
         this.transactionId = transactionId;
         this.reconsumeTimes = reconsumeTimes;
+    }
+
+    /**
+     * 校验自定义延时毫秒数（构造期统一不变量）：{@code null} 表示未设置；非 null 时必须 {@code > 0} 且 {@code <= }{@link
+     * StreamMQConstants#MAX_DELAY_TIME_MILLIS}（7 天）。
+     *
+     * <p><b>为什么收口在构造器（0.1.2）：</b>此前全参构造器与 {@link #withDelayTimeMillis(Long)} 都不校验， 而 {@code
+     * MessageBuilder}/{@code MessageMetadataBuilder} 只校验 {@code > 0}，同一条消息经不同构造路径
+     * 会得到不同结果（非法值直到发送时才在适配层失败）。
+     *
+     * @param delayTimeMillis 延时毫秒数，可为 null
+     * @return 原值（null 原样返回）
+     * @throws IllegalArgumentException 如果取值不在 {@code (0, 7 天]} 区间内
+     */
+    private static Long requireValidDelayTimeMillis(Long delayTimeMillis) {
+        if (Objects.isNull(delayTimeMillis)) {
+            return null;
+        }
+        if (delayTimeMillis <= 0) {
+            throw new IllegalArgumentException(
+                    "delayTimeMillis must be > 0, got: " + delayTimeMillis);
+        }
+        if (delayTimeMillis > StreamMQConstants.MAX_DELAY_TIME_MILLIS) {
+            throw new IllegalArgumentException(
+                    "delayTimeMillis must be <= "
+                            + StreamMQConstants.MAX_DELAY_TIME_MILLIS
+                            + " (7 days), got: "
+                            + delayTimeMillis);
+        }
+        return delayTimeMillis;
     }
 
     // ===================== properties / userProperties 访问器 =====================
@@ -332,8 +364,11 @@ public final class Message<T> implements Serializable {
     /**
      * 返回带有指定延时毫秒数的新 Message 实例。
      *
-     * @param delayTimeMillis 新的延时毫秒数
+     * <p>校验与全参构造器一致（0.1.2 起）：{@code null} 表示清除延时设置；非 null 时必须 {@code > 0} 且 {@code <=} 7 天。
+     *
+     * @param delayTimeMillis 新的延时毫秒数，可为 null（清除延时）
      * @return 新的 Message 实例
+     * @throws IllegalArgumentException 如果 delayTimeMillis 不在 {@code (0, 7 天]} 区间内
      */
     public Message<T> withDelayTimeMillis(Long delayTimeMillis) {
         return new Message<>(

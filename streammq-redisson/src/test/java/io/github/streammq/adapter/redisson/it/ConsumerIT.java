@@ -6,6 +6,7 @@
 package io.github.streammq.adapter.redisson.it;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListener;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.redisson.api.PendingEntry;
 import org.redisson.api.RStream;
 import org.redisson.api.StreamGroup;
 import org.redisson.api.StreamMessageId;
@@ -220,12 +222,26 @@ class ConsumerIT extends AbstractRedisIT {
     }
 
     @Test
-    @DisplayName("ack 不存在的 messageId 不抛异常")
+    @DisplayName("ack 不存在的 messageId 不抛异常且不改变 PEL")
     void ack_nonExistentMessageId_noException() {
-        // 使用一个不存在的 messageId 进行 ack,Redis XACK 对不存在的 ID 返回 0 但不抛异常
-        consumer.pull(1); // 确保 group 已创建
+        producer.syncSend(MessageBuilder.<String>withTopic(TOPIC).body("pel-body").build());
+        List<Message<?>> messages = consumer.pull(1);
+        assertThat(messages).hasSize(1);
+
+        RStream<String, String> stream =
+                redisson.getStream(StreamMQKeys.topicStream(namespace, TOPIC));
+        assertThat(stream.listPending(GROUP, StreamMessageId.MIN, StreamMessageId.MAX, 100))
+                .hasSize(1);
+
+        // Redis XACK 对不存在的 ID 返回 0：不得抛异常
         MessageId fakeId = new MessageId("9999999999999-0");
-        // 不应抛异常
-        consumer.ack(fakeId);
+        assertThatCode(() -> consumer.ack(fakeId)).doesNotThrowAnyException();
+
+        // PEL 未被误改：仍在 PEL 中的是真实消息，而不是被伪 ID 影响
+        List<PendingEntry> pendingAfter =
+                stream.listPending(GROUP, StreamMessageId.MIN, StreamMessageId.MAX, 100);
+        assertThat(pendingAfter).hasSize(1);
+        assertThat(pendingAfter.get(0).getId().toString())
+                .isEqualTo(messages.get(0).getMessageId().getStreamEntryId());
     }
 }

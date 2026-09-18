@@ -10,20 +10,28 @@ on:
       - master
       - main
   schedule:
-    # 每周一 03:17 UTC：依赖漏洞库更新后定期复查（PR 门禁不依赖此扫描）
+    # 每周一 03:17 UTC：OWASP/NVD 深扫（增强，需要 NVD_API_KEY）只在 schedule/手动触发通道运行；
+    # PR/push 的 CVE 硬门禁走无需密钥的 sbom-scan（CycloneDX SBOM + osv-scanner）。
     - cron: '17 3 * * 1'
+  workflow_dispatch:
 
 # 最小权限原则：CI 只需读取仓库内容（artifact 上传走 Actions 运行时 token，不受此处限制）
 permissions:
   contents: read
 
+# E-14/E-25：同一分支/PR 的旧运行被新提交取消，避免重复占用 runner
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   guard:
-    name: Guards (parent↔BOM property sync)
+    name: Guards (parent↔BOM sync + publish set consistency)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        # E-14/E-25：第三方 action 固定到 v4 对应 commit SHA（renovate/dependabot 可识别 # v4）
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Verify parent pom.xml and streammq-bom/pom.xml dependency versions are in sync
         run: |
@@ -56,16 +64,112 @@ jobs:
           [ "$fail" -eq 0 ] || exit 1
           echo "parent ↔ BOM version properties are in sync"
 
+      # E-06：发布集一致性守卫 —— 三个清单（根 POM <modules>、central-publishing 的
+      # <excludeArtifacts>、streammq-bom 管理的 io.github.streammq:* 构件）必须严格等价，
+      # 否则会出现「BOM 里管理了永不发布的构件」或「发布了但 BOM 里没有」的静默漂移。
+      # 断言：({全部模块} ∪ {streammq-parent}) − {excludeArtifacts} == {BOM 管理集合} ∪ {streammq-parent, streammq-bom}
+      - name: Publish-set consistency guard (modules ↔ excludeArtifacts ↔ BOM)
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          def local(tag):
+              return tag.split('}')[-1]
+
+          def child_text(el, name):
+              for c in el:
+                  if local(c.tag) == name:
+                      return (c.text or '').strip()
+              return None
+
+          def collect_modules(pom_path):
+              """递归收集 pom_path（含嵌套 <modules>）中所有项目的 artifactId。"""
+              root = ET.parse(pom_path).getroot()
+              artifacts = set()
+              own = child_text(root, 'artifactId')
+              if own:
+                  artifacts.add(own)
+              base = pom_path.rsplit('/', 1)[0] if '/' in pom_path else ''
+              for el in root:
+                  if local(el.tag) != 'modules':
+                      continue
+                  for m in el:
+                      if local(m.tag) != 'module' or not (m.text or '').strip():
+                          continue
+                      sub = m.text.strip().replace('\\', '/')
+                      sub_pom = f"{base}/{sub}/pom.xml" if base else f"{sub}/pom.xml"
+                      artifacts |= collect_modules(sub_pom)
+              return artifacts
+
+          def exclude_artifacts(pom_path):
+              root = ET.parse(pom_path).getroot()
+              excluded = set()
+              for plugin in root.iter():
+                  if local(plugin.tag) != 'plugin':
+                      continue
+                  if child_text(plugin, 'artifactId') != 'central-publishing-maven-plugin':
+                      continue
+                  for cfg in plugin:
+                      if local(cfg.tag) != 'configuration':
+                          continue
+                      for el in cfg:
+                          if local(el.tag) == 'excludeArtifacts' and (el.text or '').strip():
+                              excluded |= {x.strip() for x in el.text.split(',') if x.strip()}
+              return excluded
+
+          def bom_managed(pom_path):
+              root = ET.parse(pom_path).getroot()
+              managed = set()
+              for dm in root.iter():
+                  if local(dm.tag) != 'dependencyManagement':
+                      continue
+                  for deps in dm:
+                      if local(deps.tag) != 'dependencies':
+                          continue
+                      for dep in deps:
+                          if local(dep.tag) != 'dependency':
+                              continue
+                          if child_text(dep, 'groupId') == 'io.github.streammq':
+                              art = child_text(dep, 'artifactId')
+                              if art:
+                                  managed.add(art)
+              return managed
+
+          all_modules = collect_modules('pom.xml')
+          excluded = exclude_artifacts('pom.xml')
+          if not excluded:
+              print("::error::cannot read <excludeArtifacts> from central-publishing-maven-plugin in pom.xml")
+              sys.exit(1)
+
+          published = all_modules - excluded          # 含 streammq-parent / streammq-bom
+          expected = bom_managed('streammq-bom/pom.xml') | {'streammq-parent', 'streammq-bom'}
+
+          print(f"modules ({len(all_modules)}): {sorted(all_modules)}")
+          print(f"excludeArtifacts ({len(excluded)}): {sorted(excluded)}")
+          print(f"published = modules - excludeArtifacts ({len(published)}): {sorted(published)}")
+          print(f"expected = BOM-managed ∪ {{streammq-parent, streammq-bom}} ({len(expected)}): {sorted(expected)}")
+
+          only_published = published - expected
+          only_bom = expected - published
+          if only_published or only_bom:
+              print(f"::error::publish-set drift — published-only (must be added to the BOM): {sorted(only_published)}")
+              print(f"::error::publish-set drift — BOM-only (must be published or removed from the BOM): {sorted(only_bom)}")
+              sys.exit(1)
+          print("Publish set is consistent: published == BOM-managed ∪ {streammq-parent, streammq-bom}")
+          PY
+
   build:
     name: Build
     needs: guard
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: 21
@@ -83,23 +187,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: 21
           cache: maven
 
       - name: Check formatting (mvn spotless:check)
-        # 不传 -Dspotless.check.skip=true：这里就是格式门禁本体，必须真实执行
-        run: mvn -q spotless:check
+        # 不传 -Dspotless.check.skip=true：这里就是格式门禁本体，必须真实执行。
+        # E-21：不加 -q —— spotless 的违规明细走 INFO 日志，-q 会把「哪个文件哪一行」全部吞掉。
+        run: mvn spotless:check
 
   test:
     name: Test
     needs: build
     runs-on: ubuntu-latest
+    # F-11：显式超时预算，避免 runner 卡死时无限等待
+    timeout-minutes: 45
     services:
       redis:
         image: redis:7.2
@@ -112,10 +219,10 @@ jobs:
           --health-retries 5
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: 21
@@ -139,7 +246,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: test-results
           path: |
@@ -152,6 +259,8 @@ jobs:
     name: Verify (Integration)
     needs: build
     runs-on: ubuntu-latest
+    # F-11：显式超时预算
+    timeout-minutes: 45
     services:
       redis:
         image: redis:7.2
@@ -164,10 +273,10 @@ jobs:
           --health-retries 5
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: 21
@@ -176,50 +285,85 @@ jobs:
       - name: Run integration tests
         # 发布前修复 P2-3：除运行集成测试外，同时启用覆盖率门禁（jacoco.check.skip=false），
         # 使默认 verify 既验证集成测试执行数（见下方 tripwire），也兜住发布模块的覆盖红线，
-        # 不必依赖单独的 coverage job。spotless 由专门 job / 本地 pre-commit 负责，verify 中跳过以免重复卡构建。
+        # 不必依赖单独的 coverage job（E-22：coverage job 已改为只出报告，门禁唯一入口在此）。
+        # spotless 由专门 job / 本地 pre-commit 负责，verify 中跳过以免重复卡构建。
         run: mvn verify -Djacoco.check.skip=false -Dspotless.check.skip=true
 
-      # Tripwire：集成测试若因 Redis service 容器异常被整体跳过，mvn verify 仍会"绿色"通过。
-      # 此步骤解析 failsafe 报告，校验实际执行的 IT 数量下限与跳过率上限，防止静默失效。
-      - name: Integration test tripwire (detect silent Redis-service breakage)
+      # F-01：集成测试若因 Redis service 容器异常被整体跳过，mvn verify 仍会"绿色"通过。
+      # 此步骤解析 failsafe 报告，**按模块**校验实际执行量下限（单模块整体跳过此前会被全局下限掩盖），
+      # 并保留全局下限与跳过率上限。失败时打印每个模块的 executed/skipped 明细。
+      - name: Integration test tripwire (per-module floors, detect silent Redis-service breakage)
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import glob
           import sys
           import xml.etree.ElementTree as ET
+          from collections import defaultdict
 
           files = glob.glob('**/failsafe-reports/*.xml', recursive=True)
           if not files:
               print("::error::no failsafe-reports/*.xml found — integration tests never ran")
               sys.exit(1)
 
-          total = skipped = 0
+          # 按模块聚合；streammq-samples 下的 8 个 sample 统一归入 streammq-samples/*
+          stats = defaultdict(lambda: {"tests": 0, "skipped": 0})
           for path in files:
+              p = path.replace("\\", "/")
+              key = "streammq-samples/*" if p.startswith("streammq-samples/") else p.split("/")[0]
               root = ET.parse(path).getroot()
-              total += int(root.get('tests', 0))
-              skipped += int(root.get('skipped', 0))
+              stats[key]["tests"] += int(root.get("tests", 0))
+              stats[key]["skipped"] += int(root.get("skipped", 0))
 
-          executed = total - skipped
-          print(f"Failsafe totals: tests={total} skipped={skipped} executed={executed}")
+          rows = []
+          total = skipped = 0
+          for key in sorted(stats):
+              t = stats[key]["tests"]
+              s = stats[key]["skipped"]
+              total += t
+              skipped += s
+              rows.append((key, t, s, t - s))
 
-          if executed < 80:
-              print("::error::integration tests executed below floor "
-                    f"(executed={executed} < 80). Likely cause: the Redis service container "
-                    "is unhealthy and ITs were silently skipped. Check redis service logs.")
+          print("Failsafe per-module inventory (executed = tests - skipped):")
+          for key, t, s, e in rows:
+              print(f"  {key}: executed={e} skipped={s} total={t}")
+          print(f"Failsafe totals: tests={total} skipped={skipped} executed={total - skipped}")
+
+          # 模块下限（F-01）：redisson 111 个 IT 全跳过、starter/test/samples 整体跳过都会在此失败
+          floors = {
+              "streammq-redisson": 100,
+              "streammq-spring-boot-starter": 30,
+              "streammq-test": 40,
+              "streammq-samples/*": 16,
+          }
+          failed = False
+          for key, floor in floors.items():
+              executed = (stats[key]["tests"] - stats[key]["skipped"]) if key in stats else 0
+              if executed < floor:
+                  print(f"::error::module '{key}' executed {executed} integration tests, below its floor {floor} "
+                        "(likely cause: the Redis service container is unhealthy and ITs were silently skipped).")
+                  failed = True
+
+          global_executed = total - skipped
+          if global_executed < 230:
+              print(f"::error::integration tests executed below the global floor "
+                    f"(executed={global_executed} < 230).")
+              failed = True
+          if skipped * 5 > total:
+              print(f"::error::more than 20% of integration tests were skipped "
+                    f"(skipped={skipped}/{total}).")
+              failed = True
+
+          if failed:
+              print("Tripwire details (per module): "
+                    + "; ".join(f"{k}: executed={e} skipped={s} total={t}" for k, t, s, e in rows))
               sys.exit(1)
-
-          if skipped * 2 > total:
-              print("::error::more than 50% of integration tests were skipped "
-                    f"(skipped={skipped}/{total}). Likely cause: Redis unavailable to tests.")
-              sys.exit(1)
-
-          print("Tripwire OK: integration tests executed above floor and skip rate within limit.")
+          print("Tripwire OK: per-module floors, global floor and skip-rate limit are satisfied.")
           PY
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: verify-results
           path: |
@@ -228,47 +372,71 @@ jobs:
             **/target/site/
           if-no-files-found: warn
 
+      # E-22：把本 job 的 jacoco 执行数据交给 coverage job 渲染报告（避免再跑一遍完整测试）
+      - name: Upload JaCoCo execution data for the coverage report job
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: verify-jacoco-data
+          path: |
+            streammq-core/target/jacoco.exec
+            streammq-redisson/target/jacoco.exec
+            streammq-spring-boot-starter/target/jacoco.exec
+            streammq-test/target/jacoco.exec
+          if-no-files-found: error
+
   coverage:
-    # P3-13：JaCoCo 覆盖率门禁——仅针对"已发布模块"启用 check（core/redisson/starter 等），
-    # 未发布模块（samples/benchmark/kubernetes）不参与门禁。阈值见根 POM jacoco check 配置。
-    name: Coverage gate (published modules)
-    needs: build
+    # E-22/E-06 分工：覆盖率「门禁」只在 verify job 执行一次（-Djacoco.check.skip=false，
+    # 单测+集成测试一并跑完并卡红线）；本 job 只渲染并上传发布模块的覆盖率报告，
+    # 不再重复执行门禁、也不再需要 Redis（此前两个 job 双份全量构建 + 双份门禁）。
+    # 数据来源：verify job 上传的 verify-jacoco-data（各发布模块 target/jacoco.exec）；
+    # 本 job 只做 test-compile（不跑测试）+ jacoco:report，再由下方步骤上传 HTML 报告。
+    # 模块清单 = 发布集 ∩ 有 check 门禁的模块（parent/bom 为 pom 打包，无 check）：
+    #   streammq-core, streammq-redisson, streammq-spring-boot-starter, streammq-test
+    name: Coverage report (published modules)
+    needs: verify
     runs-on: ubuntu-latest
-    services:
-      redis:
-        image: redis:7.2
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+    # F-11：显式超时预算
+    timeout-minutes: 45
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: 21
           cache: maven
 
-      # verify 阶段：单测 + 集成测试（需上方 Redis service）一并执行并收集 jacoco 数据，
-      # jacoco:report / jacoco:check 已绑定在 verify 阶段（见根 POM），-Djacoco.check.skip=false 启用门禁。
-      # 集成测试对覆盖率的贡献不可或缺（redisson 含 IT 实测行覆盖约 0.63、分支约 0.53；
-      # 模块门禁取「实测 − 3pt」= LINE 0.60 / BRANCH 0.50），
-      # 因此必须提供 Redis 并运行 verify，而非仅 test。
-      # -am 自动带上所选模块的 reactor 依赖（如 core），确保闭环可解析。
+      - name: Download JaCoCo execution data from the verify job
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: verify-jacoco-data
+          path: .
+
       # 注意：模块清单不能用 YAML 折叠标量（>-）书写——折行会在行尾逗号后插入空格，
       # Maven 会把后续模块名当作 lifecycle phase 直接失败；此处用 `\` 续行交给 shell 拼接。
-      - name: Coverage check on published modules
+      - name: Render coverage reports (report only — the gate runs in the verify job)
         run: |
+          set -euo pipefail
           mvn -pl streammq-core,streammq-redisson,streammq-spring-boot-starter,\
-          streammq-tracing-opentelemetry,streammq-diagnostics,\
-          streammq-spring-cloud-stream-binder,streammq-test \
-              -am verify -Djacoco.check.skip=false -Dspotless.check.skip=true
+          streammq-test \
+              -am test-compile -DskipTests -Dspotless.check.skip=true -B
+          mvn -pl streammq-core,streammq-redisson,streammq-spring-boot-starter,\
+          streammq-test \
+              jacoco:report -B
+
+      - name: Upload coverage reports
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: coverage-reports
+          path: |
+            streammq-core/target/site/jacoco/
+            streammq-redisson/target/site/jacoco/
+            streammq-spring-boot-starter/target/site/jacoco/
+            streammq-test/target/site/jacoco/
+          if-no-files-found: error
 
   staging-smoke:
     # P2-8：发布预检——把全部模块 install 到本地仓库（模拟 staging），
@@ -277,12 +445,14 @@ jobs:
     name: Staging smoke (consumer-side resolve)
     needs: build
     runs-on: ubuntu-latest
+    # F-11：显式超时预算
+    timeout-minutes: 45
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: 21
@@ -300,8 +470,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VER="$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout \
-            -Dmaven.repo.local="${RUNNER_TEMP}/streammq-staging-repo")"
+          # E-09：-N（非递归）避免 20 项目 reactor 上 help:evaluate 输出多行；tail -n1 兜底清洗
+          VER="$(mvn -N help:evaluate -Dexpression=project.version -q -DforceStdout \
+            -Dmaven.repo.local="${RUNNER_TEMP}/streammq-staging-repo" | tail -n1)"
           mkdir -p /tmp/streammq-smoke/src/main/java/com/example
           cat > /tmp/streammq-smoke/pom.xml <<'EOF'
           <project xmlns="http://maven.apache.org/POM/4.0.0"
@@ -362,16 +533,24 @@ jobs:
 
       # 反向断言：未纳入发布清单的构件必须无法解析（防止再次把“永不发布的构件”写进 BOM——
       # 那会让使用方按 BOM 版本号依赖时解析到中央仓库不存在的构件）。
+      # E-06：清单改为从根 pom 的 maven-deploy-plugin <excludeArtifacts> 动态读取（与 release.yml 一致），
+      # 不再硬编码 4 项，避免新增/移除发布模块后两处清单漂移。
       - name: Assert unpublished modules are NOT resolvable
         shell: bash
         run: |
           set -euo pipefail
-          VER="$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout \
-            -Dmaven.repo.local="${RUNNER_TEMP}/streammq-staging-repo")"
-          for art in streammq-diagnostics streammq-tracing-opentelemetry \
-                     streammq-spring-cloud-stream-binder streammq-kubernetes; do
+          REPO="${RUNNER_TEMP}/streammq-staging-repo"
+          VER="$(mvn -N help:evaluate -Dexpression=project.version -q -DforceStdout \
+            -Dmaven.repo.local="${REPO}" | tail -n1)"
+          excluded="$(grep -oP '(?<=<excludeArtifacts>)[^<]+' pom.xml)"
+          if [ -z "${excluded}" ]; then
+            echo "::error::could not read <excludeArtifacts> from pom.xml — cannot verify the unpublished set"
+            exit 1
+          fi
+          IFS=',' read -r -a artifacts <<< "${excluded}"
+          for art in "${artifacts[@]}"; do
             if mvn -q dependency:get -Dartifact="io.github.streammq:${art}:${VER}" \
-                 -Dmaven.repo.local="${RUNNER_TEMP}/streammq-staging-repo" >/dev/null 2>&1; then
+                 -Dmaven.repo.local="${REPO}" >/dev/null 2>&1; then
               echo "::error::${art} resolved from the staging repo but is NOT in the published set —"
               echo "::error::keep the BOM and the release excludeArtifacts list consistent."
               exit 1
@@ -379,34 +558,171 @@ jobs:
             echo "OK: ${art} is correctly absent from the published set"
           done
 
-  security:
-    name: Dependency vulnerability scan (OWASP)
-    needs: [test]
+  sbom-scan:
+    # E-03：发布/PR 的 **CVE 硬门禁**（不需要任何 secrets，因此无密钥也能稳定执行）。
+    # 背景：OWASP Dependency-Check + NVD 在无 NVD_API_KEY 时被匿名限速（HTTP 408/429），
+    # 会永久红，使「发布不需要人工前置」无法成立 —— 故默认门禁改为
+    # 「CycloneDX 聚合 SBOM + osv-scanner（OSV 数据库，无需密钥）」；
+    # OWASP/NVD 深扫降级为增强通道，见 security job（仅 schedule / workflow_dispatch + 需要密钥）。
+    name: CVE gate (CycloneDX SBOM + osv-scanner)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: 21
           cache: maven
 
+      - name: Generate aggregate CycloneDX SBOM (target/bom.json)
+        # 根 POM pluginManagement 已 pin cyclonedx-maven-plugin 2.9.1 并默认 skip=true
+        # （避免影响本地构建），此处显式开启；makeAggregateBom 为 aggregator goal，
+        # 聚合产物落在 reactor 根目录 target/bom.json（outputFormat 默认 all，同时产出 bom.xml）。
+        run: |
+          set -euo pipefail
+          mvn -B -q -DskipTests -Dspotless.check.skip=true -Dcyclonedx.skip=false \
+            org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom
+          test -s target/bom.json || { echo "::error::target/bom.json was not generated"; exit 1; }
+
+      - name: Sanity-check the SBOM (published artifacts + dependency graph must be present)
+        # 防止「SBOM 生成成功但内容为空/退化为空壳」导致 CVE 门禁静默失效：
+        # 1) 4 个发布构件必须在 SBOM 中；2) 解析出的第三方依赖必须存在（缺失说明依赖图构建失败）；
+        # 3) 组件总数下限兜底。
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import sys
+
+          with open('target/bom.json', encoding='utf-8') as fh:
+              bom = json.load(fh)
+          components = bom.get('components') or []
+          names = {(c.get('group'), c.get('name')) for c in components}
+          required = {('io.github.streammq', a) for a in (
+              'streammq-core', 'streammq-redisson', 'streammq-spring-boot-starter', 'streammq-test')}
+          missing = sorted(required - names)
+          print(f"SBOM components: {len(components)}")
+          if missing:
+              print(f"::error::SBOM is missing published artifacts: {missing}")
+              sys.exit(1)
+
+          expected_deps = {('org.slf4j', 'slf4j-api'), ('org.redisson', 'redisson'),
+                           ('com.fasterxml.jackson.core', 'jackson-databind'),
+                           ('org.springframework.boot', 'spring-boot-starter')}
+          found_deps = expected_deps & names
+          print(f"Expected third-party dependencies found in the SBOM: {sorted(found_deps)}")
+          if len(found_deps) < 3:
+              print(f"::error::SBOM lists fewer expected third-party dependencies than expected "
+                    f"(found {len(found_deps)} of {len(expected_deps)}) — dependency resolution likely failed")
+              sys.exit(1)
+
+          if len(components) < 20:
+              print(f"::error::SBOM looks too small ({len(components)} components) — dependency resolution likely failed")
+              sys.exit(1)
+          print("SBOM sanity check OK: published artifacts and dependency components are present")
+          PY
+
+      - name: Download osv-scanner (pinned version)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_linux_amd64"
+          # TODO(release-0.1.2)：首次运行后由维护者回填官方 SHA256 并启用校验（切勿编造哈希）：
+          #   1) 本地/runner 执行： curl -fsSL <上面的 URL> | sha256sum
+          #   2) 把结果填入下面一行并取消注释（校验失败即中断，防止供应链投毒）：
+          #   echo "<SHA256>  osv-scanner" | sha256sum -c -
+          chmod +x osv-scanner
+          # 冒烟：确保下载的二进制可执行且 CLI 可用（v2 是 cobra CLI，版本开关在不同小版本间
+          # 可能是 `--version` 或 `version` 子命令，故按顺序容错，最后以 `--help` 兜底）。
+          ./osv-scanner --version 2>/dev/null || ./osv-scanner version 2>/dev/null || ./osv-scanner --help > /dev/null
+
+      - name: Scan the SBOM with osv-scanner (hard gate)
+        # osv-scanner v2 的 SBOM 扫描入口是 `scan source -L <bom>`（v2 无 --sbom / --fail-on-vulnerability 开关）。
+        # 退出码语义（官方文档 Return Codes）：0=未发现漏洞；1=发现漏洞；127=工具错误；128=未解析到任何包。
+        # 这里显式判断退出码，等价于 --fail-on-vulnerability 的硬门禁语义。
+        run: |
+          set -euo pipefail
+          rc=0
+          ./osv-scanner scan source -L target/bom.json --format table || rc=$?
+          case "${rc}" in
+            0)
+              echo "OSV scan OK: no known vulnerabilities in the SBOM"
+              ;;
+            1)
+              echo "::error::osv-scanner found known vulnerabilities — CVE gate failed (see the table above)"
+              exit 1
+              ;;
+            128)
+              echo "::error::osv-scanner found no packages in target/bom.json — the SBOM is empty or broken"
+              exit 1
+              ;;
+            *)
+              echo "::error::osv-scanner failed with exit code ${rc}"
+              exit 1
+              ;;
+          esac
+
+  security:
+    # E-03/E-19：OWASP/NVD **深扫 = 增强**（默认门禁是 sbom-scan，不需要密钥）。
+    # 只在 schedule（每周）+ workflow_dispatch 运行，且未配置 secrets.NVD_API_KEY 时在 step 内跳过
+    #（workflow 的 secrets 不能用于 job-level if，只能在 step 里判断环境变量并 skip）。
+    # E-19：扫描范围收敛到发布集并显式指定 dataDirectory + actions/cache 缓存 NVD 库，
+    # 避免 20 个模块各建一次库（耗时 + 更容易触发 NVD 限速）。
+    name: Dependency vulnerability scan (OWASP deep scan, needs NVD_API_KEY)
+    needs: [test]
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      - name: Cache OWASP dependency-check data directory (NVD database)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/dependency-check
+          key: dependency-check-data-${{ runner.os }}-${{ hashFiles('pom.xml') }}
+          restore-keys: |
+            dependency-check-data-${{ runner.os }}-
+
       - name: Run OWASP Dependency-Check (bounded retry for NVD rate limits)
         shell: bash
         env:
-          # 可选：仓库 Secret 中配置 NVD_API_KEY 提升 NVD 查询限额；未配置时为匿名限速模式，
-          # 此时 NVD 侧偶发 429/超时，用有限次重试消除“与代码无关”的红色构建。
+          # 可选：仓库 Secret 中配置 NVD_API_KEY 提升 NVD 查询限额；未配置时本步骤显式跳过
+          #（默认硬门禁由 sbom-scan 承担，匿名 NVD 扫描不参与任何发布前置）。
           NVD_API_KEY: ${{ secrets.NVD_API_KEY || '' }}
         run: |
           set -euo pipefail
+          if [ -z "${NVD_API_KEY:-}" ]; then
+            echo "::notice::NVD_API_KEY is not configured — skipping the OWASP/NVD deep scan."
+            echo "::notice::The default CVE hard gate is the sbom-scan job (CycloneDX + osv-scanner), which needs no secrets."
+            exit 0
+          fi
+          DATA_DIR="${HOME}/.cache/dependency-check"
+          mkdir -p "${DATA_DIR}"
+          # E-02：必须显式传参 —— dependency-check-maven 的 nvdApiKeyEnvironmentVariable 无默认值，
+          # 只设置 env 而不传参等于插件永远不读密钥（此前的红色构建即源于此）。
+          # E-19：-pl 收敛到发布集（bom/core/redisson/starter/test），不再让 20 个模块各扫一遍。
           for attempt in 1 2 3; do
-            if mvn verify -Dowasp.skip=false -DskipTests; then
+            if mvn verify -B -Dowasp.skip=false -DskipTests -Dspotless.check.skip=true \
+                 -pl streammq-bom,streammq-core,streammq-redisson,streammq-spring-boot-starter,streammq-test \
+                 -DnvdApiKeyEnvironmentVariable=NVD_API_KEY \
+                 -DnvdValidForHours=24 \
+                 -DdataDirectory="${DATA_DIR}"; then
               exit 0
             fi
-            echo "::warning::OWASP scan attempt ${attempt} failed (NVD rate limits are common without NVD_API_KEY); retrying..."
+            echo "::warning::OWASP scan attempt ${attempt} failed (NVD rate limits are common without a valid key); retrying..."
             sleep 30
           done
           echo "::error::OWASP dependency scan failed after 3 attempts"
@@ -414,7 +730,7 @@ jobs:
 
       - name: Upload dependency-check reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dependency-check-reports
           path: |

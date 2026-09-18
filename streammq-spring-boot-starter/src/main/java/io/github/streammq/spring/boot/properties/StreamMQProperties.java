@@ -11,6 +11,7 @@ import io.github.streammq.adapter.redisson.retry.FixedArrayRetryPolicy;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.ConsumeFromWhere;
+import io.github.streammq.core.exception.StreamMQClientException;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
@@ -267,8 +268,10 @@ public class StreamMQProperties {
         /**
          * 广播实例身份本地持久化文件路径（可选）。
          *
-         * <p>默认 {@code ${user.home}/.streammq/instance-id}。设为 {@code none} 或 {@code false} 可禁用本地文件
-         * （只读根文件系统场景，此时完全依赖 Redis 注册中心回收）。
+         * <p>默认按 namespace+group 分片：{@code ${user.home}/.streammq/instance-id-<ns>_<group>}—— 同一 OS
+         * 用户下的多个 StreamMQ 应用互不共享身份文件；文件内按 {@code id pid timestamp}
+         * 多记录存储，重启复用已退出进程的身份、不覆盖仍在运行进程的身份。显式设置本属性时为 全实例共用的单一文件（跨应用隔离由使用方自行保证）。设为 {@code none} 或
+         * {@code false} 可禁用本地文件（只读根文件系统场景，此时完全依赖 Redis 注册中心回收）。
          */
         private String broadcastInstanceIdFile = "";
 
@@ -539,133 +542,138 @@ public class StreamMQProperties {
     /**
      * 校验配置属性的合法性，在自动装配时调用。
      *
-     * @throws IllegalArgumentException 如果配置值不合法
+     * <p><b>异常类型（0.1.2）：</b>统一抛 {@link StreamMQClientException}（{@link
+     * io.github.streammq.core.exception.StreamMQException} 子类）而非 {@link
+     * IllegalArgumentException}——配置错误属于框架运行时的"配置错误"口径，业务层可统一 {@code catch (StreamMQException)}
+     * 处理；方法参数 / 契约违反才用 JDK 异常。消息文本保持逐项可定位（含完整配置键名）。
+     *
+     * @throws StreamMQClientException 如果配置值不合法
      */
     public void validate() {
         if (producer.sendMessageTimeout <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.producer.send-message-timeout must be > 0, got: "
                             + producer.sendMessageTimeout);
         }
         if (producer.retryTimes < 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.producer.retry-times must be >= 0, got: " + producer.retryTimes);
         }
         if (producer.streamMaxLen < 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.producer.stream-max-len must be >= 0, got: " + producer.streamMaxLen);
         }
         if (producer.maxMessageSize <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.producer.max-message-size must be > 0, got: "
                             + producer.maxMessageSize);
         }
         if (consumer.batchSize <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.consumer.batch-size must be > 0, got: " + consumer.batchSize);
         }
         if (consumer.pullInterval < 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.consumer.pull-interval must be >= 0, got: " + consumer.pullInterval);
         }
         if (consumer.pausedSleepMillis <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.consumer.paused-sleep-millis must be > 0, got: "
                             + consumer.pausedSleepMillis);
         }
         if (consumer.brokerErrorBackoffMillis <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.consumer.broker-error-backoff-millis must be > 0, got: "
                             + consumer.brokerErrorBackoffMillis);
         }
         if (consumer.maxBatchSizeLimit <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.consumer.max-batch-size-limit must be > 0, got: "
                             + consumer.maxBatchSizeLimit);
         }
         if (transaction.maxCheckTimes <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.transaction.max-check-times must be > 0, got: "
                             + transaction.maxCheckTimes);
         }
         if (dlq.maxDlqRetryAttempts < 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.dlq.max-dlq-retry-attempts must be >= 0, got: "
                             + dlq.maxDlqRetryAttempts);
         }
         if (dlq.dlqRetryDelayMs < 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.dlq.dlq-retry-delay-ms must be >= 0, got: " + dlq.dlqRetryDelayMs);
         }
         if (retry.maxReconsumeTimes < 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.retry.max-reconsume-times must be >= 0, got: "
                             + retry.maxReconsumeTimes);
         }
         if (retry.batchSize <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.retry.batch-size must be > 0, got: " + retry.batchSize);
         }
         if (delay.batchSize <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.delay.batch-size must be > 0, got: " + delay.batchSize);
         }
         if (consumer.timeoutCancelGraceMillis <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.consumer.timeout-cancel-grace-millis must be > 0, got: "
                             + consumer.timeoutCancelGraceMillis);
         }
         if (group.heartbeatIntervalMs <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.group.heartbeat-interval-ms must be > 0, got: "
                             + group.heartbeatIntervalMs);
         }
         if (group.instanceTimeoutMs <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.group.instance-timeout-ms must be > 0, got: "
                             + group.instanceTimeoutMs);
         }
         if (group.instanceTimeoutMs < group.heartbeatIntervalMs) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.group.instance-timeout-ms must be >= heartbeat-interval-ms, got: "
                             + group.instanceTimeoutMs);
         }
         if (retry.failureRequeueBackoffMs <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.retry.failure-requeue-backoff-ms must be > 0, got: "
                             + retry.failureRequeueBackoffMs);
         }
         if (delay.failureRequeueBackoffMs <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.delay.failure-requeue-backoff-ms must be > 0, got: "
                             + delay.failureRequeueBackoffMs);
         }
         if (dlq.minRetryDelayMs <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.dlq.min-retry-delay-ms must be > 0, got: " + dlq.minRetryDelayMs);
         }
         if (trace.maxReadCount <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.trace.max-read-count must be > 0, got: " + trace.maxReadCount);
         }
         if (admin.listPageSize <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.admin.list-page-size must be > 0, got: " + admin.listPageSize);
         }
         if (admin.maxPendingQuerySize <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.admin.max-pending-query-size must be > 0, got: "
                             + admin.maxPendingQuerySize);
         }
         if (admin.failureRetryCooldownMillis < 0) {
-            throw new IllegalArgumentException(
-                    "streammq.admin.failure-retry-cooldown-ms must be >= 0, got: "
+            throw new StreamMQClientException(
+                    "streammq.admin.failure-retry-cooldown-millis must be >= 0, got: "
                             + admin.failureRetryCooldownMillis);
         }
         if (admin.trustedProxies != null) {
             for (String cidr : admin.trustedProxies) {
                 if (!io.github.streammq.core.util.WebRequestAuthSupport.isValidCidr(cidr)) {
-                    throw new IllegalArgumentException(
+                    throw new StreamMQClientException(
                             "streammq.admin.trusted-proxies contains invalid CIDR: '"
                                     + cidr
                                     + "' (expected IPv4/IPv6 CIDR like 10.0.0.0/8 or"
@@ -674,64 +682,80 @@ public class StreamMQProperties {
             }
         }
         if (consumer.pollTimeout.toMillis() <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.consumer.poll-timeout must be > 0, got: " + consumer.pollTimeout);
         }
         if (consumer.inflightCapacity < 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.consumer.inflight-capacity must be >= 0, got: "
                             + consumer.inflightCapacity);
         }
         if (consumer.orderlyConsumeTimeoutMillis < 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.consumer.orderly-consume-timeout-millis must be >= 0, got: "
                             + consumer.orderlyConsumeTimeoutMillis);
         }
         if (consumer.consumeTimeoutMillis < 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.consumer.consume-timeout-millis must be >= 0, got: "
                             + consumer.consumeTimeoutMillis);
         }
         if (consumer.consumeFromWhere == null) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.consumer.consume-from-where must not be null");
         }
         if (dlq.streamMaxLen < 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.dlq.stream-max-len must be >= 0, got: " + dlq.streamMaxLen);
         }
         if (retry.scanInterval.toMillis() <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.retry.scan-interval must be > 0, got: " + retry.scanInterval);
         }
         if (retry.pelClaimScanInterval.toMillis() <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.retry.pel-claim-scan-interval must be > 0, got: "
                             + retry.pelClaimScanInterval);
         }
         if (retry.pelClaimMinIdleMs <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.retry.pel-claim-min-idle-ms must be > 0, got: "
                             + retry.pelClaimMinIdleMs);
         }
         if (retry.pelClaimMinIdleMs < StreamMQConstants.MIN_PEL_CLAIM_MIN_IDLE_MS) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.retry.pel-claim-min-idle-ms must be >= "
                             + StreamMQConstants.MIN_PEL_CLAIM_MIN_IDLE_MS
                             + " (否则仍处理中的消息会被误判为孤儿并重投), got: "
                             + retry.pelClaimMinIdleMs);
         }
+        // 判活窗口必须显著大于心跳间隔（R4-B04）：窗口取自 pel-claim-min-idle-ms，而"消费者是否存活"
+        // 依据心跳新鲜度；若窗口小于心跳间隔，活跃慢消费者的心跳会被判为过期 → 复制重投，重试耗尽后
+        // 已成功处理的消息会进 DLQ。3 倍覆盖瞬时抖动与网络延迟。
+        long minAliveWindowMs = group.heartbeatIntervalMs * 3;
+        if (retry.pelClaimMinIdleMs < minAliveWindowMs) {
+            throw new StreamMQClientException(
+                    "streammq.retry.pel-claim-min-idle-ms must be >= 3x"
+                            + " streammq.group.heartbeat-interval-ms ("
+                            + minAliveWindowMs
+                            + "ms), otherwise live consumers are judged dead and their messages"
+                            + " are duplicated into DLQ after retry budget is exhausted; got"
+                            + " pel-claim-min-idle-ms="
+                            + retry.pelClaimMinIdleMs
+                            + ", heartbeat-interval-ms="
+                            + group.heartbeatIntervalMs);
+        }
         if (delay.scanInterval.toMillis() <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.delay.scan-interval must be > 0, got: " + delay.scanInterval);
         }
         if (transaction.checkInterval.toMillis() <= 0) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.transaction.check-interval must be > 0, got: "
                             + transaction.checkInterval);
         }
         if (producer.retryTimes > StreamMQConstants.MAX_SYNC_RETRY_TIMES) {
-            throw new IllegalArgumentException(
+            throw new StreamMQClientException(
                     "streammq.producer.retry-times must be <= "
                             + StreamMQConstants.MAX_SYNC_RETRY_TIMES
                             + ", got: "

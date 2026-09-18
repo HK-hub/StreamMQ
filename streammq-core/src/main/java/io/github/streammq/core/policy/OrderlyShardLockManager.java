@@ -18,7 +18,7 @@ import java.util.concurrent.locks.Lock;
  * <p>负责为顺序消费 Consumer 创建 shard 级分布式锁，并在消费时按 shardingKey 路由到对应 shard 加锁执行， 保证同一 shardingKey
  * 的消息串行消费，不同 shard 之间可并行。
  *
- * <p>设计模式：策略模式，将顺序消费的锁逻辑从容器中分离。 默认实现（基于 Redisson 分布式锁）位于 {@code streammq-redisson-adapter} 模块，
+ * <p>设计模式：策略模式，将顺序消费的锁逻辑从容器中分离。 默认实现（基于 Redisson 分布式锁）位于 {@code streammq-redisson} 模块，
  * 可通过容器构造器注入自定义实现。
  *
  * <p>抽象层使用 JDK {@link Lock} 而非特定客户端类型（如 Redisson {@code RLock}）， 保持 core 模块与具体 Redis 客户端解耦。

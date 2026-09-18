@@ -10,6 +10,7 @@ import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.streammq.core.StreamMQConstants;
+import io.github.streammq.core.exception.StreamMQClientException;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -46,7 +47,7 @@ class StreamMQPropertiesValidateTest {
         StreamMQProperties properties = new StreamMQProperties();
         properties.getRetry().setMaxReconsumeTimes(-1);
         assertThatThrownBy(properties::validate)
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(StreamMQClientException.class)
                 .hasMessageContaining("streammq.retry.max-reconsume-times must be >= 0");
     }
 
@@ -64,7 +65,7 @@ class StreamMQPropertiesValidateTest {
         StreamMQProperties properties = new StreamMQProperties();
         properties.getRetry().setBatchSize(0);
         assertThatThrownBy(properties::validate)
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(StreamMQClientException.class)
                 .hasMessageContaining("streammq.retry.batch-size must be > 0");
     }
 
@@ -74,7 +75,7 @@ class StreamMQPropertiesValidateTest {
         StreamMQProperties properties = new StreamMQProperties();
         properties.getDelay().setBatchSize(-5);
         assertThatThrownBy(properties::validate)
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(StreamMQClientException.class)
                 .hasMessageContaining("streammq.delay.batch-size must be > 0");
     }
 
@@ -84,7 +85,7 @@ class StreamMQPropertiesValidateTest {
         StreamMQProperties properties = new StreamMQProperties();
         properties.getProducer().setMaxMessageSize(0);
         assertThatThrownBy(properties::validate)
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(StreamMQClientException.class)
                 .hasMessageContaining("streammq.producer.max-message-size must be > 0");
     }
 
@@ -94,7 +95,18 @@ class StreamMQPropertiesValidateTest {
         StreamMQProperties properties = new StreamMQProperties();
         properties.getDlq().setDlqRetryDelayMs(-1);
         assertThatThrownBy(properties::validate)
-                .isInstanceOf(IllegalArgumentException.class)
+                .isInstanceOf(StreamMQClientException.class)
                 .hasMessageContaining("streammq.dlq.dlq-retry-delay-ms must be >= 0");
+    }
+
+    @Test
+    @DisplayName("admin.failureRetryCooldownMillis < 0 的报错必须给出真实配置键名 -millis（D-13 回归）")
+    void negativeFailureRetryCooldown_reportsRealKeyName() {
+        StreamMQProperties properties = new StreamMQProperties();
+        properties.getAdmin().setFailureRetryCooldownMillis(-1);
+        assertThatThrownBy(properties::validate)
+                .isInstanceOf(StreamMQClientException.class)
+                .hasMessageContaining("streammq.admin.failure-retry-cooldown-millis must be >= 0")
+                .hasMessageNotContaining("failure-retry-cooldown-ms ");
     }
 }

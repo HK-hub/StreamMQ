@@ -6,6 +6,7 @@
 package io.github.streammq.adapter.redisson.interceptor;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.doThrow;
@@ -213,8 +214,9 @@ class TraceContextProducerInterceptorTest {
                         System.currentTimeMillis(),
                         null,
                         null);
-        // 不应抛异常
-        interceptor.afterSend(effective, result);
+        // 收集器异常被吞掉：不向调用方传播，但上报确实发生过
+        assertThatCode(() -> interceptor.afterSend(effective, result)).doesNotThrowAnyException();
+        verify(collector, times(1)).recordSend(any(TraceCollector.SendTraceContext.class));
     }
 
     @Test

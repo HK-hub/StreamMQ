@@ -29,11 +29,14 @@
 >     -Dmdep.includeScope=test -Dmdep.outputFile=target/cp.txt
 > cd streammq-benchmark
 > java -Djmh.ignoreLock=true \
->      -cp "target/test-classes;target/classes;$(cat target/cp.txt)" \
+>      -cp "target/test-classes:target/classes:$(cat target/cp.txt)" \
 >      org.openjdk.jmh.Main "SerializationBenchmark" \
 >      -f 1 -wi 4 -i 5 -w 2s -r 2s -bm thrpt \
 >      -rf json -rff target/jmh-serialization.json
 > ```
+>
+> 以上为 Linux/macOS 写法（classpath 分隔符 `:`）；Windows 下同一命令把分隔符换成 `;` 即可
+> （本报告的数字即在 Windows 11 上采集）。
 
 ## 3. 吞吐结果（ops/s，1KB 负载）
 

@@ -205,6 +205,34 @@ class ExceptionTest {
     }
 
     @Nested
+    @DisplayName("OrderlyShardBusyException")
+    class OrderlyShardBusyExceptionTest {
+
+        @Test
+        @DisplayName("继承 StreamMQException（可被统一捕获为框架异常）")
+        void extendsStreamMQException() {
+            assertThat(StreamMQException.class).isAssignableFrom(OrderlyShardBusyException.class);
+        }
+
+        @Test
+        @DisplayName("构造器：message（分片锁竞争，消息未被处理）")
+        void withMessage() {
+            OrderlyShardBusyException ex = new OrderlyShardBusyException("shard busy");
+            assertThat(ex.getMessage()).isEqualTo("shard busy");
+            assertThat(ex.getCause()).isNull();
+        }
+
+        @Test
+        @DisplayName("构造器：message + cause（等待锁被中断时保留原始异常链）")
+        void withMessageAndCause() {
+            Throwable cause = new InterruptedException("cancel");
+            OrderlyShardBusyException ex = new OrderlyShardBusyException("shard busy", cause);
+            assertThat(ex.getMessage()).isEqualTo("shard busy");
+            assertThat(ex.getCause()).isSameAs(cause);
+        }
+    }
+
+    @Nested
     @DisplayName("TransactionException")
     class TransactionExceptionTest {
 

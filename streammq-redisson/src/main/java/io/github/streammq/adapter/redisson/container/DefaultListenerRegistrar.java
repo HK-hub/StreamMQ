@@ -277,6 +277,7 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
     // ===================== Factory Method：Builder 装配 =====================
 
     /** 并发 / 顺序注册的共享装配（此前两段重复的 30 行 Builder 链收敛于此）， 仅 type、分片数、分片锁与 DLQ 标志参数化。 */
+    @SuppressWarnings("removal")
     private <T> DefaultListenerRegistration.Builder<T> concurrentOrOrderlyBuilder(
             ListenerType type,
             StreamMQConsumer ann,
@@ -320,6 +321,7 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
                                         ? resolveInstanceToken(
                                                 ann.namespace(), ann.topic(), ann.consumerGroup())
                                         : instanceToken))
+                .consumeThreads(ann.consumeThreads())
                 .consumeThreadMin(ann.consumeThreadMin())
                 .consumeThreadMax(ann.consumeThreadMax());
     }

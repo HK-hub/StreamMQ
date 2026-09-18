@@ -95,9 +95,9 @@ class ProtostuffSerializerTest {
     }
 
     @Test
-    @DisplayName("serialize(null) 返回空 byte[]")
+    @DisplayName("serialize(null) 返回 null（统一 null 契约）")
     void serializeNull() {
-        assertThat(serializer.serialize(null, MyData.class)).isEmpty();
+        assertThat(serializer.serialize(null, MyData.class)).isNull();
     }
 
     @Test

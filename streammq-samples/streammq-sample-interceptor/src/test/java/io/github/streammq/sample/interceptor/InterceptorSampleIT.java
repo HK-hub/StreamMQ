@@ -14,17 +14,26 @@ import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.SendResult;
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.redisson.Redisson;
+import org.redisson.api.RedissonClient;
+import org.redisson.client.codec.StringCodec;
+import org.redisson.config.Config;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 
 /**
@@ -59,6 +68,37 @@ class InterceptorSampleIT {
 
     private static final String TEST_CONSUMER_GROUP = "test-interceptor-consumer-group";
 
+    /** 每次运行的唯一后缀：命名空间与载荷均带此后缀，避免跨运行残留数据污染断言 */
+    private static final String RUN_ID = UUID.randomUUID().toString().substring(0, 8);
+
+    /** 本次运行的专属命名空间（覆写 streammq.namespace），配合 {@link #cleanupNamespace()} 实现跨运行隔离 */
+    private static final String IT_NAMESPACE = "interceptor-it-" + RUN_ID;
+
+    /** 覆写全局命名空间，避免与历史运行/其它示例共享 streammq:interceptor:* 键 */
+    @DynamicPropertySource
+    static void overrideNamespace(DynamicPropertyRegistry registry) {
+        registry.add("streammq.namespace", () -> IT_NAMESPACE);
+    }
+
+    /**
+     * 清理本次运行命名空间下的全部键。
+     *
+     * <p>使用独立客户端：{@code @DirtiesContext(AFTER_EACH_TEST_METHOD)} 在每个方法后关闭上下文， 注入的 RedissonClient 在
+     * {@code @AfterAll} 阶段已被 shutdown，无法复用于清理。
+     */
+    @AfterAll
+    static void cleanupNamespace() {
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://127.0.0.1:6379").setDatabase(0);
+        config.setCodec(StringCodec.INSTANCE);
+        RedissonClient cleanupClient = Redisson.create(config);
+        try {
+            cleanupClient.getKeys().deleteByPattern("streammq:" + IT_NAMESPACE + ":*");
+        } finally {
+            cleanupClient.shutdown();
+        }
+    }
+
     @Autowired private OrderProducer orderProducer;
 
     @Autowired private TestMessageCollector testCollector;
@@ -71,8 +111,8 @@ class InterceptorSampleIT {
     @Test
     @DisplayName("发送消息后 traceId 被生产者拦截器注入并被消费者接收")
     void sendMessage_traceIdInjectedByInterceptor() {
-        String orderId = "IT-INTERCEPTOR-001";
-        String content = "interceptor-test-content-001";
+        String orderId = "IT-INTERCEPTOR-001-" + RUN_ID;
+        String content = "interceptor-test-content-001-" + RUN_ID;
 
         SendResult result = orderProducer.sendOrder(orderId, content);
 
@@ -103,8 +143,8 @@ class InterceptorSampleIT {
     @Test
     @DisplayName("发送消息后 spanId 被生产者拦截器注入")
     void sendMessage_spanIdInjectedByInterceptor() {
-        String orderId = "IT-INTERCEPTOR-002";
-        String content = "interceptor-test-content-002";
+        String orderId = "IT-INTERCEPTOR-002-" + RUN_ID;
+        String content = "interceptor-test-content-002-" + RUN_ID;
 
         SendResult result = orderProducer.sendOrder(orderId, content);
 
@@ -124,11 +164,19 @@ class InterceptorSampleIT {
     @Test
     @DisplayName("发送多条消息均被消费者接收")
     void sendMultipleMessages_allReceived() {
-        String[] orderIds = {"IT-BATCH-001", "IT-BATCH-002", "IT-BATCH-003"};
-        String[] contents = {"batch-content-001", "batch-content-002", "batch-content-003"};
+        List<String> orderIds =
+                List.of(
+                        "IT-BATCH-001-" + RUN_ID,
+                        "IT-BATCH-002-" + RUN_ID,
+                        "IT-BATCH-003-" + RUN_ID);
+        List<String> contents =
+                List.of(
+                        "batch-content-001-" + RUN_ID,
+                        "batch-content-002-" + RUN_ID,
+                        "batch-content-003-" + RUN_ID);
 
-        for (int i = 0; i < orderIds.length; i++) {
-            SendResult result = orderProducer.sendOrder(orderIds[i], contents[i]);
+        for (int i = 0; i < orderIds.size(); i++) {
+            SendResult result = orderProducer.sendOrder(orderIds.get(i), contents.get(i));
             assertThat(result.isSuccess()).isTrue();
         }
 
@@ -138,7 +186,7 @@ class InterceptorSampleIT {
                             assertThat(testCollector.receivedMessages).hasSize(3);
                             assertThat(testCollector.receivedMessages)
                                     .extracting(Message::getKeys)
-                                    .containsExactlyInAnyOrder(orderIds);
+                                    .containsExactlyInAnyOrderElementsOf(orderIds);
                         });
     }
 

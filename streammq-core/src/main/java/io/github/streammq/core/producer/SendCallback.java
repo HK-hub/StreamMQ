@@ -36,9 +36,6 @@ import org.slf4j.LoggerFactory;
 @FunctionalInterface
 public interface SendCallback {
 
-    /** 发送失败默认日志（空实现改为记录 WARN，保证异常可观测） */
-    Logger log = LoggerFactory.getLogger(SendCallback.class);
-
     /**
      * 发送成功回调。
      *
@@ -54,6 +51,17 @@ public interface SendCallback {
      * @param ex 异常
      */
     default void onException(Throwable ex) {
-        log.warn("async send failed (default SendCallback.onException)", ex);
+        logger().warn("async send failed (default SendCallback.onException)", ex);
+    }
+
+    /**
+     * 默认回调日志器（private static，非 API 成员）。
+     *
+     * <p>0.1.2 起不再以 {@code public static final Logger log} 形式暴露：接口字段隐式 public static final，
+     * 会把实现细节变成公开 API 面（用户可读、可被静态引用、无法随实现演进）。{@link LoggerFactory#getLogger(Class)}
+     * 自身有缓存，此处按调用获取不引入额外开销。
+     */
+    private static Logger logger() {
+        return LoggerFactory.getLogger(SendCallback.class);
     }
 }

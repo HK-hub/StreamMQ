@@ -10,7 +10,6 @@ import io.github.streammq.adapter.redisson.scheduler.TransactionScanner;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.enums.InvokeTiming;
 import io.github.streammq.core.enums.LocalTransactionState;
-import io.github.streammq.core.event.StreamMQEventBus;
 import io.github.streammq.core.exception.StreamMQException;
 import io.github.streammq.core.exception.TransactionException;
 import io.github.streammq.core.filter.ProducerFilter;
@@ -76,9 +75,6 @@ public class DefaultStreamMessageTemplate
 
     /** 指标收集器（可选注入，用于记录发送指标，null 时为 no-op）。 */
     @Setter private volatile StreamMQMetrics metrics;
-
-    /** 事件总线（可选注入，用于异步发布消息发送事件，解耦 Tracing/Metrics）。 */
-    @Setter private volatile StreamMQEventBus eventBus;
 
     /**
      * 异步发送专用执行器：默认统一虚拟线程池（不占用 ForkJoinPool.commonPool）。 Spring 环境由自动装配注入统一管理的实现（{@link

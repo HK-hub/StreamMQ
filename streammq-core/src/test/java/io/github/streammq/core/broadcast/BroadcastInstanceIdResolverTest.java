@@ -7,6 +7,7 @@ package io.github.streammq.core.broadcast;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -121,8 +122,8 @@ class BroadcastInstanceIdResolverTest {
         assertThat(res.source())
                 .isIn(BroadcastInstanceSource.ALLOCATED, BroadcastInstanceSource.RECLAIMED);
         assertThat(res.isStable()).isTrue();
-        // 本地文件应被写入，供下次启动零往返复用
-        assertThat(file).hasContent("i-abc123");
+        // 本地文件应被写入，供下次启动零往返复用（多记录格式：id pid timestamp）
+        assertThat(file).content(StandardCharsets.UTF_8).startsWith("i-abc123 ");
     }
 
     @Test

@@ -11,8 +11,8 @@ import java.util.Objects;
 /**
  * 并发消费回调返回动作（唯一消费结果表达方式，对齐 RocketMQ 返回值语义）。
  *
- * <p>本类型是<b>值对象</b>而非 {@code enum}，因为它需要为 {@link #DEFER} 携带逐消息的延迟 （{@link #getDeferDelay()}）——纯
- * {@code enum} 常量无法持有每实例状态。需要 {@code switch} 时， 请对 {@link #type()} 返回的 {@link Type} 枚举分支：
+ * <p>本类型是<b>值对象</b>而非 {@code enum}，因为它需要为 DEFER 携带逐消息的延迟 （{@link #deferDelay()}）——纯 {@code enum}
+ * 常量无法持有每实例状态。需要 {@code switch} 时， 请对 {@link #type()} 返回的 {@link Type} 枚举分支：
  *
  * <pre>{@code
  * return switch (action.type()) {
@@ -28,8 +28,13 @@ import java.util.Objects;
  * <ul>
  *   <li>{@link #SUCCESS} - 消费成功，自动 ACK，从 PEL 移除
  *   <li>{@link #RECONSUME_LATER} - 消费失败，按 RetryPolicy 计算延迟后写入 retry ZSet 重投
- *   <li>{@link #DEFER} - 消费失败，按 {@link #defer(Duration)} 指定的延迟重投
+ *   <li>{@code DEFER} - 消费失败，按 {@link #defer(Duration)} 指定的延迟重投； DEFER 动作<b>只能</b>由 {@link
+ *       #defer(Duration)} 创建（携带正延迟）
  * </ul>
+ *
+ * <p><b>API 变更（0.1.2，首个公开发布）：</b>删除了 {@code ConsumeAction.DEFER} 常量。 该常量历史上携带 {@code null}
+ * 延迟，业务返回它会让框架拿不到延迟而静默失败（既不 ACK 也不重投）， 属于"看起来能用、实际必错"的 API。需要延迟重投请改用 {@link #defer(Duration)}；
+ * 需要普通重试请用 {@link #RECONSUME_LATER}。
  *
  * <p>当 Listener 抛出 {@link RuntimeException} 时，框架将其视为 {@link #RECONSUME_LATER}。
  *
@@ -65,18 +70,34 @@ public final class ConsumeAction {
     public static final ConsumeAction SUCCESS = new ConsumeAction(Type.SUCCESS, null);
     public static final ConsumeAction RECONSUME_LATER =
             new ConsumeAction(Type.RECONSUME_LATER, null);
-    public static final ConsumeAction DEFER = new ConsumeAction(Type.DEFER, null);
 
     private final Type type;
     private final Duration deferDelay;
 
+    /**
+     * 私有构造器（唯一创建路径）：{@link Type#DEFER} 必须携带正延迟，否则构造即失败。
+     *
+     * <p><b>为什么不变量内置在构造器里：</b>此前 {@code DEFER} 允许 {@code null} 延迟的实例存在（如已删除的 {@code
+     * ConsumeAction.DEFER} 常量），业务返回它时框架取延迟处 NPE，被吞掉后消息既不 ACK 也不重投。 把"DEFER
+     * 必须带正延迟"作为构造期不变量，可从根上杜绝这类静默失效。
+     *
+     * @param type 动作类型，不可为 null
+     * @param deferDelay DEFER 动作的延迟；非 DEFER 时必须为 null（由静态工厂保证）
+     * @throws NullPointerException 如果 type 为 null
+     * @throws IllegalArgumentException 如果 type 为 DEFER 且延迟为 null 或非正
+     */
     private ConsumeAction(Type type, Duration deferDelay) {
         this.type = Objects.requireNonNull(type, "type");
+        if (type == Type.DEFER
+                && (Objects.isNull(deferDelay) || deferDelay.isNegative() || deferDelay.isZero())) {
+            throw new IllegalArgumentException(
+                    "DEFER action requires a positive non-null delay, got: " + deferDelay);
+        }
         this.deferDelay = deferDelay;
     }
 
     /**
-     * 返回一个 {@link #DEFER} 动作，按指定延迟重投。
+     * 返回一个 DEFER 动作，按指定延迟重投。
      *
      * @param delay 延迟时长，必须非 null 且为正
      * @return DEFER 动作（携带 delay）
@@ -96,7 +117,27 @@ public final class ConsumeAction {
         return type;
     }
 
-    /** DEFER 动作的延迟；非 DEFER 时为 null。 */
+    /**
+     * DEFER 动作的延迟；非 DEFER 时为 null。DEFER 动作该值<b>永不为 null 且恒为正</b>。
+     *
+     * <p>命名与 {@link io.github.streammq.core.policy.DlqFailureDecision#retryDelay()} 对齐（值对象访问器统一无
+     * {@code get} 前缀）。
+     *
+     * @return 延迟时长
+     * @since 0.1.2
+     */
+    public Duration deferDelay() {
+        return deferDelay;
+    }
+
+    /**
+     * DEFER 动作的延迟；非 DEFER 时为 null。
+     *
+     * @return 延迟时长
+     * @deprecated 命名与 {@link io.github.streammq.core.policy.DlqFailureDecision#retryDelay()} 不一致；改用
+     *     {@link #deferDelay()}，本方法将于 0.2.0 移除
+     */
+    @Deprecated(since = "0.1.2", forRemoval = false)
     public Duration getDeferDelay() {
         return deferDelay;
     }

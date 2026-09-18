@@ -11,13 +11,21 @@ import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.SendResult;
 import java.util.List;
+import java.util.UUID;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.redisson.Redisson;
+import org.redisson.api.RedissonClient;
+import org.redisson.client.codec.StringCodec;
+import org.redisson.config.Config;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 
 /**
  * 延时消息示例集成测试，基于真实本地 Redis 连接验证延时消息的完整收发链路。
@@ -45,6 +53,37 @@ import org.springframework.test.context.ActiveProfiles;
         value = "io.github.streammq.test.util.RedisAvailability#localhostAvailable",
         disabledReason = "Redis not available at localhost:6379")
 class DelaySampleIT {
+
+    /** 每次运行的唯一后缀：命名空间与载荷均带此后缀，避免跨运行残留数据污染断言 */
+    private static final String RUN_ID = UUID.randomUUID().toString().substring(0, 8);
+
+    /** 本次运行的专属命名空间（覆写 streammq.namespace），配合 {@link #cleanupNamespace()} 实现跨运行隔离 */
+    private static final String IT_NAMESPACE = "delay-it-" + RUN_ID;
+
+    /** 覆写全局命名空间，避免与历史运行/其它示例共享 streammq:delay:* 键 */
+    @DynamicPropertySource
+    static void overrideNamespace(DynamicPropertyRegistry registry) {
+        registry.add("streammq.namespace", () -> IT_NAMESPACE);
+    }
+
+    /**
+     * 清理本次运行命名空间下的全部键。
+     *
+     * <p>使用独立客户端：{@code @DirtiesContext(AFTER_EACH_TEST_METHOD)} 在每个方法后关闭上下文， 注入的 RedissonClient 在
+     * {@code @AfterAll} 阶段已被 shutdown，无法复用于清理。
+     */
+    @AfterAll
+    static void cleanupNamespace() {
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://127.0.0.1:6379").setDatabase(0);
+        config.setCodec(StringCodec.INSTANCE);
+        RedissonClient cleanupClient = Redisson.create(config);
+        try {
+            cleanupClient.getKeys().deleteByPattern("streammq:" + IT_NAMESPACE + ":*");
+        } finally {
+            cleanupClient.shutdown();
+        }
+    }
 
     @Autowired private DelayMessageProducer producer;
 

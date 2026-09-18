@@ -189,9 +189,9 @@ class FurySerializerTest {
     }
 
     @Test
-    @DisplayName("serialize(null) 返回空 byte[]")
+    @DisplayName("serialize(null) 返回 null（统一 null 契约）")
     void serializeNull() {
-        assertThat(serializer.serialize(null, MyData.class)).isEmpty();
+        assertThat(serializer.serialize(null, MyData.class)).isNull();
     }
 
     @Test
@@ -204,6 +204,15 @@ class FurySerializerTest {
     @DisplayName("deserialize(空 byte[]) 返回 null")
     void deserializeEmpty() {
         assertThat(serializer.deserialize(new byte[0], MyData.class)).isNull();
+    }
+
+    @Test
+    @DisplayName("deserialize type 为 null 抛出 NullPointerException（入口判空，不落入类型校验分支 NPE）")
+    void deserializeNullType() {
+        byte[] bytes = serializer.serialize(new MyData("Bob", 25, 1L), MyData.class);
+        assertThatThrownBy(() -> serializer.deserialize(bytes, null))
+                .isInstanceOf(NullPointerException.class)
+                .hasMessageContaining("type");
     }
 
     @Test

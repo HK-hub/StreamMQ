@@ -9,11 +9,13 @@ import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.consumer.ConsumeOrderlyContext;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
 import io.github.streammq.core.enums.ConsumeAction;
+import io.github.streammq.core.exception.OrderlyShardBusyException;
 import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.policy.OrderlyShardLockManager;
 import io.github.streammq.core.util.StringUtils;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Lock;
 import lombok.NonNull;
 import lombok.RequiredArgsConstructor;
@@ -39,29 +41,82 @@ public class RedissonOrderlyShardLockManager implements OrderlyShardLockManager 
     private static final Logger LOG =
             LoggerFactory.getLogger(RedissonOrderlyShardLockManager.class);
 
-    /** 分片锁获取默认等待上限（毫秒）：超时未获得则转 RECONSUME_LATER */
+    /** 分片锁单轮获取等待上限默认值（毫秒） */
     public static final long DEFAULT_ACQUIRE_TIMEOUT_MS =
             io.github.streammq.core.StreamMQConstants.DEFAULT_ORDERLY_LOCK_ACQUIRE_TIMEOUT_MS;
+
+    /** 分片锁竞争默认等待轮数 */
+    public static final int DEFAULT_LOCK_WAIT_ROUNDS =
+            io.github.streammq.core.StreamMQConstants.DEFAULT_ORDERLY_LOCK_WAIT_ROUNDS;
+
+    /** 分片锁竞争默认轮间等待间隔（毫秒） */
+    public static final long DEFAULT_LOCK_WAIT_INTERVAL_MS =
+            io.github.streammq.core.StreamMQConstants.DEFAULT_ORDERLY_LOCK_WAIT_INTERVAL_MS;
 
     @NonNull private final RedissonClient redisson;
 
     /**
-     * 分片锁获取等待上限（毫秒）。
+     * 分片锁单轮获取等待上限（毫秒）。
      *
      * <p>旧实现使用无限期 {@code lock.lock()}：持有者线程挂死时 watchdog 持续续期， 其它实例在该 shard
-     * 上的消费线程将永久阻塞并不断累积，最终耗尽线程资源。 有界等待下，超时方转 {@link ConsumeAction#RECONSUME_LATER} 稍后重投， 最坏停摆时间被限制为
-     * acquireTimeout + watchdog TTL。
+     * 上的消费线程将永久阻塞并不断累积，最终耗尽线程资源。 有界等待下，单轮超时进入下一轮等待，全部轮次仍未获得锁则抛 {@link
+     * OrderlyShardBusyException}（不消耗业务重试预算、不进 DLQ）， 最坏停摆时间被限制为 {@code 轮数 × acquireTimeout + 轮间隔}。
      */
     private volatile long acquireTimeoutMs = DEFAULT_ACQUIRE_TIMEOUT_MS;
 
+    /** 分片锁竞争的等待轮数（每轮各等待一次 {@link #acquireTimeoutMs}） */
+    private volatile int lockWaitRounds = DEFAULT_LOCK_WAIT_ROUNDS;
+
+    /** 分片锁竞争的轮间等待间隔（毫秒） */
+    private volatile long lockWaitIntervalMs = DEFAULT_LOCK_WAIT_INTERVAL_MS;
+
     /**
-     * 设置分片锁获取等待上限（毫秒）。
+     * 全参构造：Redisson 客户端 + 分片锁竞争的等待轮数与轮间间隔。
+     *
+     * <p>未传入轮数 / 间隔时使用 {@link #DEFAULT_LOCK_WAIT_ROUNDS} 与 {@link #DEFAULT_LOCK_WAIT_INTERVAL_MS}（即
+     * {@link #RedissonOrderlyShardLockManager(RedissonClient)} 的默认值）， 也可在构造后通过 setter 调整。
+     *
+     * @param redisson Redisson 客户端
+     * @param lockWaitRounds 等待轮数，必须 &gt; 0
+     * @param lockWaitIntervalMs 轮间间隔（毫秒），必须 &gt;= 0
+     */
+    public RedissonOrderlyShardLockManager(
+            RedissonClient redisson, int lockWaitRounds, long lockWaitIntervalMs) {
+        this(redisson);
+        setLockWaitRounds(lockWaitRounds);
+        setLockWaitIntervalMs(lockWaitIntervalMs);
+    }
+
+    /**
+     * 设置分片锁单轮获取等待上限（毫秒）。
      *
      * @param millis 等待上限，必须 &gt; 0
      */
     public void setAcquireTimeoutMs(long millis) {
         if (millis > 0) {
             this.acquireTimeoutMs = millis;
+        }
+    }
+
+    /**
+     * 设置分片锁竞争的等待轮数。
+     *
+     * @param rounds 等待轮数，必须 &gt; 0（非法值忽略）
+     */
+    public void setLockWaitRounds(int rounds) {
+        if (rounds > 0) {
+            this.lockWaitRounds = rounds;
+        }
+    }
+
+    /**
+     * 设置分片锁竞争的轮间等待间隔（毫秒）。
+     *
+     * @param millis 轮间间隔，必须 &gt;= 0（0 表示不等待；非法值忽略）
+     */
+    public void setLockWaitIntervalMs(long millis) {
+        if (millis >= 0) {
+            this.lockWaitIntervalMs = millis;
         }
     }
 
@@ -95,11 +150,16 @@ public class RedissonOrderlyShardLockManager implements OrderlyShardLockManager 
      *
      * <p>无分片锁时直接消费（shardCount &lt;= 0 场景）。
      *
+     * <p><b>竞争信号与业务失败分离（红队审查 R4-B02 / R3-25）：</b>预算内多轮等待仍拿不到锁时， 抛 {@link OrderlyShardBusyException}
+     * 而不是返回 {@code RECONSUME_LATER}——本条消息 <b>未被 handler 处理</b>，由调用方直接稍后重投、不消耗重试预算， 避免"锁竞争耗尽预算 →
+     * 未处理消息被 ACK 进 DLQ"的误路由。
+     *
      * @param message 待消费消息
      * @param reg Listener 注册信息
      * @param ctx 顺序消费上下文
      * @param orderly 顺序消费 Consumer
      * @return 消费动作
+     * @throws OrderlyShardBusyException 预算内多轮等待仍未获得分片锁（或等待期间被中断）， 本条消息未被处理、不得消耗重试预算
      * @throws Exception Listener 抛出的异常
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
@@ -119,30 +179,102 @@ public class RedissonOrderlyShardLockManager implements OrderlyShardLockManager 
         }
         int shardIndex = (shardingKey.hashCode() & 0x7fffffff) % reg.getShardCount();
         RLock lock = (RLock) reg.getShardLocks().get(shardIndex);
-        boolean locked;
-        try {
-            // 有界等待 + 看门狗租约：等待超过上限即放弃本条消息（RECONSUME_LATER 重投），
-            // 避免持有者挂死时本实例线程无限阻塞；获得锁后由 watchdog 自动续期保证顺序性。
-            locked = lock.tryLock(acquireTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            return ConsumeAction.RECONSUME_LATER;
-        }
-        if (!locked) {
-            LOG.warn(
-                    "Shard lock acquire timed out ({}ms), deferring message: topic={}, group={},"
-                            + " shard={}",
-                    acquireTimeoutMs,
-                    reg.getTopic(),
-                    reg.getGroup(),
-                    shardIndex);
-            return ConsumeAction.RECONSUME_LATER;
+        if (!tryLockWithRounds(lock, shardIndex, reg)) {
+            // 不得返回成功/失败动作：竞争必须走独立异常通道，调用方据此跳过重试预算。
+            throw new OrderlyShardBusyException(
+                    "Orderly shard lock busy: held by another instance/thread, message NOT"
+                            + " handled, retry later without consuming reconsume budget"
+                            + " (topic="
+                            + reg.getTopic()
+                            + ", group="
+                            + reg.getGroup()
+                            + ", shard="
+                            + shardIndex
+                            + ", waitRounds="
+                            + lockWaitRounds
+                            + ", acquireTimeoutMs="
+                            + acquireTimeoutMs
+                            + ")");
         }
         try {
             return orderly.onMessage(message, ctx);
         } finally {
             releaseLockQuietly(lock, shardIndex, reg);
         }
+    }
+
+    /**
+     * 预算内多轮等待分片锁（每轮 {@code tryLock(acquireTimeoutMs)}，轮间休眠 {@code lockWaitIntervalMs}）。
+     *
+     * <p><b>为什么是多轮而非单轮：</b>多实例 rebalance 窗口与慢 handler 收尾期间，锁通常在数十至数百毫秒内
+     * 被释放；单轮超时即放弃会把可自愈的短暂竞争当成长时间不可用，降低顺序消费吞吐。
+     *
+     * <p><b>等待期间被中断</b>（消费超时取消 / 容器停机 {@code Future.cancel(true)}）：同样归类为
+     * "分片繁忙"——锁未获得意味着本条消息一定未被处理，抛 {@link OrderlyShardBusyException}
+     * 可以保证"竞争不消耗预算"在超时取消路径下依然成立（中断标志已恢复，不吞取消信号）。
+     *
+     * @param lock 分片锁
+     * @param shardIndex 分片序号（日志用）
+     * @param reg 注册信息（日志用）
+     * @return true 表示已持有锁；false 表示全部轮次仍未获得
+     * @throws OrderlyShardBusyException 等待期间线程被中断
+     */
+    private boolean tryLockWithRounds(RLock lock, int shardIndex, ListenerRegistration reg) {
+        int rounds = Math.max(1, lockWaitRounds);
+        for (int round = 1; round <= rounds; round++) {
+            try {
+                // 有界等待 + 看门狗租约：获得锁后由 watchdog 自动续期保证顺序性。
+                if (lock.tryLock(acquireTimeoutMs, TimeUnit.MILLISECONDS)) {
+                    return true;
+                }
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                throw new OrderlyShardBusyException(
+                        "Orderly shard lock wait interrupted before acquiring the lock, message"
+                                + " NOT handled (topic="
+                                + reg.getTopic()
+                                + ", group="
+                                + reg.getGroup()
+                                + ", shard="
+                                + shardIndex
+                                + ", round="
+                                + round
+                                + "/"
+                                + rounds
+                                + ")",
+                        ex);
+            }
+            LOG.debug(
+                    "Shard lock busy (round {}/{}), retrying in {}ms: topic={}, group={}, shard={}",
+                    round,
+                    rounds,
+                    lockWaitIntervalMs,
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    shardIndex);
+            if (round < rounds && lockWaitIntervalMs > 0) {
+                try {
+                    Thread.sleep(lockWaitIntervalMs);
+                } catch (InterruptedException ex) {
+                    Thread.currentThread().interrupt();
+                    throw new OrderlyShardBusyException(
+                            "Orderly shard lock wait interrupted between rounds, message NOT"
+                                    + " handled (topic="
+                                    + reg.getTopic()
+                                    + ", group="
+                                    + reg.getGroup()
+                                    + ", shard="
+                                    + shardIndex
+                                    + ", nextRound="
+                                    + (round + 1)
+                                    + "/"
+                                    + rounds
+                                    + ")",
+                            ex);
+                }
+            }
+        }
+        return false;
     }
 
     /**

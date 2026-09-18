@@ -17,17 +17,25 @@ import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.SendResult;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.redisson.Redisson;
+import org.redisson.api.RedissonClient;
+import org.redisson.client.codec.StringCodec;
+import org.redisson.config.Config;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 
 /**
@@ -62,6 +70,37 @@ class OrderlySampleIT {
 
     private static final String TEST_CONSUMER_GROUP = "test-orderly-consumer-group";
 
+    /** 每次运行的唯一后缀：命名空间与载荷均带此后缀，避免跨运行残留数据污染断言 */
+    private static final String RUN_ID = UUID.randomUUID().toString().substring(0, 8);
+
+    /** 本次运行的专属命名空间（覆写 streammq.namespace），配合 {@link #cleanupNamespace()} 实现跨运行隔离 */
+    private static final String IT_NAMESPACE = "orderly-it-" + RUN_ID;
+
+    /** 覆写全局命名空间，避免与历史运行/其它示例共享 streammq:orderly:* 键 */
+    @DynamicPropertySource
+    static void overrideNamespace(DynamicPropertyRegistry registry) {
+        registry.add("streammq.namespace", () -> IT_NAMESPACE);
+    }
+
+    /**
+     * 清理本次运行命名空间下的全部键。
+     *
+     * <p>使用独立客户端：{@code @DirtiesContext(AFTER_EACH_TEST_METHOD)} 在每个方法后关闭上下文， 注入的 RedissonClient 在
+     * {@code @AfterAll} 阶段已被 shutdown，无法复用于清理。
+     */
+    @AfterAll
+    static void cleanupNamespace() {
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://127.0.0.1:6379").setDatabase(0);
+        config.setCodec(StringCodec.INSTANCE);
+        RedissonClient cleanupClient = Redisson.create(config);
+        try {
+            cleanupClient.getKeys().deleteByPattern("streammq:" + IT_NAMESPACE + ":*");
+        } finally {
+            cleanupClient.shutdown();
+        }
+    }
+
     @Autowired private OrderlyMessageProducer producer;
 
     @Autowired private TestOrderlyMessageCollector testCollector;
@@ -74,7 +113,7 @@ class OrderlySampleIT {
     @Test
     @DisplayName("同一 shardingKey 发送多条消息后按顺序接收")
     void sendOrderlyMessage_verifiedInOrder() {
-        String orderId = "IT-ORDER-001";
+        String orderId = "IT-ORDER-001-" + RUN_ID;
 
         SendResult result1 = producer.sendOrderlyMessage(orderId, "{\"step\":\"first\"}", 1);
         SendResult result2 = producer.sendOrderlyMessage(orderId, "{\"step\":\"second\"}", 2);
@@ -105,7 +144,7 @@ class OrderlySampleIT {
     @Test
     @DisplayName("订单状态流转消息按正确顺序到达")
     void sendOrderStatusFlow_allStatusesArriveInOrder() {
-        String orderId = "IT-ORDER-FLOW-001";
+        String orderId = "IT-ORDER-FLOW-001-" + RUN_ID;
 
         producer.sendOrderStatusFlow(orderId);
 
@@ -129,7 +168,7 @@ class OrderlySampleIT {
     @Test
     @DisplayName("批量顺序消息全部按序接收")
     void sendBatchOrderlyMessages_allMessagesArriveInOrder() {
-        String orderId = "IT-BATCH-001";
+        String orderId = "IT-BATCH-001-" + RUN_ID;
         int count = 5;
 
         producer.sendBatchOrderlyMessages(orderId, count);
@@ -151,9 +190,9 @@ class OrderlySampleIT {
     @Test
     @DisplayName("多 shardingKey 并行发送，每个 shard 内消息有序")
     void multipleShardingKeys_messagesPerShardInOrder() {
-        String orderId1 = "IT-PARALLEL-001";
-        String orderId2 = "IT-PARALLEL-002";
-        String orderId3 = "IT-PARALLEL-003";
+        String orderId1 = "IT-PARALLEL-001-" + RUN_ID;
+        String orderId2 = "IT-PARALLEL-002-" + RUN_ID;
+        String orderId3 = "IT-PARALLEL-003-" + RUN_ID;
 
         producer.sendBatchOrderlyMessages(orderId1, 3);
         producer.sendBatchOrderlyMessages(orderId2, 3);
@@ -209,7 +248,7 @@ class OrderlySampleIT {
     @Test
     @DisplayName("消息元数据正确性验证：topic/tag/shardingKey/userProperties")
     void sendOrderlyMessage_metadataIsCorrect() {
-        String orderId = "IT-META-001";
+        String orderId = "IT-META-001-" + RUN_ID;
 
         SendResult result = producer.sendOrderlyMessage(orderId, "{\"meta\":\"test\"}", 42);
 

@@ -24,7 +24,7 @@ import java.util.List;
  * </ul>
  *
  * <p>实现可通过 {@code DefaultStreamMQListenerContainer} 构造器注入，以自定义拦截链行为。 默认实现位于 {@code
- * streammq-redisson-adapter} 模块。
+ * streammq-redisson} 模块。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

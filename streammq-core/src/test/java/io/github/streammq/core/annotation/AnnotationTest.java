@@ -58,9 +58,11 @@ class AnnotationTest {
         }
 
         @Test
-        @DisplayName("consumeThreadMin 默认 1，consumeThreadMax 默认 64（并发消费循环数）")
+        @DisplayName("consumeThreads 默认 1；旧名 consumeThreadMin 默认 1、consumeThreadMax 默认 64（已废弃）")
+        @SuppressWarnings("removal")
         void threadDefaults() {
             StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
+            assertThat(ann.consumeThreads()).isEqualTo(1);
             assertThat(ann.consumeThreadMin()).isEqualTo(1);
             assertThat(ann.consumeThreadMax()).isEqualTo(64);
         }

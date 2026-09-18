@@ -6,6 +6,8 @@
 package io.github.streammq.core.interceptor;
 
 import io.github.streammq.core.message.MessageId;
+import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -56,6 +58,8 @@ public interface TraceCollector {
     /**
      * 发送追踪上下文。
      *
+     * <p>{@code attributes} 在紧凑构造器内做防御性拷贝（不可修改视图），外部修改传入 Map 不影响本记录（0.1.2）。
+     *
      * @param topic 主题
      * @param tag 标签
      * @param messageId 消息 ID（发送前可能为 null）
@@ -64,7 +68,7 @@ public interface TraceCollector {
      * @param success 是否成功
      * @param durationMillis 发送耗时（毫秒）
      * @param traceId 追踪 ID
-     * @param attributes 扩展属性
+     * @param attributes 扩展属性（防御性拷贝为不可修改视图；null 视为空 Map）
      */
     record SendTraceContext(
             String topic,
@@ -75,10 +79,21 @@ public interface TraceCollector {
             boolean success,
             long durationMillis,
             String traceId,
-            Map<String, String> attributes) {}
+            Map<String, String> attributes) {
+
+        /** 紧凑构造器：{@code attributes} 防御性拷贝，避免调用方在构造后修改外部 Map 影响已构造上下文。 */
+        public SendTraceContext {
+            attributes =
+                    attributes == null
+                            ? Map.of()
+                            : Collections.unmodifiableMap(new LinkedHashMap<>(attributes));
+        }
+    }
 
     /**
      * 消费追踪上下文。
+     *
+     * <p>{@code attributes} 在紧凑构造器内做防御性拷贝（不可修改视图），外部修改传入 Map 不影响本记录（0.1.2）。
      *
      * @param topic 主题
      * @param tag 标签
@@ -89,7 +104,7 @@ public interface TraceCollector {
      * @param success 是否成功
      * @param durationMillis 消费耗时（毫秒）
      * @param traceId 追踪 ID
-     * @param attributes 扩展属性
+     * @param attributes 扩展属性（防御性拷贝为不可修改视图；null 视为空 Map）
      */
     record ConsumeTraceContext(
             String topic,
@@ -101,5 +116,14 @@ public interface TraceCollector {
             boolean success,
             long durationMillis,
             String traceId,
-            Map<String, String> attributes) {}
+            Map<String, String> attributes) {
+
+        /** 紧凑构造器：{@code attributes} 防御性拷贝，避免调用方在构造后修改外部 Map 影响已构造上下文。 */
+        public ConsumeTraceContext {
+            attributes =
+                    attributes == null
+                            ? Map.of()
+                            : Collections.unmodifiableMap(new LinkedHashMap<>(attributes));
+        }
+    }
 }

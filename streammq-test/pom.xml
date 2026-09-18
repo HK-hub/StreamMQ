@@ -129,6 +129,43 @@
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-failsafe-plugin</artifactId>
             </plugin>
+            <!-- E-06：本模块同样是「发布集」成员（Central 上以 test scope 提供），
+                 必须纳入覆盖率红线，否则发布集内存在无覆盖门禁的模块。
+                 阈值口径：按门禁命令实测校准「实测 − 3pt」= LINE 0.78 / BRANCH 0.39
+                 （实测 LINE 0.815 / BRANCH 0.424，见 docs/REPORT.md 的验证证据），
+                 与 core/redisson/starter 的设卡口径一致。
+                 check 统一受 jacoco.check.skip 控制（默认 true 跳过，CI 显式 -Djacoco.check.skip=false 启用）。 -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>check</id>
+                        <phase>verify</phase>
+                        <goals><goal>check</goal></goals>
+                        <configuration>
+                            <skip>${jacoco.check.skip}</skip>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.78</minimum>
+                                        </limit>
+                                        <limit>
+                                            <counter>BRANCH</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>0.39</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
     </build>
 

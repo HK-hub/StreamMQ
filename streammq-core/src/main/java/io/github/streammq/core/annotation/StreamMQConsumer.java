@@ -120,18 +120,41 @@ public @interface StreamMQConsumer {
     /**
      * 并发消费循环数，默认 1。仅 {@link MessageModel#CONCURRENT} 且集群消费生效； 顺序 / DLQ / 广播消费固定为单循环。
      *
-     * <p>每个循环独立执行 XREADGROUP 拉取（共享同一 consumer name，Redis 原子分配保证互不相交）， 提升单实例并行度。此前该属性为无效占位（0.1.0
-     * 前版本），现已真实生效。
+     * <p>每个循环独立执行 XREADGROUP 拉取（共享同一 consumer name，Redis 原子分配保证互不相交）， 提升单实例并行度。取值被夹取到 {@code [1,
+     * 64]}。
+     *
+     * <p><b>语义澄清（0.1.2）：</b>本属性是"并发消费循环数"的唯一推荐写法，取代历史上语义相反的 {@code consumeThreadMin}（旧名，等价）与 {@code
+     * consumeThreadMax}（旧名，<b>不再生效</b>）。
      *
      * @return 并发消费循环数
+     * @since 0.1.2
      */
+    int consumeThreads() default 1;
+
+    /**
+     * 并发消费循环数，默认 1。仅 {@link MessageModel#CONCURRENT} 且集群消费生效； 顺序 / DLQ / 广播消费固定为单循环。
+     *
+     * <p>每个循环独立执行 XREADGROUP 拉取（共享同一 consumer name，Redis 原子分配保证互不相交）， 提升单实例并行度。
+     *
+     * @return 并发消费循环数
+     * @deprecated 名称沿用线程池语义但实际是"消费循环数"，与生态惯例（min 为下限、max 为上限）相反，容易 误配；等价于 {@link
+     *     #consumeThreads()}，仅为源码兼容保留，请改用 {@link #consumeThreads()}。 当本属性被显式设置为非默认值 1
+     *     时按本属性生效（兼容旧写法）；显式声明 {@link #consumeThreads()} 时后者优先。
+     */
+    @Deprecated(since = "0.1.2", forRemoval = false)
     int consumeThreadMin() default 1;
 
     /**
-     * 并发消费循环数上限（{@code consumeThreadMin} 的夹取上界），默认 64。
+     * 已废弃且<b>不再生效</b>：并发消费循环数上限。
      *
-     * @return 并发消费循环数上限
+     * <p>历史上它被 {@code consumeThreadMin} 夹取（实际并发数 = min），只配置本属性的用户会得到单循环消费且无任何提示。 0.1.2 起并发度只由
+     * {@link #consumeThreads()}（或旧名 {@code consumeThreadMin}）决定，本属性被忽略；显式设置为非默认值 64 时会在注册期打 WARN
+     * 提示。保留仅为源码兼容，将于 0.2.0 移除。
+     *
+     * @return 已废弃的并发上限（不再生效）
+     * @deprecated 使用 {@link #consumeThreads()} 表达并发度；本属性不再影响并发数
      */
+    @Deprecated(since = "0.1.2", forRemoval = true)
     int consumeThreadMax() default StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX;
 
     /**

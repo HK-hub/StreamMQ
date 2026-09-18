@@ -10,7 +10,7 @@ import java.util.List;
 /**
  * 消费者组管理器策略接口。
  *
- * <p>负责消费者实例注册、心跳维护、活跃列表查询与分片重平衡。 默认实现位于 {@code streammq-redisson-adapter} 模块，可通过容器构造器注入自定义实现。
+ * <p>负责消费者实例注册、心跳维护、活跃列表查询与分片重平衡。 默认实现位于 {@code streammq-redisson} 模块，可通过容器构造器注入自定义实现。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

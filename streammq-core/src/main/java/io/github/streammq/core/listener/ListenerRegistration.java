@@ -5,6 +5,7 @@
  */
 package io.github.streammq.core.listener;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.consumer.StreamMessageConsumer;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.enums.ConsumeMode;
@@ -102,28 +103,56 @@ public interface ListenerRegistration<T> {
 
     void setNamespace(String namespace);
 
-    /** 命名空间解析：为空时回填默认命名空间。 */
+    /**
+     * 命名空间解析：为空时回填默认命名空间。
+     *
+     * <p>实现必须对回填值与已有值统一执行合法性校验（{@code ':'}、空白、{@code '*'}、{@code '{'}、{@code '}'} 等字符会破坏 Redis Key
+     * 结构），非法值应尽早抛出。
+     */
     void resolveNamespace(String defaultNs);
 
     /** 注册唯一键（DLQ 模式带 {@code dlq:} 前缀）。 */
     String key();
 
     /**
-     * 并发消费循环数下限（原线程池语义，现为读循环数）：仅 CONCURRENT 集群消费生效。
+     * 并发消费循环数（0.1.2 起为唯一并发度读入口）：仅 CONCURRENT 集群消费生效。
      *
-     * @return 并发数（&gt;= 1，构造时夹取下界 1）
+     * <p>每个循环独立执行 XREADGROUP 拉取（共享同一 consumer name，Redis 原子分配保证互不相交）； 顺序 / DLQ / 广播消费固定为 1。
+     *
+     * <p>默认实现返回 1，只保证第三方 {@link ListenerRegistration} 实现不因接口新增方法而编译失败； {@link
+     * DefaultListenerRegistration} 覆盖为解析后的真实值。
+     *
+     * @return 并发消费循环数（&gt;= 1）
+     * @since 0.1.2
      */
-    int getConsumeThreadMin();
+    default int getConsumeThreads() {
+        return 1;
+    }
 
     /**
-     * 并发消费循环数上限（构造时夹取至 &gt;= {@link #getConsumeThreadMin()}）。
+     * 并发消费循环数（旧名，等价于 {@link #getConsumeThreads()}）。
+     *
+     * @return 并发数（&gt;= 1）
+     * @deprecated 语义与生态惯例相反（名称像线程池下限，实际是并发数）；改用 {@link #getConsumeThreads()}，本方法将于 0.2.0 移除
+     */
+    @Deprecated(since = "0.1.2", forRemoval = true)
+    default int getConsumeThreadMin() {
+        return getConsumeThreads();
+    }
+
+    /**
+     * 并发消费循环数上限（已废弃，<b>不再影响并发数</b>，固定返回默认上限）。
      *
      * <p>注意：与 {@link ListenerConfig} 的校验策略不同——注册模型对非法值「夹取」以保证运行期弹性， ListenerConfig 构造器则直接抛出
      * IllegalArgumentException。
      *
-     * @return 上限（&gt;= 下限）
+     * @return 默认并发上限常量
+     * @deprecated 并发度只由 {@link #getConsumeThreads()} 决定；本方法将于 0.2.0 移除
      */
-    int getConsumeThreadMax();
+    @Deprecated(since = "0.1.2", forRemoval = true)
+    default int getConsumeThreadMax() {
+        return StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX;
+    }
 
     /**
      * 底层 Redis 消费者名；null 表示由适配层自动生成（group + 实例后缀）。

@@ -24,6 +24,11 @@ import java.util.Objects;
  * List<SendResult> results = template.syncSendBatch(batch);
  * }</pre>
  *
+ * <p><b>条数上限（0.1.2 明确）：</b>本类型<b>不施加</b>最大条数限制——Pipeline 的关键约束是单次请求体积（见 {@code
+ * StreamMQConstants#MAX_MESSAGE_SIZE_BYTES} / {@code RECOMMENDED_MAX_BODY_SIZE_BYTES}）与 Redis 服务端
+ * {@code proto-max-bulk-len}，由调用方按消息体大小与 Broker 侧上限共同约束。 空集合在 {@link Builder#build()} 处立即失败（{@link
+ * IllegalArgumentException}），避免空 Pipeline 造成无意义往返。
+ *
  * @param <T> body 类型
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -107,10 +112,13 @@ public final class BatchMessage<T> {
          *
          * @param message 消息
          * @return this
-         * @throws IllegalArgumentException 如果消息 Topic 与 batch Topic 不一致
+         * @throws IllegalArgumentException 如果 message 为 null 或消息 Topic 与 batch Topic 不一致 （异常口径与
+         *     {@link #addAll(List)} 统一为 IllegalArgumentException）
          */
         public Builder<T> add(Message<T> message) {
-            Objects.requireNonNull(message, "message");
+            if (Objects.isNull(message)) {
+                throw new IllegalArgumentException("message must not be null");
+            }
             if (!topic.equals(message.getTopic())) {
                 throw new IllegalArgumentException(
                         "message topic '"
@@ -128,8 +136,8 @@ public final class BatchMessage<T> {
          *
          * @param messages 消息列表
          * @return this
-         * @throws IllegalArgumentException 如果 {@code messages} 为 null（与 {@link #add(Message)} 的
-         *     null 校验对称，避免静默忽略）
+         * @throws IllegalArgumentException 如果 {@code messages} 为 null，或列表中含 null 元素（与 {@link
+         *     #add(Message)} 的校验对称，避免静默忽略）
          */
         public Builder<T> addAll(List<Message<T>> messages) {
             if (Objects.isNull(messages)) {
@@ -145,11 +153,12 @@ public final class BatchMessage<T> {
          * 构造批量消息。
          *
          * @return 批量消息
-         * @throws IllegalStateException 如果消息列表为空
+         * @throws IllegalArgumentException 如果消息列表为空（0.1.2 起由 IllegalStateException 改为此类型，与 {@code
+         *     StreamMessageTemplate#syncSendBatch} 的 javadoc 及本类 add/addAll 的异常口径统一）
          */
         public BatchMessage<T> build() {
             if (messages.isEmpty()) {
-                throw new IllegalStateException("batch messages is empty");
+                throw new IllegalArgumentException("batch messages is empty");
             }
             return new BatchMessage<>(topic, messages);
         }

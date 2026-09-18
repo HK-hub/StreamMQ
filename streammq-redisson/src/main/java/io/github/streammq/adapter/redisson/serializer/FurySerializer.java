@@ -178,7 +178,8 @@ public class FurySerializer<T> implements MessageSerializer<T> {
     @Override
     public byte[] serialize(T object, Class<T> type) {
         if (Objects.isNull(object)) {
-            return new byte[0];
+            // 统一 null 契约：serialize(null) → null（与 JdkSerializer / JacksonJsonSerializer 一致）
+            return null;
         }
         try {
             return fory.serialize(object);
@@ -201,6 +202,9 @@ public class FurySerializer<T> implements MessageSerializer<T> {
     @Override
     @SuppressWarnings("unchecked")
     public <R> R deserialize(byte[] bytes, Class<R> type) {
+        // 入口判空（与 JdkSerializer / JacksonJsonSerializer 一致）：否则 bytes 非空且结果类型不匹配时，
+        // 类型校验分支与异常消息拼装都会对 type 解引用而抛 NPE，掩盖真实的反序列化失败原因
+        Objects.requireNonNull(type, "type");
         if (Objects.isNull(bytes) || bytes.length == 0) {
             return null;
         }

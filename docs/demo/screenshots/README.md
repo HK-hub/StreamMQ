@@ -1,8 +1,11 @@
-# StreamMQ 发布截图清单
+# StreamMQ 发布截图清单（素材待补）
 
 本目录用于存放 StreamMQ 发布时所需的截图素材。
 
-## 截图清单
+> ⚠️ **当前状态：素材待补。** 本目录目前**只有本说明文件，没有任何图片**；下表是发布前需要补齐的截图计划，
+> 清单中的文件名均为**计划文件名**，尚未生成。请勿在 README/文档中直接引用这些图片，除非先按本清单补齐。
+
+## 截图清单（计划）
 
 ### 1. 项目主页截图（GitHub / Gitee）
 
@@ -18,7 +21,7 @@
 |--------|------|----------|
 | `quickstart-dependencies.png` | Maven 依赖配置代码高亮截图 | 1200×400 |
 | `quickstart-config.png` | application.yml 配置截图 | 1200×400 |
-| `quickstart-enable.png` | @EnableStreamMQ 注解代码截图 | 800×300 |
+| `quickstart-enable.png` | 启用方式说明截图（引入 starter 即自动装配，无需任何 `@Enable*` 注解） | 800×300 |
 | `quickstart-send.png` | 消息发送代码截图 | 1000×400 |
 | `quickstart-consume.png` | 消息消费者代码截图 | 1000×400 |
 | `quickstart-run.png` | 应用启动成功、消息发送/消费的控制台输出 | 1200×600 |
@@ -28,7 +31,7 @@
 | 文件名 | 描述 | 建议尺寸 |
 |--------|------|----------|
 | `feature-transaction.png` | 事务消息代码示例 + 运行效果 | 1400×600 |
-| `feature-delay.png` | 延时消息代码示例（固定延时 + 任意延时） | 1400×600 |
+| `feature-delay.png` | 延时消息代码示例（固定延时 + 任意延时，注意 7 天上限） | 1400×600 |
 | `feature-orderly.png` | 顺序消息代码示例 + 消费日志 | 1400×600 |
 | `feature-dlq.png` | 死信队列处理截图 | 1200×500 |
 | `feature-filter.png` | Tag/SQL92 消息过滤截图 | 1200×500 |
@@ -59,7 +62,7 @@
 | `og-image.png` | Open Graph 分享卡片（用于 Twitter/LinkedIn） | 1200×630 |
 | `social-hero-1.png` | 社交媒体横幅 1 - "零额外部署" | 1200×675 |
 | `social-hero-2.png` | 社交媒体横幅 2 - "类 RocketMQ API" | 1200×675 |
-| `social-hero-3.png` | 社交媒体横幅 3 - "12 个 SPI 扩展点" | 1200×675 |
+| `social-hero-3.png` | 社交媒体横幅 3 - "18 个扩展点（面向用户 + 内部装配）" | 1200×675 |
 
 ## 截图规范
 

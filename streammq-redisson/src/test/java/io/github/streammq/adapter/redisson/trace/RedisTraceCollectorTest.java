@@ -6,6 +6,7 @@
 package io.github.streammq.adapter.redisson.trace;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -241,8 +242,10 @@ class RedisTraceCollectorTest {
                         "trace-1",
                         new HashMap<>());
 
-        // 不应抛异常
-        collector.recordSend(ctx);
+        assertThatCode(() -> collector.recordSend(ctx)).doesNotThrowAnyException();
+
+        // 写入被真实尝试过（异常被吞掉，而不是提前跳过上报）
+        verify(stream, times(1)).add(any());
     }
 
     @Test
@@ -263,8 +266,10 @@ class RedisTraceCollectorTest {
                         "trace-1",
                         new HashMap<>());
 
-        // 不应抛异常
-        collector.recordConsume(ctx);
+        assertThatCode(() -> collector.recordConsume(ctx)).doesNotThrowAnyException();
+
+        // 写入被真实尝试过（异常被吞掉，而不是提前跳过上报）
+        verify(stream, times(1)).add(any());
     }
 
     @Test

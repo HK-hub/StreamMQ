@@ -8,6 +8,10 @@
 #   - Maven 3.9+
 #   - Redis 7.2+ (运行在 localhost:6379)
 #
+# 脚本会自动把本仓库的 StreamMQ 构件（core/redisson/starter + BOM）安装到本地 Maven 仓库，
+# 再创建一个演示 Spring Boot 应用并启动，随后轮询应用日志确认「发送 → 消费」闭环。
+# 超时未检测到消费时以非零退出码失败（便于 CI/录屏一次通过）。
+#
 # 用法：
 #   bash quickstart-demo.sh
 
@@ -74,6 +78,20 @@ start_redis() {
     fi
 }
 
+install_streammq_artifacts() {
+    log_step "将 StreamMQ 构件安装到本地 Maven 仓库..."
+    log_info "演示应用通过 BOM 以无版本号方式依赖 io.github.streammq:streammq-spring-boot-starter；"
+    log_info "0.1.2 首次发布前 Central 上不可解析，必须先 install（也可只装 starter 及其上游模块）。"
+
+    cd "$PROJECT_DIR"
+    if ! mvn -q -DskipTests -pl streammq-bom,streammq-spring-boot-starter -am install; then
+        log_error "StreamMQ 构件安装失败。请先在仓库根目录手动执行："
+        log_error "  mvn -q -DskipTests -pl streammq-bom,streammq-spring-boot-starter -am install"
+        exit 1
+    fi
+    log_info "StreamMQ 构件已安装到本地仓库"
+}
+
 create_demo_app() {
     log_step "创建演示 Spring Boot 应用..."
 
@@ -110,7 +128,7 @@ create_demo_app() {
             <dependency>
                 <groupId>io.github.streammq</groupId>
                 <artifactId>streammq-bom</artifactId>
-                <version>0.1.0</version>
+                <version>0.1.2</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -152,27 +170,27 @@ MAVEN_EOF
 spring:
   application:
     name: streammq-demo
+  # Redis 连接：Redisson Spring Boot Starter 依据 spring.data.redis.* 构建客户端。
+  # 注意：redisson.singleServerConfig.* 在本 starter 中无属性绑定，写了也不会生效。
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      database: 0
 
 streammq:
   enabled: true
   namespace: demo
-
-redisson:
-  singleServerConfig:
-    address: "redis://127.0.0.1:6379"
-    database: 0
 YAML_EOF
 
-    # 创建启动类
+    # 创建启动类（自动装配，无需 @Enable* 注解）
     cat > "$TEMP_DIR/src/main/java/com/example/demo/DemoApplication.java" << 'JAVA_EOF'
 package com.example.demo;
 
-import io.github.streammq.core.annotation.EnableStreamMQ;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-@EnableStreamMQ
 public class DemoApplication {
     public static void main(String[] args) {
         SpringApplication.run(DemoApplication.class, args);
@@ -325,6 +343,7 @@ wait_for_consumption() {
     log_error "1. Redis 未运行或不在 localhost:6379（redis-cli ping 验证）"
     log_error "2. 端口 8080/6379 被占用"
     log_error "3. 残留的消费组位点数据（可更换 namespace 或 flushdb 后重试）"
+    log_error "4. StreamMQ 构件未安装到本地仓库（重跑脚本或执行 mvn -q -DskipTests -pl streammq-bom,streammq-spring-boot-starter -am install）"
     return 1
 }
 
@@ -374,6 +393,7 @@ main() {
     echo ""
 
     check_prerequisites
+    install_streammq_artifacts
     create_demo_app
     build_and_run
     wait_for_consumption

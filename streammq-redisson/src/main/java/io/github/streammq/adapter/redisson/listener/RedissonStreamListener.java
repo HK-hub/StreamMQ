@@ -27,6 +27,10 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.Builder;
 import lombok.EqualsAndHashCode;
@@ -139,6 +143,24 @@ public class RedissonStreamListener implements StreamMQListener {
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
     private final AtomicBoolean groupCreated = new AtomicBoolean(false);
+
+    /**
+     * 广播实例租约心跳的共享调度器（守护线程，惰性静态共享）。
+     *
+     * <p><b>为什么必须与拉取循环解耦（R4-B05）：</b>此前租约续期只发生在 {@code doRead} 之后—— 单次 handler 处理超过租约超时（默认
+     * 20s）期间不拉取、不续租，同主机第二个进程即可判定槽位 过期并抢占，两个进程共用同一广播组（广播静默退化为集群消费）。本调度器以固定间隔独立续租， 与消息处理时长无关。
+     */
+    private static final ScheduledExecutorService LEASE_HEARTBEAT_EXECUTOR =
+            Executors.newSingleThreadScheduledExecutor(
+                    r -> {
+                        Thread t =
+                                new Thread(r, StreamMQConstants.THREAD_BROADCAST_LEASE_HEARTBEAT);
+                        t.setDaemon(true);
+                        return t;
+                    });
+
+    /** 本监听器的租约续期任务（仅广播实例创建；close() 时取消）。 */
+    private volatile ScheduledFuture<?> leaseHeartbeatFuture;
 
     /** BUSYGROUP 错误标识，用于判断消费者组已存在 */
     private static final String BUSYGROUP_MARKER = "BUSYGROUP";
@@ -282,6 +304,26 @@ public class RedissonStreamListener implements StreamMQListener {
                                 + "'. Build it with BroadcastGroupNaming.consumerName(group,"
                                 + " instanceId).");
             }
+            startLeaseHeartbeat();
+        }
+    }
+
+    /** 启动与拉取循环解耦的租约续期任务（R4-B05）：固定间隔续租实例槽位与注册表心跳， 慢 handler / 长阻塞都不会让租约过期。 */
+    private void startLeaseHeartbeat() {
+        try {
+            leaseHeartbeatFuture =
+                    LEASE_HEARTBEAT_EXECUTOR.scheduleAtFixedRate(
+                            this::heartbeatBroadcastRegistry,
+                            StreamMQConstants.DEFAULT_HEARTBEAT_INTERVAL_MS,
+                            StreamMQConstants.DEFAULT_HEARTBEAT_INTERVAL_MS,
+                            TimeUnit.MILLISECONDS);
+        } catch (RuntimeException ex) {
+            LOG.warn(
+                    "Failed to schedule broadcast lease heartbeat for topic={}, group={}: {}"
+                            + " — lease renewal stays coupled to the read loop",
+                    topic,
+                    group,
+                    ex.getMessage());
         }
     }
 
@@ -465,6 +507,11 @@ public class RedissonStreamListener implements StreamMQListener {
     @Override
     public void close() {
         if (closed.compareAndSet(false, true)) {
+            ScheduledFuture<?> heartbeat = leaseHeartbeatFuture;
+            if (Objects.nonNull(heartbeat)) {
+                heartbeat.cancel(false);
+                leaseHeartbeatFuture = null;
+            }
             awaitOutstandingAcks();
             // 广播模式：不再销毁消费者组。此前 close() 直接 removeGroup 会带来两个严重问题：
             //   1. 组的 PEL 一并丢弃 —— 优雅停机时在途消息永久丢失；

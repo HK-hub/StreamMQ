@@ -58,7 +58,8 @@ public class JacksonJsonSerializer<T> implements MessageSerializer<T> {
     @Override
     public byte[] serialize(T object, Class<T> type) throws SerializationException {
         if (Objects.isNull(object)) {
-            return new byte[0];
+            // 统一 null 契约：serialize(null) → null（见 MessageSerializer javadoc）
+            return null;
         }
         try {
             return mapper.writeValueAsBytes(object);

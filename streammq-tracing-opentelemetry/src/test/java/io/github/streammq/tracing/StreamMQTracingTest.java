@@ -6,6 +6,7 @@
 package io.github.streammq.tracing;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.message.Message;
@@ -97,11 +98,15 @@ class StreamMQTracingTest {
     @Test
     @DisplayName("endSpan 失败重载应安全处理 null Span；endProducerSpan 未配对时静默跳过")
     void endSpan_shouldHandleNullSpan() {
-        tracing.endSpan(null, false);
-        tracing.endSpan(null, false, "error");
-        tracing.endProducerSpan(null, true);
-        // 无配对消息引用：静默跳过，无异常即通过
-        tracing.endProducerSpan(buildMessage("t"), true);
+        assertThatCode(
+                        () -> {
+                            tracing.endSpan(null, false);
+                            tracing.endSpan(null, false, "error");
+                            tracing.endProducerSpan(null, true);
+                            // 无配对消息引用：静默跳过（不得抛异常，也不得影响配对注册表）
+                            tracing.endProducerSpan(buildMessage("t"), true);
+                        })
+                .doesNotThrowAnyException();
     }
 
     @Test

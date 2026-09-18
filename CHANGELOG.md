@@ -5,42 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Added
-
-- **内置高性能、安全序列化器：FlatBuffers 与 SBE**（与 Fury / Protostuff / JacksonJson 同属 SDK 内置实现，
-  通过 `streammq.producer.serializer` 全限定类名选择，无需 SPI 注册）：
-  - `FlatBuffersSerializer`：基于 FlatBuffers **FlexBuffers**（schema-less 动态格式）。**零拷贝读取**（直接基于
-    ByteBuffer 偏移量寻址，不解析、不实例化任意类）、**免代码生成**、经反射处理任意 POJO；纯数据、
-    **无反序列化代码执行面（安全）**。选用需添加 `com.google.flatbuffers:flatbuffers-java`（本项目固定 **24.3.25**，optional）。
-  - `SbeSerializer`：基于 **SBE（Simple Binary Encoding，FIX 社区标准）**的信封模式——定长 8 字节消息头 +
-    零解析拷贝；业务体以严格类型 Jackson 编码为 opaque 字节后，整体放入单一 `varData(payload)` 字段，
-    `payloadLength()`/`getPayload()` 直接基于偏移量读取，**无 gadget RCE 面（安全）**。SBE 桩代码由
-    `uk.co.real-logic:sbe-tool`（**1.18.0**，纯 Java 构建期生成，不进运行时）生成；运行时依赖
-    `org.agrona:agrona`（**1.17.1**，optional）。
-  - `streammq-benchmark` 新增 FlatBuffers / SBE 的序列化、反序列化与往返基准（吞吐 + 体积），与 Fury / Protostuff /
-    JacksonJson / JDK 同台对比。
-  - 安全与选型说明见 `SECURITY.md` 与 `docs/configuration-reference.md`。
-
-### Fixed
-
-- `FlatBuffersSerializer`：修复集合中 `null` 元素与 Map 中 `null` value 被静默丢弃的问题——改用 FlexBuffers
-  `putNull()` 显式保留，避免反序列化后集合长度 / 键集不一致。
-- `streammq-benchmark`：补齐此前缺失的序列化依赖（`jackson-datatype-jsr310`、`protostuff-core`/`protostuff-runtime`，
-  并为 `flatbuffers-java`/`agrona` 固定版本）。此前所有序列化基准在 `setup()` 阶段即因 `ClassNotFoundException` 失败
-  （`streammq-redisson` 为 test scope 不传递其依赖，且 `protostuff`/`flatbuffers`/`agrona` 均为 optional 依赖）。
-
-### Docs
-
-- 新增序列化基准报告 `docs/benchmarks/serialization-2026-09-17.md`，并在中英文 README 的「性能基准测试」章节
-  更新序列化吞吐表（新增 FlatBuffers / SBE / Protostuff 行与线长列）。
-
 ## [0.1.2] - 2026-09-10 — 首个 Maven Central 发布：持久化广播消费实例 + 安全默认与质量门禁
 
-> **0.1.2 是 StreamMQ 第一个发布到 Maven Central 的版本**（0.1.0 / 0.1.1 均为内部迭代，从未对外发布，见下文）。
-> 本节同时包含发布前红队审查（第一轮 + 第二轮）的全部根因修复；第二轮审查依据 `docs/fullReview.md` 协议执行，
-> 结论与逐项处置见 [docs/REPORT.md](docs/REPORT.md)。
+> **0.1.2 是 StreamMQ 第一个发布到 Maven Central 的版本**（0.1.0 / 0.1.1 均为内部迭代，从未对外发布，见下文。
+> 版本号与 `pom.xml` / `streammq-bom` / 各模块一致，均为 `0.1.2`）。
+> 本节同时包含发布前红队审查（第一轮 ~ 第四轮）的全部根因修复；第二轮审查依据 `docs/fullReview.md` 协议执行，
+> 各轮结论与逐项处置见 [docs/REPORT.md](docs/REPORT.md)。
 
 ### Added
 
@@ -58,6 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - 广播监听器心跳同时续租身份槽位；僵尸组回收与实例槽位清扫分工明确（前者 10 分钟、后者 7 天），互不破坏。
   - 配置项：`streammq.consumer.broadcast-instance-id`、`streammq.consumer.broadcast-instance-id-file`、
     `streammq.consumer.broadcast-lease-timeout`、`streammq.consumer.broadcast-reclaim-grace`。
+- **内置高性能、安全序列化器：FlatBuffers 与 SBE（随 0.1.2 发布）**（与 Fury / Protostuff / JacksonJson 同属 SDK 内置实现，
+  通过 `streammq.producer.serializer` 全限定类名选择，无需 SPI 注册）：
+  - `FlatBuffersSerializer`：基于 FlatBuffers **FlexBuffers**（schema-less 动态格式）。逐字段零拷贝读取（直接基于
+    ByteBuffer 偏移量寻址，不解析、不实例化任意类）、**免代码生成**、经反射处理任意 POJO；纯数据、
+    **无反序列化代码执行面（安全）**。选用需添加 `com.google.flatbuffers:flatbuffers-java`（本项目固定 **24.3.25**，optional）。
+  - `SbeSerializer`：基于 **SBE（Simple Binary Encoding，FIX 社区标准）**的信封模式——定长 8 字节消息头 +
+    零解析拷贝；业务体以严格类型 Jackson 编码为 opaque 字节后，整体放入单一 `varData(payload)` 字段，
+    `payloadLength()`/`getPayload()` 直接基于偏移量读取，**无 gadget RCE 面（安全）**。SBE 桩代码由
+    `uk.co.real-logic:sbe-tool`（**1.18.0**，纯 Java 构建期生成，不进运行时）生成；运行时依赖
+    `org.agrona:agrona`（**1.17.1**，optional）。
+  - `streammq-benchmark` 新增 FlatBuffers / SBE 的序列化、反序列化与往返基准（吞吐 + 体积），与 Fury / Protostuff /
+    JacksonJson / JDK 同台对比。
+  - 安全与选型说明见 `SECURITY.md` 与 `docs/configuration-reference.md`。
+- **文档**：新增序列化基准报告 `docs/benchmarks/serialization-2026-09-17.md`，并在中英文 README 的「性能基准测试」章节
+  更新序列化吞吐表（新增 FlatBuffers / SBE / Protostuff 行与线长列）；`docs/configuration-reference.md` 补充
+  `streammq.diagnostics.*` 模块前缀章节与延时 7 天上限说明。
 
 ### Fixed
 
@@ -101,9 +87,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ACK 完成以形成背压，停机时对在途 ACK 做有界排空。**注意语义变化**：`ack` 返回不再代表 Redis 端已确认；
   XACK 失败会记录 ERROR 且消息保留在 PEL 由认领调度器兜底重投（at-least-once 不变，消费端必须幂等）。
   需要"返回即已确认"时请用同步的 `ackBatch(List)`。Javadoc 已同步说明该契约。
+- `FlatBuffersSerializer`：修复集合中 `null` 元素与 Map 中 `null` value 被静默丢弃的问题——改用 FlexBuffers
+  `putNull()` 显式保留，避免反序列化后集合长度 / 键集不一致。
+- **SBE / FlatBuffers 对畸形字节的边界校验与深度上限**：`FlatBuffersSerializer` 读取侧对 Blob/集合/映射的**声明长度**
+  （单字段上限 = `min(streammq.producer.max-message-size, 64MB)`）与**嵌套深度**（64 层）做上限校验，
+  畸形 / 深嵌套载荷抛 `SerializationException`，不再按声明长度盲目分配（旧实现可被 4 字节长度字段放大为 GB 级分配）；
+  `SbeSerializer` 读取侧对信封头（`templateId`/`schemaId` 不匹配）、截断与声明长度（负数 / 超消息上限 / 超实际可读字节数）
+  统一校验并抛 `SerializationException`，解析期运行时异常统一包装为 SPI 契约异常。
+- **JDK 序列化器：含对象回引用（线格式 `TC_REFERENCE`）的合法载荷反序列化失败**：JEP 290 过滤器把 JDK 的
+  「深度 / 引用计数」检查回调（`serialClass == null`、`arrayLength == -1`）误判为未知类并返回 `REJECTED`，
+  合法载荷因此抛 `InvalidClassException: filter status: REJECTED`。现对 `serialClass == null` 返回 `UNDECIDED`，
+  交由合并的深度 / 引用数 / 字节上限过滤器裁决——白名单边界不变，合法回引用载荷可正常反序列化。
+- `streammq-benchmark`：补齐此前缺失的序列化依赖（`jackson-datatype-jsr310`、`protostuff-core`/`protostuff-runtime`，
+  并为 `flatbuffers-java`/`agrona` 固定版本）。此前所有序列化基准在 `setup()` 阶段即因 `ClassNotFoundException` 失败
+  （`streammq-redisson` 为 test scope 不传递其依赖，且 `protostuff`/`flatbuffers`/`agrona` 均为 optional 依赖）。
 
 ### Changed
 
+- **`@StreamMQConsumer` 新增 `consumeThreads` 并发旋钮（0.1.2 新增，默认 1）**：并发消费循环数的唯一推荐写法
+  （仅 CONCURRENT 集群消费生效，取值夹取到 `[1, 64]`）。旧名 `consumeThreadMin` 标记 `@Deprecated` 并仅为源码兼容保留
+  （`consumeThreads` 保持默认 1 且旧属性被显式设为非默认值时仍按旧属性生效）；`consumeThreadMax` 废弃且**不再影响并发数**
+  （显式设置为非默认值时注册期输出 WARN，将于 0.2.0 移除）。历史缺陷：只配置 `consumeThreadMax` 的用户实际只得到 1 个消费循环且无任何提示。
+- **依赖升级：Jackson 2.17.2 → 2.18.10**（修复 **GHSA-r7wm-3cxj-wff9** / **GHSA-72hv-8253-57qq** 两个 High CVE）。
+  父 POM 中 `jackson-bom` 的 import **声明在 Spring Boot BOM 之前**（Maven「先声明者优先」），
+  避免被 Boot 管理的 2.17.2 逐构件覆盖；`NOTICE` 同步更新。
+- **异常口径 javadoc 澄清（0.1.2 起）**：方法参数 / 契约违反继续使用 JDK 标准异常
+  （`IllegalArgumentException` / `IllegalStateException` / `NullPointerException`）；框架运行时错误（Broker 交互、
+  序列化、事务、发送超时、消费中断）使用 `StreamMQException` 子类；**外部配置错误**使用 `StreamMQClientException`
+  （首个真实使用点为 starter 的 `StreamMQProperties#validate()`）；`ConsumerInterruptedException` 由适配层在消费路径
+  包装 `InterruptedException` 抛出，core 仅提供类型。
+- **序列化器 null / 空输入语义统一**：6 个内置实现（Jackson / JDK / Fury / Protostuff / FlatBuffers / SBE）一致——
+  `serialize(null)` 返回 `null`，`deserialize(null | 空数组)` 返回 `null`（不抛异常）；新增
+  `SerializerNullSemanticsTest` 作为跨实现回归守卫。
+- **文档**：`SECURITY.md` 改为英文为主（文末附中文摘要），修正 FlatBuffers / SBE 的版本身份为 **0.1.2**；
+  `docs/configuration-reference.md` 新增 `streammq.diagnostics.*` 模块前缀与 `streammq.tracing.otel.*` 章节、
+  延时 7 天上限说明；中英文 README 补最小依赖矩阵的 scope 事实、benchmark 复现命令改为 Linux/macOS 可执行写法。
 - **默认序列化器回退为 `JacksonJsonSerializer`（安全默认，0.1.1 起改为 Fury 的回退）**：库的默认反序列化器
   不应把 RCE 面传播给所有下游应用。0.1.1 把默认设为 Fury 宽松模式（`requireClassRegistration=false`）——
   该模式允许把 Redis 中字节流反序列化为 classpath 上任意类，在共享/多租户 Redis 上是反序列化 RCE 攻击面。
@@ -129,11 +147,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   非 `volatile` 会让另一线程（如 Spring 生命周期线程）读到过期引用。
 - **`MessageSink.dispatch` 由 1ms `parkNanos` 自旋改为带超时的阻塞 `offer`**：队列满时不再空转 CPU，
   仍以 200ms 周期检查 `running` 以保证停机响应。
-- **Jackson 版本对齐 Spring Boot 3.3.5 的管理版本（2.17.2）**，避免与 Spring Boot 管理的 Jackson 混用。
 - `RedissonBroadcastGroupRegistry.DEFAULT_MAX_SWEEP` 可见性由 private 提升为 public，供装配层复用。
 - 版本统一为 `0.1.2`（parent / BOM / 各模块 / 两份 README）；`release.yml` 移除对不存在的 `streammq-test-support`
   模块的引用。
-- **发布面收缩（P2-1/P2-2）**：`streammq-kubernetes` 移出 Maven reactor（不随默认构建编译、不被发布）；`release.yml` 的 `excludeArtifacts` 扩展为 `streammq-tracing-opentelemetry` / `streammq-diagnostics` / `streammq-spring-cloud-stream-binder`，首发只发布 `bom / core / redisson / spring-boot-starter` 4 个构件，把永久 API 兼容承诺从 8 条降到 4 条。
+- **发布面收缩（P2-1/P2-2）**：`streammq-kubernetes` 移出 Maven reactor（不随默认构建编译、不被发布）；`release.yml` 的 `excludeArtifacts` 扩展为 `streammq-tracing-opentelemetry` / `streammq-diagnostics` / `streammq-spring-cloud-stream-binder`，首发实际发布 **5 个构件**：`bom / core / redisson / spring-boot-starter / test`（`streammq-test` 不在 `excludeArtifacts` 中，`release.yml` 亦上传其 jar），把永久 API 兼容承诺从 8 条降到 5 条。
 - **`ConsumeAction` 明确为值对象 + 可 switch（P3-1）**：保留逐消息 `defer` 延迟（框架 `handleDefer` 实际消费 `getDeferDelay()`，纯 `enum` 常量无法携带每实例状态，故不改为 `enum`），新增 `Type` 枚举供 `switch (action.type())` 使用，javadoc 说明。
 - **`Message.equals/hashCode` 值对象语义修正（P3-2）**：messageId 为 null 的两个内容相同消息现在判定为相等（保持值对象契约），已分配 ID 与未分配 ID 的消息始终不等。
 - **`SpiResolver` 错误信息增强（P3-6）**：实例化 SPI 失败时给出中文可操作提示（缺 public 无参构造 / 应走 Spring Bean 覆盖）。
@@ -169,6 +186,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `docs/configuration-reference.md` 纠正 9 处错误默认值；模块表标注 0.1.x 仅源码提供的模块；修复死链。
 - 新增 [docs/REPORT.md](docs/REPORT.md)：第二轮红队审查报告、逐项处置与发布门禁结论。
 
+- **PEL 认领脚本在 `XADD` 失败时静默丢失消息（第四轮红队 P1）**：Redis Lua 无回滚语义——脚本先 `XACK`
+  认领、再 `XADD` 副本；目标键类型冲突（WRONGTYPE）、`maxmemory` OOM 或 ACL 拒绝时 `XADD` 抛错，而先前的 `XACK`
+  已生效：条目从 PEL 消失、副本未写入，业务与运维两侧都无信号。现改为 `pcall` 包裹 `XADD` 并返回失败标记，
+  Java 侧用内存中仍持有的字段做补偿（直接重试 → 隔离区 Hash 落盘 + 隔离区 ZSet 登记，7 天 TTL，ERROR 日志给出 key），
+  并在认领前对目标键做**类型自检**（不可写则整轮跳过认领，条目留在 PEL 等人工修复）。
+- **PEL 扫描"头部饥饿"**：每轮都从 `XPENDING` 头部取固定窗口，头部被存活消费者长期占据时，其后方死亡实例的
+  遗留条目永远不进入扫描窗口。现改为**游标分页**（本轮扫完从最后一条之后继续，到达 PEL 尾部回到起点），
+  保证全量 PEL 逐轮被遍历。
+- **顺序消费分片锁竞争被计入业务重试预算，未处理消息被 ACK 进 DLQ（R3-25 根因修复）**：竞争信号与 handler 失败
+  共用返回值，多实例 rebalance/僵尸 handler 持锁时竞争会耗尽 `maxReconsumeTimes`，把**从未执行 handler** 的消息
+  转投 DLQ。现新增 `OrderlyShardBusyException`（纯新增类型，零 SPI 破坏）：锁管理器在预算内多轮等待后仍拿不到锁
+  即抛出；处理器单独捕获，返回 `RECONSUME_LATER` 且**不消耗预算、不写 retry ZSet、不进 DLQ、不 ACK**，消息留在
+  PEL 由认领调度器兜底（限频 WARN 可观测）。
+- **广播实例身份本地文件被同机多应用互相覆盖**：默认路径 `${user.home}/.streammq/instance-id` 是"每 OS 用户单例"，
+  应用 B 读到应用 A 的身份、被注册中心拒绝后覆盖该文件，A 下次重启又读到 B 的身份——身份互踩、组名漂移、
+  停机窗口的广播消息被静默跳过。现改为**按 namespace+group 分片**的默认文件（`instance-id-<ns>_<group>`），
+  文件内按 `id pid timestamp` **多记录**存储：重启复用**已退出进程**的身份，绝不覆盖仍在运行进程的身份。
+- **广播租约续期与拉取循环耦合**：续租此前只发生在 `doRead` 之后，单次 handler 超过租约超时（默认 20s）期间
+  不续租，同主机第二进程即可抢占槽位 → 两个活跃进程共用同一广播组（广播静默退化为集群消费）。现为广播监听器
+  提供**独立心跳线程**（5s 固定间隔，与消息处理时长无关，close 时取消）。
+- **判活窗口与心跳间隔缺跨字段校验**：`pel-claim-min-idle-ms` 小于 `group.heartbeat-interval-ms` 时，活跃慢消费者
+  的心跳会被判为过期 → 复制重投、重试耗尽后已成功处理的消息进 DLQ。现启动期校验
+  `pel-claim-min-idle-ms >= 3 × heartbeat-interval-ms`，非法组合直接失败。
+- **广播租约参数零校验**：`broadcast-lease-timeout <= 0` / `reclaim-grace < lease-timeout` 会让任意槽位"立即过期"，
+  同机另一进程可立即回收身份。现构造期快速失败并给出具体参数。
+- **事务状态缺失（MISSING）时 commit 请求被静默忽略**：`TransactionScanner` 在状态字段缺失时按"已终态"debug 返回，
+  半消息既不投递也不清理。现显式 ERROR 告警并降级为 `UNKNOWN` 走有界回查（元数据确实丢失时以 ROLLBACK 明确终结）。
+- **调度扫描每轮少扫一条**（`valueRange(..., batchSize - 1)`）：retry/delay 扫描窗口改为扫满 `batchSize`。
+- **延时投递指标高估**：未真正投递（claim 未拿到 / payload 被隔离 / 原子批失败）也计入投递指标；
+  现仅在原子批真正成功时计数，未投递路径降为 DEBUG 观测。
+- **消费循环 supervisor 陈旧 Future 导致"静默不消费"**：循环自终结后残留的已完成 Future 会让新循环被
+  `cancel(true)` 且无日志；现提交前先清理已完成 Future，取消分支输出 WARN。
+- **重试策略返回 null 时的求值顺序错误**：`decision.type()` 在 null 判断之前求值导致 NPE、null 兜底成死代码；
+  现先判 null 并按兜底策略处理，热路径 INFO 日志降为 DEBUG。
+- **`MessageId` 的 `equals`/`hashCode` 与 `compareTo` 不一致**：`compareTo` 按 `(timestamp, sequence)` 数值比较，
+  而 `equals` 按原始字符串比较（`"01-2"` 与 `of(1,2)` 比较相等但 `equals` 为 false）。现统一为数值语义，
+  构造时规范化；`of()` 拒绝负值（避免生成无法回解析的 `-1--1`）。
+- **`BatchMessage` 异常类型与 javadoc 不符**：空列表抛 `IllegalStateException` 而文档写 `IllegalArgumentException`；
+  `add` 抛 NPE 而 `addAll` 抛 IAE。现统一为 `IllegalArgumentException`。
+- 删除 `StreamMQKeys.transactionLock(...)` 死键布局（去锁化后全仓零引用）。
+- **基准口径有效性判定（R4-38）**：`StreamConsumerBenchmark` 新增 `feederSanityThroughput` 探针
+  （与补货线程同一条 `syncSend` 路径）；`main()` 结束后解析 JMH 结果并判定
+  `feeder ≥ 3 × consume`，不满足时打印 `INVALID RUN` 并以非零码退出——把"补货端下界"与
+  "消费能力"彻底区分开，杜绝把受补货约束的数字当作容量依据。
+- **`streammq-test` 覆盖率门禁按门禁命令实测校准**（首版占位 0.30/0.20 → 实测 −3pt 的 0.78/0.39），
+  与其他发布模块的设卡口径一致。
+
+### Removed
+
+- **`ConsumeAction.DEFER` 常量（改用 `ConsumeAction.defer(Duration)`）**：该常量历史上携带 `null` 延迟，
+  业务返回它时框架在取延迟处 NPE 且被吞掉，消息既不 ACK 也不重投。现移除常量，延迟重投统一走
+  `defer(Duration)`，并把"DEFER 动作必须携带正延迟"提升为**构造期不变量**（违反时直接抛
+  `IllegalArgumentException`），从根上杜绝这类静默失效。
+- **`StreamMQEventBus` SPI 及其实现（`AsyncStreamMQEventBus`）与自动装配 Bean**：该扩展点未被任何生产代码接线
+  （全仓库零引用的死 API），首发前移除，避免形成永久的 API 兼容承诺。
+
 ### Security
 
 - 默认反序列化器由 Fury 宽松模式回退为 `JacksonJsonSerializer`，消除库默认传播的反序列化 RCE 面
@@ -201,6 +274,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fury 白名单可用性**：新增 `streammq.producer.fury-registered-classes`，白名单模式下可直接声明业务消息体
   类型；未声明时启动日志给出可操作告警。文档 / Javadoc / SECURITY.md 统一为"默认强制类注册白名单；
   `new FurySerializer()` 即白名单，`new FurySerializer(false)` 才是宽松模式（受系统属性门禁保护）"。
+- **Jackson 升级至 2.18.10（原 2.17.2）**：修复 **GHSA-r7wm-3cxj-wff9** 与 **GHSA-72hv-8253-57qq** 两个 High CVE；
+  `jackson-bom` 声明在 Spring Boot BOM 之前，确保不会被 Boot 管理的 2.17.2 静默覆盖。
+- **SBE / FlatBuffers 读取侧长度与深度上限**：FlatBuffers 对单字段声明长度的上限为
+  `min(streammq.producer.max-message-size, 64MB)`，嵌套深度上限 64 层；SBE 校验信封头（`templateId`/`schemaId`）、
+  截断与声明长度（负数 / 超消息上限 / 超实际可读字节数）。畸形载荷一律抛 `SerializationException`，
+  **不按声明长度分配内存**（消除"4 字节长度字段放大为 GB 级分配"的内存放大面）。
+- **`PayloadTypeSafety` 危险命名空间黑名单扩充**：新增 commons-configuration / jelly / fileupload / dbcp(2) / text、
+  xpath / velocity / ignite / activemq / myfaces / struts / tomcat / log4j、fastjson2、Guava collect、mchange、Hikari、
+  net.sf.json、ehcache、org.json、quartz、jboss、Javassist、Groovy、Rhino（`org.mozilla.javascript`）、
+  `org.python`、logback 等条目（护栏仍是命名空间拒绝式黑名单，属纵深防御）。
 
 ## [0.1.1] - 2026-08-29 — 内部迭代版本（未发布到 Maven Central）
 
@@ -388,9 +471,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   仅当端点部署在受控代理之后、且配置可信代理 CIDR 白名单时才解析 XFF 首值；`StreamMQProperties` 启动时
   校验 CIDR 合法性。`WebRequestAuthSupport` 相应新增 CIDR 校验/匹配与 Basic 凭据解析工具函数（安全默认值：
   fail-closed）。
-- **CI 新增 `coverage` job（P3-13）**：仅针对已发布模块启用 JaCoCo 覆盖率门禁（LINE ≥ 30% / BRANCH ≥
-  15%，防灾难性回退而非考核线）；提供 Redis service 运行 verify，让集成测试贡献覆盖率
-  （redisson 实测：仅单测约 33% 行覆盖，含 IT 达 90%+）。
+- **CI 新增 `coverage` job（P3-13）**：仅针对已发布模块启用 JaCoCo 覆盖率门禁（当时的初版阈值
+  LINE ≥ 30% / BRANCH ≥ 15%，防灾难性回退而非考核线；该阈值已在 0.1.2 发布前按实测重设为按模块设卡，
+  见上方 0.1.2 章节）；提供 Redis service 运行 verify，让集成测试贡献覆盖率
+  （redisson 实测：仅单测约 0.33 行覆盖，含 IT 约 0.64 行覆盖）。
 - **CI 新增 `staging-smoke` job（P2-8）**：发布预检——全部构件 install 到本地仓库（模拟 staging）后，
   以"使用方视角"最小工程 import `streammq-bom` 并编译引用公开 API，直接验证 BOM 与发布构件可解析。
 - **发布流水线新增 japicmp API 兼容性门禁（P2-13）**：探测 Central 上一发布版本，非首个版本时对已发布

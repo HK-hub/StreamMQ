@@ -22,6 +22,8 @@ import java.util.Objects;
 import java.util.concurrent.locks.Lock;
 import lombok.Getter;
 import lombok.Setter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * {@link ListenerRegistration} 默认实现（0.1.0 起为唯一注册模型）。
@@ -30,7 +32,7 @@ import lombok.Setter;
  * ListenerConfig#from(ListenerRegistration)} 单点映射， 供底层 {@link StreamMQListenerFactory} SPI
  * 消费，二者不再各自维护可漂移的字段副本。
  *
- * <p>与 {@link ListenerConfig} 的校验差异（有意保留）：本类对 {@code consumeThreadMax}/{@code shardCount}
+ * <p>与 {@link ListenerConfig} 的校验差异（有意保留）：本类对 {@code consumeThreads}/{@code shardCount}
  * 等运行时参数采取「夹取（clamp）」策略以保证注册期弹性； 而 {@link ListenerConfig} 构造器对同类参数直接抛出 IllegalArgumentException
  * 以便配置错误尽早暴露。详见两者各自的字段注释。
  *
@@ -40,6 +42,11 @@ import lombok.Setter;
  */
 @Getter
 public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(DefaultListenerRegistration.class);
+
+    /** {@code consumeThreads} 的默认值（也是"未显式声明"的判定基准） */
+    private static final int DEFAULT_CONSUME_THREADS = 1;
 
     /** DLQ 监听器注册 key 前缀 */
     private static final String DLQ_KEY_PREFIX = "dlq:";
@@ -98,10 +105,8 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
     /** per-consumer 已解析转换器实例（null 表示使用全局），由容器在 SPI 解析后回填。 */
     @Getter @Setter private MessageConverter converterInstance;
 
-    /** 并发消费循环数下限（夹取下界 1）与上限（夹取至 &gt;= min；与 {@link ListenerConfig} 的「非法即抛异常」策略不同）。 */
-    private final int consumeThreadMin;
-
-    private final int consumeThreadMax;
+    /** 并发消费循环数（构造时解析：{@code consumeThreads > 0} 优先，否则回落到旧名 min；夹取到 [1, 64]）。 */
+    private final int consumeThreads;
 
     @Setter private String namespace;
 
@@ -138,11 +143,56 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         this.dlqFailureStrategy = b.dlqFailureStrategy;
         this.consumerFilter = b.consumerFilter;
         this.selectorType = b.selectorType;
-        this.namespace = b.namespace;
-        this.consumeThreadMin = Math.max(1, b.consumeThreadMin);
-        this.consumeThreadMax = Math.max(this.consumeThreadMin, b.consumeThreadMax);
+        this.namespace = StringUtils.requireValidNamespace(b.namespace);
+        this.consumeThreads = resolveConsumeThreads(b);
         this.consumerName = b.consumerName;
         this.retryMode = b.retryMode;
+        warnDeprecatedThreadMax(b);
+    }
+
+    /**
+     * 解析生效的并发消费循环数（0.1.2 起为唯一并发度来源）。
+     *
+     * <p>优先级（无哨兵、无歧义的判定，语义见 {@link StreamMQConsumer#consumeThreads()}）：
+     *
+     * <ol>
+     *   <li>{@code consumeThreads} 被设置为非默认值（≠ 1）→ 采用它
+     *   <li>否则（保持默认 1）若已废弃的 {@code consumeThreadMin} 被设置为非默认值（≠ 1）→ 采用它（兼容 0.1.x 旧写法）
+     *   <li>否则 1
+     * </ol>
+     *
+     * <p>最终夹取到 {@code [1, StreamMQConstants#DEFAULT_CONSUME_THREAD_MAX]}；已废弃的 {@code
+     * consumeThreadMax} <b>不参与</b>解析（但被显式设置时打 WARN，见 {@link #warnDeprecatedThreadMax}）。
+     */
+    private static int resolveConsumeThreads(DefaultListenerRegistration.Builder<?> b) {
+        int resolved;
+        if (b.consumeThreads != DEFAULT_CONSUME_THREADS) {
+            resolved = b.consumeThreads;
+        } else if (b.consumeThreadMin != DEFAULT_CONSUME_THREADS) {
+            resolved = b.consumeThreadMin;
+        } else {
+            resolved = DEFAULT_CONSUME_THREADS;
+        }
+        return Math.max(1, Math.min(resolved, StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX));
+    }
+
+    /**
+     * 已废弃属性的注册期告警：{@code consumeThreadMax} 不再影响并发数。
+     *
+     * <p>历史缺陷：只配置 {@code consumeThreadMax=16} 的用户会得到 1 个消费循环且无任何提示（实际并发数 = min）。 0.1.2
+     * 起该属性被忽略，此处在注册期 WARN 一次，避免"配置了却没生效"的静默失败。
+     */
+    private static void warnDeprecatedThreadMax(DefaultListenerRegistration.Builder<?> b) {
+        if (b.consumeThreadMax != StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX) {
+            LOG.warn(
+                    "consumeThreadMax={} is deprecated and no longer affects consumer concurrency"
+                            + " (concurrency is decided by consumeThreads/consumeThreadMin);"
+                            + " use consumeThreads instead. registration={}",
+                    b.consumeThreadMax,
+                    (Objects.isNull(b.topic) ? "?" : b.topic)
+                            + ":"
+                            + (Objects.isNull(b.group) ? "?" : b.group));
+        }
     }
 
     private static long requireMin(String name, long value, long min) {
@@ -186,7 +236,8 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         private String consumerName;
         private boolean retryMode;
         private MessageConverter converterInstance;
-        private int consumeThreadMin = 1;
+        private int consumeThreads = DEFAULT_CONSUME_THREADS;
+        private int consumeThreadMin = DEFAULT_CONSUME_THREADS;
         private int consumeThreadMax = StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX;
 
         public Builder<T> type(ListenerType type) {
@@ -351,11 +402,43 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
             return this;
         }
 
+        /**
+         * 设置并发消费循环数（0.1.2 起为唯一并发度入口）。
+         *
+         * <p>仅 CONCURRENT 集群消费生效；每循环独立 XREADGROUP，共享同一 consumer name，分配互不相交。 解析优先级见 {@code
+         * DefaultListenerRegistration#resolveConsumeThreads}：非默认值优先，否则回落到已废弃的 {@code
+         * consumeThreadMin}。最终夹取到 {@code [1, 64]}。
+         *
+         * @param v 并发消费循环数
+         * @return this
+         * @since 0.1.2
+         */
+        public Builder<T> consumeThreads(int v) {
+            this.consumeThreads = v;
+            return this;
+        }
+
+        /**
+         * 设置并发消费循环数（旧名，等价于 {@link #consumeThreads(int)}）。
+         *
+         * @param v 并发消费循环数
+         * @return this
+         * @deprecated 改用 {@link #consumeThreads(int)}；本方法仅为源码兼容保留，将于 0.2.0 移除
+         */
+        @Deprecated(since = "0.1.2", forRemoval = true)
         public Builder<T> consumeThreadMin(int v) {
             this.consumeThreadMin = v;
             return this;
         }
 
+        /**
+         * 设置并发消费循环数上限。
+         *
+         * @param v 并发上限
+         * @return this
+         * @deprecated 已废弃且<b>不再影响并发数</b>；改用 {@link #consumeThreads(int)}。本方法将于 0.2.0 移除
+         */
+        @Deprecated(since = "0.1.2", forRemoval = true)
         public Builder<T> consumeThreadMax(int v) {
             this.consumeThreadMax = v;
             return this;
@@ -366,10 +449,23 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         }
     }
 
+    /**
+     * 命名空间解析：为空时回填默认命名空间，并对两者统一执行合法性校验。
+     *
+     * <p><b>为什么必须校验：</b>命名空间会作为 Redis Key 前缀（{@code streammq:{ns}:...}）参与拼接， 含 {@code ':'} / 空白 /
+     * {@code '*'} / {@code '{}'} 等字符会破坏 Key 结构（注入出非法前缀、通配命中或 Cluster 热点），
+     * 因此程序化注册路径（非注解路径）也必须与注解路径走同一校验。 空串/null 保留"使用全局命名空间"语义。
+     *
+     * @param defaultNs 默认命名空间（来自全局配置）
+     * @throws IllegalArgumentException 如果命名空间含非法字符（{@code ':'}、{@code '*'}、{@code '{'}、 {@code
+     *     '}'}、{@code '|'}、{@code ','} 或空白）
+     */
     @Override
     public void resolveNamespace(String defaultNs) {
         if (StringUtils.isEmpty(namespace)) {
-            namespace = defaultNs;
+            namespace = StringUtils.requireValidNamespace(defaultNs);
+        } else {
+            namespace = StringUtils.requireValidNamespace(namespace);
         }
     }
 

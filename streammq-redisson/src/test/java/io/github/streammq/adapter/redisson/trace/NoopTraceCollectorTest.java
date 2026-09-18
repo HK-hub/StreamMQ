@@ -6,6 +6,7 @@
 package io.github.streammq.adapter.redisson.trace;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import io.github.streammq.core.interceptor.TraceCollector;
 import io.github.streammq.core.message.MessageId;
@@ -50,9 +51,13 @@ class NoopTraceCollectorTest {
                         10L,
                         "trace-1",
                         new HashMap<>());
-        // 多次调用不应抛异常
-        collector.recordSend(ctx);
-        collector.recordSend(null);
+        // 多次调用（含 null）不应抛异常：no-op 收集器必须对任何入参安全
+        assertThatCode(
+                        () -> {
+                            collector.recordSend(ctx);
+                            collector.recordSend(null);
+                        })
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -70,8 +75,12 @@ class NoopTraceCollectorTest {
                         10L,
                         "trace-1",
                         new HashMap<>());
-        // 多次调用不应抛异常
-        collector.recordConsume(ctx);
-        collector.recordConsume(null);
+        // 多次调用（含 null）不应抛异常：no-op 收集器必须对任何入参安全
+        assertThatCode(
+                        () -> {
+                            collector.recordConsume(ctx);
+                            collector.recordConsume(null);
+                        })
+                .doesNotThrowAnyException();
     }
 }

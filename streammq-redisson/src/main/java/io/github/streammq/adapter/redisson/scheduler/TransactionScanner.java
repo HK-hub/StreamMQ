@@ -567,12 +567,26 @@ public class TransactionScanner implements StreamMQScheduler {
         String oldState = casState(stateHashKey, txId, STATE_COMMITTING);
         if (STATE_COMMIT.equals(oldState)
                 || STATE_ROLLBACK.equals(oldState)
-                || STATE_ROLLBACKING.equals(oldState)
-                || "MISSING".equals(oldState)) {
+                || STATE_ROLLBACKING.equals(oldState)) {
             LOG.debug(
-                    "markCommit ignored, transaction already terminal: txId={}, state={}",
+                    "markCommit ignored, transaction already terminal or in flight: txId={},"
+                            + " state={}",
                     txId,
                     oldState);
+            return;
+        }
+        if ("MISSING".equals(oldState)) {
+            // 状态字段缺失（txId 从未注册 / 注册期 Crash 于 XADD 半消息与元数据写入之间）：
+            // 旧实现按"已终态"静默返回，commit 请求被吞掉——半消息既不投递也不清理。
+            // 这里显式降级为 UNKNOWN 走有界回查（计数消耗回查预算）：元数据仍在则正常提交；
+            // 元数据确实丢失时，回查路径以 ROLLBACK 明确终结并 ERROR 告警（孤儿半消息由保留期
+            // 维护任务清理），保证半消息最终"要么投递、要么明确失败"。
+            LOG.error(
+                    "markCommit on missing txstate entry (never registered or metadata lost),"
+                            + " degrading to UNKNOWN for bounded recheck: txId={}, txGroup={}",
+                    txId,
+                    txGroup);
+            degradeToUnknown(stateHashKey, stateMap, txId, txGroup);
             return;
         }
         // COMMITTING/ROLLBACKING 表示其它实例正在处理。转投由单 Lua 脚本原子完成且天然去重

@@ -145,7 +145,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             return;
         }
         if (reg.isDlqMode()) {
-            LOG.info(
+            LOG.debug(
                     "Routing to handleDlqFailureWithStrategy: topic={}, group={}, messageId={},"
                             + " cause={}",
                     reg.getTopic(),
@@ -175,7 +175,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             StreamMQListener listener,
             MessageId messageId,
             Throwable cause) {
-        LOG.info(
+        LOG.debug(
                 "handleDlqFailureWithStrategy called: topic={}, group={}, messageId={}, cause={}",
                 reg.getTopic(),
                 reg.getGroup(),
@@ -183,7 +183,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                 cause != null ? cause.getMessage() : "null");
         try {
             Map<String, String> fields = messageConverter.toStreamFields(message);
-            LOG.info("handleDlqFailureWithStrategy: fields.size={}", fields.size());
+            LOG.debug("handleDlqFailureWithStrategy: fields.size={}", fields.size());
             int dlqRetryCount = resolveDlqRetryCount(message, fields);
             String dlqReason =
                     fields.getOrDefault(
@@ -203,17 +203,29 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                             dlqConfig.getDlqRetryDelayMs(),
                             reg.getGroup());
 
-            LOG.info(
+            LOG.debug(
                     "Calling dlqFailureStrategy.decide: strategy={}, dlqRetryCount={},"
                             + " dlqReason={}",
                     dlqFailureStrategy.name(),
                     dlqRetryCount,
                     dlqReason);
             DlqFailureDecision decision = dlqFailureStrategy.decide(message, ctx);
-            LOG.info("dlqFailureStrategy.decide returned: decision={}", decision.type());
+            // 必须先判 null 再读 decision.type()：策略返回 null 属于合法兜底输入（旧实现先调用
+            // decision.type()，null 时直接 NPE 并被外层 catch 吞成 ERROR，等价于"消息滞留 PEL"），
+            // 这里显式降级为默认策略 DROP，与既有兜底语义一致且可观测。
             if (Objects.isNull(decision)) {
+                LOG.warn(
+                        "DlqFailureStrategy returned null decision, falling back to DROP:"
+                                + " strategy={}, topic={}, group={}, messageId={},"
+                                + " dlqRetryCount={}",
+                        dlqFailureStrategy.name(),
+                        reg.getTopic(),
+                        reg.getGroup(),
+                        messageId,
+                        dlqRetryCount);
                 decision = DlqFailureDecision.drop();
             }
+            LOG.debug("dlqFailureStrategy.decide returned: decision={}", decision.type());
 
             // dispatch decision
             switch (decision.type()) {

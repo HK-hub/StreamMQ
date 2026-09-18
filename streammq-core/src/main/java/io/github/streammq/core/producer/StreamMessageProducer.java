@@ -21,8 +21,7 @@ import java.util.concurrent.TimeoutException;
 /**
  * StreamMQ 生产者接口（底层抽象）。
  *
- * <p>提供原始的发送 API，{@link StreamMessageTemplate} 在此基础上做业务友好封装。 实现类位于 {@code
- * streammq-redisson-adapter} 模块。
+ * <p>提供原始的发送 API，{@link StreamMessageTemplate} 在此基础上做业务友好封装。 实现类位于 {@code streammq-redisson} 模块。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

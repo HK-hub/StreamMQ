@@ -127,9 +127,6 @@ public class StreamMQKeys {
                 + requireNonEmpty(group, "group");
     }
 
-    /** 事务锁类型段 */
-    public static final String TYPE_TXLOCK = "txlock";
-
     /** 元数据类型段 */
     public static final String TYPE_META = "meta";
 
@@ -475,26 +472,6 @@ public class StreamMQKeys {
         return transactionCheckZSet(namespace, txGroup) + SEP + SEG_COUNTER;
     }
 
-    /**
-     * 事务分布式锁 Key：{@code streammq:{ns}:txlock:{txGroup}:{txId}}。
-     *
-     * <p>用于防止多实例并发提交/回滚同一事务（TOCTOU 保护）。
-     *
-     * @param namespace 命名空间
-     * @param txGroup 事务组名
-     * @param txId 事务 ID
-     * @return 锁 Key
-     */
-    public static String transactionLock(String namespace, String txGroup, String txId) {
-        return prefix(namespace)
-                + SEP
-                + TYPE_TXLOCK
-                + SEP
-                + requireNonEmpty(txGroup, "txGroup")
-                + SEP
-                + requireNonEmpty(txId, "txId");
-    }
-
     /** 顺序消费分片锁 Key：{@code streammq:{ns}:shardlock:{topic}:{group}:{shardId}}。 */
     public static String shardLock(String namespace, String topic, String group, int shardId) {
         return prefix(namespace)
@@ -602,6 +579,25 @@ public class StreamMQKeys {
      */
     public static String quarantineZset(String namespace, String kind) {
         return prefix(namespace) + SEP + TYPE_QUARANTINE + SEP + requireNonEmpty(kind, "kind");
+    }
+
+    /**
+     * 隔离区 payload Hash Key：{@code streammq:{ns}:quarantine:payload:{group}:{msgId}}。
+     *
+     * <p>场景：PEL 认领脚本已 XACK 旧条目、但副本 XADD 失败（目标键类型冲突 / OOM / ACL）时， 用内存中仍持有的 fields
+     * 把消息体落盘到隔离区——「认领了就必须有下落」，避免静默丢失； 运维可按此 Key 重放消息。
+     *
+     * @param namespace 命名空间
+     * @param group 消费者组
+     * @param msgId 被认领的 entry id
+     * @return Hash Key
+     */
+    public static String quarantinePayloadHash(String namespace, String group, String msgId) {
+        return quarantineZset(namespace, SEG_PAYLOAD)
+                + SEP
+                + requireNonEmpty(group, "group")
+                + SEP
+                + requireNonEmpty(msgId, "msgId");
     }
 
     private static String requireNonEmpty(String value, String name) {

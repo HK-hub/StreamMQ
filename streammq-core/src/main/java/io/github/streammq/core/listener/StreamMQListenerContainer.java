@@ -15,8 +15,8 @@ import java.util.Collection;
 /**
  * StreamMQ 监听器容器接口。
  *
- * <p>管理所有 Listener 的生命周期、消费线程、Rebalance。 实现类位于 {@code streammq-redisson-adapter} 模块，建议继承 Spring
- * {@code SmartLifecycle}。
+ * <p>管理所有 Listener 的生命周期、消费线程、Rebalance。 实现类位于 {@code streammq-redisson} 模块，建议继承 Spring {@code
+ * SmartLifecycle}。
  *
  * <p>容器内部为每个注册项创建一个 {@link StreamMQListener}（监听器，负责 PULL 消息）， 拉取到的消息分发给业务层实现的 {@link
  * StreamMessageConcurrentlyConsumer}（消费者，onMessage 业务处理）。

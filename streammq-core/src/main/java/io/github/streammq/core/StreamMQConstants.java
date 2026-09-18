@@ -234,18 +234,20 @@ public final class StreamMQConstants {
 
     // ==================== 默认序列化器 ====================
     /**
-     * 默认消息体序列化器实现类全限定名：{@code JacksonJsonSerializer}。
+     * 默认消息体序列化器实现类全限定名：{@code JacksonJsonSerializer}（基于 Jackson 的 JSON 序列化，跨语言/可读性优先、严格类型、无多态反序列化）。
      *
-     * <p><b>为什么默认是 Jackson 而不是 Fury（0.1.2 起的变更）：</b>0.1.1 曾把默认设为 Apache Fury 的宽松模式（{@code
-     * requireClassRegistration=false}）。Fury 吞吐确实约为 Jackson 的 7~13 倍， 但宽松模式下 Redis 中的字节流可被反序列化为
-     * classpath 上的任意类——在<b>共享/多租户 Redis</b> 上是反序列化 RCE 攻击面，而这个风险是通过本 SDK
+     * <p><b>为什么默认是 Jackson 而不是 Apache Fory（原 Apache Fury，0.1.2 起的变更）：</b>0.1.1 曾把默认设为 Apache Fory（原
+     * Fury）的宽松模式（{@code requireClassRegistration=false}）。Fory 吞吐确实约为 Jackson 的 7~13 倍， 但宽松模式下 Redis
+     * 中的字节流可被反序列化为 classpath 上的任意类——在<b>共享/多租户 Redis</b> 上是反序列化 RCE 攻击面，而这个风险是通过本 SDK
      * <b>传播给所有下游应用</b>的。安全默认值不应该依赖用户先读完 README 的警告段， 因此默认值回退为 {@code
      * JacksonJsonSerializer}：严格类型、无多态反序列化、无 gadget 面， 且消息体在 Redis 中是人类可读的 JSON（便于排障与跨语言消费）。
      *
      * <p><b>需要更高吞吐时：</b>显式配置 {@code streammq.producer.serializer} 为 {@code
-     * io.github.streammq.adapter.redisson.serializer.FurySerializer}（并建议同时开启 {@code
-     * streammq.producer.fury-require-class-registration=true} 与预注册业务类型）， 或 {@code
-     * ProtostuffSerializer}。 二者在 {@code streammq-redisson} 中为 optional 依赖，使用前需自行加入 classpath。
+     * io.github.streammq.adapter.redisson.serializer.FurySerializer}（类名保持 {@code FurySerializer}
+     * 不变以兼容已发布配置，底层为 Apache Fory，原名 Fury；坐标 {@code org.apache.fory:fory-core >= 1.1.0}，即
+     * CVE-2026-50076 的修复版）， 并建议同时开启 {@code streammq.producer.fury-require-class-registration=true}
+     * 与预注册业务类型； 宽松模式（{@code requireClassRegistration=false}）受系统属性门禁保护，仅在显式放开后可用。 或改用 {@code
+     * ProtostuffSerializer}。二者在 {@code streammq-redisson} 中为 optional 依赖，使用前需自行加入 classpath。
      *
      * <p>以字符串形式定义此默认值，避免 core 模块反向依赖 redisson 适配器； Spring Boot Starter 按此默认值装配 {@code
      * streammq.producer.serializer}。
@@ -297,8 +299,18 @@ public final class StreamMQConstants {
     /** 转移任务执行权锁默认 TTL（毫秒）：持有者崩溃后其它实例可在 TTL 过期后接管 */
     public static final long DEFAULT_TRANSFER_CLAIM_TTL_MS = 30_000L;
 
-    /** 顺序消费分片锁默认获取等待上限（毫秒）：超时未获得则转 RECONSUME_LATER，防止挂死的持有者造成分片永久停摆 */
+    /** 顺序消费分片锁单轮获取等待上限（毫秒）：单轮超时后进入下一轮，防止挂死的持有者造成分片永久停摆 */
     public static final long DEFAULT_ORDERLY_LOCK_ACQUIRE_TIMEOUT_MS = 5_000L;
+
+    /**
+     * 顺序消费分片锁竞争的默认等待轮数：每轮各等待一次 {@link #DEFAULT_ORDERLY_LOCK_ACQUIRE_TIMEOUT_MS}，轮间休眠一次 {@link
+     * #DEFAULT_ORDERLY_LOCK_WAIT_INTERVAL_MS}；全部轮次仍拿不到锁时抛 {@code
+     * OrderlyShardBusyException}（不消耗业务重试预算、不进 DLQ）。
+     */
+    public static final int DEFAULT_ORDERLY_LOCK_WAIT_ROUNDS = 3;
+
+    /** 顺序消费分片锁竞争的轮间等待间隔（毫秒） */
+    public static final long DEFAULT_ORDERLY_LOCK_WAIT_INTERVAL_MS = 200L;
 
     /** 内部保留属性前缀：解码时捕获到用户属性、编码时随 props JSON 往返的 SDK 元数据均以此开头 */
     public static final String RESERVED_PROPERTY_PREFIX = "__";
@@ -336,6 +348,8 @@ public final class StreamMQConstants {
     public static final String THREAD_PELCLAIM_SCHEDULER = "streammq-pelclaim-scheduler";
     public static final String THREAD_BROADCAST_SWEEP_SCHEDULER =
             "streammq-broadcast-sweep-scheduler";
+    public static final String THREAD_BROADCAST_LEASE_HEARTBEAT =
+            "streammq-broadcast-lease-heartbeat";
     public static final String THREAD_HEARTBEAT_PREFIX = "streammq-hb-";
     public static final String THREAD_PROCESS_PREFIX = "streammq-process-";
 

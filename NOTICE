@@ -57,9 +57,11 @@ This product includes software developed by the following third parties.
 
    License: Apache License, Version 2.0
    Copyright: Copyright (c) 2008-2026 FasterXML, LLC
-   Version: 2.17.2
-   Used in: streammq-core (default JSON serializer), streammq-redisson,
-            streammq-diagnostics, streammq-kubernetes, streammq-benchmark
+   Version: 2.18.10 (upgraded from 2.17.2 for GHSA-r7wm-3cxj-wff9 /
+            GHSA-72hv-8253-57qq)
+   Used in: streammq-redisson (default JSON serializer + props field codec),
+            streammq-core (optional), streammq-diagnostics,
+            streammq-kubernetes, streammq-benchmark
 
 ================================================================================
 
@@ -155,7 +157,7 @@ This product includes software developed by the following third parties.
 
 ================================================================================
 
-16. Apache Fory (formerly Apache Fury) (https://github.com/apache/fory)
+16. Apache Fory (formerly Apache Fury), org.apache.fory:fory-core (https://github.com/apache/fory)
 
     License: Apache License, Version 2.0
     Copyright: Copyright (c) 2023-2026 Apache Software Foundation
@@ -217,6 +219,54 @@ This product includes software developed by the following third parties.
     Copyright: Copyright (c) 2015-2026 Google LLC
     Version: 1.24.0
     Used in: build (code formatting enforcement via Spotless)
+
+================================================================================
+
+23. FlatBuffers (https://github.com/google/flatbuffers)
+
+    com.google.flatbuffers:flatbuffers-java
+
+    License: Apache License, Version 2.0
+    Copyright: Copyright (c) Google LLC
+    Version: 24.3.25
+    Used in: streammq-redisson (optional; FlatBuffersSerializer — FlexBuffers
+             dynamic binary serialization)
+
+================================================================================
+
+24. Agrona (https://github.com/real-logic/agrona)
+
+    org.agrona:agrona
+
+    License: Apache License, Version 2.0
+    Copyright: Copyright (c) Real Logic Limited
+    Version: 1.17.1
+    Used in: streammq-redisson (optional; runtime library required by the
+             generated SBE encoders/decoders used by SbeSerializer)
+
+================================================================================
+
+25. SBE Tool (Simple Binary Encoding) (https://github.com/real-logic/simple-binary-encoding)
+
+    uk.co.real-logic:sbe-tool
+
+    License: Apache License, Version 2.0
+    Copyright: Copyright (c) Real Logic Limited
+    Version: 1.18.0
+    Used in: build (build-time code generation for streammq-redisson: reads
+             src/main/resources/sbe/streammq-message.xml and generates the SBE
+             encoder/decoder sources)
+
+================================================================================
+
+26. Fabric8 Kubernetes Client (https://github.com/fabric8io/kubernetes-client)
+
+    io.fabric8:kubernetes-client
+
+    License: Apache License, Version 2.0
+    Copyright: Copyright (c) Red Hat, Inc.
+    Version: 6.13.1
+    Used in: streammq-kubernetes (experimental module, provided scope)
 
 ================================================================================
 

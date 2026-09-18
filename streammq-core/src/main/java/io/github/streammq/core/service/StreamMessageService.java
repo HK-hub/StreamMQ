@@ -41,9 +41,6 @@ import org.slf4j.LoggerFactory;
  */
 public interface StreamMessageService extends TransactionExecutor {
 
-    /** 回调派发日志（用户回调异常不应吞掉也不应中断框架流程） */
-    Logger log = LoggerFactory.getLogger(StreamMessageService.class);
-
     // ===================== Message 形态 =====================
 
     /**
@@ -166,12 +163,14 @@ public interface StreamMessageService extends TransactionExecutor {
                                                             "async send failed", ex));
                                 }
                             } catch (Throwable dispatchError) {
-                                log.warn(
-                                        "async send callback threw exception: topic={},"
-                                                + " messageId={}",
-                                        topic,
-                                        Objects.nonNull(result) ? result.getMessageId() : "unknown",
-                                        dispatchError);
+                                logger().warn(
+                                                "async send callback threw exception: topic={},"
+                                                        + " messageId={}",
+                                                topic,
+                                                Objects.nonNull(result)
+                                                        ? result.getMessageId()
+                                                        : "unknown",
+                                                dispatchError);
                             }
                         });
     }
@@ -210,5 +209,15 @@ public interface StreamMessageService extends TransactionExecutor {
             metadata.applyTo(builder);
         }
         return builder.build();
+    }
+
+    /**
+     * 回调派发日志器（private static，非 API 成员）。
+     *
+     * <p>0.1.2 起不再以 {@code public static final Logger log} 形式暴露：接口字段隐式 public static final，
+     * 会把实现细节（用户回调异常的吞掉策略）固化成公开 API。{@link LoggerFactory#getLogger(Class)} 自带缓存， 按调用获取不引入额外开销。
+     */
+    private static Logger logger() {
+        return LoggerFactory.getLogger(StreamMessageService.class);
     }
 }

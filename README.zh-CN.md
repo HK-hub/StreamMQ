@@ -41,7 +41,8 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 | 🖼️ 截图素材清单 | [docs/demo/screenshots/README.md](docs/demo/screenshots/README.md) |
 | 🚀 一键演示脚本 | [docs/demo/quickstart-demo.sh](docs/demo/quickstart-demo.sh) |
 
-> 💡 一键演示脚本已内置发送演示消息（应用启动即自动发送），并在超时未检测到消费时以非零退出码失败，便于录屏一次通过。
+> 💡 一键演示脚本会先把本仓库的 StreamMQ 构件（BOM/core/redisson/starter）安装到本地 Maven 仓库，再生成并启动演示应用；
+> 应用启动即自动发送演示消息，脚本轮询应用日志确认消费，超时未检测到消费时以非零退出码失败，便于录屏一次通过。
 
 ---
 
@@ -89,7 +90,7 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 ### 深度可扩展
 
-序列化器、转换器、过滤器、拦截器、重试策略、重平衡策略、压缩编解码器、死信失败策略、管理鉴权器、链路追踪采集器——几乎一切可替换。0.1.2 提供 **16 个扩展点**（面向用户 + 内部装配，详见 [SPI 扩展机制](#spi-扩展机制)）。
+序列化器、转换器、过滤器、拦截器、重试策略、重平衡策略、压缩编解码器、死信失败策略、管理鉴权器、链路追踪采集器——几乎一切可替换。0.1.2 提供 **18 个扩展点**（面向用户 + 内部装配，详见 [SPI 扩展机制](#spi-扩展机制)）。
 
 ### 质量与发布姿态
 
@@ -168,7 +169,7 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 | 消息压缩 | **支持（GZIP SPI）** | 不支持 | 不支持 | 支持 | 支持 |
 | 背压控制 | **支持（InflightQueue）** | 不支持 | 不支持 | 支持 | 支持 |
 | Spring Boot 3 集成 | **深度集成** | 一般 | 一般 | 一般（第三方） | 一般（第三方） |
-| SPI 扩展点数量 | **16 个** | 0 | 0 | 少量 | 少量 |
+| SPI 扩展点数量 | **18 个** | 0 | 0 | 少量 | 少量 |
 | 管理接口 | **REST API + Actuator** | 无 | 无 | Dashboard | 无 |
 | 链路追踪 | **支持（TraceCollector SPI）** | 不支持 | 不支持 | 支持 | 不支持 |
 | 学习成本 | **低** | 中 | 中 | 中 | 中 |
@@ -214,7 +215,7 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 ### 序列化性能 (Throughput, ops/s) — 2026-09-17 实测
 
-测试 1KB 消息体的序列化/反序列化吞吐量（`messageCount=1000`，含 Blackhole 消费）。JMH fork=1，warmup=4×2s，measurement=5×2s，Throughput 模式。覆盖全部 6 个内置序列化器，**含新增的 `FlatBuffersSerializer`（FlexBuffers）与 `SbeSerializer`（SBE 信封）**。完整报告见 [`docs/benchmarks/serialization-2026-09-17.md`](docs/benchmarks/serialization-2026-09-17.md)。
+测试 1KB 消息体的序列化/反序列化吞吐量（`messageCount=1000`，含 Blackhole 消费）。`SerializationBenchmark` 注解声明的 JMH 参数为 `@Fork(3, warmups = 2)`、`@Warmup(3×2s)`、`@Measurement(5×2s)`、`@BenchmarkMode(Throughput, SampleTime)`；下表数字采集时使用了命令行覆盖 `-f 1 -wi 4 -i 5 -w 2s -r 2s -bm thrpt`（单 fork 运行，完整命令见[基准报告](docs/benchmarks/serialization-2026-09-17.md) §2）。覆盖全部 6 个内置序列化器，**含新增的 `FlatBuffersSerializer`（FlexBuffers）与 `SbeSerializer`（SBE 信封）**。完整报告见 [`docs/benchmarks/serialization-2026-09-17.md`](docs/benchmarks/serialization-2026-09-17.md)。
 
 | 序列化器 | Serialize (ops/s) | Deserialize (ops/s) | RoundTrip (ops/s) | 单次序列化 (ops/s) | 单次反序列化 (ops/s) | 体积 (字节) |
 |----------|-------------------|---------------------|-------------------|--------------------|----------------------|------------|
@@ -229,7 +230,8 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 ### 消息发送性能 (Throughput, ops/s) — 0.1.2 实测
 
-单实例同步/异步发送，直连 localhost Redis。JMH fork=1，warmup=1×2s，measurement=2×3s。
+单实例同步/异步发送，直连 localhost Redis。`StreamMessageTemplateBenchmark` 注解声明的 JMH 参数为 `@Fork(3, warmups = 2)`、`@Warmup(3×2s)`、`@Measurement(5×2s)`、`@BenchmarkMode(Throughput, SampleTime)`。
+**如实披露：** 下表的 0.1.2 数字采集于早期的轻量配置（fork=1、warmup=1×2s、measurement=2×3s，见 `streammq-benchmark/BENCHMARK_REPORT.md` §4），此后未按加严后的注解重测，仅供参考；需要全量参数的数字请按本节末尾的复现命令重跑。
 
 | 发送模式 | 100B 负载 (ops/s) | 1KB 负载 (ops/s) | 10KB 负载 (ops/s) |
 |----------|-------------------|------------------|-------------------|
@@ -251,9 +253,23 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 > `consumeThroughput` 测量的是消费路径（含 Redis 网络往返、反序列化、业务回调、批量 XACK），并非空读往返——
 > 但它是 **SDK 容器路径的下界**：不含容器的逐条 ACK 与过滤器/拦截器/指标链。不同硬件、Redis 实例、网络延迟下数字会有显著差异。
 
-> 自行运行基准：`mvn -B -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-template exec:exec@benchmark-serialization exec:exec@benchmark-consumer -Dstreammq.benchmark.allowFlush=true`
-> 或按 [`.github/workflows/benchmark.yml`](.github/workflows/benchmark.yml) 手动触发 CI 基准任务，
-> 结果会以 JMH 产物形式回填。
+自行运行基准（与基准报告一致的可复现命令——直接调用 JMH CLI，避免 `exec:exec@...` 作为独立 goal 触发时**跳过 `test-compile`** 而用到陈旧字节码）：
+
+```bash
+mvn -q -pl streammq-benchmark test-compile dependency:build-classpath \
+    -Dmdep.includeScope=test -Dmdep.outputFile=target/cp.txt
+cd streammq-benchmark
+java -Djmh.ignoreLock=true \
+     -cp "target/test-classes:target/classes:$(cat target/cp.txt)" \
+     org.openjdk.jmh.Main "SerializationBenchmark" \
+     -f 1 -wi 4 -i 5 -w 2s -r 2s -bm thrpt \
+     -rf json -rff target/jmh-serialization.json
+```
+
+发送/消费基准同理，把 `"SerializationBenchmark"` 换成 `"StreamMessageTemplateBenchmark"` / `"StreamConsumerBenchmark"`
+即可（classpath 分隔符在 Linux/macOS 为 `:`，Windows 为 `;`）。
+或按 [`.github/workflows/benchmark.yml`](.github/workflows/benchmark.yml) 手动触发 CI 基准任务，
+结果会以 JMH 产物形式回填。
 
 ### 性能优化建议
 
@@ -266,8 +282,8 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 2. **发送策略**: 高吞吐场景使用 `asyncSend`，可提升 4~5 倍性能
 3. **负载大小**: 10KB 大消息建议启用 GZIP 压缩（`CompressionCodec` SPI）
 4. **连接池**: 默认 16 连接可满足多数场景，高并发可调至 32~64。**Sizing 经验**：
-   - 公式：`(consumers × consumeThreadMin) + producers + scheduler_threads + 4 headroom`。
-   - 100 个 consumer、`consumeThreadMin=4`：需 400+ 连接（虚拟线程会全部并发发起 XREADGROUP）。
+   - 公式：`(consumers × consumeThreads) + producers + scheduler_threads + 4 headroom`。
+   - 100 个 consumer、`consumeThreads=4`：需 400+ 连接（虚拟线程会全部并发发起 XREADGROUP）。
    - 启动时监控 Redisson 活跃连接数 / 池大小，接近 80% 即扩容。
 5. **批量消费**: 使用 `pullBatchSize`（注解）或 `streammq.consumer.batch-size`（全局配置）批量拉取，减少网络往返
 
@@ -318,6 +334,17 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 > 代价是必须自己引入它。若忘记，启动时 StreamMQ 的 `FailureAnalyzer` 会拦截原本语焉不详的
 > `NoSuchBeanDefinitionException`，直接给出上面这段依赖声明与配置示例。
 
+**最小依赖矩阵（三条接入路径各自必须自备的坐标）：**
+
+| 路径 | 必须自备的坐标 | scope 事实（已核对各模块 POM） |
+|------|----------------|------------------------------|
+| **仅 core**（不依赖 Spring） | `org.slf4j:slf4j-api` | `streammq-core` 中 slf4j-api 为 `provided`（日志门面不随构件传递）；Jackson 在 core 中为 `optional`，且 core 运行路径并未使用它 |
+| **仅 redisson**（不带 Spring） | `org.redisson:redisson`（仅当你要覆盖/排除它们时才需显式声明 Jackson 与 SLF4J） | `redisson` 为 `provided`；`org.slf4j:slf4j-api`、`com.fasterxml.jackson.core:jackson-databind`、`com.fasterxml.jackson.datatype:jackson-datatype-jsr310` 在 `streammq-redisson` 中均为 **compile** scope，会随构件传递（两个 Jackson 构件分别是默认序列化器 `JacksonJsonSerializer` 与 `props` 字段编解码的必需依赖）。`optional` 的序列化器仅在你显式 opt-in 时才需要：`org.apache.fory:fory-core`（>= 1.1.0）/ `io.protostuff:protostuff-core`+`protostuff-runtime` / `com.google.flatbuffers:flatbuffers-java` / `org.agrona:agrona` |
+| **starter**（Spring Boot 3） | `org.redisson:redisson-spring-boot-starter`（版本由 `streammq-bom` 管理；它提供 `RedissonClient` Bean 与 `spring.data.redis.*` 绑定）+ 你自己的 Spring Boot 父 POM/BOM | starter 中 `redisson-spring-boot-starter` 与 `spring-boot-starter` 为 `provided`；`spring-boot-starter-actuator`、`micrometer-core` 为 `optional`（需要健康检查/指标时自行引入）；`spring-boot-autoconfigure` 为普通 compile 依赖 |
+
+可选但推荐：`io.micrometer:micrometer-registry-prometheus`（`/actuator/prometheus`）；
+需要诊断/OTel 能力时再加 `streammq-diagnostics` / `streammq-tracing-opentelemetry`（0.1.x 仅源码提供）。
+
 ### 2. 配置
 
 ```yaml
@@ -343,7 +370,7 @@ streammq:
 
 ### 3. 启用（自动）
 
-只需引入 starter 依赖——starter 出现在 classpath 时，StreamMQ 即通过 `META-INF/spring/AutoConfiguration.imports` 自动装配全部核心 Bean（且 `streammq.enabled=true`，默认值）。无需任何 `@Enable*` 注解。
+只需引入 starter 依赖——starter 出现在 classpath 时，StreamMQ 即通过 `META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports` 自动装配全部核心 Bean（且 `streammq.enabled=true`，默认值）。无需任何 `@Enable*` 注解。
 
 ```java
 @SpringBootApplication
@@ -382,7 +409,7 @@ public class OrderService {
 }
 ```
 
-> **高级用户**：需要访问拦截器/过滤器/SPI 能力时，改为注入 `StreamMessageTemplate`（详见 [进阶用法](#进阶用法)）。
+> **高级用户**：需要访问拦截器/过滤器/SPI 能力时，改为注入 `StreamMessageTemplate`（详见 [SPI 扩展机制](#spi-扩展机制)）。
 
 ### 5. 消费消息
 
@@ -504,6 +531,10 @@ Message<String> msg2 = MessageBuilder.<String>withTopic("delay-topic")
         .build();
 ```
 
+> ⚠️ **延时时长上界：7 天。** `delayTimeMillis` 不得超过 `StreamMQConstants.MAX_DELAY_TIME_MILLIS`
+> （7 天），超限时**发送即失败**（抛 `StreamMQException`，fail-fast），不会被静默截断。
+> 18 级固定延时远低于该上界（最大 `HOUR_2` = 2 小时）。
+
 **延时级别对照表：**
 
 | 级别 | 延时 | 级别 | 延时 | 级别 | 延时 |
@@ -514,7 +545,10 @@ Message<String> msg2 = MessageBuilder.<String>withTopic("delay-topic")
 | `SECOND_30` | 30s | `MINUTE_6` | 6m | `HOUR_2` | 2h |
 | `MINUTE_1` | 1m | `MINUTE_7` | 7m | | |
 | `MINUTE_2` | 2m | `MINUTE_8` | 8m | | |
-| `MINUTE_9` | 9m | `MINUTE_10` | 10m | | |
+| `MINUTE_9` | 9m | `MINUTE_10` | 10m |
+
+> ⚠️ 上述 18 级固定延时均远低于 7 天上限；**任意毫秒延时（`delayTimeMillis`）同样受
+> `StreamMQConstants.MAX_DELAY_TIME_MILLIS`（7 天）约束**，超限在发送期即失败。
 
 ### 顺序消息
 
@@ -539,8 +573,17 @@ Message<String> msg2 = MessageBuilder.<String>withTopic("delay-topic")
 - 超时语义与并发消费一致：**业务层必须保证幂等**（原消费与重试副本可能并发执行）。
 
 **全局开启：** 逐个消费者写注解很繁琐，可通过 `streammq.consumer.orderly-consume-timeout-millis`
-一次性为所有顺序消费者设置默认值。优先级为「注解显式值（`> 0`）> 全局配置」，因此全局开启后
-无法用注解单独关闭某个消费者——需要对该消费者放松保护时，请设置一个足够大的值：
+一次性为所有顺序消费者设置默认值。两者关系以 `DefaultConsumerTuning#effectiveOrderlyConsumeTimeoutMillis`
+为准（注解默认值为 `-1`）：
+
+| 注解 `orderlyConsumeTimeout` | 生效值 |
+|---|---|
+| `> 0` | 注解值（覆盖全局） |
+| `= 0` | **继承全局配置** `streammq.consumer.orderly-consume-timeout-millis`（全局默认 0 = 不启用） |
+| `< 0`（含默认的 `-1`） | **显式关闭**该消费者的顺序超时保护，即使全局已开启也不生效 |
+
+因此：**全局开启后，仍可用注解 `orderlyConsumeTimeout = -1` 单独关闭某个消费者**；反过来，若希望某个消费者
+使用全局值，则必须把它显式写成 `0`——保持默认（不写）时是关闭而非继承。
 
 ```yaml
 streammq:
@@ -548,16 +591,30 @@ streammq:
     orderly-consume-timeout-millis: 60000   # 全局默认；0=不启用（默认）
 ```
 
-**为什么不使用 `consumeTimeout`：** 两者语义与默认值都不同，不能合并：
+```java
+// 全局已开启，仅本消费者关闭顺序超时保护
+@StreamMQConsumer(topic = "order-topic", consumerGroup = "order-group",
+                  messageModel = MessageModel.ORDERLY, orderlyConsumeTimeout = -1)
+
+// 全局已开启，本消费者继承全局值
+@StreamMQConsumer(topic = "order-topic", consumerGroup = "order-group",
+                  messageModel = MessageModel.ORDERLY, orderlyConsumeTimeout = 0)
+```
+
+**为什么不与 `consumeTimeout` 合并：** 两者语义与默认值都不同，不能合并：
 
 | | `consumeTimeout`（并发） | `orderlyConsumeTimeout`（顺序） |
 |---|---|---|
-| 默认值 | 30000，**默认启用** | 0，**默认关闭** |
+| 默认值 | 0（`DEFAULT_CONSUME_TIMEOUT_MS`），**即默认不设超时**；`-1` 回落全局 `streammq.consumer.consume-timeout-millis`（默认 0） | -1，**默认关闭**；`0` 继承全局（全局默认 0 = 不启用）；`> 0` 覆盖全局 |
 | 超时后果 | 单条消息重投，不影响其它消息 | 串行重试＋分片挂起，耗尽 `maxReconsumeTimes` 后进 **DLQ** |
 | 保护目标 | 单消息吞吐 | 分片可用性 |
 
-若顺序消费复用 `consumeTimeout` 的非零默认值，等于把所有存量顺序消费者的慢消息系统性送入 DLQ
-（破坏性变更）。因此独立为 opt-in 属性，由业务按最慢耗时显式评估后开启。
+`consumeTimeout` 之所以默认关闭，是因为设为正数后框架会为**每一条**消息执行一次
+`executor.submit()` + `Future.get(timeout)`（每条消息的固定成本），而卡死消息由 PEL 认领调度器
+（空闲阈值默认 60s）认领重投兜底，at-least-once 语义不变。顺序消费则更敏感：顺序消费是
+「分片锁 + 串行重试」，超时会原地在当前线程按 `maxReconsumeTimes` 重试、每次失败挂起
+`suspendCurrentQueueTimeMillis`，耗尽即进 DLQ——若直接复用 `consumeTimeout` 的语义，等于让所有
+存量顺序消费者的慢消息被系统性送入 DLQ，属破坏性变更。因此独立为 opt-in 属性，由业务按最慢耗时显式评估后开启。
 
 ```java
 @Component
@@ -658,7 +715,7 @@ streammq:
 Redis 的消费者组天然是"组内竞争消费"。要实现广播（每条消息投递给所有实例），StreamMQ 为**每个容器实例创建一个独立的 Redis 消费者组**，组名由持久化实例身份（`BroadcastInstanceIdResolver`，0.1.2 引入）派生。身份按五级优先级解析：
 
 1. 显式配置 `streammq.consumer.broadcast-instance-id`（或系统属性 `streammq.instance.id` / 环境变量 `STREAMMQ_INSTANCE_ID`）
-2. 本地持久文件 `${user.home}/.streammq/instance-id`（路径可用 `streammq.consumer.broadcast-instance-id-file` 覆盖；`none`/`false` 禁用）
+2. 本地持久文件 `${user.home}/.streammq/instance-id-<namespace>_<group>`（**按应用/消费者组分片**：同一 OS 用户下的多个 StreamMQ 应用互不共享身份文件；文件内按 `id pid timestamp` 多记录存储，重启时复用**已退出进程**的身份、绝不覆盖仍在运行进程的身份。路径可用 `streammq.consumer.broadcast-instance-id-file` 覆盖为单一文件；`none`/`false` 禁用本地文件）
 3. Redis 注册中心**回收同主机的历史槽位**（跨重启持久，保住 PEL）
 4. Redis 注册中心为全新实例**分配新槽位**
 5. 随机 UUID 兜底（不稳定，等价于 0.1.2 之前的行为）
@@ -667,8 +724,10 @@ Redis 的消费者组天然是"组内竞争消费"。要实现广播（每条消
 
 - **有持久化身份时**：重启后的实例复用同一消费者组 → PEL 保留、停机期间产生的消息在重连后补投、**不会创建新组**；
   僵尸组仅在实例被永久下线（超出回收宽限期，默认 `streammq.consumer.broadcast-reclaim-grace`=7 天）后才被清扫释放。
-- **无持久化身份（随机 UUID）时**：每次重启都会产生一个新组，旧组在心跳超时（默认 `streammq.group.instance-timeout-ms`）后被清扫；
-  清理前的窗口内，组的总数 ≈ 心跳超时窗口内的「实例数 × 重启次数」。
+- **无持久化身份（随机 UUID）时**：每次重启都会产生一个新组；被遗弃的组（心跳停止即视为僵尸组）由
+  `RedissonBroadcastGroupRegistry` 按**固定 10 分钟 TTL** 清扫（`BROADCAST_GROUP_STALE_TTL_MS`，**不可配置**），
+  而带 PEL 的身份槽位只有超出 7 天回收宽限期后才会被销毁；
+  清理前的窗口内，组的总数 ≈ 10 分钟窗口内的「实例数 × 重启次数」。
 - 每个组都持有自己的 PEL，**会占用 Redis 内存**。
 
 ### 容量估算
@@ -678,13 +737,14 @@ Redis 的消费者组天然是"组内竞争消费"。要实现广播（每条消
 峰值组数量 ≈ 实例数 × (实例身份不可用窗口内的最大重启次数)
 ```
 
-心跳超时由 `streammq.group.instance-timeout-ms` 控制（默认见 `StreamMQConstants`）。
+僵尸组清扫使用的是**固定 10 分钟 TTL**（`RedissonBroadcastGroupRegistry.BROADCAST_GROUP_STALE_TTL_MS`，不可配置）；
+`streammq.group.instance-timeout-ms`（默认 20s）只用于消费者组内的**实例存活判定与分片分配**，与僵尸组清扫无关。
 
 ### 需要监控的信号
 
 | 指标 | 获取方式 | 异常含义 |
 |------|----------|----------|
-| 广播组条目数 | `GET /actuator/streammq` → `broadcastGroups` | 持续增长 = 实例崩溃循环，或心跳超时配置过长 |
+| 广播组条目数 | `GET /actuator/streammq` → `broadcastGroups` | 持续增长 = 实例崩溃循环（僵尸组在 10 分钟 TTL 内累积），或身份不稳定导致反复新建组 |
 | 单轮清理量 | 日志 `Swept N stale broadcast group(s): namespace=..., remaining=M` | N 长期为 0 但 `remaining` 持续增长 = 回收任务未生效 |
 | Redis 内存 | `INFO memory` | 与上面两个数字交叉验证 |
 
@@ -712,7 +772,10 @@ Redis 的消费者组天然是"组内竞争消费"。要实现广播（每条消
    ——最常见的是 Redis 凭据错误、消费者组名非法、命名空间不一致。
 4. **看容器状态**：`/actuator/streammq/groups` 中的 `containerRunning` 字段。
 
-> 消费循环启动失败**不会**自动重试。修复根因后需要重启应用（或调用管理端点的重平衡接口）。
+> 消费循环启动失败**不会**自动重试，重平衡接口也**无法**恢复它：`POST /actuator/streammq/rebalance/{group}`
+> 只对**已在运行的 ORDERLY 容器**做分片再分配（`StreamMQAdminEndpoint#triggerRebalance` →
+> `container.rebalanceGroup(group)`），消费循环从未启动时该调用不产生任何效果。
+> 修复根因后**必须重启应用**。
 
 ---
 
@@ -849,6 +912,24 @@ streammq:
 > 一律填写**全限定类名**。全部键与校验规则以 `StreamMQProperties` 与
 > `META-INF/spring-configuration-metadata.json` 为准（IDE 自动补全会给出描述与校验）。
 
+### 两个容易被忽略的配置
+
+- **`streammq.diagnostics.enabled`（默认 `false`）**：开启 `streammq-diagnostics` 模块的诊断能力
+  （消息画像、慢消费、积压、DLQ 分析）。它属于**独立模块**：必须把 `streammq-diagnostics` 加入
+  classpath **并且**把该键设为 `true`；同时需要存在 `StreamMQTraceService` Bean（即开启
+  `streammq.trace.enabled=true` + `streammq.trace.storage=redis`），分析器才会装配；无 Redisson 客户端时
+  积压探针会静默退化为按追踪窗口估算。
+  **未引入该模块时，`streammq.diagnostics.*` 会被 Spring 静默忽略**——不报警告、不报错，
+  因为没有任何东西绑定该键（未知属性默认被忽略）。同理，`streammq.tracing.otel.*` 需要
+  `streammq-tracing-opentelemetry` 模块，其它模块级配置键也一样。
+  **排查提示**：若配置"配了没反应"，先确认坐标确实在 classpath（`mvn dependency:tree | grep streammq-diagnostics`），
+  再确认 `enabled=true` 已生效（自动装配由 `@ConditionalOnProperty(..., matchIfMissing=false)` 门控）。
+- **`@StreamMQConsumer(enable = false)`**（注解属性，默认 `true`）：该消费者在**注册阶段被整体跳过**——
+  `StreamMQListenerRegistrar` 打印 `Skip disabled @StreamMQConsumer: bean=..., topic=...` 后不再创建监听器、
+  不启动消费循环，且不会占用 `(topic, group)` 注册键（此期间另一个 Bean 可以占用它）；消费者 Bean 本身仍由 Spring 创建。
+  适合按环境/开关（如特性开关）控制某个消费者是否真正消费，无需删除类；仅按消费者粒度生效，没有全局对应配置
+  （`@StreamMQDlqConsumer` 上也有同名属性）。
+
 ### @StreamMQConsumer 属性速查
 
 | 属性 | 类型 | 默认值 | 说明 |
@@ -857,11 +938,13 @@ streammq:
 | `consumerGroup` | String | - | 消费组（必填） |
 | `messageModel` | MessageModel | CONCURRENT | 消费模型：CONCURRENT / ORDERLY |
 | `consumeMode` | ConsumeMode | CLUSTERING | 消费模式：CLUSTERING / BROADCASTING |
-| `consumeThreadMin` | int | 1 | **并发消费循环数**（仅 CONCURRENT 集群消费生效；每循环独立 XREADGROUP 拉取，共享 consumer name 原子分配互不相交） |
-| `consumeThreadMax` | int | 64 | 并发消费循环数上限（夹取上界） |
+| `consumeThreads` | int | 1 | **并发消费循环数**（仅 CONCURRENT 集群消费生效；每循环独立 XREADGROUP 拉取，共享 consumer name 原子分配互不相交；夹取到 `[1, 64]`）。0.1.2 新增，是表达并发度的唯一推荐写法 |
+| `consumeThreadMin` | int | 1 | **已废弃（`@Deprecated`，0.2.0 移除）**：旧名，语义等同于 `consumeThreads`，仅为源码兼容保留；`consumeThreads` 保持默认 1 且本属性被显式设为非默认值时仍按本属性生效（旧写法兼容） |
+| `consumeThreadMax` | int | 64 | **已废弃且不再生效**：0.1.2 起并发度只由 `consumeThreads`（或旧名 `consumeThreadMin`）决定，本属性被**忽略**；显式设置为非默认值 64 时注册期打 WARN |
 | `maxReconsumeTimes` | int | -1（=回落全局 `streammq.retry.max-reconsume-times`，默认 16） | 最大重试次数；-1 时取全局配置，>=0 时注解优先（0=消费失败不重试直接进 DLQ） |
-| `consumeTimeout` | long | -1（=回落全局 `streammq.consumer.consume-timeout-millis`，默认 0） | 并发消费超时（毫秒）；-1 取全局，>=0 注解优先（0=不设超时）。超时后按 RECONSUME_LATER 重试（业务层需幂等） |
-| `orderlyConsumeTimeout` | long | -1（=回落全局 `streammq.consumer.orderly-consume-timeout-millis`，默认 0=不启用） | 顺序消费超时（毫秒）；-1 取全局，>=0 注解优先；**显式设 0 可单独关闭该消费者的顺序超时保护**（即使全局已开启） |
+| `consumeTimeout` | long | -1（=回落全局 `streammq.consumer.consume-timeout-millis`，默认 0=不设超时） | 并发消费超时（毫秒）；-1 取全局，>=0 注解优先（0=不设超时）。超时后按 RECONSUME_LATER 重试（业务层需幂等） |
+| `enable` | boolean | true | 是否启用消费；`false` 时该消费者在注册阶段被整体跳过（**不注册监听器、不启动消费循环**，也不占用 `(topic, group)` 注册键），消费者 Bean 本身仍由 Spring 创建 |
+| `orderlyConsumeTimeout` | long | -1（**默认关闭**，不继承全局） | 顺序消费超时（毫秒）；`> 0` 覆盖全局；`= 0` **继承全局** `streammq.consumer.orderly-consume-timeout-millis`（全局默认 0=不启用）；`< 0`（含默认 -1）**显式关闭**该消费者的顺序超时保护，即使全局已开启也不生效 |
 | `consumeFromWhere` | ConsumeFromWhere | CONSUME_FROM_LAST（=全局默认） | 新消费者组起始位点（仅首次建组生效）。由于枚举注解默认值无法用哨兵表达，<b>仅显式声明 `CONSUME_FROM_FIRST` 视为用户覆盖</b>；未声明或声明 `CONSUME_FROM_LAST` 一律采用全局 `streammq.consumer.consume-from-where`（默认 `CONSUME_FROM_LAST`）。`CONSUME_FROM_LAST`=只消费组创建后消息；`CONSUME_FROM_FIRST`=重放全量历史 |
 | `pullBatchSize` | int | -1（=回落全局 `streammq.consumer.batch-size`，默认 32） | 单次拉取批量；-1 取全局，>0 注解优先。最终夹取到 1~max-batch-size-limit |
 | `selectorExpression` | String | "*" | Tag/SQL92 过滤表达式 |
@@ -884,10 +967,10 @@ streammq:
 
 ## SPI 扩展机制
 
-StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换。0.1.2 提供 **16 个可覆盖点**，分两类：
+StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换。0.1.2 提供 **18 个可覆盖点**，分两类：
 
-- **12 个面向用户的扩展点**（业务方最常实现/替换）
-- **4 个内部装配点**（容器内部组件，技术集成方按需覆盖）
+- **13 个面向用户的扩展点**（业务方最常实现/替换）
+- **5 个内部装配点**（容器内部组件，技术集成方按需覆盖）
 
 > 这些扩展点通过注解的 `Class` 属性或 Spring Bean 覆盖来加载，**不使用 Java `ServiceLoader`**。
 
@@ -905,10 +988,12 @@ StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换。0.1.2 提
 | 用户扩展 | `ManagementAuthenticator` | 管理/诊断接口鉴权 | `AllowAllAuthenticator` / `BasicAuthAuthenticator` / `TokenAuthenticator` / `DenyAllAuthenticator` |
 | 用户扩展 | `DlqFailureStrategy` | 死信消费失败策略 | `LogAndDropDlqFailureStrategy` / `LimitedRetryDlqFailureStrategy` / `SecondaryDlqFailureStrategy` |
 | 用户扩展 | `ExpressionSelectorFilter` | SQL92/TAG 表达式选择器共享接口（自定义选择器扩展点） | 由 `SqlSelectorFilter` 实现 |
+| 用户扩展 | `BroadcastInstanceRegistry` | 广播实例身份注册中心（稳定槽位、租约/回收，0.1.2 新增） | `RedisBroadcastInstanceRegistry` |
 | 内部装配 | `TraceCollector` | 链路追踪上下文采集（默认关闭） | `NoopTraceCollector` / `Slf4jTraceCollector` / `RedisTraceCollector` |
 | 内部装配 | `ConsumerFilterResolver` | per-consumer 过滤器解析器 | `ReflectiveConsumerFilterResolver`（默认反射）/ Spring 容器解析 |
 | 内部装配 | `OrderlyShardLockManager` | 顺序消费分片分布式锁 | `RedissonOrderlyShardLockManager` |
 | 内部装配 | `ConsumerGroupManager` | 消费组实例管理 | `RedissonConsumerGroupManager` |
+| 内部装配 | `CompressionCodecRegistry` | 压缩编解码器注册表（按名称注册/查找 codec，消费端据此解压） | `DefaultCompressionCodecRegistry`（内置 GZIP，LZ4 按 classpath 探测） |
 
 > 说明：0.1.x 阶段 core 的 SPI 接口仍可能演进（多后端抽象将在 1.0 前定型），自定义 SPI 实现的
 > 用户请以 0.2.x 版本为前提评估接口稳定性。
@@ -917,26 +1002,42 @@ StreamMQ 通过 SPI 提供丰富的扩展点，几乎一切可替换。0.1.2 提
 
 ```java
 @Component
-public class CustomMessageSerializer implements MessageSerializer {
+public class CustomMessageSerializer<T> implements MessageSerializer<T> {
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
-    public byte[] serialize(Object obj) throws SerializationException {
-        // 自定义序列化逻辑
-        return customSerialize(obj);
+    public byte[] serialize(T object, Class<T> type) throws SerializationException {
+        try {
+            return objectMapper.writeValueAsBytes(object);
+        } catch (JsonProcessingException e) {
+            throw new SerializationException("Custom serialize failed: " + type.getName(), e);
+        }
     }
 
     @Override
-    public <T> T deserialize(byte[] bytes, Class<T> type) throws SerializationException {
-        // 自定义反序列化逻辑
-        return customDeserialize(bytes, type);
+    public <R> R deserialize(byte[] bytes, Class<R> type) throws SerializationException {
+        try {
+            return objectMapper.readValue(bytes, type);
+        } catch (IOException e) {
+            throw new SerializationException("Custom deserialize failed: " + type.getName(), e);
+        }
     }
 
+    // name() 有默认实现（返回类名），需要自定义名称时再覆写
     @Override
     public String name() {
         return "custom";
     }
 }
 ```
+
+> 签名以 `io.github.streammq.core.serializer.MessageSerializer` 为准：`byte[] serialize(T object, Class<T> type)`
+> 与 `<R> R deserialize(byte[] bytes, Class<R> type)`。`SerializationException`
+> （`io.github.streammq.core.exception.SerializationException`）继承自 `StreamMQException` →
+> `RuntimeException`，属**非受检异常**：接口上的 `throws` 仅作契约说明，示例中保留它以与接口一致。
+> 需要引入的包：`io.github.streammq.core.serializer.MessageSerializer`、
+> `io.github.streammq.core.exception.SerializationException`，以及 Jackson 的 `ObjectMapper` 等。
 
 ```java
 // 在注解中指定使用自定义 SPI
@@ -1061,7 +1162,7 @@ StreamMQ 提供两条互补的追踪路径，按需选择：
 |------|------|------|----------|
 | `streammq.tracing.enabled` | TraceCollector SPI 总开关（消息级追踪采集，traceId 透传） | Slf4j 追踪日志 / 自定义 Collector 输出 | 轻量审计；配合诊断模块消息画像 |
 | `streammq.trace.enabled`（+ `streammq.trace.storage=redis`） | 消息轨迹的持久化存储与查询 | Redis Stream 存储的轨迹数据（可经管理端点查询） | 需要事后排查消息流转路径时开启 |
-| `streammq.tracing.otel.enabled` | OpenTelemetry 集成开关（拦截器注入 Span） | 标准 OTLP Span（Jaeger / Tempo / Collector 可视） | 已有 OTel 栈的分布式链路观测 |
+| `streammq.tracing.otel.enabled` | OpenTelemetry 集成开关（拦截器注入 Span） | 标准 OTLP Span（Jaeger / Tempo / Collector 可视） | 已有 OTel 栈的分布式链路观测。**需引入 `streammq-tracing-opentelemetry` 模块，否则该键被忽略**；另需配置 `streammq.tracing.otel.otlp-endpoint` 才会真正导出——未配置端点时为 no-op（不导出任何数据） |
 
 ```java
 MDC.put("traceId", "t-001");
@@ -1089,7 +1190,7 @@ template.syncSend(message);  // traceId 自动透传到消费者
 
 | 文档 | 说明 |
 |------|------|
-| [本 README](README.md) | 权威使用手册（功能 / 快速开始 / 配置 / SPI / 运维） |
+| [本 README](README.zh-CN.md) | 权威使用手册（功能 / 快速开始 / 配置 / SPI / 运维） |
 | Javadoc | 随 Maven Central 发布的构件附带 sources/javadoc jar |
 | [CHANGELOG](CHANGELOG.md) | 版本变更记录 |
 | [CONTRIBUTING](CONTRIBUTING.md) | 贡献流程与开发规范 |
@@ -1120,7 +1221,7 @@ template.syncSend(message);  // traceId 自动透传到消费者
 - [x] Micrometer 指标 + MDC 日志
 - [x] 链路追踪（TraceCollector SPI）
 - [x] 管理 REST API
-- [x] 16 个可覆盖点（面向用户 + 内部装配）
+- [x] 18 个可覆盖点（面向用户 + 内部装配）
 - [x] Spring Boot 3 自动装配 + Actuator 集成
 - [x] Spring Cloud Stream Binder（实现 Spring Cloud Stream Binder SPI）
 - [x] Kubernetes 集成（实验性预览：CRD 控制器 / HPA / 配置热更新，默认关闭；需显式开启 `streammq.cloud.k8s.enabled=true`）
@@ -1189,10 +1290,11 @@ git commit -m "feat: add your feature"
 
 ### 不建议使用
 
-- 超大规模流式数据处理（单集群日消息量 > 1 亿）—— 建议使用 Kafka
-- 对消息吞吐要求极高且可容忍少量丢失 —— 建议使用 Kafka
-- 需要复杂路由规则（topic 通配符、多级路由）—— 建议使用 RabbitMQ
-- 已有成熟 MQ 集群且无 Redis 资源 —— 直接复用现有 MQ
+- 超大规模流式数据处理（持续 **> 1M TPS**）—— 建议使用 Kafka
+- 金融级严格 ACID 事务 —— 建议使用 RocketMQ 事务消息
+- 1 亿级以上消息堆积 —— 建议使用 Kafka（磁盘存储）
+- 多机房部署 —— 建议使用 RocketMQ Cluster / Pulsar Geo-Replication
+- 嵌入式 IoT 设备 —— 建议使用 MQTT Broker
 
 ---
 
@@ -1203,9 +1305,12 @@ git commit -m "feat: add your feature"
 | Java | 21+ | 运行时 |
 | Spring Boot | 3.3.5 | 框架基础 |
 | Redisson | 3.34.1 | Redis 客户端 |
-| Jackson | 2.17.2 | JSON 序列化（默认序列化器；对齐 Spring Boot 3.3.5 管理版本） |
+| Jackson | 2.18.10 | JSON 序列化（默认序列化器；由 2.17.2 升级以修复 GHSA-r7wm-3cxj-wff9 / GHSA-72hv-8253-57qq——`jackson-bom` import 声明在 Spring Boot BOM **之前**，避免被 Boot 管理的 2.17.2 覆盖） |
 | Apache Fory（原 Apache Fury） | 1.7.3 | 高性能序列化（optional 依赖，需显式 opt-in；`org.apache.fory:fory-core`，要求 >= 1.1.0——更早版本受 CVE-2026-50076 影响） |
 | Protostuff | 1.8.0 | Protobuf 序列化（optional 替代实现） |
+| FlatBuffers | 24.3.25 | FlexBuffers 动态二进制序列化（optional 依赖；`com.google.flatbuffers:flatbuffers-java`，供 `FlatBuffersSerializer` 使用） |
+| Agrona | 1.17.1 | SBE 生成代码的运行时依赖（optional 依赖；`org.agrona:agrona`） |
+| SBE (sbe-tool) | 1.18.0 | SBE 信封的构建期代码生成（`uk.co.real-logic:sbe-tool`，在 `generate-sources` 阶段运行） |
 | Lombok | - | 代码简化 |
 | Micrometer | - | 指标收集 |
 | SLF4J | - | 日志门面 |

@@ -63,3 +63,7 @@ app.env
 
 # CodeBuddy 代理本地数据目录
 .codebuddy/
+
+# E-16 仓库卫生：代理/工具本地目录与第三方源码检出（不入版本控制）
+.claude/
+redisson341/

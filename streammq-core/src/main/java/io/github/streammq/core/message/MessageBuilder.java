@@ -5,6 +5,7 @@
  */
 package io.github.streammq.core.message;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.util.StringUtils;
 import java.util.LinkedHashMap;
@@ -250,13 +251,24 @@ public final class MessageBuilder<T> {
     /**
      * 设置任意延时时间（v1.0+）。
      *
-     * @param delayTimeMillis 延时毫秒数，必须 > 0
+     * <p>取值范围与 {@link Message} 构造期校验一致：{@code > 0} 且 {@code <= }{@link
+     * StreamMQConstants#MAX_DELAY_TIME_MILLIS}（7 天）。
+     *
+     * @param delayTimeMillis 延时毫秒数，必须 &gt; 0 且不超过 7 天
      * @return this
+     * @throws IllegalArgumentException 如果取值不在 {@code (0, 7 天]} 区间内
      */
     public MessageBuilder<T> delayTimeMillis(long delayTimeMillis) {
         if (delayTimeMillis <= 0) {
             throw new IllegalArgumentException(
                     "delayTimeMillis must be positive: " + delayTimeMillis);
+        }
+        if (delayTimeMillis > StreamMQConstants.MAX_DELAY_TIME_MILLIS) {
+            throw new IllegalArgumentException(
+                    "delayTimeMillis must be <= "
+                            + StreamMQConstants.MAX_DELAY_TIME_MILLIS
+                            + " (7 days), got: "
+                            + delayTimeMillis);
         }
         this.delayTimeMillis = delayTimeMillis;
         return this;

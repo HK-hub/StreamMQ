@@ -227,7 +227,11 @@ StreamMQ has a layered testing approach:
 
 1. **Test class naming**: `<ClassUnderTest>Test` (unit) / `<ClassUnderTest>IT` (integration)
 2. **Test method naming**: `should_<behavior>_when_<condition>` or `<method>_<scenario>_<expected>`
-3. **Coverage targets**: Core modules ≥ 80%, SPI implementations ≥ 90%
+3. **Coverage targets**: the gate is enforced per module by `jacoco-maven-plugin` (`check` bound to `verify`, enabled with `-Djacoco.check.skip=false`). Thresholds are *measured coverage minus ~3 points* (see the comments in each module's `pom.xml`):
+   - `streammq-core`: LINE ≥ 0.48, BRANCH ≥ 0.44 (unit tests only — core has no IT)
+   - `streammq-redisson`: LINE ≥ 0.60, BRANCH ≥ 0.50 (measured **with the real-Redis ITs** running; without Redis the gate is not meaningful)
+   - `streammq-spring-boot-starter`: LINE ≥ 0.55, BRANCH ≥ 0.41 (auto-configuration has many branches by nature)
+   - Modules that do not declare the plugin (e.g. `streammq-test`, `streammq-samples/*`, `streammq-benchmark`) are outside the gate
 4. **Assertions**: Use AssertJ (`assertThat(...).isEqualTo(...)`)
 5. **Mocks**: Use Mockito with `@ExtendWith(MockitoExtension.class)`
 
@@ -235,34 +239,55 @@ StreamMQ has a layered testing approach:
 
 ```java
 @ExtendWith(MockitoExtension.class)
-class StreamMessageTemplateTest {
+class StreamMessageServiceTest {
 
     @Mock
-    private StreamMessageProducer producer;
+    private StreamMessageTemplate template;
+
+    private StreamMessageService service;
+
+    @BeforeEach
+    void setUp() {
+        service = new DefaultStreamMessageService(template);
+    }
 
     @Test
-    void should_send_message_when_producer_returns_success() {
-        Message<String> message = MessageBuilder.<String>withTopic("test-topic")
-                .body("hello")
-                .build();
-        SendResult expected = SendResult.success("msg-001", 0L);
+    void should_return_send_result_when_template_sync_send_succeeds() {
+        // MessageId is a value object — build it with the real Stream entry id, there is no
+        // SendResult.success(...) factory method.
+        SendResult expected =
+                new SendResult(new MessageId("1700000000000-0"), "test-topic", null, 0L);
+        when(template.syncSend(any(Message.class), any(SendOptions.class))).thenReturn(expected);
 
-        when(producer.send(any())).thenReturn(expected);
-
-        SendResult result = template.syncSend(message);
+        SendResult result = service.send("test-topic", "hello");
 
         assertThat(result.isSuccess()).isTrue();
-        assertThat(result.getMessageId()).isEqualTo("msg-001");
+        // getMessageId() returns MessageId (not String) — compare via toString() or equals().
+        assertThat(result.getMessageId().toString()).isEqualTo("1700000000000-0");
+        verify(template).syncSend(any(Message.class), any(SendOptions.class));
     }
 }
 ```
+
+Notes on the real API used above (all verified against the sources):
+
+- `SendResult` has **no** `success(...)` factory — use the public constructor
+  `SendResult(MessageId messageId, String topic, String tag, long bornTimestamp)`.
+- `MessageId` is constructed with the Redis Stream entry id: `new MessageId("1700000000000-0")`.
+- The send entry point on `StreamMessageProducer` is `syncSend(Message<?>)` (plus
+  `asyncSend` / `syncSendBatch` / `sendOneway`); `StreamMessageTemplate` exposes
+  `syncSend(Message<T>, SendOptions)` plus a `syncSend(Message<T>)` default method.
 
 #### Integration Test Example
 
 ```java
 // 集成测试继承 StreamMQTestBase（无 Redis 时通过 Assumptions 自动跳过），
-// 或使用 @EnabledIf("io.github.streammq.core.util.RedisAvailability#localhostAvailable")
+// 或使用 @EnabledIf("io.github.streammq.test.util.RedisAvailability#localhostAvailable")
 class StreamMessageServiceIT extends StreamMQTestBase {
+
+    // 示意：template 为应用中已装配的发送模板（StreamMessageTemplate），
+    // consumer 为被测消费者 Bean，其 getReceivedMessages() 是消费者自己实现的「已收到消息」记录方法。
+    // StreamMQTestBase 本身只提供 redisServer / redissonClient / clearRedisData() 等测试基础设施。
 
     @Test
     void should_consume_message_when_sent_by_producer() {
@@ -349,7 +374,7 @@ streammq-parent
 
 ## SPI Extension Point Guide
 
-StreamMQ ships **16 extension points** in total — user-facing SPI interfaces plus internal assembly points (the authoritative table is the [README's Extension Points section](README.md#extension-points)). All extension points are resolved as Spring beans or via the annotation's `Class` attribute — **not** via Java `ServiceLoader`.
+StreamMQ ships **18 extension points** in total — user-facing SPI interfaces plus internal assembly points (the authoritative table is the [README's Extension Points section](README.md#extension-points)). All extension points are resolved as Spring beans or via the annotation's `Class` attribute — **not** via Java `ServiceLoader`.
 
 ### List of SPI Interfaces (most commonly implemented)
 
@@ -364,46 +389,62 @@ StreamMQ ships **16 extension points** in total — user-facing SPI interfaces p
 | `RetryPolicy` | core | Control retry behavior |
 | `RebalanceStrategy` | core | Consumer rebalance strategy |
 | `CompressionCodec` | core | Compress/decompress message bodies |
+| `CompressionCodecRegistry` | core | Register/look up codecs by name (consumer side decompression) |
 | `TraceCollector` | core | Collect trace context for distributed tracing |
 | `ManagementAuthenticator` | core | Authenticate management API requests |
 | `DlqFailureStrategy` | core | Handle DLQ consumption failures |
+| `BroadcastInstanceRegistry` | core | Stable broadcast instance identity (lease/reclaim/sweep, 0.1.2) |
+| `ConsumerFilterResolver` | core | Resolve per-consumer filters |
+| `OrderlyShardLockManager` | core | Shard distributed lock for ordered consumption |
+| `ConsumerGroupManager` | core | Consumer-group instance management |
 
 ### Implementing an SPI
 
 ```java
 package com.example;
 
-import io.github.streammq.core.serializer.MessageSerializer;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.streammq.core.exception.SerializationException;
+import io.github.streammq.core.serializer.MessageSerializer;
 import org.springframework.stereotype.Component;
 
 @Component
-public class CustomJsonSerializer implements MessageSerializer {
+public class CustomJsonSerializer<T> implements MessageSerializer<T> {
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Override
-    public byte[] serialize(Object obj) throws SerializationException {
+    public byte[] serialize(T object, Class<T> type) throws SerializationException {
         try {
-            return objectMapper.writeValueAsBytes(obj);
+            return objectMapper.writeValueAsBytes(object);
         } catch (Exception e) {
-            throw new SerializationException("Failed to serialize", e);
+            throw new SerializationException("Failed to serialize " + type.getName(), e);
         }
     }
 
     @Override
-    public <T> T deserialize(byte[] bytes, Class<T> type) throws SerializationException {
+    public <R> R deserialize(byte[] bytes, Class<R> type) throws SerializationException {
         try {
             return objectMapper.readValue(bytes, type);
         } catch (Exception e) {
-            throw new SerializationException("Failed to deserialize", e);
+            throw new SerializationException("Failed to deserialize " + type.getName(), e);
         }
     }
 
+    // name() has a default implementation (simple class name); override it to pick a custom name.
     @Override
     public String name() {
         return "custom-json";
     }
 }
 ```
+
+> The SPI signature is exactly `byte[] serialize(T object, Class<T> type)` and
+> `<R> R deserialize(byte[] bytes, Class<R> type)` on
+> `io.github.streammq.core.serializer.MessageSerializer<T>`. `SerializationException`
+> (`io.github.streammq.core.exception.SerializationException`) extends `StreamMQException` →
+> `RuntimeException`, so it is **unchecked** — the `throws` clause is documentation; keep it to
+> mirror the interface.
 
 ### Using an SPI Implementation
 

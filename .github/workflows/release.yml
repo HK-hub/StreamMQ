@@ -14,10 +14,18 @@ on:
 permissions:
   contents: write
 
+# E-14/E-25：发布流程**不取消**进行中的运行（cancel-in-progress: false），
+# 中央仓库构件不可变，任何一次发布都必须完整走完或人工干预，不能被并发触发静默掐断。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   test:
     name: Test (gate before publish)
     runs-on: ubuntu-latest
+    # F-11：显式超时预算
+    timeout-minutes: 45
     services:
       redis:
         image: redis:7.2
@@ -30,10 +38,10 @@ jobs:
           --health-retries 5
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: 21
@@ -46,8 +54,10 @@ jobs:
         run: |
           set -euo pipefail
           version="${RELEASE_REF#v}"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid release version '$RELEASE_REF'. Expected MAJOR.MINOR.PATCH." >&2
+          # E-20：显式拦截 SNAPSHOT —— 中央仓库不接受 SNAPSHOT 版本，
+          # 且 SNAPSHOT 会绕过「版本与标签一致」的语义（此前正则允许 `-SNAPSHOT` 后缀）。
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || [[ "$version" == *SNAPSHOT* ]]; then
+            echo "Invalid release version '$RELEASE_REF'. Expected MAJOR.MINOR.PATCH (SNAPSHOT is not allowed)." >&2
             exit 1
           fi
 
@@ -57,70 +67,129 @@ jobs:
       - name: Run full verify (unit + integration + coverage gate)
         run: mvn clean verify -B -Djacoco.check.skip=false
 
-      # Tripwire：集成测试若因 Redis service 异常被整体跳过，mvn verify 仍会"绿色"通过。
-      # 发布通道必须与 PR 通道同等强度，此处解析 failsafe 报告校验实际执行量下限与跳过率上限。
-      - name: Integration test tripwire (detect silent Redis-service breakage)
+      # F-01：集成测试若因 Redis service 异常被整体跳过，mvn verify 仍会"绿色"通过。
+      # 发布通道必须与 PR 通道同等强度：按模块下限 + 全局下限 + 跳过率上限三层校验。
+      - name: Integration test tripwire (per-module floors, detect silent Redis-service breakage)
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import glob
           import sys
           import xml.etree.ElementTree as ET
+          from collections import defaultdict
 
           files = glob.glob('**/failsafe-reports/*.xml', recursive=True)
           if not files:
               print("::error::no failsafe-reports/*.xml found — integration tests never ran")
               sys.exit(1)
 
-          total = skipped = 0
+          # 按模块聚合；streammq-samples 下的 8 个 sample 统一归入 streammq-samples/*
+          stats = defaultdict(lambda: {"tests": 0, "skipped": 0})
           for path in files:
+              p = path.replace("\\", "/")
+              key = "streammq-samples/*" if p.startswith("streammq-samples/") else p.split("/")[0]
               root = ET.parse(path).getroot()
-              total += int(root.get('tests', 0))
-              skipped += int(root.get('skipped', 0))
+              stats[key]["tests"] += int(root.get("tests", 0))
+              stats[key]["skipped"] += int(root.get("skipped", 0))
 
-          executed = total - skipped
-          print(f"Failsafe totals: tests={total} skipped={skipped} executed={executed}")
+          rows = []
+          total = skipped = 0
+          for key in sorted(stats):
+              t = stats[key]["tests"]
+              s = stats[key]["skipped"]
+              total += t
+              skipped += s
+              rows.append((key, t, s, t - s))
 
-          if executed < 80:
-              print("::error::integration tests executed below floor "
-                    f"(executed={executed} < 80). Likely cause: the Redis service container "
-                    "is unhealthy and ITs were silently skipped. Check redis service logs.")
+          print("Failsafe per-module inventory (executed = tests - skipped):")
+          for key, t, s, e in rows:
+              print(f"  {key}: executed={e} skipped={s} total={t}")
+          print(f"Failsafe totals: tests={total} skipped={skipped} executed={total - skipped}")
+
+          floors = {
+              "streammq-redisson": 100,
+              "streammq-spring-boot-starter": 30,
+              "streammq-test": 40,
+              "streammq-samples/*": 16,
+          }
+          failed = False
+          for key, floor in floors.items():
+              executed = (stats[key]["tests"] - stats[key]["skipped"]) if key in stats else 0
+              if executed < floor:
+                  print(f"::error::module '{key}' executed {executed} integration tests, below its floor {floor} "
+                        "(likely cause: the Redis service container is unhealthy and ITs were silently skipped).")
+                  failed = True
+
+          global_executed = total - skipped
+          if global_executed < 230:
+              print(f"::error::integration tests executed below the global floor "
+                    f"(executed={global_executed} < 230).")
+              failed = True
+          if skipped * 5 > total:
+              print(f"::error::more than 20% of integration tests were skipped "
+                    f"(skipped={skipped}/{total}).")
+              failed = True
+
+          if failed:
+              print("Tripwire details (per module): "
+                    + "; ".join(f"{k}: executed={e} skipped={s} total={t}" for k, t, s, e in rows))
               sys.exit(1)
-
-          if skipped * 2 > total:
-              print("::error::more than 50% of integration tests were skipped "
-                    f"(skipped={skipped}/{total}). Likely cause: Redis unavailable to tests.")
-              sys.exit(1)
-
-          print("Tripwire OK: integration tests executed above floor and skip rate within limit.")
+          print("Tripwire OK: per-module floors, global floor and skip-rate limit are satisfied.")
           PY
 
-      # P2-13 门禁：API 兼容性检查（japicmp）。
+      # 门禁：API 兼容性检查（japicmp）。
       # 探测 Maven Central 上已发布的上一版本；若存在（即非首个版本），
       # 对比当前源码构建产物与上一版本的二进制/源码兼容性，发现破坏性变更则阻断发布。
-      # 首个公开版本（Central 无历史）时自动跳过。
+      # 首个公开版本（Central 无历史）时整步跳过（并显式输出 ran=false，由下方断言步骤区分「跳过」与「没跑」）。
+      # 0.1.x 兼容策略：核心/发布模块（core/redisson/spring-boot-starter/test）的公开 API 由本门禁强制
+      # 「二进制 + 源码」兼容；确需破坏性变更时走 CHANGELOG 的 Breaking Changes 流程并显式调整基线。
       # 注意：-pl 只能包含"实际发布集合"（core/redisson/spring-boot-starter/test）——
       # streammq-tracing-opentelemetry / streammq-diagnostics / streammq-spring-cloud-stream-binder
-      # 被 excludeArtifacts 永久排除、Central 上永远没有旧版本，纳入后 japicmp 解析旧版本失败
-      #（插件默认 ignoreMissingOldVersion=false），从第二次发布起会直接中断发布流程。
+      # 被 excludeArtifacts 永久排除、Central 上永远没有旧版本，纳入后 japicmp 解析旧版本会直接失败
+      #（根 POM 已显式 ignoreMissingOldVersion=false，解析不到即失败，不再静默跳过）。
       - name: API compatibility gate (japicmp vs previous release)
+        id: japicmp
         shell: bash
         run: |
           set -euo pipefail
           metadata_url="https://repo1.maven.org/maven2/io/github/streammq/streammq-core/maven-metadata.xml"
           prev="$(curl -fsSL "${metadata_url}" 2>/dev/null | grep -oP '(?<=<release>)[^<]+' | head -1 || true)"
           if [[ -z "${prev}" ]]; then
+            echo "ran=false" >> "$GITHUB_OUTPUT"
             echo "No previous release on Maven Central — first public release, API compatibility gate skipped."
             exit 0
           fi
+          echo "ran=true" >> "$GITHUB_OUTPUT"
           echo "Comparing API compatibility against previous release: ${prev}"
           mvn -pl streammq-core,streammq-redisson,streammq-spring-boot-starter,\
           streammq-test \
               -am verify \
               -Djapicmp.skip=false -Djapicmp.oldVersion="${prev}" \
-              -DskipTests -Dspotless.check.skip=true -Djacoco.check.skip=true -B
+              -DskipTests -Dspotless.check.skip=true -Djacoco.check.skip=true -B \
+              2>&1 | tee "${RUNNER_TEMP}/japicmp.log"
 
-      # P2-8 门禁：发布预检（staging smoke）——与 ci.yml 的 staging-smoke 对齐，做到真正隔离：
+      # E-04 断言：japicmp 若被静默跳过（旧版本解析不到、模块被排除、只跑了少数模块），
+      # 上面的 mvn 仍可能"绿色"，发布通道就会假绿。
+      # 口径：N = 发布模块数 - 2（不含 parent/bom，二者为 pom 打包、由 japicmp 自动跳过）= 4，
+      # 日志中至少出现 N 条 `Comparing <binary|source> compatibility`，或产出 ≥N 个 target/japicmp/*.xml 报告。
+      - name: Assert japicmp actually compared every published module
+        if: steps.japicmp.outputs.ran == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=4
+          compared="$(grep -cE 'Comparing (binary|source) compatibility' "${RUNNER_TEMP}/japicmp.log" || true)"
+          reports="$(find . -path '*/target/japicmp/*.xml' -type f | wc -l)"
+          echo "japicmp 'Comparing' lines: ${compared}; target/japicmp/*.xml reports: ${reports}"
+          if [ "${compared}" -lt "${expected}" ] && [ "${reports}" -lt "${expected}" ]; then
+            echo "::error::japicmp compared fewer modules than expected (expected >= ${expected} of the 4 published"
+            echo "::error::jar modules; 'Comparing' lines=${compared}, xml reports=${reports})."
+            echo "::error::A silently skipped API-compatibility gate means a false green — investigate before publishing."
+            exit 1
+          fi
+          echo "japicmp assertion OK"
+
+      # 发布预检（staging smoke）——与 ci.yml 的 staging-smoke 对齐，做到真正隔离：
       # 只把"实际发布到 Central 的构件集合"（bom/core/redisson/spring-boot-starter/test）install 到
       # 隔离本地仓库（${RUNNER_TEMP}，不污染 ~/.m2）。若误把永不发布的构件混入发布集合/BOM，
       # 下面的使用方解析会真实失败，而不是被共享本地仓库里的"意外安装物"掩盖。
@@ -137,8 +206,9 @@ jobs:
         run: |
           set -euo pipefail
           REPO="${RUNNER_TEMP}/streammq-release-staging-repo"
-          VER="$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout \
-            -Dmaven.repo.local="${REPO}")"
+          # E-09：-N（非递归）避免 20 项目 reactor 上 help:evaluate 输出多行；tail -n1 兜底清洗
+          VER="$(mvn -N help:evaluate -Dexpression=project.version -q -DforceStdout \
+            -Dmaven.repo.local="${REPO}" | tail -n1)"
           mkdir -p /tmp/streammq-smoke/src/main/java/com/example
           cat > /tmp/streammq-smoke/pom.xml <<'EOF'
           <project xmlns="http://maven.apache.org/POM/4.0.0"
@@ -205,8 +275,8 @@ jobs:
         run: |
           set -euo pipefail
           REPO="${RUNNER_TEMP}/streammq-release-staging-repo"
-          VER="$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout \
-            -Dmaven.repo.local="${REPO}")"
+          VER="$(mvn -N help:evaluate -Dexpression=project.version -q -DforceStdout \
+            -Dmaven.repo.local="${REPO}" | tail -n1)"
           excluded="$(grep -oP '(?<=<excludeArtifacts>)[^<]+' pom.xml)"
           if [ -z "${excluded}" ]; then
             echo "::error::could not read <excludeArtifacts> from pom.xml — cannot verify the unpublished set"
@@ -223,25 +293,75 @@ jobs:
             echo "OK: ${art} is correctly absent from the published set"
           done
 
-      # 发布通道 CVE 扫描：根 POM 默认 owasp.skip=true，此前只有 ci.yml 显式开启，
-      # release 通道完全未执行。此处显式 -Dowasp.skip=false，扫描失败即阻断 publish job（needs: test）。
-      # NVD API 需要密钥：未配置 secrets.NVD_API_KEY 时 NVD 侧会以 HTTP 408/429 拒绝请求，属预期失败。
-      - name: Dependency vulnerability scan (OWASP, requires NVD_API_KEY)
+      # E-19：缓存 NVD 库目录（与下方 -DdataDirectory 指向同一路径），避免每次发布全量重建数据库。
+      - name: Cache OWASP dependency-check data directory (NVD database)
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.cache/dependency-check
+          key: dependency-check-data-${{ runner.os }}-${{ hashFiles('pom.xml') }}
+          restore-keys: |
+            dependency-check-data-${{ runner.os }}-
+
+      # 发布前置（E-03）：默认 CVE 硬门禁在 CI 的 sbom-scan job（CycloneDX SBOM + osv-scanner，
+      # 不需要任何 secrets）；本步骤的 OWASP/NVD 深扫为**增强**：仅当 secrets.NVD_API_KEY 存在时执行，
+      # 否则显式跳过（workflow 的 secrets 不能用于 job-level if，只能在 step 内判断环境变量并 skip）。
+      # 不再留下「未配置密钥 → NVD 408/429 → 永久红」的矛盾说明。
+      # E-02：必须显式传 nvdApiKeyEnvironmentVariable/nvdValidForHours/dataDirectory ——
+      # 插件参数无默认值，只设置 env 而不传参等于插件永远不读密钥。
+      # E-19：-pl 收敛到发布集 + 显式 dataDirectory + actions/cache 缓存 NVD 库，避免逐模块重建。
+      - name: Dependency vulnerability scan (OWASP deep scan, runs only when NVD_API_KEY is set)
         shell: bash
         env:
-          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-        run: mvn verify -B -Dowasp.skip=false -DskipTests
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY || '' }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NVD_API_KEY:-}" ]; then
+            echo "::notice::NVD_API_KEY is not configured — skipping the OWASP/NVD deep scan (release is not blocked)."
+            echo "::notice::The default CVE hard gate is CI's sbom-scan job (CycloneDX + osv-scanner), which needs no secrets."
+            exit 0
+          fi
+          DATA_DIR="${HOME}/.cache/dependency-check"
+          mkdir -p "${DATA_DIR}"
+          for attempt in 1 2 3; do
+            if mvn verify -B -Dowasp.skip=false -DskipTests -Dspotless.check.skip=true \
+                 -pl streammq-bom,streammq-core,streammq-redisson,streammq-spring-boot-starter,streammq-test \
+                 -DnvdApiKeyEnvironmentVariable=NVD_API_KEY \
+                 -DnvdValidForHours=24 \
+                 -DdataDirectory="${DATA_DIR}"; then
+              exit 0
+            fi
+            echo "::warning::OWASP scan attempt ${attempt} failed (NVD rate limits are common); retrying..."
+            sleep 30
+          done
+          echo "::error::OWASP dependency scan failed after 3 attempts"
+          exit 1
 
   publish:
     name: Publish to Maven Central
     needs: test
     runs-on: ubuntu-latest
+    # F-11：显式超时预算
+    timeout-minutes: 45
+    # E-01：publish job 也必须提供 Redis —— 下方 `mvn clean verify -Djacoco.check.skip=false`
+    # 会跑发布集的覆盖率门禁，而 redisson 的阈值（LINE 0.60 / BRANCH 0.50）是含 IT 标定的：
+    # 没有 Redis 时 IT 全部跳过 → 覆盖率跌破阈值 → BUILD FAILURE → deploy 永不执行。
+    # 配置与 test job 完全一致，保证两个 job 的门禁口径相同。
+    services:
+      redis:
+        image: redis:7.2
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up JDK 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: 21
@@ -260,8 +380,9 @@ jobs:
         run: |
           set -euo pipefail
           version="${RELEASE_REF#v}"
-          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]]; then
-            echo "Invalid release version '$RELEASE_REF'. Expected MAJOR.MINOR.PATCH." >&2
+          # E-20：拦截 SNAPSHOT（中央仓库不接受；且会绕过发布语义）
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || [[ "$version" == *SNAPSHOT* ]]; then
+            echo "Invalid release version '$RELEASE_REF'. Expected MAJOR.MINOR.PATCH (SNAPSHOT is not allowed)." >&2
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -298,6 +419,7 @@ jobs:
 
       # 发布门禁（R-39）：versions:set 改写了全部 pom，此前 test job 验证的是"旧版本号"的产物。
       # 必须对"即将发布的这份产物"重新跑一次完整 verify，保证“被测试的 = 被发布的”。
+      # E-01：本 job 已提供 Redis service，集成测试与覆盖率门禁（-Djacoco.check.skip=false）口径与 test job 一致。
       - name: Re-verify after version rewrite (tested bits == published bits)
         run: mvn clean verify -B -Djacoco.check.skip=false
 
@@ -309,6 +431,11 @@ jobs:
           MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN }}
           MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
 
+      # E-13：资产清单只包含真实产出的文件 —— BOM 为 pom 打包，不产出 target/*.pom，
+      # 直接挂各模块 target/ 下的产物；fail_on_unmatched_files: true 让清单与实际产物不一致时
+      # 立即失败（此前缺失资产会被静默忽略）。
+      # 注：tracing/diagnostics/spring-cloud-stream-binder 三个模块被 excludeArtifacts 排除、
+      # 不会发布到 Central，其 target 产物（若存在）也不属于发布资产，故不再列入。
       - name: Create GitHub Release
         # 供应链加固：第三方 action 固定到 v2 对应的完整 commit SHA（renovate/dependabot 可识别 # v2）
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -316,8 +443,9 @@ jobs:
           name: StreamMQ ${{ steps.version.outputs.version }}
           tag_name: v${{ steps.version.outputs.version }}
           generate_release_notes: true
+          fail_on_unmatched_files: true
           files: |
-            streammq-bom/target/streammq-bom-${{ steps.version.outputs.version }}.pom
+            streammq-bom/pom.xml
             streammq-core/target/streammq-core-${{ steps.version.outputs.version }}.jar
             streammq-core/target/streammq-core-${{ steps.version.outputs.version }}-sources.jar
             streammq-core/target/streammq-core-${{ steps.version.outputs.version }}-javadoc.jar

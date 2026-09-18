@@ -14,6 +14,7 @@ import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
 import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.enums.InvokeTiming;
+import io.github.streammq.core.exception.OrderlyShardBusyException;
 import io.github.streammq.core.interceptor.ConsumerInterceptorChain;
 import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.listener.ListenerType;
@@ -30,6 +31,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -47,7 +49,7 @@ import org.slf4j.LoggerFactory;
  *   <li>异常统一转 RECONSUME_LATER 路由
  * </ul>
  *
- * <p>容器保留生命周期、注册管理与读循环编排；本类无状态可并发调用。
+ * <p>容器保留生命周期、注册管理与读循环编排；本类仅持有分片锁竞争日志的限频时间戳（{@link AtomicLong}）， 其余无状态，可并发调用。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -59,6 +61,9 @@ public class DefaultMessageProcessor implements MessageProcessor {
     /** 消费超时取消后，等待业务线程真正终止的默认宽限期（毫秒） */
     static final long DEFAULT_TIMEOUT_CANCEL_GRACE_MILLIS =
             io.github.streammq.core.StreamMQConstants.DEFAULT_TIMEOUT_CANCEL_GRACE_MS;
+
+    /** 分片锁竞争 WARN 的限频间隔（毫秒）：高竞争期间（多实例 rebalance、慢 handler 持锁） 每容器每 N 秒最多一条，避免日志风暴。 */
+    static final long SHARD_BUSY_WARN_INTERVAL_MILLIS = 10_000L;
 
     private final ConsumerInterceptorChain interceptorChain;
     private final OrderlyShardLockManager shardLockManager;
@@ -86,6 +91,14 @@ public class DefaultMessageProcessor implements MessageProcessor {
 
     /** 消费超时取消后的宽限期（毫秒） */
     private volatile long timeoutCancelGraceMillis = DEFAULT_TIMEOUT_CANCEL_GRACE_MILLIS;
+
+    /**
+     * 上一次分片锁竞争 WARN 的时间戳（毫秒）。
+     *
+     * <p>仅用于 {@link #SHARD_BUSY_WARN_INTERVAL_MILLIS} 限频：竞争是正常调度状态， 但连续竞争（如 rebalance 窗口）可能每秒数十次，逐条
+     * WARN 会淹没日志。
+     */
+    private final AtomicLong lastShardBusyWarnMillis = new AtomicLong(0L);
 
     public DefaultMessageProcessor(
             ConsumerInterceptorChain interceptorChain,
@@ -457,6 +470,11 @@ public class DefaultMessageProcessor implements MessageProcessor {
      *
      * <p>当 {@link ListenerRegistration#getOrderlyConsumeTimeoutMillis()} 大于 0 时，每次尝试由 {@link
      * #attemptOrderlyConsume} 以消费超时保护：卡死 handler 不再永久阻塞消费循环。
+     *
+     * <p><b>竞争 ≠ 业务失败（红队审查 R4-B02 / R3-25）：</b>{@link OrderlyShardBusyException}
+     * 表示"分片锁被其它实例持有，本条消息未被 handler 处理"。该信号在 {@code attempt++} 之前单独捕获， 直接返回 {@code
+     * RECONSUME_LATER}——不计数、不挂起等待、不写 retry ZSet、不进 DLQ、不 ACK， 消息继续留在 PEL 由认领机制兜底重投。否则多实例 rebalance
+     * 窗口内的锁竞争会白白耗尽 maxReconsumeTimes 预算，把从未被处理过的消息送进 DLQ。
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
     private ConsumeAction consumeOrderlyWithRetry(
@@ -470,7 +488,12 @@ public class DefaultMessageProcessor implements MessageProcessor {
         int maxRetries = Math.max(0, reg.getMaxReconsumeTimes());
         long suspendMillis = Math.max(0, reg.getSuspendCurrentQueueTimeMillis());
         long orderlyTimeout = Math.max(0, reg.getOrderlyConsumeTimeoutMillis());
-        ConsumeAction action = attemptOrderlyConsume(message, reg, ctx, orderly, orderlyTimeout);
+        ConsumeAction action;
+        try {
+            action = attemptOrderlyConsume(message, reg, ctx, orderly, orderlyTimeout);
+        } catch (OrderlyShardBusyException busy) {
+            return deferShardBusy(message, reg, busy);
+        }
         int attempt = 0;
         while (!action.isSuccess() && attempt < maxRetries) {
             attempt++;
@@ -484,7 +507,11 @@ public class DefaultMessageProcessor implements MessageProcessor {
                     reg.getGroup(),
                     message.getMessageId());
             ContainerSupport.sleepQuietly(suspendMillis);
-            action = attemptOrderlyConsume(message, reg, ctx, orderly, orderlyTimeout);
+            try {
+                action = attemptOrderlyConsume(message, reg, ctx, orderly, orderlyTimeout);
+            } catch (OrderlyShardBusyException busy) {
+                return deferShardBusy(message, reg, busy);
+            }
         }
         if (action.isSuccess()) {
             handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
@@ -511,6 +538,44 @@ public class DefaultMessageProcessor implements MessageProcessor {
     }
 
     /**
+     * 分片锁竞争（{@link OrderlyShardBusyException}）退避路径：竞争不是业务失败。
+     *
+     * <p>本条消息<b>未被 handler 处理</b>，因此：
+     *
+     * <ul>
+     *   <li>不消耗 {@code maxReconsumeTimes} 预算（不计 attempt、不挂起等待）
+     *   <li>不写 retry ZSet、不进 DLQ、不 ACK——消息保持 pending 留在 PEL 中， 由 {@code PelClaimScheduler}
+     *       在空闲阈值后认领重投（at-least-once 兜底）
+     *   <li>返回 {@code RECONSUME_LATER} 仅作为当前投递轮次的结束信号（顺序消费分支不再路由该动作）
+     * </ul>
+     *
+     * <p>日志按 {@link #SHARD_BUSY_WARN_INTERVAL_MILLIS} 限频（每容器每 10s 最多一条）。 竞争计数复用现有消费失败指标（本方法返回后
+     * {@code recordConsumeMetrics} 记一次 failure）， 不新增公开 API。
+     *
+     * @param message 未被处理的消息
+     * @param reg Listener 注册信息
+     * @param busy 锁管理器抛出的竞争异常
+     * @return 恒为 {@link ConsumeAction#RECONSUME_LATER}
+     */
+    private ConsumeAction deferShardBusy(
+            Message<?> message, ListenerRegistration<?> reg, OrderlyShardBusyException busy) {
+        long now = System.currentTimeMillis();
+        long last = lastShardBusyWarnMillis.get();
+        if (now - last >= SHARD_BUSY_WARN_INTERVAL_MILLIS
+                && lastShardBusyWarnMillis.compareAndSet(last, now)) {
+            LOG.warn(
+                    "Orderly shard contended, message deferred WITHOUT consuming retry budget"
+                            + " (stays in PEL for redelivery): topic={}, group={}, messageId={},"
+                            + " cause={}",
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    message.getMessageId(),
+                    busy.getMessage());
+        }
+        return ConsumeAction.RECONSUME_LATER;
+    }
+
+    /**
      * 单次顺序消费尝试。
      *
      * <p>{@code timeoutMillis > 0} 时以 Future 包裹「获取分片锁 + onMessage + 释放分片锁」：
@@ -521,6 +586,9 @@ public class DefaultMessageProcessor implements MessageProcessor {
      *       拒绝并重试，不会破坏严格有序
      *   <li>超时路径语义与 {@link #processWithTimeout} 一致：业务层必须保证幂等
      * </ul>
+     *
+     * <p><b>分片锁竞争信号透传：</b>超时包装下，任务线程内的 {@link OrderlyShardBusyException} 会被 记入 {@code busyRef}
+     * 并在判定为非业务失败后抛出——不能在任务内吞成 {@code RECONSUME_LATER}， 否则竞争会被误计为一次业务尝试。
      */
     private ConsumeAction attemptOrderlyConsume(
             Message<?> message,
@@ -533,6 +601,7 @@ public class DefaultMessageProcessor implements MessageProcessor {
             return shardLockManager.consumeWithShardLock(message, reg, ctx, orderly);
         }
         AtomicReference<Thread> taskThread = new AtomicReference<>();
+        AtomicReference<OrderlyShardBusyException> busyRef = new AtomicReference<>();
         Future<ConsumeAction> future =
                 executor.submit(
                         () -> {
@@ -542,6 +611,10 @@ public class DefaultMessageProcessor implements MessageProcessor {
                                         shardLockManager.consumeWithShardLock(
                                                 message, reg, ctx, orderly);
                                 return Objects.isNull(a) ? ConsumeAction.RECONSUME_LATER : a;
+                            } catch (OrderlyShardBusyException busy) {
+                                // 竞争信号：本条消息未被处理，独立于业务失败向上抛出
+                                busyRef.set(busy);
+                                return ConsumeAction.RECONSUME_LATER;
                             } catch (Exception ex) {
                                 // 异常按一次失败处理（与同步路径的 catch 语义一致），保证 Future 正常返回
                                 return ConsumeAction.RECONSUME_LATER;
@@ -549,6 +622,10 @@ public class DefaultMessageProcessor implements MessageProcessor {
                         });
         try {
             ConsumeAction action = future.get(timeoutMillis, TimeUnit.MILLISECONDS);
+            OrderlyShardBusyException busy = busyRef.get();
+            if (Objects.nonNull(busy)) {
+                throw busy;
+            }
             return Objects.isNull(action) ? ConsumeAction.RECONSUME_LATER : action;
         } catch (TimeoutException e) {
             future.cancel(true);
@@ -560,6 +637,11 @@ public class DefaultMessageProcessor implements MessageProcessor {
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                 }
+            }
+            // 超时与竞争同刻发生的竞态：若任务已判定为竞争，按竞争处理（不消耗预算），不按超时记账
+            OrderlyShardBusyException busy = busyRef.get();
+            if (Objects.nonNull(busy)) {
+                throw busy;
             }
             LOG.warn(
                     "Orderly consume timeout ({}ms), cancelling and retrying: topic={}, group={},"

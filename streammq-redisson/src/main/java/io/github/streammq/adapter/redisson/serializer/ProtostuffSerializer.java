@@ -40,7 +40,8 @@ public class ProtostuffSerializer<T> implements MessageSerializer<T> {
     @Override
     public byte[] serialize(T object, Class<T> type) {
         if (Objects.isNull(object)) {
-            return new byte[0];
+            // 统一 null 契约：serialize(null) → null（见 MessageSerializer javadoc）
+            return null;
         }
         // String / byte[] 不是 protostuff 消息：RuntimeSchema 会为其生成 0 字段 schema，
         // 序列化结果为空字节、反序列化返回 null，造成静默丢数据。作为默认序列化器必须原生支持。

@@ -19,6 +19,7 @@ import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.adapter.redisson.template.DefaultStreamMessageTemplate;
 import io.github.streammq.core.annotation.StreamMQConsumer;
+import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.enums.ConsumeMode;
@@ -41,12 +42,15 @@ import io.github.streammq.core.template.StreamMessageTemplate;
 import java.lang.reflect.Proxy;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -71,7 +75,8 @@ import org.redisson.api.StreamMessageId;
  *   <li>异常处理
  * </ul>
  *
- * <p>每个测试方法使用独立的 Topic 与 ConsumerGroup，通过 flushdb 保证数据隔离。
+ * <p>每个测试方法使用独立的 Topic 与 ConsumerGroup 避免相互干扰；类级 {@code @AfterAll} 按固定命名空间 （{@value
+ * #NAMESPACE}）前缀清理残留键（本地 Redis 上基类 flush 默认被安全守卫跳过，键只增不减）。
  *
  * <p>命名说明：类名以 {@code IT} 结尾（{@code *IT}），由 maven-failsafe-plugin 在 {@code mvn verify} 阶段执行；不匹配
  * surefire 的 {@code *Test} 模式，避免无 Redis 环境下混入单元测试阶段。
@@ -147,10 +152,34 @@ class CoreRedisIntegrationIT extends StreamMQTestBase {
         }
     }
 
+    /**
+     * 清理本类固定命名空间（{@value #NAMESPACE}）的全部残留键。
+     *
+     * <p>基类 {@code clearRedisData()} 在本地 Redis 上默认被安全守卫跳过（防误 flush 非测试数据），
+     * 因此本类的键只增不减；每个类运行结束后按命名空间前缀删除，避免长期占用本地 Redis。
+     */
+    @AfterAll
+    static void cleanupNamespace() {
+        if (redissonClient != null && !redissonClient.isShutdown()) {
+            redissonClient.getKeys().deleteByPattern("streammq:" + NAMESPACE + ":*");
+        }
+    }
+
     // ==================== 辅助方法 ====================
 
     /** 使用动态代理创建 StreamMQConsumer 注解实例，避免引入 Mockito 注解 mock。 */
     private StreamMQConsumer buildConsumerAnnotation(String topic, String consumerGroup) {
+        return buildConsumerAnnotation(topic, consumerGroup, 1);
+    }
+
+    /**
+     * 使用动态代理创建 StreamMQConsumer 注解实例，并把并发消费循环数显式置为 {@code consumeThreads}。
+     *
+     * <p>同时返回 0.1.2 新属性 {@code consumeThreads} 与旧名 {@code consumeThreadMin}（两者均为 4），
+     * 使本用例在主代码完成并发旋钮改名后语义不变。
+     */
+    private StreamMQConsumer buildConsumerAnnotation(
+            String topic, String consumerGroup, int consumeThreads) {
         return (StreamMQConsumer)
                 Proxy.newProxyInstance(
                         StreamMQConsumer.class.getClassLoader(),
@@ -166,8 +195,10 @@ class CoreRedisIntegrationIT extends StreamMQTestBase {
                                     return ConsumeMode.CLUSTERING;
                                 case "messageModel":
                                     return MessageModel.CONCURRENT;
+                                case "consumeThreads":
+                                    return consumeThreads;
                                 case "consumeThreadMin":
-                                    return 1;
+                                    return consumeThreads;
                                 case "consumeThreadMax":
                                     return 64;
                                 case "maxReconsumeTimes":
@@ -559,7 +590,7 @@ class CoreRedisIntegrationIT extends StreamMQTestBase {
         void syncSendBatch_emptyBatch_throws() {
             BatchMessage.Builder<String> builder = BatchMessage.<String>withTopic("empty-topic");
             assertThatThrownBy(builder::build)
-                    .isInstanceOf(IllegalStateException.class)
+                    .isInstanceOf(IllegalArgumentException.class)
                     .hasMessageContaining("empty");
         }
 
@@ -768,30 +799,61 @@ class CoreRedisIntegrationIT extends StreamMQTestBase {
         }
 
         @Test
-        @DisplayName("消费者并发消费: 多线程同时处理消息")
-        void consumer_concurrentConsumption_multipleThreads() throws Exception {
+        @DisplayName("消费者并发消费: 10 条消息各处理一次且处理跨越多个线程")
+        void consumer_multipleMessages_allConsumedAcrossThreads() throws Exception {
             String topic = "consume-concurrent-" + System.nanoTime();
             String group = "consume-concurrent-group";
 
             ensureConsumerGroup(topic, group);
 
             int count = 10;
-            TestStreamMQListener<String> consumer = new TestStreamMQListener<>();
-            consumer.prepareAwait(count);
-            container.registerConsumer(consumer, buildConsumerAnnotation(topic, group));
+            // 计数而非集合：Set.add 天然去重会让"是否重复投递"的断言永真
+            Map<String, AtomicInteger> processedCounts = new ConcurrentHashMap<>();
+            // 线程身份而非线程名：容器默认执行器为虚拟线程池，名字为空串无法区分
+            Set<Thread> handlerThreads = ConcurrentHashMap.newKeySet();
+            StreamMessageConcurrentlyConsumer<String> consumer =
+                    (message, context) -> {
+                        handlerThreads.add(Thread.currentThread());
+                        processedCounts
+                                .computeIfAbsent(
+                                        String.valueOf(message.getBody()),
+                                        key -> new AtomicInteger())
+                                .incrementAndGet();
+                        return ConsumeAction.SUCCESS;
+                    };
+            // 并发度置 4：同时返回新属性 consumeThreads 与旧名 consumeThreadMin，主代码改名后语义不变
+            container.registerConsumer(consumer, buildConsumerAnnotation(topic, group, 4));
             container.start();
 
             for (int i = 0; i < count; i++) {
-                Message<String> msg =
-                        MessageBuilder.<String>withTopic(topic).body("concurrent-" + i).build();
-                template.syncSend(msg);
+                template.syncSend(
+                        MessageBuilder.<String>withTopic(topic).body("concurrent-" + i).build());
             }
 
-            consumer.waitForMessages(10000);
+            await().atMost(15, TimeUnit.SECONDS).until(() -> processedCounts.size() >= count);
 
-            List<Message<String>> received = consumer.getReceivedMessages();
-            assertThat(received).hasSize(count);
-            assertThat(consumer.getSuccessCount()).isEqualTo(count);
+            // 不丢不重：10 条消息全部处理，且每条恰好处理一次
+            assertThat(processedCounts).hasSize(count);
+            assertThat(processedCounts.values())
+                    .allSatisfy(processed -> assertThat(processed.get()).isEqualTo(1));
+
+            // 多线程处理：handler 未被串行到单一固定线程上
+            // （"并发循环数=4 且不丢不重"的多循环专项断言由 ConcurrentConsumeIT 覆盖）
+            assertThat(handlerThreads.size()).isGreaterThanOrEqualTo(2);
+
+            // 全部成功后 PEL 清空：ACK 恰好一次，无遗留待认领条目
+            RStream<String, String> stream =
+                    redissonClient.getStream(StreamMQKeys.topicStream(NAMESPACE, topic));
+            await().atMost(5, TimeUnit.SECONDS)
+                    .untilAsserted(
+                            () ->
+                                    assertThat(
+                                                    stream.listPending(
+                                                            group,
+                                                            StreamMessageId.MIN,
+                                                            StreamMessageId.MAX,
+                                                            100))
+                                            .isEmpty());
         }
     }
 

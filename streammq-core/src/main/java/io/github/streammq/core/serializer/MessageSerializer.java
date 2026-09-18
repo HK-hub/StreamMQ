@@ -48,9 +48,19 @@ public interface MessageSerializer<T> {
     /**
      * 序列化对象为 byte[]。
      *
-     * @param object 待序列化对象
+     * <p><b>null / 空输入契约（0.1.2 起对全部内置实现统一）：</b>
+     *
+     * <ul>
+     *   <li>{@code serialize(null, type)} 返回 {@code null}（不再返回 {@code byte[0]}）；
+     *   <li>{@code deserialize(null | byte[0], type)} 返回 {@code null}，不抛异常。
+     * </ul>
+     *
+     * <p>调用方（消息转换器）在 body 为 null 时不会写入 {@code body} 字段，因此 {@code null} 返回值不会进入 Base64 编码路径；实现方仍需保证非
+     * null 入参永远返回非 null 字节数组。
+     *
+     * @param object 待序列化对象（可为 null）
      * @param type 目标类型（用于多态场景）
-     * @return 字节数组
+     * @return 字节数组；{@code object == null} 时为 {@code null}
      * @throws SerializationException 序列化失败
      */
     byte[] serialize(T object, Class<T> type) throws SerializationException;
@@ -58,10 +68,14 @@ public interface MessageSerializer<T> {
     /**
      * 反序列化 byte[] 为对象。
      *
-     * @param bytes 字节数组
-     * @param type 目标类型
+     * <p><b>null / 空输入契约（0.1.2 起对全部内置实现统一）：</b>{@code bytes} 为 {@code null} 或空数组时返回 {@code
+     * null}（不抛异常）；{@code type} 为 {@code null} 时抛 {@link NullPointerException}。 内置实现只抛 {@code
+     * SerializationException}（包装内部异常），不向消费路径泄漏裸运行时异常。
+     *
+     * @param bytes 字节数组（可为 null 或空）
+     * @param type 目标类型，不能为 null
      * @param <R> 反序列化目标类型
-     * @return 反序列化对象
+     * @return 反序列化对象；{@code bytes} 为 null / 空时为 {@code null}
      * @throws SerializationException 反序列化失败
      */
     <R> R deserialize(byte[] bytes, Class<R> type) throws SerializationException;

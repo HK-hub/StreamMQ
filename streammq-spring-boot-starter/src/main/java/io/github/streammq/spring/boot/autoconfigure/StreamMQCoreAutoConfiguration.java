@@ -13,7 +13,6 @@ import io.github.streammq.adapter.redisson.compression.Lz4CompressionCodecFactor
 import io.github.streammq.adapter.redisson.container.ConsumerTuning;
 import io.github.streammq.adapter.redisson.container.DefaultConsumerTuning;
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
-import io.github.streammq.adapter.redisson.event.AsyncStreamMQEventBus;
 import io.github.streammq.adapter.redisson.interceptor.TraceContextConsumerInterceptor;
 import io.github.streammq.adapter.redisson.interceptor.TraceContextProducerInterceptor;
 import io.github.streammq.adapter.redisson.listener.RedissonBroadcastGroupRegistry;
@@ -31,7 +30,6 @@ import io.github.streammq.core.broadcast.BroadcastInstanceRegistry;
 import io.github.streammq.core.compression.CompressionCodec;
 import io.github.streammq.core.compression.CompressionCodecRegistry;
 import io.github.streammq.core.converter.MessageConverter;
-import io.github.streammq.core.event.StreamMQEventBus;
 import io.github.streammq.core.interceptor.ProducerInterceptor;
 import io.github.streammq.core.interceptor.TraceCollector;
 import io.github.streammq.core.listener.BroadcastGroupRegistry;
@@ -302,24 +300,6 @@ public class StreamMQCoreAutoConfiguration {
     @ConditionalOnMissingBean(name = "streammqExecutor")
     public ExecutorService streammqExecutor() {
         return Executors.newVirtualThreadPerTaskExecutor();
-    }
-
-    /**
-     * 事件总线，模块间异步解耦通信的核心。
-     *
-     * <p>核心流程通过事件总线发布事件，扩展模块（Tracing/Metrics/Diagnostics）订阅事件后异步处理， 核心流程不直接依赖扩展模块。
-     *
-     * <p>复用 {@code streammqExecutor}：事件分发是短任务，无需独立线程池。
-     *
-     * @param streammqExecutor StreamMQ 统一执行器
-     * @return 异步事件总线
-     */
-    @Bean(destroyMethod = "close")
-    @ConditionalOnMissingBean(StreamMQEventBus.class)
-    public StreamMQEventBus streamMQEventBus(
-            @Qualifier("streammqExecutor") ExecutorService streammqExecutor) {
-        LOG.debug("Creating AsyncStreamMQEventBus (shared virtual executor)");
-        return new AsyncStreamMQEventBus(streammqExecutor, false);
     }
 
     /**
@@ -602,7 +582,6 @@ public class StreamMQCoreAutoConfiguration {
             StreamMessageProducer producer,
             MessageConverter converter,
             StreamMQProperties properties,
-            StreamMQEventBus eventBus,
             ObjectProvider<TransactionScanner> transactionScannerProvider,
             ObjectProvider<StreamMQMetrics> metricsProvider,
             ObjectProvider<ProducerInterceptor> producerInterceptorProvider,
@@ -629,7 +608,6 @@ public class StreamMQCoreAutoConfiguration {
         DefaultStreamMessageTemplate template =
                 new DefaultStreamMessageTemplate(
                         producer, defaultGroup, converter, defaultConfig, txGroup);
-        template.setEventBus(eventBus);
         template.setAsyncSendExecutor(streammqExecutor);
         TransactionScanner scanner = transactionScannerProvider.getIfAvailable();
         if (scanner != null) {

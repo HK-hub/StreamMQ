@@ -5,8 +5,10 @@
  */
 package io.github.streammq.core.message;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.service.StreamMessageService;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -109,10 +111,16 @@ public final class MessageMetadataBuilder {
     /**
      * 将本构造器中的超时/重试设置转换为 {@link SendOptions}。
      *
+     * <p><b>归一化语义（0.1.2 与文档对齐）：</b>{@code timeoutMillis <= 0} 视为"未设置"并回落到默认超时 （此前只归一化 {@code
+     * -1}，{@code -2} 等取值会在 {@link SendOptions#of} 抛 IAE，与字段 javadoc 不符）； {@code retryTimes < 0}
+     * 同理回落到默认重试次数。{@link SendOptions#of} 自身的取值范围校验不受影响。
+     *
      * @return SendOptions
      */
     public SendOptions toSendOptions() {
-        return SendOptions.of(timeoutMillis, retryTimes);
+        long effectiveTimeout = timeoutMillis > 0 ? timeoutMillis : -1L;
+        int effectiveRetryTimes = retryTimes >= 0 ? retryTimes : -1;
+        return SendOptions.of(effectiveTimeout, effectiveRetryTimes);
     }
 
     /**
@@ -171,13 +179,24 @@ public final class MessageMetadataBuilder {
     /**
      * 设置自定义延时时间（毫秒）。
      *
-     * @param delayTimeMillis 延时毫秒数（必须 &gt; 0）
+     * <p>取值范围与 {@link Message} 构造期校验一致：{@code > 0} 且 {@code <= }{@link
+     * StreamMQConstants#MAX_DELAY_TIME_MILLIS}（7 天）。
+     *
+     * @param delayTimeMillis 延时毫秒数（必须 &gt; 0 且不超过 7 天）
      * @return this
+     * @throws IllegalArgumentException 如果取值不在 {@code (0, 7 天]} 区间内
      */
     public MessageMetadataBuilder delayTimeMillis(long delayTimeMillis) {
         if (delayTimeMillis <= 0) {
             throw new IllegalArgumentException(
                     "delayTimeMillis must be > 0, got " + delayTimeMillis);
+        }
+        if (delayTimeMillis > StreamMQConstants.MAX_DELAY_TIME_MILLIS) {
+            throw new IllegalArgumentException(
+                    "delayTimeMillis must be <= "
+                            + StreamMQConstants.MAX_DELAY_TIME_MILLIS
+                            + " (7 days), got "
+                            + delayTimeMillis);
         }
         this.delayTimeMillis = delayTimeMillis;
         return this;
@@ -201,12 +220,19 @@ public final class MessageMetadataBuilder {
     /**
      * 批量设置系统属性。
      *
-     * @param properties 属性 Map
+     * <p>与 {@link #property(String, String)} 同一校验口径：<b>任一条目的 key 或 value 为 null 立即抛
+     * NullPointerException</b>（此前直接 {@code putAll} 会把 null 值推迟到属性快照 {@code Map.copyOf} 时才
+     * NPE，错误位置远离调用点）。插入顺序保留。
+     *
+     * @param properties 属性 Map；null 表示不追加
      * @return this
+     * @throws NullPointerException 如果任一 key 或 value 为 null（即时失败）
      */
     public MessageMetadataBuilder properties(Map<String, String> properties) {
         if (Objects.nonNull(properties)) {
-            this.properties.putAll(properties);
+            for (Map.Entry<String, String> entry : properties.entrySet()) {
+                property(entry.getKey(), entry.getValue());
+            }
         }
         return this;
     }
@@ -229,12 +255,18 @@ public final class MessageMetadataBuilder {
     /**
      * 批量设置用户属性。
      *
-     * @param userProperties 用户属性 Map
+     * <p>与 {@link #userProperty(String, String)} 同一校验口径：<b>任一条目的 key 或 value 为 null 立即抛
+     * NullPointerException</b>；插入顺序保留。
+     *
+     * @param userProperties 用户属性 Map；null 表示不追加
      * @return this
+     * @throws NullPointerException 如果任一 key 或 value 为 null（即时失败）
      */
     public MessageMetadataBuilder userProperties(Map<String, String> userProperties) {
         if (Objects.nonNull(userProperties)) {
-            this.userProperties.putAll(userProperties);
+            for (Map.Entry<String, String> entry : userProperties.entrySet()) {
+                userProperty(entry.getKey(), entry.getValue());
+            }
         }
         return this;
     }
@@ -264,17 +296,17 @@ public final class MessageMetadataBuilder {
     // ===================== Getter =====================
 
     /**
-     * @return 系统属性（不可修改）
+     * @return 系统属性（不可修改视图，保留插入顺序）
      */
     public Map<String, String> getProperties() {
-        return Map.copyOf(properties);
+        return Collections.unmodifiableMap(new LinkedHashMap<>(properties));
     }
 
     /**
-     * @return 用户属性（不可修改）
+     * @return 用户属性（不可修改视图，保留插入顺序）
      */
     public Map<String, String> getUserProperties() {
-        return Map.copyOf(userProperties);
+        return Collections.unmodifiableMap(new LinkedHashMap<>(userProperties));
     }
 
     // ===================== 应用到 MessageBuilder =====================

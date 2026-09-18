@@ -10,6 +10,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.streammq.core.exception.SerializationException;
 import java.io.Serializable;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -85,9 +87,9 @@ class JdkSerializerTest {
     }
 
     @Test
-    @DisplayName("serialize(null) 返回空 byte[]")
+    @DisplayName("serialize(null) 返回 null（统一 null 契约）")
     void serializeNull() {
-        assertThat(serializer.serialize(null, MyData.class)).isEmpty();
+        assertThat(serializer.serialize(null, MyData.class)).isNull();
     }
 
     @Test
@@ -140,6 +142,114 @@ class JdkSerializerTest {
     /** 白名单外的测试用 POJO */
     public static class ForeignData implements Serializable {
         private static final long serialVersionUID = 1L;
+    }
+
+    /** 两个字段引用同一 String 实例的 POJO（触发 JDK 线格式回引用 TC_REFERENCE）。 */
+    public static class Twinned implements Serializable {
+        private static final long serialVersionUID = 1L;
+
+        private String left;
+        private String right;
+
+        public Twinned() {}
+
+        public Twinned(String left, String right) {
+            this.left = left;
+            this.right = right;
+        }
+
+        public String getLeft() {
+            return left;
+        }
+
+        public void setLeft(String left) {
+            this.left = left;
+        }
+
+        public String getRight() {
+            return right;
+        }
+
+        public void setRight(String right) {
+            this.right = right;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof Twinned twinned)) {
+                return false;
+            }
+            return Objects.equals(left, twinned.left) && Objects.equals(right, twinned.right);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(left, right);
+        }
+    }
+
+    @Test
+    @DisplayName("含同一 String 实例 3 次的 List 往返成功（JEP 290 回引用检查不误判）")
+    @SuppressWarnings("unchecked")
+    void roundTripListWithSharedReferences() {
+        // 回归保护：JDK 21 在处理 TC_REFERENCE（回引用）时会以 class=null、arrayLength=-1
+        // 调用过滤器；旧实现对该调用返回 REJECTED，导致任何含回引用的合法载荷都抛
+        // InvalidClassException: filter status: REJECTED。
+        String shared = new String("shared-instance");
+        List<String> list = new ArrayList<>();
+        list.add(shared);
+        list.add(shared);
+        list.add(shared);
+
+        JdkSerializer<ArrayList<String>> listSerializer = new JdkSerializer<>();
+        @SuppressWarnings("unchecked")
+        Class<ArrayList<String>> listType = (Class<ArrayList<String>>) (Class<?>) ArrayList.class;
+        byte[] bytes = listSerializer.serialize((ArrayList<String>) list, listType);
+        assertThat(bytes).isNotEmpty();
+
+        ArrayList<String> restored = listSerializer.deserialize(bytes, listType);
+        assertThat(restored).isEqualTo(list);
+        // 回引用必须被真正还原为同一实例，否则上面的过滤器误判没有被覆盖到
+        assertThat(restored.get(0)).isSameAs(restored.get(1));
+        assertThat(restored.get(1)).isSameAs(restored.get(2));
+    }
+
+    @Test
+    @DisplayName("两个字段同值的 POJO 往返成功（回引用不触发过滤器拒绝）")
+    void roundTripPojoWithFieldBackReference() {
+        String value = new String("same-value");
+        Twinned data = new Twinned(value, value);
+        JdkSerializer<Twinned> twinnedSerializer = new JdkSerializer<>();
+
+        byte[] bytes = twinnedSerializer.serialize(data, Twinned.class);
+        Twinned restored = twinnedSerializer.deserialize(bytes, Twinned.class);
+
+        assertThat(restored).isEqualTo(data);
+        assertThat(restored.getLeft()).isSameAs(restored.getRight());
+    }
+
+    @Test
+    @DisplayName("含未放行类的载荷（即使同一实例被回引用）仍被过滤器拒绝（未放松安全）")
+    @SuppressWarnings("unchecked")
+    void filterStillRejectsNonWhitelistedClassWithBackReferences() {
+        ForeignData shared = new ForeignData();
+        List<Object> payload = new ArrayList<>();
+        payload.add(shared);
+        payload.add(shared);
+
+        JdkSerializer<ArrayList<Object>> listSerializer = new JdkSerializer<>();
+        @SuppressWarnings("unchecked")
+        Class<ArrayList<Object>> listType = (Class<ArrayList<Object>>) (Class<?>) ArrayList.class;
+        byte[] bytes = listSerializer.serialize((ArrayList<Object>) payload, listType);
+
+        assertThatThrownBy(() -> listSerializer.deserialize(bytes, listType))
+                .isInstanceOf(SerializationException.class)
+                .hasMessageContaining("JDK deserialize failed")
+                .rootCause()
+                .hasMessageContaining("REJECTED");
     }
 
     @Test

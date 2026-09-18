@@ -69,13 +69,21 @@
         <maven.compiler.release>21</maven.compiler.release>
         <java.version>21</java.version>
 
+        <!-- E-11 可复现构建：固定产物时间戳（jar 内条目时间统一为该值）。
+             **每次发布前必须更新为「发布日期的固定值」**（如 2026-09-18T00:00:00Z），
+             该值变化即代表产物字节变化、需重新走发布流程；同一 commit 重复构建可复现。 -->
+        <project.build.outputTimestamp>2026-09-18T00:00:00Z</project.build.outputTimestamp>
+
         <streammq.version>0.1.2</streammq.version>
 
         <!-- 依赖版本 -->
         <spring-boot.version>3.3.5</spring-boot.version>
         <spring.version>6.1.14</spring.version>
         <redisson.version>3.34.1</redisson.version>
-        <jackson.version>2.17.2</jackson.version>
+        <!-- Jackson：2.18.10 修复 GHSA-r7wm-3cxj-wff9 与 GHSA-72hv-8253-57qq。
+             注意：spring-boot-dependencies(3.3.5) 管理的是 2.17.2，因此下方 dependencyManagement
+             中 jackson-bom 的 import **必须声明在 Spring Boot BOM 之前**（Maven「先声明者优先」）。 -->
+        <jackson.version>2.18.10</jackson.version>
         <slf4j.version>2.0.16</slf4j.version>
         <micrometer.version>1.13.6</micrometer.version>
         <lombok.version>1.18.34</lombok.version>
@@ -116,6 +124,12 @@
         <!-- OWASP Dependency-Check 默认跳过；CI 中通过 -Dowasp.skip=false 显式开启 -->
         <owasp.skip>true</owasp.skip>
 
+        <!-- E-03：CycloneDX SBOM 插件。默认 true（跳过）以免影响本地构建；
+             CI 的 sbom-scan job 用 -Dcyclonedx.skip=false 显式开启，
+             生成聚合 SBOM（根 target/bom.json）后交给 osv-scanner 做无需密钥的 CVE 硬门禁。 -->
+        <cyclonedx-maven-plugin.version>2.9.1</cyclonedx-maven-plugin.version>
+        <cyclonedx.skip>true</cyclonedx.skip>
+
         <!-- Central Portal 发布插件 -->
         <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
 
@@ -145,6 +159,20 @@
     <!-- ========== 依赖统一管理（默认 provided，子模块按需引入）========== -->
     <dependencyManagement>
         <dependencies>
+            <!-- C-02：Jackson BOM 必须声明在 **spring-boot-dependencies import 之前**。
+                 Maven 对 dependencyManagement 采用「先声明者优先」，Spring Boot 3.3.5 管理的
+                 Jackson 是 2.17.2；若本 import 排在 Boot BOM 之后，逐构件条目会被 Boot 的管理值
+                 覆盖（依赖收敛后实际仍解析到 2.17.2，GHSA-r7wm-3cxj-wff9 / GHSA-72hv-8253-57qq 不修复）。
+                 放在最前可保证 Jackson 全家桶统一为 ${jackson.version}（2.18.10）。
+                 下方逐构件条目与本 import 版本一致，保留作为显式文档。 -->
+            <dependency>
+                <groupId>com.fasterxml.jackson</groupId>
+                <artifactId>jackson-bom</artifactId>
+                <version>${jackson.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+
             <!-- 内部模块版本由 BOM 提供 -->
             <dependency>
                 <groupId>io.github.streammq</groupId>
@@ -173,7 +201,7 @@
                 <version>${redisson.version}</version>
             </dependency>
 
-            <!-- Jackson -->
+            <!-- Jackson（逐构件条目：与顶部 jackson-bom import 同版本，保留为显式声明） -->
             <dependency>
                 <groupId>com.fasterxml.jackson.core</groupId>
                 <artifactId>jackson-databind</artifactId>
@@ -429,6 +457,9 @@
                     <artifactId>maven-surefire-plugin</artifactId>
                     <version>${maven-surefire-plugin.version}</version>
                     <configuration>
+                        <!-- F-11：单个 fork JVM 的硬超时（600s）。测试死锁/挂起时直接失败，
+                             而不是把本地构建或 CI runner 拖到整体超时上限。 -->
+                        <forkedProcessTimeoutInSeconds>600</forkedProcessTimeoutInSeconds>
                         <!-- @{jacoco.argLine} 由 jacoco prepare-agent 注入（见下方 jacoco 插件
                              propertyName 配置）；若直接写死字面量会覆盖 jacoco agent，
                              导致覆盖率数据永远为空。 -->
@@ -449,6 +480,8 @@
                     <!-- 集成测试同样需要加载 jacoco agent（@{jacoco.argLine} 由 prepare-agent 注入），
                          否则 IT 全部不产生覆盖率数据，仅单测数据会低估真实覆盖。 -->
                     <configuration>
+                        <!-- F-11：与 surefire 一致，单个 fork JVM 硬超时 600s（防 IT 死锁挂起） -->
+                        <forkedProcessTimeoutInSeconds>600</forkedProcessTimeoutInSeconds>
                         <argLine>
                             @{jacoco.argLine}
                             -Xshare:off
@@ -522,9 +555,15 @@
                         </execution>
                     </executions>
                 </plugin>
-                <!-- P2-13：API 兼容性检查（japicmp）。默认跳过；release.yml 在探测到上一发布
-                     版本时覆盖 japicmp.skip=false 与 japicmp.oldVersion，对已发布模块做
-                     二进制/源码兼容门禁。 -->
+                <!-- API 兼容性检查（japicmp）。默认跳过；release.yml 在探测到上一发布版本时
+                     覆盖 japicmp.skip=false 与 japicmp.oldVersion，对已发布模块做二进制/源码兼容门禁。
+                     0.1.x 兼容策略：核心/发布模块（core/redisson/spring-boot-starter/test）的公开 API
+                     由本门禁强制「二进制 + 源码」兼容；确需破坏性变更时走 CHANGELOG 的
+                     Breaking Changes 流程并显式调整基线，而不是静默放宽门禁。
+                     ignoreMissingOldVersion=false：上一版本解析不到时必须失败（插件默认 true 会
+                     静默跳过 → 假绿，发布通道将无法发现 japicmp 根本没跑）。
+                     注：历史上这里排除过 io.github.streammq.internal.*，但该包并不存在
+                     （仓库内 0 处 package 声明），属死配置，已删除以保持诚实口径。 -->
                 <plugin>
                     <groupId>com.github.siom79.japicmp</groupId>
                     <artifactId>japicmp-maven-plugin</artifactId>
@@ -543,9 +582,7 @@
                             <breakBuildOnBinaryIncompatibleModifications>true</breakBuildOnBinaryIncompatibleModifications>
                             <breakBuildOnSourceIncompatibleModifications>true</breakBuildOnSourceIncompatibleModifications>
                             <ignoreMissingClasses>true</ignoreMissingClasses>
-                            <excludes>
-                                <exclude>io.github.streammq.internal.*</exclude>
-                            </excludes>
+                            <ignoreMissingOldVersion>false</ignoreMissingOldVersion>
                         </parameter>
                     </configuration>
                 </plugin>
@@ -569,6 +606,46 @@
                             </goals>
                         </execution>
                     </executions>
+                </plugin>
+                <!-- E-03：CycloneDX 聚合 SBOM（CVE 硬门禁的输入）。
+                     默认跳过（cyclonedx.skip=true）以免影响本地构建；CI 的 sbom-scan job 以
+                     `mvn -Dcyclonedx.skip=false org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom`
+                     显式调用（该 goal 为 aggregator，产物落在 reactor 根的 target/bom.json）。
+                     execution 绑定 package 阶段：若未来某个模块显式声明本插件，即在 package 产出 BOM。 -->
+                <plugin>
+                    <groupId>org.cyclonedx</groupId>
+                    <artifactId>cyclonedx-maven-plugin</artifactId>
+                    <version>${cyclonedx-maven-plugin.version}</version>
+                    <configuration>
+                        <skip>${cyclonedx.skip}</skip>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <id>make-aggregate-bom</id>
+                            <phase>package</phase>
+                            <goals>
+                                <goal>makeAggregateBom</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                </plugin>
+                <!-- E-12：CI/发布通道以「命令行目标」方式调用的插件必须显式 pin 版本，
+                     否则 Maven 按「最新版」解析 —— 同一 commit 在不同时间可能跑到不同插件版本。
+                     版本号 2026-09 已核实存在于 Maven Central（首次升级时请重新确认）。 -->
+                <plugin>
+                    <groupId>org.codehaus.mojo</groupId>
+                    <artifactId>versions-maven-plugin</artifactId>
+                    <version>2.18.0</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-help-plugin</artifactId>
+                    <version>3.5.1</version>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-dependency-plugin</artifactId>
+                    <version>3.8.1</version>
                 </plugin>
             </plugins>
         </pluginManagement>

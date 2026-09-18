@@ -13,7 +13,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
 import lombok.NonNull;
@@ -28,7 +30,9 @@ import org.slf4j.LoggerFactory;
  * <ol>
  *   <li><b>显式配置</b>——{@code streammq.consumer.broadcast.instance-id}、系统属性 {@code
  *       streammq.instance.id} 或环境变量 {@code STREAMMQ_INSTANCE_ID}。生产环境推荐：运维完全可控。
- *   <li><b>本地持久文件</b>——默认 {@code ${user.home}/.streammq/instance-id}。对齐 RocketMQ {@code
+ *   <li><b>本地持久文件</b>——默认 {@code ${user.home}/.streammq/instance-id-<ns>_<group>}（<b>按应用分片</b>， 同一
+ *       OS 用户下多个 StreamMQ 应用/消费者组互不共享身份；文件内按 {@code id pid timestamp} 多记录存储，
+ *       重启时优先复用<b>已退出进程</b>的身份，绝不覆盖仍在运行的其它进程的身份）。对齐 RocketMQ {@code
  *       LocalFileOffsetStore}：身份落在本地盘，重启零 Redis 往返即可复用。
  *   <li><b>注册中心回收</b>——本地文件丢失（K8s emptyDir 重建、镜像重置）时，向 Redis 注册中心按 {@code host} 匹配回收同主机的历史槽位，保住 PEL
  *       与消费位点。
@@ -57,22 +61,30 @@ public final class BroadcastInstanceIdResolver {
      */
     public static final String LOCAL_ID_FILE_PROPERTY = "streammq.instance.id-file";
 
-    /** 本地身份文件默认路径（相对 {@code user.home}） */
-    public static final String DEFAULT_LOCAL_ID_FILE = ".streammq/instance-id";
+    /** 本地身份文件默认目录（相对 {@code user.home}） */
+    public static final String DEFAULT_LOCAL_ID_DIR = ".streammq";
+
+    /** 本地身份文件默认前缀；完整文件名为 {@code instance-id-<namespace>_<group>}（按应用分片） */
+    public static final String DEFAULT_LOCAL_ID_FILE_PREFIX = "instance-id-";
 
     /** 显式禁用本地文件的哨兵值 */
     private static final String DISABLED = "none";
 
     private final BroadcastInstanceRegistry registry;
-    private final Path localIdFile;
+    private final Path explicitLocalIdFile;
+    private final boolean localIdFileDisabled;
     private final long leaseTimeoutMillis;
     private final long reclaimGraceMillis;
+
+    /** 本地身份记录的最大保留期（超过后从文件中剪除，避免文件无限增长）。 */
+    private static final long LOCAL_RECORD_RETENTION_MS = 7L * 24 * 60 * 60 * 1000;
 
     /**
      * 构造解析器。
      *
      * @param registry 注册中心，可为 null（表示禁用注册中心，只在配置 / 本地文件 / 随机值之间解析）
-     * @param localIdFilePath 本地身份文件路径，可为 null 表示使用默认路径
+     * @param localIdFilePath 显式本地身份文件路径（非 null 时全实例共用该文件，跨应用隔离由调用方保证）； null 表示按「应用维度」默认路径（见 {@link
+     *     #DEFAULT_LOCAL_ID_FILE}）
      * @param leaseTimeoutMillis 租约超时（毫秒）
      * @param reclaimGraceMillis 回收宽限期（毫秒）
      */
@@ -82,9 +94,36 @@ public final class BroadcastInstanceIdResolver {
             long leaseTimeoutMillis,
             long reclaimGraceMillis) {
         this.registry = registry;
-        this.localIdFile = resolveLocalIdFile(localIdFilePath);
-        this.leaseTimeoutMillis = leaseTimeoutMillis;
+        IdFileSetting idFileSetting = resolveExplicitLocalIdFile(localIdFilePath);
+        this.explicitLocalIdFile = idFileSetting.path();
+        this.localIdFileDisabled = idFileSetting.disabled();
+        this.leaseTimeoutMillis = requireValidLeaseTimeouts(leaseTimeoutMillis, reclaimGraceMillis);
         this.reclaimGraceMillis = reclaimGraceMillis;
+    }
+
+    /**
+     * 校验租约参数（R4-A17）：租约超时必须为正，回收宽限期不得小于租约超时。
+     *
+     * <p>此前零校验——把 {@code leaseTimeout} 配成 0/负数会让<b>任意</b>槽位立刻满足"已过期"，
+     * 同主机另一进程可立即回收该身份：两个活跃进程共用同一广播组，广播静默退化为集群消费 （正是同主机守卫想要防止的场景）。这里改为启动期快速失败。
+     *
+     * @return 校验通过的租约超时
+     * @throws IllegalArgumentException 参数非法
+     */
+    private static long requireValidLeaseTimeouts(
+            long leaseTimeoutMillis, long reclaimGraceMillis) {
+        if (leaseTimeoutMillis <= 0) {
+            throw new IllegalArgumentException(
+                    "broadcast lease timeout must be > 0, got: " + leaseTimeoutMillis);
+        }
+        if (reclaimGraceMillis < leaseTimeoutMillis) {
+            throw new IllegalArgumentException(
+                    "broadcast reclaim grace must be >= lease timeout ("
+                            + leaseTimeoutMillis
+                            + "), got: "
+                            + reclaimGraceMillis);
+        }
+        return leaseTimeoutMillis;
     }
 
     // ===================== 公开 API =====================
@@ -117,17 +156,21 @@ public final class BroadcastInstanceIdResolver {
             return new Resolution(configured, BroadcastInstanceSource.CONFIGURED);
         }
 
-        // ② 本地持久文件
-        String fromFile = readLocalIdFile();
-        if (fromFile != null) {
-            if (claimQuietly(ns, topic, group, host, pid, fromFile, now)) {
-                return new Resolution(fromFile, BroadcastInstanceSource.LOCAL_FILE);
+        // ② 本地持久文件（按 namespace+group 分片，多进程共享同一文件时按 pid 记录复用）
+        Path idFile = localIdFileFor(ns, group);
+        List<LocalIdRecord> records = readLocalIdRecords(idFile);
+        LocalIdRecord reusable = pickReusable(records, pid);
+        if (reusable != null) {
+            if (claimQuietly(ns, topic, group, host, pid, reusable.instanceId(), now)) {
+                upsertLocalIdRecord(idFile, reusable.instanceId(), pid, now);
+                return new Resolution(reusable.instanceId(), BroadcastInstanceSource.LOCAL_FILE);
             }
-            // 注册中心拒绝（槽位被其它主机占用）→ 继续走回收/分配，不复用该值
+            // 注册中心拒绝（槽位被其它主机的活进程占用）→ 不复用该值，继续走回收/分配。
+            // 注意：不覆盖本地文件（该身份可能属于同机另一个仍在运行的进程）。
             LOG.warn(
-                    "Local broadcast instance id {} rejected by registry (slot taken by another"
-                            + " host); allocating a fresh identity",
-                    fromFile);
+                    "Local broadcast instance id {} rejected by registry (slot held by another"
+                            + " live process); allocating a fresh identity",
+                    reusable.instanceId());
         }
 
         // ③ / ④ 注册中心回收或新分配
@@ -147,7 +190,7 @@ public final class BroadcastInstanceIdResolver {
                                         reclaimGraceMillis));
                 if (lease != null && lease.instanceId() != null) {
                     String id = lease.instanceId();
-                    writeLocalIdFile(id);
+                    upsertLocalIdRecord(idFile, id, pid, now);
                     BroadcastInstanceSource source =
                             lease.reclaimed()
                                     ? BroadcastInstanceSource.RECLAIMED
@@ -271,71 +314,194 @@ public final class BroadcastInstanceIdResolver {
     }
 
     /**
-     * 解析本地身份文件路径。
+     * 解析显式本地身份文件设置。
      *
-     * <p>优先级：显式入参 &gt; 系统属性 {@code streammq.instance.id-file} &gt; 默认 {@code
-     * ${user.home}/.streammq/instance-id}。系统属性取值为 {@code none}（或 {@code false}）时禁用本地文件。
+     * <p>优先级：显式入参 &gt; 系统属性 {@code streammq.instance.id-file}。系统属性取值为 {@code none}（或 {@code
+     * false}）时禁用本地文件。两者都没有时返回「未显式配置」，由 {@link #localIdFileFor} 按 namespace+group 分片到默认目录。
      */
-    private static Path resolveLocalIdFile(Path explicit) {
+    private static IdFileSetting resolveExplicitLocalIdFile(Path explicit) {
         if (explicit != null) {
-            return explicit;
+            return new IdFileSetting(explicit, false);
         }
         String fromProperty = System.getProperty(LOCAL_ID_FILE_PROPERTY);
-        if (fromProperty != null) {
-            String trimmed = fromProperty.trim();
-            if (trimmed.isEmpty()
-                    || DISABLED.equalsIgnoreCase(trimmed)
-                    || "false".equalsIgnoreCase(trimmed)) {
-                return null;
-            }
-            return Paths.get(trimmed);
+        if (fromProperty == null) {
+            return new IdFileSetting(null, false);
+        }
+        String trimmed = fromProperty.trim();
+        if (trimmed.isEmpty()
+                || DISABLED.equalsIgnoreCase(trimmed)
+                || "false".equalsIgnoreCase(trimmed)) {
+            return new IdFileSetting(null, true);
+        }
+        return new IdFileSetting(Paths.get(trimmed), false);
+    }
+
+    /**
+     * 本实例使用的本地身份文件：显式路径优先；否则按 {@code namespace+group} 分片到默认目录 （{@code
+     * ${user.home}/.streammq/instance-id-<ns>_<group>}）。
+     *
+     * <p><b>为什么按应用分片（R4-A01）：</b>此前的全局单文件 {@code .streammq/instance-id} 被同一 OS 用户下 的<b>所有</b>
+     * StreamMQ 应用共享——应用 B 启动会读到应用 A 的身份、被注册中心拒绝后又覆盖该文件， 导致 A 下次重启读到 B 的身份……形成身份互踩与组名漂移（广播漏投 +
+     * 僵尸组堆积）。按 namespace+group 分片后，不同应用/消费者组天然隔离。
+     *
+     * @return 身份文件路径；禁用本地文件时为 null
+     */
+    private Path localIdFileFor(String namespace, String group) {
+        if (explicitLocalIdFile != null) {
+            return explicitLocalIdFile;
+        }
+        if (localIdFileDisabled) {
+            return null;
         }
         String home = System.getProperty("user.home");
         if (home == null || home.isBlank()) {
             return null;
         }
-        return Paths.get(home).resolve(DEFAULT_LOCAL_ID_FILE);
+        return Paths.get(home)
+                .resolve(DEFAULT_LOCAL_ID_DIR)
+                .resolve(DEFAULT_LOCAL_ID_FILE_PREFIX + scopeSegment(namespace, group));
     }
 
-    /** 读取本地身份文件；不存在 / 不可读 / 内容非法时返回 null。 */
-    private String readLocalIdFile() {
-        Path file = localIdFile;
+    /** 作用域片段：namespace 与 group 净化后拼接（不同应用/消费者组互不共享身份文件）。 */
+    private static String scopeSegment(String namespace, String group) {
+        String ns = BroadcastInstanceLease.sanitize(Objects.isNull(namespace) ? "" : namespace);
+        String grp = BroadcastInstanceLease.sanitize(Objects.isNull(group) ? "" : group);
+        String joined = ns.isEmpty() ? grp : ns + "_" + grp;
+        return joined.isEmpty() ? "default" : joined;
+    }
+
+    /** 读取本地身份文件中的全部记录；不存在 / 不可读时返回空列表。 */
+    private static List<LocalIdRecord> readLocalIdRecords(Path file) {
         if (file == null || !Files.isRegularFile(file)) {
-            return null;
+            return List.of();
         }
         try {
-            String content = Files.readString(file, StandardCharsets.UTF_8).trim();
-            return trimToNull(content);
+            List<LocalIdRecord> records = new ArrayList<>();
+            for (String line : Files.readAllLines(file, StandardCharsets.UTF_8)) {
+                LocalIdRecord record = parseLocalIdRecord(line);
+                if (record != null) {
+                    records.add(record);
+                }
+            }
+            return records;
         } catch (IOException | RuntimeException ex) {
             LOG.debug("Failed to read local broadcast instance id file {}: {}", file, ex);
-            return null;
+            return List.of();
         }
     }
 
-    /** 原子写入本地身份文件（写临时文件后 rename）；失败静默。 */
-    private void writeLocalIdFile(String id) {
-        Path file = localIdFile;
+    /** 解析一行记录（{@code id pid timestamp}）；兼容旧版"仅 id"单值文件（pid=0 表示归属未知）。 */
+    private static LocalIdRecord parseLocalIdRecord(String line) {
+        if (line == null) {
+            return null;
+        }
+        String trimmed = line.trim();
+        if (trimmed.isEmpty() || trimmed.startsWith("#")) {
+            return null;
+        }
+        String[] parts = trimmed.split("\\s+");
+        String id = trimToNull(parts[0]);
+        if (id == null) {
+            return null;
+        }
+        long pid = 0L;
+        if (parts.length >= 2) {
+            try {
+                pid = Long.parseLong(parts[1]);
+            } catch (NumberFormatException ignored) {
+                pid = 0L;
+            }
+        }
+        long timestamp = 0L;
+        if (parts.length >= 3) {
+            try {
+                timestamp = Long.parseLong(parts[2]);
+            } catch (NumberFormatException ignored) {
+                timestamp = 0L;
+            }
+        }
+        return new LocalIdRecord(id, pid, timestamp);
+    }
+
+    /**
+     * 选择可复用的身份记录：优先本进程记录，其次是<b>已退出进程</b>的记录（同机重启复用同一身份，保住 PEL）， 最后是归属未知的旧版单值记录。
+     *
+     * <p>若记录归属的 pid 仍存活且不是本进程，说明该身份正被同机另一个进程使用——不复用（否则两个进程 会争抢同一身份，注册中心的同主机守卫会拒绝其一，最终双双漂移）。
+     */
+    private static LocalIdRecord pickReusable(List<LocalIdRecord> records, long myPid) {
+        LocalIdRecord unknownOwner = null;
+        for (LocalIdRecord record : records) {
+            if (myPid > 0 && record.pid() == myPid) {
+                return record;
+            }
+            if (record.pid() <= 0) {
+                if (unknownOwner == null) {
+                    unknownOwner = record;
+                }
+                continue;
+            }
+            if (!isProcessAlive(record.pid())) {
+                return record;
+            }
+        }
+        return unknownOwner;
+    }
+
+    /** 进程是否存活；无法判断时按「不存活」处理（保守：宁可分配新身份也不与活进程争抢）。 */
+    private static boolean isProcessAlive(long pid) {
+        if (pid <= 0) {
+            return false;
+        }
+        try {
+            return ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false);
+        } catch (RuntimeException ex) {
+            return false;
+        }
+    }
+
+    /**
+     * 写入/更新本进程的身份记录（原子替换）：替换同 pid / 同 id 的旧记录，剪除超过保留期的记录。
+     *
+     * <p>不删除其它存活进程的记录——它们是那些进程跨重启复用身份的凭据。
+     */
+    private static void upsertLocalIdRecord(Path file, String id, long pid, long now) {
         if (file == null) {
             return;
         }
         try {
-            Path parent = file.getParent();
-            if (parent != null) {
-                Files.createDirectories(parent);
-            }
-            Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-            Files.writeString(tmp, id, StandardCharsets.UTF_8);
-            try {
-                Files.move(
-                        tmp,
-                        file,
-                        StandardCopyOption.REPLACE_EXISTING,
-                        StandardCopyOption.ATOMIC_MOVE);
-            } catch (AtomicMoveNotSupportedException notAtomic) {
-                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
-            }
+            List<LocalIdRecord> records = new ArrayList<>(readLocalIdRecords(file));
+            records.removeIf(r -> (pid > 0 && r.pid() == pid) || r.instanceId().equals(id));
+            records.removeIf(r -> now - r.timestamp() > LOCAL_RECORD_RETENTION_MS);
+            records.add(new LocalIdRecord(id, pid, now));
+            writeLocalIdRecords(file, records);
         } catch (IOException | RuntimeException ex) {
             LOG.debug("Failed to persist local broadcast instance id to {}: {}", file, ex);
+        }
+    }
+
+    /** 原子写入全部记录（写临时文件后 rename）；失败向上抛出由调用方记录。 */
+    private static void writeLocalIdRecords(Path file, List<LocalIdRecord> records)
+            throws IOException {
+        Path parent = file.getParent();
+        if (parent != null) {
+            Files.createDirectories(parent);
+        }
+        StringBuilder content = new StringBuilder();
+        for (LocalIdRecord record : records) {
+            content.append(record.instanceId())
+                    .append(' ')
+                    .append(record.pid())
+                    .append(' ')
+                    .append(record.timestamp())
+                    .append('\n');
+        }
+        Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+        Files.writeString(tmp, content.toString(), StandardCharsets.UTF_8);
+        try {
+            Files.move(
+                    tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException notAtomic) {
+            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
@@ -376,6 +542,23 @@ public final class BroadcastInstanceIdResolver {
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
     }
+
+    /**
+     * 本地身份文件设置：显式路径，或"显式禁用"标记。
+     *
+     * @param path 显式文件路径（null 表示未显式配置）
+     * @param disabled 是否禁用本地文件
+     */
+    private record IdFileSetting(Path path, boolean disabled) {}
+
+    /**
+     * 本地身份文件中的一条记录。
+     *
+     * @param instanceId 实例身份
+     * @param pid 持有该身份的进程号（0 表示归属未知，兼容旧版单值文件）
+     * @param timestamp 记录写入时间（毫秒）
+     */
+    private record LocalIdRecord(String instanceId, long pid, long timestamp) {}
 
     /**
      * 解析结果。

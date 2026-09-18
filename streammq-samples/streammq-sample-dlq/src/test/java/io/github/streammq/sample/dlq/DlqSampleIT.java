@@ -18,13 +18,18 @@ import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.policy.RetryPolicy;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
+import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.redisson.Redisson;
 import org.redisson.api.RedissonClient;
+import org.redisson.client.codec.StringCodec;
+import org.redisson.config.Config;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Bean;
@@ -32,6 +37,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.TestPropertySource;
 
 /**
@@ -69,8 +76,38 @@ class DlqSampleIT {
 
     private static final String TEST_CONSUMER_GROUP = "test-collector-group";
     private static final String TEST_FAIL_CONSUMER_GROUP = "test-fail-group";
-    private static final String NAMESPACE = SampleConstants.NAMESPACE;
     private static final String TOPIC = SampleConstants.TOPIC;
+
+    /** 每次运行的唯一后缀：命名空间与载荷均带此后缀，避免跨运行残留数据污染断言 */
+    private static final String RUN_ID = UUID.randomUUID().toString().substring(0, 8);
+
+    /** 本次运行的专属命名空间（覆写 streammq.namespace），配合 {@link #cleanupNamespace()} 实现跨运行隔离 */
+    private static final String IT_NAMESPACE = "dlq-it-" + RUN_ID;
+
+    /** 覆写全局命名空间，避免与历史运行/其它示例共享 streammq:dlq:* 键 */
+    @DynamicPropertySource
+    static void overrideNamespace(DynamicPropertyRegistry registry) {
+        registry.add("streammq.namespace", () -> IT_NAMESPACE);
+    }
+
+    /**
+     * 清理本次运行命名空间下的全部键。
+     *
+     * <p>使用独立客户端：{@code @DirtiesContext(AFTER_EACH_TEST_METHOD)} 在每个方法后关闭上下文， 注入的 RedissonClient 在
+     * {@code @AfterAll} 阶段已被 shutdown，无法复用于清理。
+     */
+    @AfterAll
+    static void cleanupNamespace() {
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://127.0.0.1:6379").setDatabase(0);
+        config.setCodec(StringCodec.INSTANCE);
+        RedissonClient cleanupClient = Redisson.create(config);
+        try {
+            cleanupClient.getKeys().deleteByPattern("streammq:" + IT_NAMESPACE + ":*");
+        } finally {
+            cleanupClient.shutdown();
+        }
+    }
 
     @Autowired private OrderProducer orderProducer;
 
@@ -96,12 +133,12 @@ class DlqSampleIT {
             // 仅清理 retry / dlq 流以避免跨测试污染。
             String retryKey =
                     "streammq:"
-                            + NAMESPACE
+                            + IT_NAMESPACE
                             + ":retry:msg:"
                             + TOPIC
                             + ":"
                             + TEST_FAIL_CONSUMER_GROUP;
-            String dlqKey = "streammq:" + NAMESPACE + ":dlq:" + TEST_FAIL_CONSUMER_GROUP;
+            String dlqKey = "streammq:" + IT_NAMESPACE + ":dlq:" + TEST_FAIL_CONSUMER_GROUP;
             System.out.println("=== Cleaning streams: " + retryKey + ", " + dlqKey);
             long deleted = redissonClient.getKeys().delete(retryKey, dlqKey);
             System.out.println("=== Deleted keys count: " + deleted);
@@ -116,8 +153,8 @@ class DlqSampleIT {
     @Test
     @DisplayName("正常消息投递 - 消费者接收验证")
     void normalMessageDelivery() {
-        String orderId = "IT-NORMAL-001";
-        String content = "normal-order-content";
+        String orderId = "IT-NORMAL-001-" + RUN_ID;
+        String content = "normal-order-content-" + RUN_ID;
 
         System.out.println("=== TestCollector instance: " + testCollector.hashCode());
         System.out.println(
@@ -153,8 +190,8 @@ class DlqSampleIT {
     @Test
     @DisplayName("消息消费失败触发死信队列")
     void failedMessageTriggersDlq() {
-        String orderId = "IT-DLQ-001";
-        String content = "dlq-order-content";
+        String orderId = "IT-DLQ-001-" + RUN_ID;
+        String content = "dlq-order-content-" + RUN_ID;
 
         SendResult result = orderProducer.sendOrder(orderId, content);
 
@@ -179,8 +216,8 @@ class DlqSampleIT {
     @Test
     @DisplayName("死信消费者收到死信消息并验证元数据")
     void dlqConsumerReceivesDeadLetter() {
-        String orderId = "IT-DLQ-002";
-        String content = "dlq-order-content-002";
+        String orderId = "IT-DLQ-002-" + RUN_ID;
+        String content = "dlq-order-content-002-" + RUN_ID;
 
         SendResult result = orderProducer.sendOrder(orderId, content);
 
@@ -269,10 +306,11 @@ class DlqSampleIT {
      *
      * <p>通过 {@link StreamMQDlqConsumer} 注解注册为 DLQ 消费者， 监听 {@value #TEST_FAIL_CONSUMER_GROUP}
      * 消费者组的死信队列， 收集死信消息供测试验证。
+     *
+     * <p>不显式声明 {@code namespace}：注解值只能取编译期常量，无法携带每次运行的 {@link #RUN_ID}， 留空即回退到被 {@link
+     * #overrideNamespace} 覆写的全局命名空间，与 {@link TestFailConsumer} 写入死信所用的命名空间保持一致。
      */
-    @StreamMQDlqConsumer(
-            consumerGroup = TEST_FAIL_CONSUMER_GROUP,
-            namespace = SampleConstants.NAMESPACE)
+    @StreamMQDlqConsumer(consumerGroup = TEST_FAIL_CONSUMER_GROUP)
     static class TestDlqConsumer extends AbstractDlqMessageConsumer<String> {
 
         final ConcurrentLinkedQueue<Message<String>> receivedDlqMessages =
