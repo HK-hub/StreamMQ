@@ -58,7 +58,7 @@
         <streammq.version>0.1.2</streammq.version>
 
         <!-- 由本 BOM 管理的第三方版本（与 streammq-parent 保持一致） -->
-        <redisson.version>3.34.1</redisson.version>
+        <redisson.version>3.52.0</redisson.version>
         <lombok.version>1.18.34</lombok.version>
     </properties>
 
