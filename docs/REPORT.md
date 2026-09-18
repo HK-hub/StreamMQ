@@ -118,7 +118,31 @@
 | R4-40 | CONTRIBUTING 示例/命令/覆盖率目标与代码事实不符（4 处编译错误示例、错误 FQCN、80%/90% 不实目标） | 按真实 API 重写；FQCN/阈值更正 |
 | R4-41 | 文档事实错误：广播僵尸组清扫 TTL 参数、zh README 顺序消费超时语义三处反转、SPI 示例签名、死锚点、延时 7 天上限缺失、诊断模块配置缺失 | 全部按代码事实更正/补齐（EN/zh/config-reference 三处同步） |
 | R4-42 | NOTICE 缺 4 个第三方依赖、Jackson 版本过时；README 技术栈表缺项 | 补齐（FlatBuffers/Agrona/SBE/fabric8）+ 版本同步 |
-| R4-43 | `SECURITY.md` 全中文而 EN README 指向它 | 重写为英文为主（附中文摘要），技术口径与代码逐条核对 |
+| R4-43 | `SECURITY.md` 全中文而 EN README 指向它 | 重写为英文为主（附中文摘要），技术口径与代码逐条核对；依赖基线与 CVE 门禁口径同步更新到 3.5.16 线 |
+
+### 发布工程与依赖基线（第二轮迭代，2026-09-18 晚）
+
+首次 push 后 CI 真实执行暴露了 CVE 门禁的三层问题，本轮全部闭环：
+
+| 编号 | 问题 | 证据 | 处置 |
+|---|---|---|---|
+| R4-44 | 新建的 SBOM 步骤必然失败：`makeAggregateBom` 默认 `skipNotDeployed=true`，根工程（pom 打包）不参与 deploy → `target/bom.json` 根本不生成 | CI job "CVE gate (CycloneDX SBOM + osv-scanner)" 日志：`target/bom.json was not generated`；本地复现 + 插件字节码核对 | FIXED：显式 `-Dcyclonedx.skipNotDeployed=false`；本地实测生成 198 组件 SBOM |
+| R4-45 | CVE 门禁口径不可操作：聚合 SBOM 含 samples/未发布模块（Tomcat 等无关依赖），且"任意公告即失败"会让门禁长期变红 | 本地 osv-scanner 实测：聚合扫描 24 个含公告包（13 个 High/Critical），其中多数属示例应用依赖面 | FIXED：门禁范围收敛为**发布构件依赖闭包**（`bom-shipped.cdx.json`，BFS 裁剪，剔除其它 streammq 模块与 provided/optional 面）；阻断阈值 CVSS ≥ 7.0（与 OWASP 时代 `failBuildOnCVSS=7` 对齐），<7.0 打印且随 JSON 报告上传为构建产物 |
+| R4-46 | 依赖基线本身带着 13 个 High/Critical 公告：这些公告只能由 Boot 3.5 / Spring 6.2 / Spring Data 3.5 / Micrometer 1.15 线修复，旧基线（Boot 3.3.x + Redisson 3.34.1）无法修复 | OSV 公告区间逐一比对（spring-core/expression 修复于 6.2.x，spring-data-commons 3.5.12，micrometer 1.15.12，actuator starter 3.5.12，spring-boot 3.5.12，netty 4.1.136+） | FIXED：基线升级到 Spring Boot **3.5.16** + Redisson **3.52.0** + Spring Cloud Stream **4.3.3** + Jackson **2.21.4** + Netty **4.1.138.Final** + AssertJ 3.27.7 + commons-compress 1.27.1；升级后闭包扫描 0 个 ≥7.0 公告（余 5 个 Medium 观测项） |
+| R4-47 | 升级暴露 Redisson 3.5x 行为变化：对"组已存在"的 `XGROUP CREATE` 会先做约 5s 退避重试才抛 BUSYGROUP（3.34 立即返回）→ 组预先存在时（重启/预建组/IT）监听器启动被阻塞数秒、启动窗口消息漏读 | 独立探针实测：3.34.1 二次调用立即返回；3.52.0 二次调用耗时 **4865ms**；streammq-test 的 `ConsumerTests` 由 6/6 绿变为 4 失败 | FIXED：`ensureGroup` 改为**先探测（`listGroups()`）再创建**——命中即返回，语义不变且启动零延迟；修复后 6/6 恢复绿 |
+| R4-48 | 升级暴露 Spring Cloud Stream 4.3 兼容问题：`AbstractExtendedBindingProperties` 自 4.3 起通过 `ConfigurableApplicationContext` 注入 `propertiesBinder`，纯单测环境为 null → `StreamMQMessageBinderTest` 2 例 NPE | CI 与本地 failsafe 日志（`propertiesBinder is null`） | FIXED：测试装配提供最小 `AnnotationConfigApplicationContext` 并注入（生产路径由 Spring 注入，不受影响）；binder 13/13 恢复绿 |
+
+**依赖基线与支持矩阵**：0.1.2 以 Spring Boot 3.5 构建，支持矩阵表述为 **Spring Boot 3.3–3.5**（README 双语已同步）；
+`streammq-bom` 仍不 import `spring-boot-dependencies`（版本由使用方 BOM 决定）。
+
+**CVE 门禁的本地可复现命令**（与 CI `sbom-scan` 一致）：
+
+```text
+mvn -DskipTests -Dcyclonedx.skip=false -Dcyclonedx.skipNotDeployed=false org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom
+# 裁剪发布闭包 → target/bom-shipped.cdx.json（BFS 脚本与 CI 的 "Filter the SBOM..." 步骤逐字一致）
+osv-scanner scan source -L target/bom-shipped.cdx.json --format json --output-file target/osv-report.json
+# 阈值裁决：任一 CVSS ≥ 7.0 → 阻断（实测：0 个阻断 / 5 个 Medium 观测项）
+```
 
 ### P3/P4（本轮一并闭环的整备项）
 
@@ -159,7 +183,7 @@ mvn clean verify -Djacoco.check.skip=false
 
 | 项 | 结果 |
 |---|---|
-| Reactor | **20/20 模块 SUCCESS** |
+| Reactor | **20/20 模块 SUCCESS**（含依赖基线升级与 CVE 门禁改造后的最终树） |
 | 测试总数（surefire + failsafe） | **1206**（单元 958 / 集成 248） |
 | 失败 / 错误 / 跳过 | **0 / 0 / 0** |
 | JaCoCo 覆盖率门禁 | 发布模块全部达标，无 `Rule violated`（按「实测 −3pt」口径设卡） |
@@ -245,7 +269,8 @@ Must Fix Before Release: 0 items
 Should Fix:             0 items
 Open P2:                0 items
 Open P3/P4:             0 items（结构性整备见 §4 的后续工作，均不影响发布）
-Release Prerequisite:   无（CVE 门禁不再依赖维护者配置 secrets；有 NVD key 时自动获得增强扫描）
+Release Prerequisite:   无（CVE 门禁为无密钥硬门禁：发布闭包 SBOM + osv-scanner，实测 0 个 >=7.0 公告；
+                        有 NVD key 时额外获得每周 OWASP 深扫）
 ```
 
 **与上一轮的差异必须被记录**：第三轮裁决 GO 但保留 4 项 P2 与 8 组 P3/P4（"0.2.0 / 1.0 前"）。

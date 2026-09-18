@@ -27,6 +27,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -37,6 +38,7 @@ import org.springframework.cloud.stream.binder.ExtendedConsumerProperties;
 import org.springframework.cloud.stream.binder.ExtendedProducerProperties;
 import org.springframework.cloud.stream.provisioning.ConsumerDestination;
 import org.springframework.cloud.stream.provisioning.ProducerDestination;
+import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.messaging.MessageHandler;
 import org.springframework.messaging.MessagingException;
 import org.springframework.messaging.support.GenericMessage;
@@ -75,11 +77,28 @@ class StreamMQMessageBinderTest {
 
     private StreamMQMessageBinder binder;
 
+    /** 供 AbstractExtendedBindingProperties 注入 Binder 的最小可配置上下文（spring-cloud-stream 4.3 起必需）。 */
+    private AnnotationConfigApplicationContext propertiesContext;
+
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         StreamMQBinderProperties binderProperties = new StreamMQBinderProperties();
         binder = new StreamMQMessageBinder(template, listenerContainer, binderProperties);
-        binder.setExtendedBindingProperties(new StreamMQExtendedBindingProperties());
+        StreamMQExtendedBindingProperties extended = new StreamMQExtendedBindingProperties();
+        // spring-cloud-stream 4.3 起 AbstractExtendedBindingProperties 的 propertiesBinder 由
+        // ConfigurableApplicationContext 注入（ApplicationContextAware）；纯单测环境必须显式提供，
+        // 否则 getExtendedConsumer/ProducerProperties 会因 propertiesBinder 为 null 抛 NPE。
+        propertiesContext = new AnnotationConfigApplicationContext();
+        propertiesContext.refresh();
+        extended.setApplicationContext(propertiesContext);
+        binder.setExtendedBindingProperties(extended);
+    }
+
+    @AfterEach
+    void tearDown() {
+        if (propertiesContext != null) {
+            propertiesContext.close();
+        }
     }
 
     @Test

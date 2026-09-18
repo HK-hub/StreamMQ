@@ -103,6 +103,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   （`streammq-redisson` 为 test scope 不传递其依赖，且 `protostuff`/`flatbuffers`/`agrona` 均为 optional 依赖）。
 
 ### Changed
+- **依赖基线升级到安全版本线（R4-CVE）：Spring Boot 3.3.5 → 3.5.16（Spring Framework 6.2.x / Spring Data 3.5.x /
+  Micrometer 1.15.x），Redisson 3.34.1 → 3.52.0，Spring Cloud Stream 4.1.3 → 4.3.3，Jackson 2.18.10 → 2.21.4，
+  Netty 统一钉到 4.1.138.Final，AssertJ 3.27.7，commons-compress 1.27.1。目的：**发布构件带给使用方的依赖闭包
+  不再包含任何 High/Critical 公告**（此前 13 个包的 High 公告只能靠 Boot 3.5 / Spring 6.2 线修复）。
+  支持矩阵相应表述为 Spring Boot 3.3–3.5。升级过程修复了两处兼容问题（见下方 Fixed）。
+- **CVE 门禁改为「发布闭包 + 严重度阈值」**：CI 每次 push/PR 生成发布构件的 CycloneDX SBOM（
+  `bom-shipped.cdx.json`，从 4 个发布构件做依赖闭包裁剪，剔除 samples/未发布模块与 provided/optional 面），
+  用 `osv-scanner`（OSV 库，无需密钥）扫描：任意 CVSS ≥ 7.0 公告阻断构建，<7.0 打印并随完整 JSON 报告上传为
+  构建产物；OWASP/NVD 深扫保留为每周/按需增强（需 `NVD_API_KEY`）。门禁命令与阈值口径同步写入 SECURITY.md。
 
 - **`@StreamMQConsumer` 新增 `consumeThreads` 并发旋钮（0.1.2 新增，默认 1）**：并发消费循环数的唯一推荐写法
   （仅 CONCURRENT 集群消费生效，取值夹取到 `[1, 64]`）。旧名 `consumeThreadMin` 标记 `@Deprecated` 并仅为源码兼容保留
@@ -232,6 +241,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "消费能力"彻底区分开，杜绝把受补货约束的数字当作容量依据。
 - **`streammq-test` 覆盖率门禁按门禁命令实测校准**（首版占位 0.30/0.20 → 实测 −3pt 的 0.78/0.39），
   与其他发布模块的设卡口径一致。
+
+- **Redisson 3.5x 下监听器启动被 BUSYGROUP 退避阻塞（新基线上线时发现）**：Redisson 3.5x 对「组已存在」的
+  `XGROUP CREATE` 会先做约 5s 退避重试才抛 BUSYGROUP（3.34 立即返回），使消费者组预先存在（重启、预建组、
+  集成测试）时监听器启动被阻塞数秒、启动窗口内的消息可能漏读。现改为**先探测组是否存在**（`listGroups()`）
+  再决定是否创建：命中即直接返回，语义不变且启动零延迟。
+- **Spring Cloud Stream 4.3 的 Binder 单元测试适配**：`AbstractExtendedBindingProperties` 自 4.3 起通过
+  `ConfigurableApplicationContext` 注入 `propertiesBinder`（ApplicationContextAware），纯单测环境需显式提供
+  上下文，否则 `getExtended{Consumer,Producer}Properties` 抛 NPE（生产路径由 Spring 注入，不受影响）。
 
 ### Removed
 

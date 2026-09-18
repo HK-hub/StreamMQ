@@ -27,7 +27,7 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 - **虚拟线程（JEP 444）**是消费循环的默认执行模型——`Executors.newVirtualThreadPerTaskExecutor()` 在 JDK 21 才是 GA 状态。我们拒绝回退到平台线程池，因为高并发消费者的线程数量会与 Redis 连接池产生 1:N 放大效应。
 - **模式匹配 + Record 模式**简化了 `ConsumeLoopTask` / `ConsumeAction` 等核心胶水代码。
-- 我们在 0.2.0 路线图中**不会**降级到 JDK 17——如果你目前在 JDK 17 LTS，请评估是否可以在该项目内使用 JDK 21。Spring Boot 3.3.x 同时支持 JDK 17 与 21，但 StreamMQ 选择把赌注压在 21 上以避免为旧 JDK 写两套线程模型。
+- 我们在 0.2.0 路线图中**不会**降级到 JDK 17——如果你目前在 JDK 17 LTS，请评估是否可以在该项目内使用 JDK 21。Spring Boot 3.3–3.5 同时支持 JDK 17 与 21，但 StreamMQ 选择把赌注压在 21 上以避免为旧 JDK 写两套线程模型。
 
 ---
 
@@ -194,7 +194,7 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 | 项目 | 配置 |
 |------|------|
 | JDK | OpenJDK 21.0.11 (Eclipse Adoptium) |
-| Spring Boot | 3.3.5 |
+| Spring Boot | 3.5.16 |
 | Redisson | 3.34.1 |
 | Redis | 7.x (本地单机, 无密码) |
 | JMH | 1.37 |
@@ -298,7 +298,7 @@ java -Djmh.ignoreLock=true \
 | JDK | 21 | 21+ |
 | Maven | 3.9 | 3.9+ |
 | Redis | 7.2 | 7.2+ |
-| Spring Boot | 3.3 | 3.3.5 |
+| Spring Boot | 3.3 – 3.5 | 3.5.16 |
 
 > ⚠️ **`mvn verify` 需本地 Redis（`localhost:6379`）。** 该命令会运行集成测试，无 Redis 时自动跳过；CI 通过 Docker service 提供 Redis。
 
@@ -1303,7 +1303,7 @@ git commit -m "feat: add your feature"
 | 技术 | 版本 | 用途 |
 |------|------|------|
 | Java | 21+ | 运行时 |
-| Spring Boot | 3.3.5 | 框架基础 |
+| Spring Boot | 3.5.16 | 框架基础 |
 | Redisson | 3.34.1 | Redis 客户端 |
 | Jackson | 2.18.10 | JSON 序列化（默认序列化器；由 2.17.2 升级以修复 GHSA-r7wm-3cxj-wff9 / GHSA-72hv-8253-57qq——`jackson-bom` import 声明在 Spring Boot BOM **之前**，避免被 Boot 管理的 2.17.2 覆盖） |
 | Apache Fory（原 Apache Fury） | 1.7.3 | 高性能序列化（optional 依赖，需显式 opt-in；`org.apache.fory:fory-core`，要求 >= 1.1.0——更早版本受 CVE-2026-50076 影响） |

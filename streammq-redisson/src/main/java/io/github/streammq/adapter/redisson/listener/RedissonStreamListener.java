@@ -38,6 +38,7 @@ import lombok.Getter;
 import lombok.NonNull;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
+import org.redisson.api.StreamGroup;
 import org.redisson.api.StreamMessageId;
 import org.redisson.api.stream.StreamAddArgs;
 import org.redisson.api.stream.StreamCreateGroupArgs;
@@ -627,6 +628,26 @@ public class RedissonStreamListener implements StreamMQListener {
     }
 
     /**
+     * 组是否已存在于该 Stream（探测失败按"不存在"处理）。
+     *
+     * <p>必要性（R4）：{@code Redisson 3.5x} 对"组已存在"的 {@code XGROUP CREATE} 会先做约 5s 的 退避重试才抛 BUSYGROUP（实测
+     * 3.34.1 立即返回、3.52.0 约 4.9s），直接调用会把监听器启动阻塞数秒。 先探测既消除该阻塞，也保留"不存在才创建"的原有语义。
+     */
+    private static boolean groupAlreadyExists(RStream<String, String> stream, String group) {
+        try {
+            for (StreamGroup existing : stream.listGroups()) {
+                if (group.equals(existing.getName())) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (RuntimeException ex) {
+            LOG.debug("listGroups probe failed (treat as missing group): {}", ex.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * 判断异常是否由线程中断引起。
      *
      * <p>Redisson 将底层 {@link InterruptedException} 包装为 RuntimeException 抛出 （消息含 {@code
@@ -873,6 +894,17 @@ public class RedissonStreamListener implements StreamMQListener {
                         consumeFromWhere == ConsumeFromWhere.CONSUME_FROM_FIRST
                                 ? new StreamMessageId(0, 0)
                                 : StreamMessageId.NEWEST;
+                // 先探测组是否已存在（R4：Redisson 3.5x 对已存在组的 XGROUP CREATE 会先做约 5s
+                // 退避重试才抛 BUSYGROUP，直接调用会把监听器启动阻塞数秒——重启/预建组场景必然命中）。
+                // 探测命中即直接返回，既避免阻塞，也保留"组不存在才创建"的原有语义；
+                // 探测失败（流不存在等）按"不存在"处理，交回 createGroup 既有错误路径。
+                if (groupAlreadyExists(stream, effectiveGroup)) {
+                    LOG.debug(
+                            "Consumer group already exists: topic={}, group={}",
+                            topic,
+                            effectiveGroup);
+                    return;
+                }
                 stream.createGroup(
                         StreamCreateGroupArgs.name(effectiveGroup).makeStream().id(startId));
                 LOG.info(

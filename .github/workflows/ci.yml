@@ -582,9 +582,13 @@ jobs:
         # 根 POM pluginManagement 已 pin cyclonedx-maven-plugin 2.9.1 并默认 skip=true
         # （避免影响本地构建），此处显式开启；makeAggregateBom 为 aggregator goal，
         # 聚合产物落在 reactor 根目录 target/bom.json（outputFormat 默认 all，同时产出 bom.xml）。
+        #
+        # skipNotDeployed=false 是必需的：该 goal 默认跳过「不参与 deploy 的项目」，
+        # 而根工程（pom 打包）不参与 deploy → 不加该参数时 SBOM 根本不会生成（R4-CVE 实测踩坑）。
         run: |
           set -euo pipefail
           mvn -B -q -DskipTests -Dspotless.check.skip=true -Dcyclonedx.skip=false \
+            -Dcyclonedx.skipNotDeployed=false \
             org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom
           test -s target/bom.json || { echo "::error::target/bom.json was not generated"; exit 1; }
 
@@ -626,6 +630,64 @@ jobs:
           print("SBOM sanity check OK: published artifacts and dependency components are present")
           PY
 
+      - name: Filter the SBOM to the shipped dependency closure
+        # 门禁范围 = 「发布构件实际带给使用方的依赖闭包」（R4-CVE）：
+        # 聚合 SBOM 覆盖全部 reactor 项目（含 samples / 未发布模块），整份扫描会把示例应用的
+        # Web 容器等无关依赖计入门禁。这里从 4 个发布构件出发做 BFS：
+        #   · 跳过其它 streammq 模块（samples/diagnostics/kubernetes/bom 不对外发布）
+        #   · 跳过 optional/excluded 组件（provided/optional 依赖由使用方自带，不属于本库的交付面）
+        # 结果写入 target/bom-shipped.cdx.json 供 osv-scanner 扫描，并打印保留/剔除统计。
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import sys
+
+          with open('target/bom.json', encoding='utf-8') as fh:
+              bom = json.load(fh)
+          components = bom.get('components') or []
+          by_ref = {c['bom-ref']: c for c in components}
+          deps = {e['ref']: (e.get('dependsOn') or []) for e in (bom.get('dependencies') or [])}
+          published = {'streammq-core', 'streammq-redisson',
+                       'streammq-spring-boot-starter', 'streammq-test'}
+          roots = [r for r, c in by_ref.items()
+                   if c.get('group') == 'io.github.streammq' and c.get('name') in published]
+          if len(roots) != 4:
+              print(f"::error::expected 4 published roots in the SBOM, found {len(roots)}: {roots}")
+              sys.exit(1)
+
+          kept = set()
+          stack = list(roots)
+          while stack:
+              ref = stack.pop()
+              if ref in kept:
+                  continue
+              component = by_ref.get(ref)
+              if component is None:
+                  continue
+              if (component.get('group') == 'io.github.streammq'
+                      and component.get('name') not in published
+                      and ref not in roots):
+                  continue
+              if component.get('scope', 'required') in ('optional', 'excluded'):
+                  continue
+              kept.add(ref)
+              stack.extend(deps.get(ref, []))
+
+          shipped = dict(bom)
+          shipped['components'] = [c for c in components if c['bom-ref'] in kept]
+          shipped['dependencies'] = [e for e in (bom.get('dependencies') or [])
+                                     if e['ref'] in kept]
+          with open('target/bom-shipped.cdx.json', 'w', encoding='utf-8') as fh:
+              json.dump(shipped, fh, ensure_ascii=False)
+
+          names = sorted(f"{by_ref[r].get('name')}:{by_ref[r].get('version')}" for r in kept)
+          print(f"Shipped closure: {len(kept)} components (aggregate SBOM has {len(components)})")
+          print("Shipped components:")
+          for name in names:
+              print(f"  - {name}")
+          PY
+
       - name: Download osv-scanner (pinned version)
         run: |
           set -euo pipefail
@@ -640,24 +702,24 @@ jobs:
           # 可能是 `--version` 或 `version` 子命令，故按顺序容错，最后以 `--help` 兜底）。
           ./osv-scanner --version 2>/dev/null || ./osv-scanner version 2>/dev/null || ./osv-scanner --help > /dev/null
 
-      - name: Scan the SBOM with osv-scanner (hard gate)
-        # osv-scanner v2 的 SBOM 扫描入口是 `scan source -L <bom>`（v2 无 --sbom / --fail-on-vulnerability 开关）。
-        # 退出码语义（官方文档 Return Codes）：0=未发现漏洞；1=发现漏洞；127=工具错误；128=未解析到任何包。
-        # 这里显式判断退出码，等价于 --fail-on-vulnerability 的硬门禁语义。
+      - name: Scan the shipped SBOM with osv-scanner (hard gate)
+        # 门禁口径（R4-CVE，与 OWASP 时代的 failBuildOnCVSS=7 对齐）：
+        #   · 扫描对象是「发布构件实际带给使用方的依赖闭包」（上一步生成的 bom-shipped.json）
+        #   · 任意 ≥7.0（High/Critical）的公告 → 门禁失败；<7.0 的公告打印但不阻断（观测面）
+        #   · 完整 JSON 报告上传为构建产物，便于 triage
+        # 说明：不使用 osv-scanner 的退出码直接判定——退出码 1 表示"发现任意级别公告"，
+        # 会把 Medium/Low 也当作阻断，门禁会长期变红而失去可操作性。
         run: |
           set -euo pipefail
           rc=0
-          ./osv-scanner scan source -L target/bom.json --format table || rc=$?
+          ./osv-scanner scan source -L target/bom-shipped.cdx.json \
+            --format json --output target/osv-report.json > /dev/null 2>&1 || rc=$?
           case "${rc}" in
-            0)
-              echo "OSV scan OK: no known vulnerabilities in the SBOM"
-              ;;
-            1)
-              echo "::error::osv-scanner found known vulnerabilities — CVE gate failed (see the table above)"
-              exit 1
+            0|1)
+              : # 0=未发现；1=发现（按严重度在下一步裁决）
               ;;
             128)
-              echo "::error::osv-scanner found no packages in target/bom.json — the SBOM is empty or broken"
+              echo "::error::osv-scanner found no packages in target/bom-shipped.cdx.json — the SBOM is empty or broken"
               exit 1
               ;;
             *)
@@ -665,6 +727,50 @@ jobs:
               exit 1
               ;;
           esac
+          python3 - <<'PY'
+          import json
+          import sys
+
+          THRESHOLD = 7.0
+          with open('target/osv-report.json', encoding='utf-8') as fh:
+              report = json.load(fh)
+
+          blocking = []
+          informational = []
+          for result in report.get('results', []):
+              for pkg in result.get('packages', []):
+                  name = pkg['package']['name']
+                  version = pkg['package']['version']
+                  for group in pkg.get('groups', []):
+                      severity = float(group.get('max_severity') or 0)
+                      ids = ', '.join(group.get('ids', []))
+                      line = f"{severity:4.1f}  {name}:{version}  {ids}"
+                      (blocking if severity >= THRESHOLD else informational).append(line)
+
+          print(f"Shipped-closure vulnerability findings: {len(blocking) + len(informational)}"
+                f" (blocking >= {THRESHOLD}: {len(blocking)})")
+          for line in sorted(informational, reverse=True):
+              print(f"  [info] {line}")
+          for line in sorted(blocking, reverse=True):
+              print(f"  [BLOCK] {line}")
+
+          if blocking:
+              print("::error::CVE gate failed: High/Critical advisories in the shipped dependency"
+                    " closure — upgrade or document an explicit exception in SECURITY.md")
+              sys.exit(1)
+          print("CVE gate OK: no High/Critical advisories in the shipped dependency closure")
+          PY
+
+      - name: Upload SBOM + vulnerability report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sbom-and-vulnerability-report
+          path: |
+            target/bom.json
+            target/bom-shipped.cdx.json
+            target/osv-report.json
+          if-no-files-found: warn
 
   security:
     # E-03/E-19：OWASP/NVD **深扫 = 增强**（默认门禁是 sbom-scan，不需要密钥）。

@@ -19,15 +19,15 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 
 /**
  * {@link StreamMQHealthController} 单元测试，验证 K8s 存活与就绪探针端点。
  *
- * <p>使用 {@link WebMvcTest} 加载 Web 层，通过 {@link MockBean} 注入模拟的 {@link StreamMQListenerContainer}，使用
- * MockMvc 验证 JSON 响应。 容器不存在时的降级场景使用独立 MockMvc 测试。
+ * <p>使用 {@link WebMvcTest} 加载 Web 层，通过 {@link MockitoBean} 注入模拟的 {@link
+ * StreamMQListenerContainer}，使用 MockMvc 验证 JSON 响应。 容器不存在时的降级场景使用独立 MockMvc 测试。
  */
 @DisplayName("健康探针控制器测试")
 @WebMvcTest(StreamMQHealthController.class)
@@ -35,7 +35,7 @@ class StreamMQHealthControllerTest {
 
     @Autowired private MockMvc mockMvc;
 
-    @MockBean private StreamMQListenerContainer container;
+    @MockitoBean private StreamMQListenerContainer container;
 
     @Test
     @DisplayName("liveness - 始终返回 UP 状态与 backend 字段")

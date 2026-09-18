@@ -540,7 +540,9 @@ StreamMQ 通过 Maven Central Portal (`org.sonatype.central:central-publishing-m
 
 1. **更新版本号** — 升级根 `pom.xml` 与 `streammq-bom/pom.xml` 中的 `<version>` 与 `<streammq.version>`，保持一致（CI `guard` job 会校验）。
 2. **更新 CHANGELOG** — 将 `[Unreleased]` 段合并入新版本，附日期。
-3. **本地 dry-run（复现发布门禁）** — `mvn clean verify -Djacoco.check.skip=false`；集成测试需要本地 Redis（`localhost:6379`，无 Redis 时 IT 会被整体跳过、门禁形同虚设）。如需一并执行依赖 CVE 扫描，追加 `-Dowasp.skip=false`，并建议设置 `NVD_API_KEY` 环境变量（否则匿名访问 NVD 限流、扫描可能偶发失败）。
+3. **本地 dry-run（复现发布门禁）** — `mvn clean verify -Djacoco.check.skip=false`；集成测试需要本地 Redis（`localhost:6379`，无 Redis 时 IT 会被整体跳过、门禁形同虚设）。
+   依赖 CVE 门禁（CI 的 `sbom-scan` job，无需密钥）本地复现：`mvn -DskipTests -Dcyclonedx.skip=false -Dcyclonedx.skipNotDeployed=false org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom` 生成聚合 SBOM，再从 4 个发布构件裁剪出依赖闭包后用 `osv-scanner scan source -L <bom.cdx.json>` 扫描（High/Critical 阻断；实现与阈值口径以 `.github/workflows/ci.yml` 的 `sbom-scan` 为准）。
+   如需 OWASP/NVD 深扫（每周 CI 增强项），追加 `-Dowasp.skip=false`，并建议设置 `NVD_API_KEY` 环境变量（否则匿名访问 NVD 限流、扫描可能偶发失败）。
 4. **打 tag** — `git tag -s v0.x.y -m "Release v0.x.y"`（签名 tag 满足 GPG 要求）。
 5. **触发 `release.yml`** — `workflow_dispatch` 或推送 tag；`test` job 会运行 `mvn clean verify` 兜底，`publish` job 会上传至 Central Portal。
 6. **人工确认发布** — `parent.pom.xml` 中 `<autoPublish>false</autoPublish>`，首个版本需在 [Central Portal](https://central.sonatype.com/) 人工点击 "Publish"。
@@ -563,7 +565,7 @@ CI 通过 GitHub Secrets 注入：
 
 - `CENTRAL_USERNAME` / `CENTRAL_TOKEN` — Central Portal 凭据
 - `GPG_PRIVATE_KEY` / `GPG_PASSPHRASE` — 签名密钥
-- `NVD_API_KEY` — OWASP Dependency-Check 查询 NVD 的限额（可选；缺失时为匿名限速模式）
+- `NVD_API_KEY` — OWASP Dependency-Check 深扫（每周 CI 增强项）查询 NVD 的限额（可选；缺失时该 job 按设计跳过，**默认 CVE 硬门禁无需任何密钥**）
 
 本地发布需在 `~/.m2/settings.xml` 中以 `server-id=central` 配置相同凭据。
 

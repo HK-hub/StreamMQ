@@ -23,7 +23,7 @@ StreamMQ 0.1.2 hard-depends on **JDK 21+** (enforced in `pom.xml` via `maven-enf
 
 - **Virtual threads (JEP 444)** are the default execution model for consume loops — `Executors.newVirtualThreadPerTaskExecutor()` is only GA in JDK 21. We refuse to fall back to a platform-thread pool because the consumer thread count would multiply against the Redis connection pool in a 1:N relationship.
 - **Pattern matching + Record patterns** simplify core glue code in `ConsumeLoopTask` and `ConsumeAction`.
-- We will **not** downgrade to JDK 17 in the 0.2.0 roadmap. If you are currently on JDK 17 LTS, please evaluate whether you can use JDK 21 within this project. Spring Boot 3.3.x supports both 17 and 21, but StreamMQ bets on 21 to avoid writing two thread models for old JDKs.
+- We will **not** downgrade to JDK 17 in the 0.2.0 roadmap. If you are currently on JDK 17 LTS, please evaluate whether you can use JDK 21 within this project. Spring Boot 3.3–3.5 support both 17 and 21, but StreamMQ bets on 21 to avoid writing two thread models for old JDKs.
 
 ---
 
@@ -235,7 +235,7 @@ artifacts and back-filled into this table.
 | JDK | 21 | 21+ |
 | Maven | 3.9 | 3.9+ |
 | Redis | 7.2 | 7.2+ |
-| Spring Boot | 3.3 | 3.3.5 |
+| Spring Boot | 3.3 – 3.5 | 3.5.16 |
 
 > ⚠️ `mvn verify` requires a local Redis (`localhost:6379`). Without Redis, IT auto-skips; CI uses Docker service.
 > ⚠️ **Build prerequisites:** JDK **21+** is required (`requireJavaVersion [21,)`) and Maven **3.9+**. The build runs `spotless:check` at the `verify` phase — run `mvn spotless:apply` first, or skip with `-Dspotless.check.skip=true`.
@@ -811,7 +811,7 @@ git commit -m "feat: add your feature"
 | Tech | Version | Purpose |
 |---|---|---|
 | Java | 21+ | Runtime |
-| Spring Boot | 3.3.5 | Framework |
+| Spring Boot | 3.5.16 | Framework |
 | Redisson | 3.34.1 | Redis client |
 | Jackson | 2.18.10 | JSON serialization (default serializer; upgraded from 2.17.2 for GHSA-r7wm-3cxj-wff9 / GHSA-72hv-8253-57qq — the `jackson-bom` import is declared **before** the Spring Boot BOM so Boot's managed 2.17.2 cannot override it) |
 | Apache Fory (formerly Apache Fury) | 1.7.3 | High-perf serialization (optional; opt-in for throughput; `org.apache.fory:fory-core`, required >= 1.1.0 — CVE-2026-50076) |

@@ -133,19 +133,25 @@ written as Base64 text in stream fields. Still, keep Redis reachable only by tru
   **24.3.25**), SBE runtime (`org.agrona:agrona`, **1.17.1**; build-time codegen `uk.co.real-logic:sbe-tool`
   **1.18.0**), and Protostuff (**1.8.0**). They are declared `optional` in `streammq-redisson` and their versions are
   managed by the parent POM. Follow the declared lower bounds; do not downgrade `fory-core` below 1.1.0.
-- **Jackson is on 2.18.10 in this repository's build** (upgraded from 2.17.2 to fix **GHSA-r7wm-3cxj-wff9** and
-  **GHSA-72hv-8253-57qq**). The `jackson-bom` import is declared **before** the Spring Boot BOM so that Boot's managed
-  2.17.2 cannot silently override it.
-- **Host dependencies (Spring / Netty / ...) are managed by the consumer**: the versions in this project's parent POM
-  (Spring Boot 3.3.5 → Spring 6.1.14, Netty 4.1.x transitively via Redisson) are **only used to build and test this
-  repository** and are not imposed on consumers; `streammq-bom` deliberately does not import
+- **Jackson follows the Spring Boot 3.5 baseline (2.21.4)**: the `jackson-bom` import is declared **before** the
+  Spring Boot BOM so that the Boot-managed version cannot silently override it, and the pinned line is the one that
+  carries the fixes for **GHSA-r7wm-3cxj-wff9** / **GHSA-72hv-8253-57qq** (2.18.8+) and the 2.19–2.21 async-parser
+  advisories (2.21.4+).
+- **Host dependencies (Spring / Redisson / ...) are managed by the consumer**: the versions in this project's parent
+  POM (**Spring Boot 3.5.16**, **Redisson 3.52.0**, Netty 4.1.x transitively via Redisson) are **only used to build
+  and test this repository** and are not imposed on consumers; `streammq-bom` deliberately does not import
   `spring-boot-dependencies`. Manage these through your own BOM (`spring-boot-starter-parent` /
-  `spring-boot-dependencies`).
-- The remaining host dependency lines (Spring 6.1.x / Netty 4.1.x) carry upstream advisories during the 0.1.x cycle;
-  upgrade cadence is the consumer's responsibility. This project will refresh its own build/test dependency lines to
-  the then-current versions in **0.2.x**.
-- **CVE scanning channel**: OWASP Dependency-Check runs in CI (`mvn verify -Dowasp.skip=false` locally; a scheduled
-  weekly CI job with bounded retries). Security advisories are published through
+  `spring-boot-dependencies`). The 0.1.x line is built against Spring Boot 3.5 and is expected to work on 3.3–3.5.
+- **The 0.1.2 build baseline was selected to clear High/Critical advisories in the dependency closure we ship**:
+  Spring Boot 3.5.16 (Spring Framework 6.2.x, Spring Data 3.5.x, Micrometer 1.15.x), Redisson 3.52.0 (Netty 4.1.135+),
+  Jackson 2.21.4, AssertJ 3.27.7 and commons-compress 1.27.1. Remaining Medium/Low upstream advisories (if any) are
+  reported but do not block the gate.
+- **CVE scanning channel**: every PR/push runs a **keyless hard gate** — a CycloneDX SBOM of the four published
+  artifacts' dependency closure (`bom-shipped.json`) is scanned with `osv-scanner` (OSV database). Any advisory with
+  CVSS ≥ 7.0 in that closure fails the build; the full JSON report is uploaded as a build artifact. OWASP
+  Dependency-Check / NVD **deep scan** runs weekly and on demand (it requires `secrets.NVD_API_KEY`). Local
+  equivalent: `mvn -DskipTests -Dcyclonedx.skip=false -Dcyclonedx.skipNotDeployed=false
+  org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom`. Security advisories are published through
   [GitHub Security Advisories](https://github.com/HK-hub/StreamMQ/security/advisories).
 
 ### Runtime reflection in streammq-core (non-Spring environments)
