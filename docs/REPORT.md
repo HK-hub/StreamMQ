@@ -164,8 +164,11 @@ osv-scanner scan source -L target/bom-shipped.cdx.json --format json --output-fi
 1. **真实 Maven Central 发布未执行**（无凭据）：`-Pgpg deploy` → Portal staging 的签名/校验流程、
    `autoPublish=false + waitUntil=validated` 的行为需一次 dry-run 才能定论。发布链路的所有**代码侧**前置
    （Central Portal 插件、BOM、sources/javadoc、GPG profile、staging 隔离 + 反向断言）已就绪。
-2. **GitHub Actions runner 上的真实执行未发生**：4 个 workflow 的改动已通过 YAML 解析、
-   `bash -n` 语法检查与关键脚本的参数拼接实测，但"远端真实跑通"要等一次 push。
+2. ~~**GitHub Actions runner 上的真实执行未发生**~~ → **已闭环（2026-09-18）**：提交 `9ef0877` 的 CI
+   全绿（run [35328121221](https://github.com/HK-hub/StreamMQ/actions/runs/35328121221)）：
+   Guards / CVE gate（SBOM + osv-scanner）/ Formatting / Build / Test / Verify（含全部真实 Redis IT）/
+   Coverage report / Staging smoke 全部 success（OWASP 深扫按设计在无 NVD key 时跳过——默认 CVE 门禁
+   为无需密钥的 sbom-scan）。过程中由 CI 实测驱动修复了 5 项（R4-44…R4-48）。
 3. **JMH 未重跑**：基准报告的消费/序列化数字口径已如实标注（下界、绕过容器、攒批 XACK），
    harness 已加"补货端吞吐 ≥ 消费测量 ×3"的有效性断言；容器路径端到端基准列为后续工作。
 4. **Redis Cluster 未实测**：CROSSSLOT 为推断（已按 0.1.x 不支持 Cluster 明示）。
@@ -205,6 +208,20 @@ mvn clean verify -Djacoco.check.skip=false
 **证据文件**：`/tmp/streammq-r4/verify-gate6.log`（最终树上的门禁命令原始输出，20/20 SUCCESS、1206 测试）。
 同一目录保留本轮迭代过程的门禁日志（gate1…gate5：分别暴露 core 断言口径、JdkSerializer 回引用、DeferActionIT
 时序预算、streammq-test 空批异常口径等失败并据此修复），可逐轮对照。
+
+### 5.1b CI 真实执行证据（GitHub Actions）
+
+| Job | 结果 |
+|---|---|
+| Guards (parent↔BOM sync + publish set consistency) | success（并实测捕获 `streammq-bom` 的 redisson 版本漂移 → 已修复） |
+| CVE gate (CycloneDX SBOM + osv-scanner) | success（发布闭包：0 个 ≥7.0 公告） |
+| Formatting / Build / Test | success |
+| Verify (Integration, 真实 Redis) | success（首次运行即暴露并修复了 `BroadcastPauseHeartbeatIT` 的启动竞态） |
+| Coverage report (published modules) | success |
+| Staging smoke (consumer-side resolve) | success |
+| OWASP deep scan | skipped（无 `NVD_API_KEY`；默认硬门禁为无需密钥的 sbom-scan） |
+
+> 结论：**CI 通道在真实 runner 上全绿**，报告 §4 中"未在 runner 上执行"的保留项已闭环。
 
 ### 5.2 本轮新增/强化的"失败即红"用例（节选）
 
