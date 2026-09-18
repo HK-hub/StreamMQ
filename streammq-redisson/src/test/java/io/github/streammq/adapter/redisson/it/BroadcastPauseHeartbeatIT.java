@@ -91,7 +91,15 @@ class BroadcastPauseHeartbeatIT extends AbstractRedisIT {
 
         container.start();
         try {
-            // 广播组默认在 NEWEST 建组：必须先 start() 建组，再发送 M1，才能保证 M1 被本实例收到
+            // 广播组默认在 NEWEST 建组，而建组发生在消费循环启动后的异步路径上：
+            // 必须先等到实例专属组真正建立，再发送 M1——否则 M1 会落在组起始位点之前被永久跳过
+            // （本地快机器常侥幸通过，CI runner 上会稳定超时）。
+            String topicStreamKey = StreamMQKeys.topicStream(namespace, topic);
+            await().atMost(15, TimeUnit.SECONDS)
+                    .until(
+                            () ->
+                                    redisson.getStream(topicStreamKey).listGroups().stream()
+                                            .anyMatch(g -> g.getName().startsWith(group + ":")));
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("M1").build());
             await().atMost(15, TimeUnit.SECONDS).until(() -> receivedBodies.contains("M1"));
 
