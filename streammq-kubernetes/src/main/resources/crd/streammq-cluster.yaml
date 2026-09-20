@@ -176,6 +176,17 @@ spec:
                   enabled:
                     type: boolean
                     default: false
+                  topic:
+                    type: string
+                    description: >-
+                      Consumer-side topic; must match @StreamMQConsumer(topic = ...) in the
+                      consumer deployment. Required for HPA decisions (no default is derived
+                      from the CR name).
+                  consumerGroup:
+                    type: string
+                    description: >-
+                      Consumer-side group; must match @StreamMQConsumer(consumerGroup = ...).
+                      Required for HPA decisions.
                   minReplicas:
                     type: integer
                     minimum: 1

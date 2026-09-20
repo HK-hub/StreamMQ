@@ -38,6 +38,11 @@
 > 以上为 Linux/macOS 写法（classpath 分隔符 `:`）；Windows 下同一命令把分隔符换成 `;` 即可
 > （本报告的数字即在 Windows 11 上采集）。
 
+> **配置变更提示（2026-09-20）**：`SerializationBenchmark` 的类注解默认值已收敛为 `@Fork(1)` +
+> `@Warmup(2×1s)` + `@Measurement(3×2s)`（原为 `@Fork(3, warmups = 2)` + 3×2s/5×2s），且 `main()` 不再用
+> `OptionsBuilder` 覆盖注解（消除"注解一套、实际一套"的参数双源）；本报告的数字来自上面显式列出的 CLI 覆盖
+> 参数，仍然可复现。全量默认运行的时长预算（45 分钟上限）见 `streammq-benchmark/BENCHMARK_REPORT.md` §0.2。
+
 ## 3. 吞吐结果（ops/s，1KB 负载）
 
 | 序列化器 | Serialize | Deserialize | RoundTrip | Single Serialize | Single Deserialize | 体积 (字节) |
@@ -49,7 +54,11 @@
 | Jackson（默认） | 416,872 ±24,177 | 893,418 ±120,623 | 266,364 ±32,946 | 410,731 ±19,245 | 875,660 ±132,579 | 1,092 |
 | JDK | 442,764 ±17,313 | — | — | 459,824 ±13,874 | — | — |
 
-> 说明：JDK 反序列化未被测量——`JdkSerializer` 强制启用 JDK 反序列化过滤器（安全加固），本基准负载被拒绝。
+> 说明：本快照未测 JDK 反序列化——写作时的过滤器状态拒绝基准载荷。**该结论已过时**：当前
+> `JdkSerializer.installFilter` 会把「本次调用的目标类型」加入放行集（受统一载荷类型护栏约束），
+> 因此 JDK 反序列化/往返可正常测量。2026-09-20 全量重跑已补齐该项
+> （`jdkDeserialize` 116,017 ops/s、`jdkRoundTrip` 86,815 ops/s），见
+> [`streammq-benchmark/BENCHMARK_REPORT.md`](../../streammq-benchmark/BENCHMARK_REPORT.md) §1。
 > 体积为“1KB 字符串”负载的线长，主要受字符串支配，各实现差异在 ±10% 内。
 
 ## 4. 分析

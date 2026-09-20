@@ -8,6 +8,7 @@ package io.github.streammq.core.message;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.streammq.core.enums.LocalTransactionState;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -133,6 +134,89 @@ class SendResultTest {
                     new SendResult(
                             MESSAGE_ID, "t", null, SendStatus.SEND_FAILED, 1L, null, "timeout");
             assertThat(result.toString()).contains("errorMessage='timeout'");
+        }
+    }
+
+    @Nested
+    @DisplayName("事务状态（8 参构造）")
+    class TransactionState {
+
+        @Test
+        @DisplayName("7 参构造 transactionState 为 null（非事务路径），isTransactionUnknown 为 false")
+        void sevenArgHasNullTransactionState() {
+            SendResult result =
+                    new SendResult(MESSAGE_ID, "t", null, SendStatus.SEND_OK, 1L, null, null);
+            assertThat(result.getTransactionState()).isNull();
+            assertThat(result.isTransactionUnknown()).isFalse();
+        }
+
+        @Test
+        @DisplayName("UNKNOWN：SEND_FAILED + transactionState=UNKNOWN，可与硬失败区分")
+        void unknownIsFailedButDistinguishable() {
+            SendResult unknown =
+                    new SendResult(
+                            MESSAGE_ID,
+                            "t",
+                            null,
+                            SendStatus.SEND_FAILED,
+                            1L,
+                            null,
+                            "Transaction state UNKNOWN, waiting for check-back",
+                            LocalTransactionState.UNKNOWN);
+            assertThat(unknown.isSuccess()).isFalse();
+            assertThat(unknown.getSendStatus()).isEqualTo(SendStatus.SEND_FAILED);
+            assertThat(unknown.isTransactionUnknown()).isTrue();
+            assertThat(unknown.getTransactionState()).isEqualTo(LocalTransactionState.UNKNOWN);
+
+            SendResult hardFailure =
+                    new SendResult(
+                            MESSAGE_ID,
+                            "t",
+                            null,
+                            SendStatus.SEND_FAILED,
+                            1L,
+                            null,
+                            "Transaction rolled back",
+                            LocalTransactionState.ROLLBACK_MESSAGE);
+            assertThat(hardFailure.isSuccess()).isFalse();
+            assertThat(hardFailure.isTransactionUnknown()).isFalse();
+        }
+
+        @Test
+        @DisplayName("COMMIT_MESSAGE 为 SEND_OK 且非 unknown")
+        void commitIsSuccess() {
+            SendResult committed =
+                    new SendResult(
+                            MESSAGE_ID,
+                            "t",
+                            null,
+                            SendStatus.SEND_OK,
+                            1L,
+                            null,
+                            null,
+                            LocalTransactionState.COMMIT_MESSAGE);
+            assertThat(committed.isSuccess()).isTrue();
+            assertThat(committed.isTransactionUnknown()).isFalse();
+        }
+
+        @Test
+        @DisplayName("toString 在事务路径包含 transactionState，非事务路径不包含")
+        void toStringContainsTransactionState() {
+            SendResult unknown =
+                    new SendResult(
+                            MESSAGE_ID,
+                            "t",
+                            null,
+                            SendStatus.SEND_FAILED,
+                            1L,
+                            null,
+                            "unknown",
+                            LocalTransactionState.UNKNOWN);
+            assertThat(unknown.toString()).contains("transactionState=UNKNOWN");
+
+            SendResult plain =
+                    new SendResult(MESSAGE_ID, "t", null, SendStatus.SEND_OK, 1L, null, null);
+            assertThat(plain.toString()).doesNotContain("transactionState");
         }
     }
 

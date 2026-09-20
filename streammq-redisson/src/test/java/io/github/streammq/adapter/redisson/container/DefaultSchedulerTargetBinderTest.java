@@ -27,12 +27,14 @@ import org.junit.jupiter.api.Test;
 /**
  * 调度目标绑定器回归测试（发布前红队审查 R5）。
  *
- * <p>锁定两条不变量：
+ * <p>锁定三条不变量：
  *
  * <ol>
  *   <li><b>运行期单注册项绑定</b>必须与启动期批量绑定产生<b>同一目标集合</b>——历史上动态注册只建读循环、 漏绑调度目标，这些消费者的失败消息写入重试 ZSet
  *       后永不重投（payload 过期即静默丢失）；
- *   <li><b>注销必须解除绑定</b>——否则调度目标只增不减，调度器持续扫描已注销目标。
+ *   <li><b>注销必须解除绑定</b>——否则调度目标只增不减，调度器持续扫描已注销目标；
+ *   <li><b>广播（R4-x1）必须登记共享 retry-stream 认领目标</b>——retry Stream 在两种消费模式下都是共享的 （retryMode
+ *       固定复用基组名），漏登记会让广播实例崩溃后遗留的唯一副本永久滞留；但广播的 topic 流认领目标仍不得登记（基组名在该流上不存在，只会刷 NOGROUP 告警且无法恢复 PEL）。
  * </ol>
  */
 @DisplayName("调度目标绑定器（单注册项绑定/解绑）")
@@ -45,14 +47,32 @@ class DefaultSchedulerTargetBinderTest {
 
     private RetryScheduler retryScheduler;
     private PelClaimScheduler pelClaimScheduler;
+    private RegistrationStore store;
     private DefaultSchedulerTargetBinder binder;
 
     @BeforeEach
     void setUp() {
         retryScheduler = mock(RetryScheduler.class);
         pelClaimScheduler = mock(PelClaimScheduler.class);
-        RegistrationStore store = mock(RegistrationStore.class);
+        store = mock(RegistrationStore.class);
         binder = new DefaultSchedulerTargetBinder(store);
+    }
+
+    @Test
+    @DisplayName("批量绑定（启动期）：广播注册同样登记 retry-stream 认领目标，不登记 topic 目标")
+    void batchBind_broadcast_registersRetryStreamTargetOnly() {
+        ListenerRegistration<?> reg =
+                reg(ListenerType.AUTO_ACK, false, ConsumeMode.BROADCASTING, 0);
+        when(store.registrations()).thenReturn(java.util.List.of(reg));
+        when(store.registrationCount()).thenReturn(1);
+
+        binder.bindPelClaimTargets(pelClaimScheduler);
+
+        verify(pelClaimScheduler)
+                .registerRetryStreamTarget(eq(NS), eq(TOPIC), eq(GROUP), eq(MAX_RECONSUME));
+        verify(pelClaimScheduler, never())
+                .registerTarget(any(), any(), any(), anyInt(), anyBoolean(), anyInt(), any());
+        verify(pelClaimScheduler, never()).registerTarget(any(), any(), any(), anyInt());
     }
 
     @Test
@@ -93,18 +113,34 @@ class DefaultSchedulerTargetBinderTest {
     }
 
     @Test
-    @DisplayName("广播（非 DLQ）：无共享 retry 流，不注册认领目标")
-    void broadcastRegistration_registersNoPelClaimTarget() {
+    @DisplayName("广播（非 DLQ）：注册共享 retry-stream 认领目标，不注册 topic 流认领目标")
+    void broadcastRegistration_registersRetryStreamTargetOnly() {
         ListenerRegistration<?> reg =
                 reg(ListenerType.AUTO_ACK, false, ConsumeMode.BROADCASTING, 0);
 
         binder.bindTargets(retryScheduler, pelClaimScheduler, reg);
 
+        // R4-x1：retry Stream 是共享的（retryMode 固定复用基组名），广播实例崩溃后
+        // 其 PEL 唯一副本只能靠该目标恢复；若不注册则永久滞留
+        verify(pelClaimScheduler)
+                .registerRetryStreamTarget(eq(NS), eq(TOPIC), eq(GROUP), eq(MAX_RECONSUME));
+        // topic 流是"每实例一个生效组"（{group}:{group}-{id}），基组名在该流上不存在，
+        // 注册 TOPIC 目标只会让认领循环对不存在的组刷 NOGROUP 告警
         verify(pelClaimScheduler, never())
                 .registerTarget(any(), any(), any(), anyInt(), anyBoolean(), anyInt(), any());
         verify(pelClaimScheduler, never()).registerTarget(any(), any(), any(), anyInt());
-        verify(pelClaimScheduler, never()).registerRetryStreamTarget(any(), any(), any(), anyInt());
         verify(pelClaimScheduler, never()).registerDlqTarget(any(), any(), any());
+    }
+
+    @Test
+    @DisplayName("广播重试目标与集群一致：仍注册重试 ZSet 目标（失败消息可重投）")
+    void broadcastRegistration_registersRetryZSetTarget() {
+        ListenerRegistration<?> reg =
+                reg(ListenerType.AUTO_ACK, false, ConsumeMode.BROADCASTING, 0);
+
+        binder.bindTargets(retryScheduler, pelClaimScheduler, reg);
+
+        verify(retryScheduler).registerRetryTarget(eq(NS), eq(TOPIC), eq(GROUP), eq(MAX_RECONSUME));
     }
 
     @Test

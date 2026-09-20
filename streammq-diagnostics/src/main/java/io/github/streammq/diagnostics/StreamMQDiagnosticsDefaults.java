@@ -13,7 +13,7 @@ import io.github.streammq.core.StreamMQConstants;
  * <p>作为 {@link StreamMQDiagnosticsProperties} 各配置项的默认值来源， 集中管理便于调整与复用。
  *
  * @author StreamMQ Contributors
- * @since 1.1.0
+ * @since 0.1.2
  */
 public final class StreamMQDiagnosticsDefaults {
 

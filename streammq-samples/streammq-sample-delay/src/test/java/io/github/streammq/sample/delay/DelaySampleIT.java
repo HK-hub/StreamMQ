@@ -6,22 +6,30 @@
 package io.github.streammq.sample.delay;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.awaitility.Awaitility.await;
 
+import io.github.streammq.adapter.redisson.retry.FixedIntervalRetryPolicy;
 import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.SendResult;
+import io.github.streammq.core.policy.RetryPolicy;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.redisson.Redisson;
+import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.client.codec.StringCodec;
 import org.redisson.config.Config;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -35,6 +43,7 @@ import org.springframework.test.context.DynamicPropertySource;
  * <ul>
  *   <li>{@link #sendCustomDelayMessage()} — 发送自定义延时消息（5 秒）并验证消费
  *   <li>{@link #sendFixedDelayMessage()} — 发送固定延时消息（{@link DelayLevel#SECOND_10}）并验证消费
+ *   <li>{@link #failedDelayMessageEntersDlqAfterRetries()} — 消费失败 → 重试耗尽 → 最终进入 DLQ（不丢消息）
  * </ul>
  *
  * <p>本测试使用独立的测试消费者组（{@code delay-order-consumer-group-it}）， 通过 {@link DelayMessageTestConsumer}
@@ -47,6 +56,7 @@ import org.springframework.test.context.DynamicPropertySource;
  */
 @SpringBootTest(classes = DelaySampleApplication.class)
 @ActiveProfiles("it")
+@Import(DelaySampleIT.TestConfig.class)
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 @DisplayName("延时消息示例集成测试")
 @EnabledIf(
@@ -86,6 +96,11 @@ class DelaySampleIT {
     }
 
     @Autowired private DelayMessageProducer producer;
+
+    /** 示例自带的消费者：用于注入失败，验证失败消息最终进入 DLQ 而不是被静默 ACK 吞掉 */
+    @Autowired private DelayMessageConsumer delayMessageConsumer;
+
+    @Autowired private RedissonClient redissonClient;
 
     /**
      * 发送自定义延时消息（5 秒延时时长），验证消息在延时期满后被正确消费。
@@ -151,5 +166,48 @@ class DelaySampleIT {
         assertThat(messages.get(0).getKeys()).as("消息 keys 应匹配 orderId").isEqualTo(orderId);
         assertThat(messages.get(0).getBody()).as("消息 body 应匹配发送内容").isEqualTo(content);
         assertThat(messages.get(0).getTag()).as("消息 tag 应为 delay").isEqualTo("delay");
+    }
+
+    /**
+     * 验证延时消息消费失败不会被静默 ACK 吞掉：重试耗尽（{@code maxReconsumeTimes=3}）后由框架路由到 DLQ Stream {@code
+     * streammq:{ns}:dlq:{consumerGroup}}，供 DLQ 消费者 / 运维处理。
+     *
+     * <p>该用例守护「重试用尽即 SUCCESS 吞消息」这一历史反模式：失败消息必须最终出现在 DLQ 中。
+     */
+    @Test
+    @DisplayName("sendCustomDelayMessage — 消费失败的消息重试耗尽后进入 DLQ")
+    void failedDelayMessageEntersDlqAfterRetries() {
+        String orderId = "order-fail-" + System.currentTimeMillis();
+        String content = "延时失败消息（验证 DLQ 路由）";
+
+        delayMessageConsumer.setFailOrderId(orderId);
+        try {
+            SendResult result = producer.sendCustomDelayMessage(orderId, content, 1000L);
+            assertThat(result.isSuccess()).as("延时消息发送应成功").isTrue();
+
+            RStream<String, String> dlqStream =
+                    redissonClient.getStream(
+                            "streammq:" + IT_NAMESPACE + ":dlq:" + SampleConstants.CONSUMER_GROUP,
+                            StringCodec.INSTANCE);
+            await().atMost(30, TimeUnit.SECONDS)
+                    .untilAsserted(
+                            () ->
+                                    assertThat(dlqStream.size())
+                                            .as("失败消息应在重试耗尽后进入 DLQ，而不是被静默丢弃")
+                                            .isGreaterThanOrEqualTo(1));
+        } finally {
+            delayMessageConsumer.clearFailOrderId();
+        }
+    }
+
+    // ===================== 测试配置 =====================
+
+    /** 测试专用配置：短间隔重试策略，使「失败 → 重试耗尽 → DLQ」在秒级完成（示例默认退避为分钟级）。 */
+    @Configuration
+    static class TestConfig {
+        @Bean
+        public RetryPolicy streamMQRetryPolicy() {
+            return new FixedIntervalRetryPolicy(100L, 3);
+        }
     }
 }

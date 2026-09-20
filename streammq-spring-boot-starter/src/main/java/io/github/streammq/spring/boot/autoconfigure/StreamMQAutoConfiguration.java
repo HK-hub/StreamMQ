@@ -27,6 +27,8 @@ import org.springframework.context.annotation.Import;
  *   <li>{@link StreamMQSchedulerAutoConfiguration} - 重试 / 延时 / 事务回查 调度器
  *   <li>{@link StreamMQListenerContainerAutoConfiguration} - Listener 容器 + 注解扫描 + SmartLifecycle
  *   <li>{@link StreamMQHealthAutoConfiguration} - Actuator HealthIndicator（可选）
+ *   <li>{@link StreamMQAdminAutoConfiguration} - 管理/Actuator 端点 + 启动安全提醒（受 {@code
+ *       streammq.admin.enabled} 门控，与健康检查开关解耦）
  * </ol>
  *
  * <p>注意：{@link StreamMQMetricsAutoConfiguration} <b>不通过 {@code @Import} 引入</b>。 它依赖 {@code
@@ -59,6 +61,7 @@ import org.springframework.context.annotation.Import;
     StreamMQCoreAutoConfiguration.class,
     StreamMQSchedulerAutoConfiguration.class,
     StreamMQListenerContainerAutoConfiguration.class,
-    StreamMQHealthAutoConfiguration.class
+    StreamMQHealthAutoConfiguration.class,
+    StreamMQAdminAutoConfiguration.class
 })
 public class StreamMQAutoConfiguration {}

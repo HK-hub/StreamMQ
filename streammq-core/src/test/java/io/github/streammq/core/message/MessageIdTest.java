@@ -131,6 +131,79 @@ class MessageIdTest {
     }
 
     @Nested
+    @DisplayName("占位 ID（pending / sentinel）")
+    class Pending {
+
+        @Test
+        @DisplayName("pending() 稳定：多次调用返回同一实例与保留值 0-0")
+        void pendingIsStable() {
+            MessageId pending = MessageId.pending();
+            assertThat(pending).isSameAs(MessageId.pending());
+            assertThat(pending.getStreamEntryId()).isEqualTo(MessageId.PENDING_STREAM_ENTRY_ID);
+            assertThat(pending.getStreamEntryId()).isEqualTo("0-0");
+            assertThat(pending.toString()).isEqualTo("0-0");
+            assertThat(pending.getTimestamp()).isZero();
+            assertThat(pending.getSequence()).isZero();
+        }
+
+        @Test
+        @DisplayName("isPending 判定：pending()/of(0,0) 为 true，真实 ID 为 false")
+        void isPendingDetection() {
+            assertThat(MessageId.pending().isPending()).isTrue();
+            assertThat(MessageId.of(0L, 0L).isPending()).isTrue();
+            assertThat(new MessageId("0-0").isPending()).isTrue();
+            // 真实 Entry ID：时间戳恒 > 0
+            assertThat(new MessageId("1234567890-0").isPending()).isFalse();
+            assertThat(MessageId.of(1L, 0L).isPending()).isFalse();
+            assertThat(MessageId.of(0L, 1L).isPending()).isFalse();
+        }
+
+        @Test
+        @SuppressWarnings({"deprecation", "removal"})
+        @DisplayName("sentinel() 为 pending() 的别名（旧名返回值域不再与真实 ID 碰撞）")
+        void sentinelIsPendingAlias() {
+            MessageId sentinel = MessageId.sentinel();
+            assertThat(sentinel).isEqualTo(MessageId.pending());
+            assertThat(sentinel.isPending()).isTrue();
+            assertThat(sentinel.hashCode()).isEqualTo(MessageId.pending().hashCode());
+        }
+
+        @Test
+        @DisplayName("占位值与任意真实 ID 不混淆：equals 不等、compareTo 非 0、占位排序最前")
+        void pendingNeverConfusedWithRealIds() {
+            MessageId pending = MessageId.pending();
+            MessageId real = new MessageId("1234567890-0");
+            assertThat(pending).isNotEqualTo(real);
+            assertThat(pending.compareTo(real)).isNegative();
+            assertThat(real.compareTo(pending)).isPositive();
+            // TreeSet 与 HashSet 判定一致（compareTo == 0 ⟺ equals）
+            assertThat(real.compareTo(pending)).isNotZero();
+        }
+
+        @Test
+        @DisplayName("of(0,0) 与 pending() 语义等价（同一保留值），equals/compareTo 自洽")
+        void ofZeroZeroEqualsPending() {
+            MessageId zero = MessageId.of(0L, 0L);
+            assertThat(zero).isEqualTo(MessageId.pending());
+            assertThat(zero.compareTo(MessageId.pending())).isZero();
+            assertThat(zero.isPending()).isTrue();
+        }
+
+        @Test
+        @DisplayName("of() 非负校验与规范化规则不回归")
+        void ofValidationNotRegressed() {
+            assertThat(MessageId.of(100L, 5L).getStreamEntryId()).isEqualTo("100-5");
+            assertThat(new MessageId("01-2")).isEqualTo(MessageId.of(1L, 2L));
+            assertThatThrownBy(() -> MessageId.of(-1L, 0L))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("timestamp");
+            assertThatThrownBy(() -> MessageId.of(0L, -1L))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("sequence");
+        }
+    }
+
+    @Nested
     @DisplayName("toString")
     class ToString {
 

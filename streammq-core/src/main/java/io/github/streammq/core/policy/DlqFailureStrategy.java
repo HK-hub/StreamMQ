@@ -39,7 +39,8 @@ public interface DlqFailureStrategy {
      *
      * @param message 消费失败的死信消息
      * @param context DLQ 失败上下文（含重试次数、原因等）
-     * @return 决策（永不返回 null；返回 null 时框架视为 {@link DlqFailureDecision#drop()}）
+     * @return 决策；<b>实现应返回非 null</b>。若实现返回 {@code null}，框架按 {@link DlqFailureDecision#drop()}
+     *     兜底处理（丢弃并 ACK，保证 DLQ 不无限循环），但该路径不应被依赖
      */
     DlqFailureDecision decide(Message<?> message, DlqFailureContext context);
 

@@ -141,8 +141,8 @@
         <central-publishing-maven-plugin.version>0.11.0</central-publishing-maven-plugin.version>
 
         <!-- API 兼容性检查（japicmp）：
-             0.1.1 是首个公开版本、无 previous 基线，默认跳过（japicmp.skip=true）；
-             发布流程中由 release.yml 自动探测 Central 上的上一版本并临时覆盖启用 -->
+             0.1.2 是首个公开版本（也是首个发布到 Maven Central 的版本）、无 previous 基线，
+             默认跳过（japicmp.skip=true）；发布流程中由 release.yml 自动探测 Central 上的上一版本并临时覆盖启用 -->
         <japicmp-maven-plugin.version>0.26.1</japicmp-maven-plugin.version>
         <japicmp.skip>true</japicmp.skip>
         <japicmp.oldVersion/>
@@ -602,7 +602,11 @@
                     <version>${owasp-dependency-check.version}</version>
                     <configuration>
                         <failBuildOnCVSS>7</failBuildOnCVSS>
-                        <suppressionFile>owasp-suppressions.xml</suppressionFile>
+                        <!-- F-6：抑制清单必须用 ${maven.multiModuleProjectDirectory} 绝对路径。
+                             相对路径按**各模块 basedir** 解析，而扫描命令是
+                             `-pl streammq-bom,streammq-core,...`（不含根工程）——
+                             子模块下不存在 owasp-suppressions.xml，相对路径永不解析、抑制清单静默失效。 -->
+                        <suppressionFile>${maven.multiModuleProjectDirectory}/owasp-suppressions.xml</suppressionFile>
                     </configuration>
                     <executions>
                         <execution>
@@ -736,7 +740,9 @@
                 </executions>
                 <configuration>
                     <failBuildOnCVSS>7</failBuildOnCVSS>
-                    <suppressionFile>owasp-suppressions.xml</suppressionFile>
+                    <!-- F-6：同上——相对路径按模块 basedir 解析，-pl 扫描（不含根工程）下永不解析；
+                         用 ${maven.multiModuleProjectDirectory} 指向仓库根，保证抑制清单真实生效。 -->
+                    <suppressionFile>${maven.multiModuleProjectDirectory}/owasp-suppressions.xml</suppressionFile>
                     <skip>${owasp.skip}</skip>
                 </configuration>
             </plugin>

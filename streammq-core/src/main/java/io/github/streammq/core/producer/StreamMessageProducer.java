@@ -146,6 +146,18 @@ public interface StreamMessageProducer {
         if (timeoutMillis <= 0) {
             throw new IllegalArgumentException("timeoutMillis must be positive: " + timeoutMillis);
         }
+        // fail-fast：本方法的契约是"整批同 Topic"（超时预算与结果顺序都按批语义定义）。
+        // 此前默认实现完全不校验，混合 Topic 的批次会被静默逐条投递到不同 Topic，调用方无从察觉。
+        String batchTopic = messages.get(0).getTopic();
+        for (Message<?> message : messages) {
+            if (!Objects.equals(batchTopic, message.getTopic())) {
+                throw new IllegalArgumentException(
+                        "syncSendBatch requires all messages to share the same topic, got: "
+                                + batchTopic
+                                + " and "
+                                + message.getTopic());
+            }
+        }
         long deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
         List<SendResult> results = new ArrayList<>(messages.size());
         for (Message<?> message : messages) {

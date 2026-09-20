@@ -5,6 +5,8 @@
  */
 package io.github.streammq.adapter.redisson.scheduler;
 
+import io.github.streammq.adapter.redisson.support.RedisClusterCompatibility;
+import io.github.streammq.adapter.redisson.support.RedisServerClock;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.DelayLevel;
@@ -15,6 +17,7 @@ import io.github.streammq.core.util.StringUtils;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -23,6 +26,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import lombok.Setter;
 import org.redisson.api.BatchOptions;
 import org.redisson.api.RBatch;
@@ -97,6 +101,12 @@ public class DelayMessageScheduler implements StreamMQScheduler {
 
     /** 转移失败后的回写退避（毫秒），可通过 {@link #setFailureRequeueBackoffMs(long)} 覆盖 */
     private volatile long failureRequeueBackoffMs = DEFAULT_FAILURE_REQUEUE_BACKOFF_MS;
+
+    /** Redis 服务器时钟不可用（回退本机时钟）时的告警限频间隔（毫秒） */
+    private static final long CLOCK_FALLBACK_WARN_INTERVAL_MS = 60_000L;
+
+    /** Redis 服务器时钟回退告警限频时间戳 */
+    private final AtomicLong lastClockFallbackWarnMs = new AtomicLong();
 
     /**
      * 设置转移失败后的回写退避间隔（毫秒）。
@@ -283,7 +293,9 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     void scanExpired(DelayLevel level) {
         String zsetKey = StreamMQKeys.delayZSet(namespace, level.name());
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey, StringCodec.INSTANCE);
-        long now = System.currentTimeMillis();
+        // R2-4：到期判定使用 Redis 服务器时钟（与生产端 deliverAt score 同一时间基准），
+        // 规避跨主机 NTP 偏差平移延时时长；服务器时钟不可用时回退本机时钟并限频 WARN。
+        long now = scheduleClockMillis();
 
         // LIMIT count 必须等于 batchSize：此前写成 batchSize - 1，每轮少转投一条（B-18）
         Collection<String> expired = zset.valueRange(0, true, now, true, 0, batchSize);
@@ -304,7 +316,8 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     void scanExpiredCustom() {
         String zsetKey = StreamMQKeys.delayCustomZSet(namespace);
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey, StringCodec.INSTANCE);
-        long now = System.currentTimeMillis();
+        // R2-4：同 scanExpired，到期判定使用 Redis 服务器时钟
+        long now = scheduleClockMillis();
 
         // LIMIT count 必须等于 batchSize（B-18，同 scanExpired）
         Collection<String> expired = zset.valueRange(0, true, now, true, 0, batchSize);
@@ -373,6 +386,11 @@ public class DelayMessageScheduler implements StreamMQScheduler {
      * @return true 仅当原子批提交成功（消息已投递）
      */
     boolean doTransferExpired(RScoredSortedSet<String> zset, String msgId, String label) {
+        // XADD + DEL payload + ZREM 跨三个 key 家族：Cluster 下原子批退化为按节点拆分（或 CROSSSLOT），
+        // 两者都不可接受——半写会造成消息丢失/重复，前置拒绝比静默降级安全
+        RedisClusterCompatibility.requireCrossKeyAtomicity(
+                redisson,
+                "Delayed message transfer (target stream + payload hash + schedule ZSet)");
         String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
         RMap<String, String> payloadMap = redisson.getMap(payloadKey, StringCodec.INSTANCE);
         Map<String, String> fields = payloadMap.readAllMap();
@@ -422,7 +440,8 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     /** 转移失败后的退避回写：仅调整 score 推迟下一轮处理（entry 本身仍在 ZSet 中）。 */
     private void requeueWithBackoff(RScoredSortedSet<String> zset, String msgId, String label) {
         try {
-            zset.add(System.currentTimeMillis() + failureRequeueBackoffMs, msgId);
+            // R2-4：退避 score 与扫描侧/生产端统一使用 Redis 服务器时钟
+            zset.add(scheduleClockMillis() + failureRequeueBackoffMs, msgId);
             LOG.warn(
                     "Re-added delay[{}] msgId={} (backoff {}ms)",
                     label,
@@ -435,6 +454,33 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                     msgId,
                     reAddEx.getMessage(),
                     reAddEx);
+        }
+    }
+
+    /**
+     * 调度时间基准（R2-4）：Redis 服务器时钟（与生产端写入的 deliverAt score 同一时间源，规避跨主机 NTP 偏差
+     * 平移延时时长，例如拨快的实例让延时消息提前投递）；读取失败时回退本机时钟并限频 WARN。
+     *
+     * @return 调度用当前毫秒时间戳（服务器时钟优先）
+     */
+    long scheduleClockMillis() {
+        long serverNow = RedisServerClock.nowMillis(redisson);
+        if (serverNow == RedisServerClock.UNKNOWN) {
+            warnClockFallback();
+            return System.currentTimeMillis();
+        }
+        return serverNow;
+    }
+
+    /** 服务器时钟不可用的限频 WARN（默认 60s 一次）。 */
+    private void warnClockFallback() {
+        long now = System.currentTimeMillis();
+        long last = lastClockFallbackWarnMs.get();
+        if (now - last >= CLOCK_FALLBACK_WARN_INTERVAL_MS
+                && lastClockFallbackWarnMs.compareAndSet(last, now)) {
+            LOG.warn(
+                    "Redis TIME unavailable, falling back to LOCAL clock for delay scheduling;"
+                            + " cross-host NTP skew may shift delay delivery times");
         }
     }
 
@@ -588,20 +634,36 @@ public class DelayMessageScheduler implements StreamMQScheduler {
     /**
      * 清理指定 ZSet 中的孤立 entry。
      *
+     * <p><b>R2-5：</b>孤儿判定从「逐条 {@code isExists}」改为服务端单条 Lua 批量完成（一次往返），语义不变—— 仅删除「无对应 payload
+     * Hash」的条目；有 payload 的条目一律保留（防误删）。
+     *
      * @param zsetKey ZSet 的 Redis key
      * @param label 日志标签（level 名称或 "custom"）
      * @return 清理的 entry 数量
      */
     private int cleanupOrphanedInZSet(String zsetKey, String label) {
-        RScoredSortedSet<String> zset = redisson.getScoredSortedSet(zsetKey, StringCodec.INSTANCE);
-        // R-34 同口径的有界扫描：ZRANGEBYSCORE ... LIMIT 0 N，绝不一次性把整个延时 backlog
+        // payload key 前缀 = 完整 key 去掉末段 msgId（msgId 由 key 构造器强制非空，故用探针 key 截断）
+        String probeKey = StreamMQKeys.delayPayloadHash(namespace, "0");
+        String payloadPrefix = probeKey.substring(0, probeKey.length() - 1);
+        // R-34 同口径的有界扫描：ZRANGE ... LIMIT 0 N，绝不一次性把整个延时 backlog
         // materialize 进内存（历史积压可达百万级）；超额时 WARN 提示分多次调用。
-        Collection<String> allMembers =
-                zset.valueRange(0, true, Double.POSITIVE_INFINITY, true, 0, MAX_ORPHAN_ZSET_SCAN);
-        if (allMembers.isEmpty()) {
+        List<Object> purgeResult =
+                redisson.getScript(StringCodec.INSTANCE)
+                        .eval(
+                                RScript.Mode.READ_WRITE,
+                                LUA_PURGE_ORPHAN_ZSET,
+                                RScript.ReturnType.MULTI,
+                                Collections.singletonList(zsetKey),
+                                payloadPrefix,
+                                MAX_ORPHAN_ZSET_SCAN);
+        long scanned =
+                purgeResult != null && purgeResult.size() > 0 ? asLong(purgeResult.get(0)) : 0L;
+        long removed =
+                purgeResult != null && purgeResult.size() > 1 ? asLong(purgeResult.get(1)) : 0L;
+        if (scanned <= 0) {
             return 0;
         }
-        if (allMembers.size() >= MAX_ORPHAN_ZSET_SCAN) {
+        if (scanned >= MAX_ORPHAN_ZSET_SCAN) {
             LOG.warn(
                     "Delay ZSet orphan cleanup truncated at {} entries (more may remain); call"
                             + " again to continue: zsetKey={}, label={}",
@@ -609,25 +671,48 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                     zsetKey,
                     label);
         }
-        int cleaned = 0;
-        for (String msgId : allMembers) {
-            String payloadKey = StreamMQKeys.delayPayloadHash(namespace, msgId);
-            RMap<String, String> payloadMap = redisson.getMap(payloadKey, StringCodec.INSTANCE);
-            if (!payloadMap.isExists()) {
-                // payload Hash 不存在，ZSet entry 为孤立条目，安全移除
-                boolean removed = zset.remove(msgId);
-                if (removed) {
-                    cleaned++;
-                    LOG.debug(
-                            "Removed orphaned delay ZSet entry: zsetKey={}, msgId={}",
-                            zsetKey,
-                            msgId);
-                }
+        if (removed > 0) {
+            LOG.warn("Cleaned {} orphaned entries from delay ZSet [label={}]", removed, label);
+        }
+        return (int) removed;
+    }
+
+    /**
+     * 将脚本返回值稳健转为 long（协议漂移时返回 0，绝不抛 ClassCastException 中断清理）。
+     *
+     * @param value 脚本返回元素
+     * @return long 值；不可解析时为 0
+     */
+    private static long asLong(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String str) {
+            try {
+                return Long.parseLong(str);
+            } catch (NumberFormatException ignored) {
+                return 0L;
             }
         }
-        if (cleaned > 0) {
-            LOG.warn("Cleaned {} orphaned entries from delay ZSet [label={}]", cleaned, label);
-        }
-        return cleaned;
+        return 0L;
     }
+
+    /**
+     * Lua：批量清理孤儿调度条目（R2-5）。
+     *
+     * <p>此前逐个 msgId 发 {@code EXISTS}（N+1 往返）；现在服务端一次遍历窗口，仅对 payload 缺失的条目 {@code
+     * ZREM}。语义与逐条检查一致（只删无对应 payload 的条目，绝不误删仍有 payload 的条目）。
+     *
+     * <p>KEYS[1] = 延时 ZSet key；ARGV[1] = payload Hash key 前缀；ARGV[2] = 单次扫描窗口上限。 返回 {@code
+     * {scanned, removed}}。
+     */
+    static final String LUA_PURGE_ORPHAN_ZSET =
+            "local ids = redis.call('ZRANGE', KEYS[1], 0, tonumber(ARGV[2]) - 1);"
+                    + "local removed = 0;"
+                    + "for i = 1, #ids do"
+                    + "  if redis.call('EXISTS', ARGV[1] .. ids[i]) == 0 then"
+                    + "    removed = removed + redis.call('ZREM', KEYS[1], ids[i]);"
+                    + "  end;"
+                    + "end;"
+                    + "return { #ids, removed };";
 }

@@ -22,7 +22,6 @@ import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
-import org.openjdk.jmh.runner.options.TimeValue;
 import org.redisson.Redisson;
 import org.redisson.api.RedissonClient;
 import org.redisson.client.codec.StringCodec;
@@ -30,12 +29,21 @@ import org.redisson.config.Config;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+/**
+ * 发送吞吐基准（同步批量/同步单条/异步批量 × 三种负载）。
+ *
+ * <p>参数真源：fork/预热/测量<b>只由本类注解决定</b>（{@code main()} 不再用 {@code OptionsBuilder} 覆盖，
+ * 消除"注解一套、实际一套"的双源）。默认值按 CI 的 60 分钟 job 预算收敛——旧的 {@code @Fork(3, warmups = 2)} + 3 方法 × 双模式 × 3
+ * 种负载结构性需要 ≈35 分钟：现在单 fork、不再单独的 warmup fork、 更短迭代，全量默认运行约 6 分钟。预算校验见 {@code
+ * BenchmarkBudgetTest}；需要更细的分布可用 JMH 命令行 参数（{@code -f}/{@code -wi}/{@code -i}/{@code -w}/{@code
+ * -r}）临时覆盖。
+ */
 @State(Scope.Benchmark)
 @BenchmarkMode({Mode.Throughput, Mode.SampleTime})
 @OutputTimeUnit(TimeUnit.SECONDS)
-@Warmup(iterations = 3, time = 2, timeUnit = TimeUnit.SECONDS)
-@Measurement(iterations = 5, time = 2, timeUnit = TimeUnit.SECONDS)
-@Fork(value = 3, warmups = 2)
+@Warmup(iterations = 2, time = 1, timeUnit = TimeUnit.SECONDS)
+@Measurement(iterations = 3, time = 2, timeUnit = TimeUnit.SECONDS)
+@Fork(1)
 public class StreamMessageTemplateBenchmark {
 
     private static final Logger LOG = LoggerFactory.getLogger(StreamMessageTemplateBenchmark.class);
@@ -115,7 +123,7 @@ public class StreamMessageTemplateBenchmark {
     @TearDown(Level.Trial)
     public void teardown() {
         if (redisson != null) {
-            requireFlushAllowed();
+            requireFlushAllowed(redisServer);
             redisson.getKeys().flushdb();
             redisson.shutdown();
         }
@@ -125,12 +133,16 @@ public class StreamMessageTemplateBenchmark {
     }
 
     /**
-     * 防误删守卫：flushdb 会清空目标 Redis 当前库的全部数据，必须显式授权后才会执行。
+     * 防误删守卫：flushdb 会清空目标 Redis 当前库的全部数据。
      *
-     * <p>基准默认通过 Testcontainers 拉起独占实例，但切到 {@code -Dstreammq.redis.mode=local} 直连本地/共享 Redis 时，无守卫的
-     * flushdb 可能误删业务数据。
+     * <p>docker 模式由 Testcontainers 拉起<b>独占实例</b>（随机映射端口、本进程创建并销毁），清空的一定是 自己的容器，因此自动放行；切到 {@code
+     * -Dstreammq.redis.mode=local} 直连本地/共享 Redis 时必须显式追加 {@code
+     * -Dstreammq.benchmark.allowFlush=true} 授权，否则拒绝执行。
      */
-    private static void requireFlushAllowed() {
+    private static void requireFlushAllowed(ContainerizedRedisServer ownedServer) {
+        if (ownedServer != null) {
+            return;
+        }
         if (!Boolean.getBoolean("streammq.benchmark.allowFlush")) {
             throw new IllegalStateException(
                     "Destructive operation blocked: benchmark flushdb would ERASE ALL DATA in the"
@@ -170,14 +182,10 @@ public class StreamMessageTemplateBenchmark {
     }
 
     public static void main(String[] args) throws RunnerException {
+        // fork/预热/测量参数只由类注解决定（此处不再覆盖），需要临时覆盖请用 JMH 命令行参数
         Options opt =
                 new OptionsBuilder()
                         .include(StreamMessageTemplateBenchmark.class.getSimpleName())
-                        .warmupTime(TimeValue.seconds(2))
-                        .warmupIterations(3)
-                        .measurementTime(TimeValue.seconds(3))
-                        .measurementIterations(5)
-                        .forks(3)
                         .result("target/jmh-template.json")
                         .resultFormat(ResultFormatType.JSON)
                         .build();

@@ -122,10 +122,40 @@ class DefaultConsumeLoopSupervisorTest {
                                         .contains("order-topic:order-group"));
     }
 
+    @Test
+    @DisplayName("R1-7：replaceLoops 先取消旧循环（含 inflight 泵）再提交新循环——重注册不再静默无效")
+    void replaceLoops_cancelsOldAndLaunchesNew() {
+        supervisor.submitLoops(reg);
+        assertThat(loopFactory.launchedCount()).isEqualTo(1);
+        Future<?> oldLoop = loopFactory.launchedFutures.get(0);
+        // 登记一个 inflight 泵（键约定 {loopKey}#{idx}:inflight-processor）
+        CompletableFuture<Void> pump = new CompletableFuture<>();
+        supervisor.registerInflightPump(reg.key() + "#0", pump);
+
+        supervisor.replaceLoops(reg);
+
+        assertThat(oldLoop.isCancelled()).as("旧循环必须被取消（否则旧 consumer 永远继续消费）").isTrue();
+        assertThat(pump.isCancelled()).as("旧 inflight 泵必须一并取消（否则孤儿线程泄漏）").isTrue();
+        assertThat(loopFactory.launchedCount()).as("新注册的循环必须真正提交").isEqualTo(2);
+        Future<?> newLoop = loopFactory.launchedFutures.get(1);
+        assertThat(newLoop.isCancelled()).isFalse();
+        assertThat(newLoop.isDone()).isFalse();
+        assertThat(logEvents())
+                .as("替换必须留痕（含 topic/group）")
+                .anySatisfy(
+                        event ->
+                                assertThat(event.getFormattedMessage())
+                                        .contains("Replacing consume loops"));
+    }
+
     private List<ILoggingEvent> warnEvents() {
         return logAppender.list.stream()
                 .filter(event -> Level.WARN.equals(event.getLevel()))
                 .toList();
+    }
+
+    private List<ILoggingEvent> logEvents() {
+        return List.copyOf(logAppender.list);
     }
 
     /** 记录每次 launch 的 Future，并支持"立即完成 / 重入提交"两种故障注入。 */

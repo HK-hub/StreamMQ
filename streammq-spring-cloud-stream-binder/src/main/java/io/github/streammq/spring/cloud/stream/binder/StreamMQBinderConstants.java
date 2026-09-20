@@ -13,7 +13,7 @@ import io.github.streammq.core.enums.SelectorType;
  * <p>集中管理配置前缀、Bean 名称、消息头与健康检查详情 key。
  *
  * @author StreamMQ Contributors
- * @since 1.1.0
+ * @since 0.1.2
  */
 public final class StreamMQBinderConstants {
 

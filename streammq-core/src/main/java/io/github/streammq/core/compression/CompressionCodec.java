@@ -32,16 +32,26 @@ public interface CompressionCodec {
     /**
      * 压缩数据。
      *
-     * @param data 原始字节数组
+     * <p><b>异常契约（0.1.2 起）。</b>实现方失败时必须抛 {@link
+     * io.github.streammq.core.exception.SerializationException}（可包装底层异常）。消费侧按"毒丸消息"识别失败、 决定是否重试/进
+     * DLQ 时依赖的正是该类型；抛裸运行时异常（如 {@code StreamMQException} / {@link
+     * java.io.UncheckedIOException}）会让压缩/解压失败逃出既有的失败处理分支，消息可能被当成业务异常无限重试。
+     *
+     * @param data 原始字节数组（可为空数组；实现方需自行决定空输入语义并在实现类文档中说明）
      * @return 压缩后的字节数组
+     * @throws io.github.streammq.core.exception.SerializationException 压缩失败
      */
     byte[] compress(byte[] data);
 
     /**
      * 解压数据。
      *
+     * <p><b>异常契约：</b>与 {@link #compress(byte[])} 相同——任何失败（格式非法、超长、zip-bomb 防护触发）都必须抛 {@link
+     * io.github.streammq.core.exception.SerializationException}。
+     *
      * @param data 压缩后的字节数组
      * @return 解压后的原始字节数组
+     * @throws io.github.streammq.core.exception.SerializationException 解压失败或输入非法
      */
     byte[] decompress(byte[] data);
 

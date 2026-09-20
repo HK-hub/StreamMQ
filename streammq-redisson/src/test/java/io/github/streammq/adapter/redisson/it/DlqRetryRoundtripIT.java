@@ -97,6 +97,9 @@ class DlqRetryRoundtripIT extends AbstractRedisIT {
                         .maxDlqRetryAttempts(1)
                         .dlqRetryDelayMs(200)
                         .dlqRetryBackoffMultiplier(1.0)
+                        // R3-6 起二级死信为显式开关（默认关闭时 SECONDARY_DLQ 决策按"丢弃并 ACK"处理），
+                        // 本用例要证明计数存活，必须与生产配置一致地显式启用
+                        .secondaryDlqEnabled(true)
                         .build();
         SecondaryDlqFailureStrategy strategy = new SecondaryDlqFailureStrategy(dlqConfig);
 
@@ -107,7 +110,10 @@ class DlqRetryRoundtripIT extends AbstractRedisIT {
                         converter,
                         new NoRetryPolicy(),
                         strategy,
-                        DlqConfig.builder().build(),
+                        // 生效配置按消费者合并后随决策上下文交给策略（0.1.2 配置真源收口），
+                        // 因此这里必须与策略使用同一份配置（而非 builder 默认），否则策略将以
+                        // 全局默认 3 次/10s 决策。
+                        dlqConfig,
                         namespace);
 
         AtomicInteger dlqFailures = new AtomicInteger();

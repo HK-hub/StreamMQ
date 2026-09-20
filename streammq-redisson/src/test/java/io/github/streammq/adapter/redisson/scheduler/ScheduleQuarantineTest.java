@@ -127,9 +127,13 @@ class ScheduleQuarantineTest {
         try {
             scheduler.doTransferExpired(activeZset, "m3", "SEC_1");
         } catch (RuntimeException ignored) {
-            // 批执行在 mock 上可能失败——本测试仅断言隔离区未被误写
+            // 批执行在 mock 上可能失败（未桩化 createBatch）。这不再是"断言恒成立"的漏洞：
+            // 下方先断言代码确实走到了 payload 读取（证明路径被真正执行），再断言隔离区未被触碰。
         }
 
+        // 路径可达性证据：healthy payload 必须被读取过——否则 never() 断言毫无意义
+        verify(redisson).getMap(StreamMQKeys.delayPayloadHash("ns", "m3"), StringCodec.INSTANCE);
+        verify(payload).readAllMap();
         verify(quarantineZset, never()).add(anyLong(), anyString());
         verify(activeZset, never()).remove(Mockito.anyString());
         assertThat(StreamMQKeys.quarantineZset("ns", "delay"))

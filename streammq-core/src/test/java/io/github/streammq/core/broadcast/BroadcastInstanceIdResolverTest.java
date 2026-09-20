@@ -6,6 +6,7 @@
 package io.github.streammq.core.broadcast;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -35,14 +36,34 @@ class BroadcastInstanceIdResolverTest {
         final List<String> topicReleases = new ArrayList<>();
         String nextId;
         boolean claimResult = true;
+
+        /** true：带 preferredId 时返回另一个 id，模拟"槽位被其它活实例占用"（注册中心明确拒绝）。 */
+        boolean refusePreferred;
+
+        /** true：acquire 抛异常，模拟注册中心不可达。 */
+        boolean throwOnAcquire;
+
         long sweepRemoved = 0;
 
         @Override
         public BroadcastInstanceLease acquire(BroadcastInstanceRequest request) {
+            if (throwOnAcquire) {
+                throw new IllegalStateException("registry down");
+            }
             if (!claimResult) {
                 return null;
             }
-            String id = Objects.isNull(nextId) ? "reg-" + request.host() : nextId;
+            // 忠实复刻真实注册中心语义（RedisBroadcastInstanceRegistry#acquire）：带 preferredId 时
+            // 优先占用该身份（槽位空闲即原样返回），无 preferredId 才分配新值。若这里一律返回 nextId，
+            // "本地文件复用"用例就无法区分「复用本地身份」与「重新向注册中心申请」两条路径，
+            // 断言会失去鉴别力（弱测试）。
+            String preferred = request.preferredIdOrNull();
+            String id;
+            if (preferred != null && !refusePreferred) {
+                id = preferred;
+            } else {
+                id = Objects.isNull(nextId) ? "reg-" + request.host() : nextId;
+            }
             return new BroadcastInstanceLease(
                     id,
                     request.host(),
@@ -122,7 +143,7 @@ class BroadcastInstanceIdResolverTest {
         assertThat(res.source())
                 .isIn(BroadcastInstanceSource.ALLOCATED, BroadcastInstanceSource.RECLAIMED);
         assertThat(res.isStable()).isTrue();
-        // 本地文件应被写入，供下次启动零往返复用（多记录格式：id pid timestamp）
+        // 本地文件应被写入，供下次启动直接复用身份（多记录格式：id pid timestamp）
         assertThat(file).content(StandardCharsets.UTF_8).startsWith("i-abc123 ");
     }
 
@@ -141,7 +162,7 @@ class BroadcastInstanceIdResolverTest {
     }
 
     @Test
-    @DisplayName("本地文件：重启后只读本地文件即复用身份（零 Redis 往返）")
+    @DisplayName("本地文件：重启后复用本地身份（只做 claim 校验，不再重新分配）")
     void localFileReusedAcrossResolveCalls(@TempDir Path tmp) {
         FakeRegistry registry = new FakeRegistry();
         registry.nextId = "different-each-time";
@@ -149,10 +170,53 @@ class BroadcastInstanceIdResolverTest {
         BroadcastInstanceIdResolver r = resolver(registry, file);
 
         // 首次：注册中心分配 + 落盘
+        BroadcastInstanceIdResolver.Resolution first = r.resolve("", "t", "g", null);
+        assertThat(first.source()).isEqualTo(BroadcastInstanceSource.ALLOCATED);
+        // 关键：让注册中心下次会返回**不同**的 id。若实现真的走了分配路径（而非读本地文件），
+        // 第二次 resolve 就会拿到这个新值、断言随之失败——这才能证明"复用本地身份"路径真实生效。
+        registry.nextId = "should-never-be-used";
+        // 二次：claim 校验通过（注册中心认可该身份），复用本地文件值
+        BroadcastInstanceIdResolver.Resolution second = r.resolve("", "t", "g", null);
+        assertThat(second.instanceId()).isEqualTo(first.instanceId());
+        assertThat(second.source()).isEqualTo(BroadcastInstanceSource.LOCAL_FILE);
+    }
+
+    @Test
+    @DisplayName("注册中心不可达：信任本地持久身份（停机期间不漂移），不降级为随机值")
+    void registryUnreachableStillReusesLocalIdentity(@TempDir Path tmp) {
+        FakeRegistry registry = new FakeRegistry();
+        registry.nextId = "i-persisted";
+        Path file = tmp.resolve("instance-id");
+        BroadcastInstanceIdResolver r = resolver(registry, file);
+
         String first = r.resolve("", "t", "g", null).instanceId();
-        // 二次：直接复用本地文件值，不应再向注册中心申请（nextId 已变化，若复用则值不变）
-        String second = r.resolve("", "t", "g", null).instanceId();
-        assertThat(second).isEqualTo(first);
+        assertThat(first).isEqualTo("i-persisted");
+
+        // Redis 停机（acquire 抛异常）：本地文件是身份的持久记忆，必须继续复用——
+        // 若此时降级为 rnd-，消费者组名会漂移、PEL 与消费位点丢失，正是本地文件要防止的场景。
+        registry.throwOnAcquire = true;
+        BroadcastInstanceIdResolver.Resolution degraded = r.resolve("", "t", "g", null);
+        assertThat(degraded.instanceId()).isEqualTo(first);
+        assertThat(degraded.source()).isEqualTo(BroadcastInstanceSource.LOCAL_FILE);
+        assertThat(degraded.isStable()).isTrue();
+    }
+
+    @Test
+    @DisplayName("注册中心明确拒绝：本地身份被其它活实例占用时轮换，绝不两实例共用同一身份")
+    void registryRefusalRotatesIdentity(@TempDir Path tmp) {
+        FakeRegistry registry = new FakeRegistry();
+        registry.nextId = "i-mine";
+        Path file = tmp.resolve("instance-id");
+        BroadcastInstanceIdResolver r = resolver(registry, file);
+        assertThat(r.resolve("", "t", "g", null).instanceId()).isEqualTo("i-mine");
+
+        // 该身份已被其它主机的活实例占用（文件被复制到别处）→ 必须轮换，否则两个实例共用
+        // 同一消费者名，广播静默退化为集群消费
+        registry.refusePreferred = true;
+        registry.nextId = "i-fresh";
+        BroadcastInstanceIdResolver.Resolution rotated = r.resolve("", "t", "g", null);
+        assertThat(rotated.instanceId()).isEqualTo("i-fresh");
+        assertThat(rotated.source()).isEqualTo(BroadcastInstanceSource.ALLOCATED);
     }
 
     @Test
@@ -162,6 +226,32 @@ class BroadcastInstanceIdResolverTest {
         BroadcastInstanceIdResolver r = resolver(registry, null);
         r.release("", "g", "some-id");
         assertThat(registry.releases).containsExactly("some-id");
+    }
+
+    @Test
+    @DisplayName("null 参数兜底：resolve/release 永不抛异常（javadoc 承诺成立）")
+    void nullArgumentsNeverThrow(@TempDir Path tmp) {
+        BroadcastInstanceIdResolver noRegistry = resolver(null, tmp.resolve("no-registry-id"));
+        FakeRegistry fake = new FakeRegistry();
+        BroadcastInstanceIdResolver withRegistry = resolver(fake, tmp.resolve("with-registry-id"));
+
+        // resolve：null 命名空间/topic/group 均按空值链路兜底（配置值优先，其余走降级链）
+        assertThat(noRegistry.resolve(null, null, null, "id-1").source())
+                .isEqualTo(BroadcastInstanceSource.CONFIGURED);
+        assertThatCode(() -> noRegistry.resolve(null, null, null, null)).doesNotThrowAnyException();
+        assertThatCode(() -> withRegistry.resolve(null, null, null, null))
+                .doesNotThrowAnyException();
+
+        // release：null 实例身份无槽位可释放；null topics 视为空集合（不触发注册中心调用）
+        assertThatCode(() -> noRegistry.release(null, null, null)).doesNotThrowAnyException();
+        assertThatCode(() -> withRegistry.release(null, null, "id-1", null))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> withRegistry.release(null, null, "id-1", List.of()))
+                .doesNotThrowAnyException();
+        assertThatCode(() -> withRegistry.release(null, null, null, List.of("t")))
+                .doesNotThrowAnyException();
+        assertThat(fake.releases).isEmpty();
+        assertThat(fake.topicReleases).isEmpty();
     }
 
     @Test

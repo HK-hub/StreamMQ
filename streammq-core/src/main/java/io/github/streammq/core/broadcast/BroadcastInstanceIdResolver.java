@@ -21,7 +21,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
-import lombok.NonNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -36,17 +35,26 @@ import org.slf4j.LoggerFactory;
  *   <li><b>本地持久文件</b>——默认 {@code ${user.home}/.streammq/instance-id-<ns>_<group>}（<b>按应用分片</b>， 同一
  *       OS 用户下多个 StreamMQ 应用/消费者组互不共享身份；文件内按 {@code id pid timestamp} 多记录存储，
  *       重启时优先复用<b>已退出进程</b>的身份，绝不覆盖仍在运行的其它进程的身份）。对齐 RocketMQ {@code
- *       LocalFileOffsetStore}：身份落在本地盘，重启零 Redis 往返即可复用。
+ *       LocalFileOffsetStore}：身份落在本地盘，重启后<b>无需重新分配</b>即可复用（仅 1 次 claim 校验， 见下）。
  *   <li><b>注册中心回收</b>——本地文件丢失（K8s emptyDir 重建、镜像重置）时，向 Redis 注册中心按 {@code host} 匹配回收同主机的历史槽位，保住 PEL
  *       与消费位点。
  *   <li><b>注册中心分配</b>——全新实例由注册中心单调递增分配，并立即写入本地文件。
- *   <li><b>随机降级</b>——注册中心不可用时退化为随机 UUID（等价于 0.1.1 行为，会漂移，仅作最后兜底）。
+ *   <li><b>随机降级</b>——注册中心不可用<b>且本地无既有身份</b>时退化为随机 UUID（等价于 0.1.1 行为，会漂移，仅作最后兜底）。
  * </ol>
  *
  * <h2>为什么必须"本地文件 + 注册中心"双写</h2>
  *
- * <p>只有注册中心：每次启动至少一次 Redis 往返，且 Redis 不可用时广播消费直接失去位点。 只有本地文件：容器空盘重建即漂移。
- * 两者结合后——<b>快路径零往返、慢路径可恢复</b>，覆盖了从物理机到 K8s 的全部部署形态。
+ * <p>只有注册中心：每次启动都要往返（回收或分配），且注册中心不可用时会退化为随机值、身份漂移。 只有本地文件：容器空盘重建即漂移，且文件被复制到另一台机器时无人裁决身份冲突。
+ *
+ * <p>两者结合后覆盖了从物理机到 K8s 的全部部署形态，代价与收益均如实如下：
+ *
+ * <ul>
+ *   <li><b>健康路径</b>：命中本地文件后仍做 1 次 claim 校验（HGET + Lua），用于挡住"文件被复制到别的
+ *       机器"与"同机上另一个活进程"两类身份互踩——这两类场景一旦漏判，两个实例会共用同一消费者名， 广播静默退化为集群消费；
+ *   <li><b>注册中心不可达</b>：claim 无法裁决，直接信任本地文件（0 次成功往返），身份在 Redis 停机期间 不漂移、PEL
+ *       与消费位点得以保留；代价是这时无法识别跨主机文件复制（日志中明确提示）；
+ *   <li><b>注册中心明确拒绝</b>（该身份被别的活实例占用）：绝不复用，转回收 / 重新分配。
+ * </ul>
  *
  * <p><b>线程安全：</b>本类无可变状态，可共享单例。
  *
@@ -86,8 +94,9 @@ public final class BroadcastInstanceIdResolver {
      * 构造解析器。
      *
      * @param registry 注册中心，可为 null（表示禁用注册中心，只在配置 / 本地文件 / 随机值之间解析）
-     * @param localIdFilePath 显式本地身份文件路径（非 null 时全实例共用该文件，跨应用隔离由调用方保证）； null 表示按「应用维度」默认路径（见 {@link
-     *     #DEFAULT_LOCAL_ID_FILE}）
+     * @param localIdFilePath 显式本地身份文件路径（非 null 时全实例共用该文件，跨应用隔离由调用方保证）； null 表示按「应用维度」默认路径 {@code
+     *     ${user.home}/}{@link #DEFAULT_LOCAL_ID_DIR}{@code /}{@link
+     *     #DEFAULT_LOCAL_ID_FILE_PREFIX}{@code <namespace>_<group>}
      * @param leaseTimeoutMillis 租约超时（毫秒）
      * @param reclaimGraceMillis 回收宽限期（毫秒）
      */
@@ -134,19 +143,16 @@ public final class BroadcastInstanceIdResolver {
     /**
      * 解析（或分配）本实例的持久化广播身份。
      *
-     * <p>本方法<b>永不抛异常</b>：任何一级失败都向下一级降级，保证消费容器总能启动。
+     * <p>本方法<b>永不抛异常</b>：任何一级失败都向下一级降级，保证消费容器总能启动。 因此参数刻意不做 {@code @NonNull} 强约束——{@code null}
+     * 命名空间按空串处理，{@code null} topic/group 由内部按空值链路（净化 / 注册中心）兜底， 注册中心抛出的任何运行时异常都被捕获并降级。
      *
-     * @param namespace 命名空间
-     * @param topic 主题
-     * @param group 消费者组
+     * @param namespace 命名空间，可为 null（按空串处理）
+     * @param topic 主题，可为 null（仅用于注册中心登记与日志）
+     * @param group 消费者组，可为 null（仅用于注册中心登记与日志）
      * @param configuredId 显式配置的身份，可为 null / 空
      * @return 解析结果，永不为 null
      */
-    public Resolution resolve(
-            @NonNull String namespace,
-            @NonNull String topic,
-            @NonNull String group,
-            String configuredId) {
+    public Resolution resolve(String namespace, String topic, String group, String configuredId) {
         String ns = Objects.isNull(namespace) ? "" : namespace;
         String host = resolveHost();
         long pid = resolvePid();
@@ -164,11 +170,26 @@ public final class BroadcastInstanceIdResolver {
         List<LocalIdRecord> records = readLocalIdRecords(idFile);
         LocalIdRecord reusable = pickReusable(records, pid);
         if (reusable != null) {
-            if (claimQuietly(ns, topic, group, host, pid, reusable.instanceId(), now)) {
+            ClaimOutcome claim =
+                    claimQuietly(ns, topic, group, host, pid, reusable.instanceId(), now);
+            if (claim != ClaimOutcome.REFUSED) {
+                if (claim == ClaimOutcome.UNREACHABLE) {
+                    // 注册中心不可达 ≠ 身份失效：本地文件是本机自己的持久记忆，此时信任它，
+                    // 才能兑现"Redis 停机期间身份不漂移、PEL 与消费位点得以保留"的承诺。
+                    // 残余风险仅限"文件被复制到另一台机器且此时注册中心恰好不可达"，已在日志中提示。
+                    LOG.warn(
+                            "Broadcast instance registry unreachable at startup; trusting local"
+                                    + " persistent identity {} without adjudication (topic={},"
+                                    + " group={}). If this identity file was copied from another"
+                                    + " host, two live instances may share one broadcast identity.",
+                            reusable.instanceId(),
+                            topic,
+                            group);
+                }
                 upsertLocalIdRecord(idFile, reusable.instanceId(), pid, now);
                 return new Resolution(reusable.instanceId(), BroadcastInstanceSource.LOCAL_FILE);
             }
-            // 注册中心拒绝（槽位被其它主机的活进程占用）→ 不复用该值，继续走回收/分配。
+            // 注册中心明确拒绝（槽位被其它主机的活进程占用）→ 不复用该值，继续走回收/分配。
             // 注意：不覆盖本地文件（该身份可能属于同机另一个仍在运行的进程）。
             LOG.warn(
                     "Local broadcast instance id {} rejected by registry (slot held by another"
@@ -233,12 +254,13 @@ public final class BroadcastInstanceIdResolver {
     /**
      * 主动释放（优雅停机）：把槽位标记为已停止，但<b>保留</b>消费者组以便重启后回收。
      *
-     * @param namespace 命名空间
-     * @param group 消费者组
-     * @param instanceId 实例身份
+     * <p>与 {@link #resolve} 同口径：不做参数强约束，{@code null} 参数按"无可释放"处理（静默跳过）， 注册中心失败只记日志、不影响停机流程。
+     *
+     * @param namespace 命名空间，可为 null（按空串处理）
+     * @param group 消费者组，可为 null
+     * @param instanceId 实例身份，可为 null / 空（无可释放）
      */
-    public void release(
-            @NonNull String namespace, @NonNull String group, @NonNull String instanceId) {
+    public void release(String namespace, String group, String instanceId) {
         if (registry == null || trimToNull(instanceId) == null) {
             return;
         }
@@ -252,17 +274,17 @@ public final class BroadcastInstanceIdResolver {
     /**
      * 按 topic 维度主动释放（注销单个/部分主题）：从槽位主题集合中移除给定主题； 若集合清空则删除槽位，使这些主题的消费者组可被清扫任务回收。
      *
-     * @param namespace 命名空间
-     * @param group 消费者组
-     * @param instanceId 实例身份
-     * @param topics 本次释放的主题（非空）
+     * @param namespace 命名空间，可为 null（按空串处理）
+     * @param group 消费者组，可为 null
+     * @param instanceId 实例身份，可为 null / 空（无可释放）
+     * @param topics 本次释放的主题；可为 null（视为空集合，无可释放）
      */
     public void release(
-            @NonNull String namespace,
-            @NonNull String group,
-            @NonNull String instanceId,
-            @NonNull Collection<String> topics) {
-        if (registry == null || trimToNull(instanceId) == null) {
+            String namespace, String group, String instanceId, Collection<String> topics) {
+        if (registry == null
+                || trimToNull(instanceId) == null
+                || Objects.isNull(topics)
+                || topics.isEmpty()) {
             return;
         }
         try {
@@ -283,8 +305,13 @@ public final class BroadcastInstanceIdResolver {
 
     // ===================== 内部实现 =====================
 
-    /** 向注册中心声明占用指定身份；失败静默（不阻塞启动）。返回是否成功占用。 */
-    private boolean claimQuietly(
+    /**
+     * 向注册中心声明占用指定身份；失败静默（不阻塞启动）。
+     *
+     * <p>必须区分三种结局（R6-B1）：<b>确认</b>可复用；<b>明确拒绝</b>（槽位被其它主机的活实例占用） 绝不可复用；<b>不可达</b>（异常 /
+     * 无响应）则无法裁决——调用方据此决定"信任本地持久身份"而非降级为随机值。
+     */
+    private ClaimOutcome claimQuietly(
             String namespace,
             String topic,
             String group,
@@ -294,7 +321,7 @@ public final class BroadcastInstanceIdResolver {
             long now) {
         if (registry == null) {
             // 无注册中心时，配置值/本地文件值本身即权威，直接接受
-            return true;
+            return ClaimOutcome.CONFIRMED;
         }
         try {
             BroadcastInstanceLease lease =
@@ -309,10 +336,15 @@ public final class BroadcastInstanceIdResolver {
                                     now,
                                     leaseTimeoutMillis,
                                     reclaimGraceMillis));
-            return lease != null && preferredId.equals(lease.instanceId());
+            if (lease == null || lease.instanceId() == null) {
+                return ClaimOutcome.UNREACHABLE;
+            }
+            return preferredId.equals(lease.instanceId())
+                    ? ClaimOutcome.CONFIRMED
+                    : ClaimOutcome.REFUSED;
         } catch (RuntimeException ex) {
             LOG.debug("Broadcast instance claim failed for {}: {}", preferredId, ex.toString());
-            return false;
+            return ClaimOutcome.UNREACHABLE;
         }
     }
 
@@ -584,6 +616,21 @@ public final class BroadcastInstanceIdResolver {
      * @param timestamp 记录写入时间（毫秒）
      */
     private record LocalIdRecord(String instanceId, long pid, long timestamp) {}
+
+    /**
+     * 本地身份向注册中心声明的结局（R6-B1）。
+     *
+     * <p>"拒绝"与"不可达"必须分开：前者是注册中心给出的<b>裁决</b>（该身份确实被别的活实例占用）， 后者只是<b>没有裁决</b>（对方不响应）。把不可达当成拒绝会让 Redis
+     * 停机时的身份退化为随机值， 与"本地文件保证停机期间身份不漂移"的设计承诺相悖。
+     */
+    private enum ClaimOutcome {
+        /** 注册中心确认占用（或未配置注册中心，本地值即权威）。 */
+        CONFIRMED,
+        /** 注册中心明确拒绝：槽位被其它主机的活实例占用，绝不可复用。 */
+        REFUSED,
+        /** 注册中心不可达 / 无响应：无法裁决，调用方按"信任本地持久身份"处理。 */
+        UNREACHABLE
+    }
 
     /**
      * 解析结果。

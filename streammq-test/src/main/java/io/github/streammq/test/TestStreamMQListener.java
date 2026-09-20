@@ -140,6 +140,22 @@ public class TestStreamMQListener<T> implements StreamMessageConcurrentlyConsume
         this.failAfterCount = count;
     }
 
+    /**
+     * 等待累计接收到的消息数达到 {@code expectedCount}。
+     *
+     * <p><b>语义是"累计"而不是"自本次调用起新增"</b>：调用时会用<b>已到达的存量消息</b>补偿 latch （这样"先发消息再 await"与"先 await
+     * 再发消息"都能正确返回）。因此：
+     *
+     * <ul>
+     *   <li>同一实例上连续 await 同一数量会立刻返回——第二阶段必须 {@link #reset()} 或使用递增的期望值；
+     *   <li>也不要把它当成"恰好 N 条"的断言，只保证"至少 N 条"。
+     * </ul>
+     *
+     * @param expectedCount 期望的累计消息数
+     * @param timeoutMillis 超时（毫秒）
+     * @throws InterruptedException 等待被中断
+     * @throws AssertionError 超时仍有消息未到齐
+     */
     public void awaitMessages(int expectedCount, long timeoutMillis) throws InterruptedException {
         // 与 onMessage 的 countDown 在同一把锁下完成"创建 latch + 补偿已收消息"，
         // 消除并发到达的消息被重复计数导致 latch 提前归零的竞态

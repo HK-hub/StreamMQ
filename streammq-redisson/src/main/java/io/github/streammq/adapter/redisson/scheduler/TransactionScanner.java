@@ -7,6 +7,7 @@ package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.PayloadTypeSafety;
+import io.github.streammq.adapter.redisson.support.RedisClusterCompatibility;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.converter.MessageConverter;
@@ -34,7 +35,6 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import lombok.Setter;
 import org.redisson.api.BatchOptions;
 import org.redisson.api.RBatch;
 import org.redisson.api.RMap;
@@ -193,6 +193,28 @@ public class TransactionScanner implements StreamMQScheduler {
     private static final String LUA_INCR_COUNT =
             "local val = redis.call('HINCRBY', KEYS[1], ARGV[1], 1);" + "return val;";
 
+    /**
+     * Lua：强制终结的<b>状态 CAS</b>——仅当状态仍等于期望的中间态（COMMITTING / ROLLBACKING）时才写终态。
+     *
+     * <p><b>为什么必须 CAS（R2-1）：</b>强制终结读取状态（是否卡在 COMMITTING）与写终态是两次独立的 Redis 往返。若在两者之间并发实例完成了转投并置位
+     * COMMIT，无条件的 {@code HSET ROLLBACK} 会把「消息已投递」改成「回滚」，状态与真实投递永久不一致。这里把校验与写入放进同一脚本，状态不是期望中间态就
+     * 原样返回、绝不改写（同时保证 {@code .failureReason} 与终态同生同死）。
+     *
+     * <p>KEYS[1] = txstate Hash key；ARGV[1]=txId, ARGV[2]=期望中间态, ARGV[3]=原因字段, ARGV[4]=原因值,
+     * ARGV[5]=终态值。返回 {@code 'OK'}（已终结）或 {@code 'STATE=<当前值>'} / {@code 'STATE=absent'}（未改写）。
+     */
+    private static final String LUA_CAS_FINALIZE_STUCK =
+            "local current = redis.call('HGET', KEYS[1], ARGV[1]);"
+                    + "if current ~= ARGV[2] then"
+                    + " return current and ('STATE=' .. current) or 'STATE=absent';"
+                    + " end;"
+                    + "redis.call('HSET', KEYS[1], ARGV[3], ARGV[4]);"
+                    + "redis.call('HSET', KEYS[1], ARGV[1], ARGV[5]);"
+                    + "return 'OK';";
+
+    /** 孤儿回查线程日志限频间隔（毫秒）：避免每个扫描周期刷屏 */
+    private static final long ORPHAN_CHECKER_WARN_INTERVAL_MS = 60_000L;
+
     private final RedissonClient redisson;
     private final String namespace;
     private final MessageConverter messageConverter;
@@ -203,6 +225,21 @@ public class TransactionScanner implements StreamMQScheduler {
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final ConcurrentMap<String, TransactionChecker<?>> checkerRegistry =
             new ConcurrentHashMap<>();
+
+    /**
+     * 超时未结束的回查线程登记表（R2-3）：key=txGroup+txId。
+     *
+     * <p>此前 {@code worker.join(timeout)} 超时后仅记 WARN，孤儿的虚拟线程仍在运行，而下一轮扫描会为同一 txId
+     * 再次启动一个回查线程——并发回查线程数随轮数增长（慢 checker 下无界）。现在超时后登记租约：线程存活期间跳过对 同一事务的重查（本轮按 UNKNOWN
+     * 有界重查），线程结束时自行摘除租约，恢复可重查。
+     */
+    private final ConcurrentMap<CheckerKey, OrphanCheckerLease> orphanCheckers =
+            new ConcurrentHashMap<>();
+
+    /** 孤儿回查线程累计数（诊断用：只增计数的累计量，当前存活数见 {@link #getOrphanCheckerCount()}） */
+    private final AtomicLong orphanCheckerTotal = new AtomicLong();
+
+    private final AtomicLong lastOrphanCheckerWarnMs = new AtomicLong();
 
     /** 默认事务组名（来自配置 `streammq.transaction.default-group`），当 checkerRegistry 为空时兜底扫描 */
     private final String defaultGroup;
@@ -233,10 +270,50 @@ public class TransactionScanner implements StreamMQScheduler {
     private volatile io.github.streammq.core.metrics.StreamMQMetrics metrics;
 
     /** 终态字段保留期（毫秒），超过后由维护任务清理 */
-    @Setter private volatile long txStateRetentionMs = DEFAULT_TX_STATE_RETENTION_MS;
+    private volatile long txStateRetentionMs = DEFAULT_TX_STATE_RETENTION_MS;
 
     /** 孤儿半消息保留期（毫秒），超过且无状态引用的 half 条目由维护任务清理 */
-    @Setter private volatile long orphanHalfRetentionMs = DEFAULT_ORPHAN_HALF_RETENTION_MS;
+    private volatile long orphanHalfRetentionMs = DEFAULT_ORPHAN_HALF_RETENTION_MS;
+
+    /**
+     * 设置 txstate 终态字段保留期（毫秒），并转发给保留期清理协作类（否则该配置对实际清理不生效）。
+     *
+     * @param millis 保留期毫秒数
+     */
+    public void setTxStateRetentionMs(long millis) {
+        this.txStateRetentionMs = millis;
+        this.retentionSweeper.setTxStateRetentionMs(millis);
+    }
+
+    /** 设置孤儿半消息保留期（毫秒），并转发给保留期清理协作类。 */
+    public void setOrphanHalfRetentionMs(long millis) {
+        this.orphanHalfRetentionMs = millis;
+        this.retentionSweeper.setOrphanHalfRetentionMs(millis);
+    }
+
+    /** 返回 txstate 终态字段保留期（毫秒）。 */
+    public long getTxStateRetentionMs() {
+        return txStateRetentionMs;
+    }
+
+    /** 返回孤儿半消息保留期（毫秒）。 */
+    public long getOrphanHalfRetentionMs() {
+        return orphanHalfRetentionMs;
+    }
+
+    /**
+     * 设置单轮保留期清理的最大条目数（R2-2②：默认 {@link TransactionRetentionSweeper#DEFAULT_SWEEP_BATCH_SIZE}）。
+     *
+     * @param size 批量上限，必须 &gt; 0
+     */
+    public void setRetentionSweepBatchSize(int size) {
+        this.retentionSweeper.setSweepBatchSize(size);
+    }
+
+    /** 返回单轮保留期清理的最大条目数。 */
+    public int getRetentionSweepBatchSize() {
+        return retentionSweeper.getSweepBatchSize();
+    }
 
     /** 回查器执行超时（毫秒）；恒 > 0（见 {@link #setCheckerTimeoutMillis(long)}）。 */
     private volatile long checkerTimeoutMillis = DEFAULT_CHECKER_TIMEOUT_MILLIS;
@@ -391,6 +468,10 @@ public class TransactionScanner implements StreamMQScheduler {
         Objects.requireNonNull(targetTopic, "targetTopic");
         Objects.requireNonNull(fields, "fields");
         StringUtils.requireValidTopic(targetTopic);
+        // 状态 Hash + 回查 ZSet 是跨 key 原子批（Cluster 下按节点拆分提交），在写半消息之前拒绝，
+        // 避免留下需要补偿的中间态
+        RedisClusterCompatibility.requireCrossKeyAtomicity(
+                redisson, "Transaction prepare metadata (state hash + check ZSet)");
 
         // 写入顺序（崩溃安全性分析，顺序不可调整）：
         //  1. 先 XADD 半消息到 half Stream —— 若在此步失败，事务尚未注册，无任何副作用；
@@ -629,8 +710,14 @@ public class TransactionScanner implements StreamMQScheduler {
         TransactionCommitExecutor.Outcome outcome =
                 commitExecutor.publishHalfAndMarkCommit(txGroup, halfIdStr, targetTopic, txId);
         switch (outcome) {
-            case PUBLISHED -> {
-                /* 终态已由脚本写入 */
+            case PUBLISHED, ALREADY_COMMIT -> {
+                /* 终态已由脚本（或并发实例）写入 */
+            }
+            case ABORTED_TERMINAL -> {
+                // R2-1：状态已被并发路径改写（强制终结 ROLLBACK / 回滚中 / 回退态），脚本未投递。
+                // 此处绝不覆盖终态：终态已置时仅补齐收尾标记；非终态交由有界回查继续推进。
+                handleAbortedCommit(txId, txGroup, stateMap);
+                return;
             }
             case HALF_MISSING -> {
                 // 半消息不存在：可能已被其它实例的转投脚本转投（此时状态已被置为 COMMIT，degrade 不会覆盖），
@@ -661,6 +748,38 @@ public class TransactionScanner implements StreamMQScheduler {
                 txId,
                 txGroup,
                 targetTopic);
+    }
+
+    /**
+     * 提交被状态 CAS 拒绝后的收尾（R2-1）：<b>绝不改写状态</b>。
+     *
+     * <p>终态（COMMIT/ROLLBACK）说明事务已由其它路径终结：仅补齐 {@code .done} 标记与回查条目清理，避免「脚本已置终态
+     * 但实例在收尾前崩溃」的字段永不被保留期清理。中间态/回退态（ROLLBACKING/PREPARE/UNKNOWN）不做任何处置，交由 扫描周期按既有状态机推进（强制终结 /
+     * 有界重查），避免把正在推进的事务改写成 UNKNOWN。
+     *
+     * @param txId 事务 ID
+     * @param txGroup 事务组名
+     * @param stateMap txstate Hash 视图
+     */
+    private void handleAbortedCommit(String txId, String txGroup, RMap<String, String> stateMap) {
+        String state = stateMap.get(txId);
+        if (STATE_COMMIT.equals(state) || STATE_ROLLBACK.equals(state)) {
+            LOG.warn(
+                    "Commit aborted by state CAS: transaction already terminal ({}), half message"
+                            + " NOT published by this instance: txId={}, txGroup={}",
+                    state,
+                    txId,
+                    txGroup);
+            markTerminalDone(stateMap, txId);
+            removeCheckEntry(txId, txGroup);
+            return;
+        }
+        LOG.warn(
+                "Commit aborted by state CAS: state is {} (not COMMITTING), leaving it to the"
+                        + " bounded recheck path: txId={}, txGroup={}",
+                state,
+                txId,
+                txGroup);
     }
 
     /**
@@ -864,8 +983,11 @@ public class TransactionScanner implements StreamMQScheduler {
         RMap<String, String> stateMap = redisson.getMap(stateHashKey, StringCodec.INSTANCE);
 
         String currentState = stateMap.get(txId);
-        // 已终态：直接清理
+        // 已终态：直接清理。
+        // R2-2①：必须同时补齐 .done 标记——否则「终态脚本已执行、实例在收尾（markTerminalDone）前崩溃」
+        // 的字段永远不会被保留期清理（sweep 只认 .done），txstate Hash 出现无法回收的常驻字段。
         if (STATE_COMMIT.equals(currentState) || STATE_ROLLBACK.equals(currentState)) {
+            markTerminalDone(stateMap, txId);
             removeCheckEntry(txId, txGroup);
             return;
         }
@@ -994,6 +1116,10 @@ public class TransactionScanner implements StreamMQScheduler {
      *
      * <p>同组互斥：{@code synchronized(groupLock)} 串行化同一 txGroup 的回查执行， 防止慢回查期间下一轮扫描对同组并发触发。
      *
+     * <p><b>孤儿回查的有界性（R2-3）：</b>超时后虚拟线程无法强制终止，其返回值被丢弃。此前实现每轮都会为同一 txId 再起一个回查线程，慢 checker
+     * 下并发线程数随扫描轮数无界增长。现在超时未结束的线程登记租约（txGroup+txId → 线程 + 开始时间）：租约存活期间对同一事务不再重查（本轮直接按 UNKNOWN
+     * 有界重查），线程结束时自行摘除租约；同时暴露 {@link #getOrphanCheckerCount()} 供诊断，孤儿告警按 60s 限频。
+     *
      * @return 回查结果状态（绝不返回 null）
      */
     private LocalTransactionState invokeCheckerWithTimeout(
@@ -1007,7 +1133,17 @@ public class TransactionScanner implements StreamMQScheduler {
         long timeoutMillis = Math.max(1L, checkerTimeoutMillis);
         final java.util.concurrent.atomic.AtomicReference<LocalTransactionState> result =
                 new java.util.concurrent.atomic.AtomicReference<>();
+        CheckerKey checkerKey = new CheckerKey(txGroup, txId);
+        if (orphanCheckers.containsKey(checkerKey)) {
+            // 上一个回查线程仍存活（超时未结束）：不得再起新线程，否则并发回查数随轮数增长
+            warnOrphanCheckerIfDue(txId, txGroup);
+            return LocalTransactionState.UNKNOWN;
+        }
         synchronized (groupLock) {
+            // 先登记租约再启动线程：若线程在登记前就结束，其结束钩子不会遗留失效登记
+            OrphanCheckerLease lease = new OrphanCheckerLease(System.currentTimeMillis());
+            orphanCheckers.put(checkerKey, lease);
+            orphanCheckerTotal.incrementAndGet();
             Thread worker =
                     Thread.ofVirtual()
                             .name("tx-checker-" + txGroup + "-" + txId)
@@ -1026,6 +1162,9 @@ public class TransactionScanner implements StreamMQScheduler {
                                                     txId,
                                                     ex.getMessage(),
                                                     ex);
+                                        } finally {
+                                            // 线程结束即摘除租约（CAS 语义：只摘自己的租约）
+                                            orphanCheckers.remove(checkerKey, lease);
                                         }
                                     });
             try {
@@ -1042,12 +1181,72 @@ public class TransactionScanner implements StreamMQScheduler {
                         timeoutMillis,
                         txId,
                         txGroup);
+                // R2-3：线程仍存活 → 保留租约，后续轮次跳过同一事务的重查（租约在线程结束时自摘）
+                warnOrphanCheckerIfDue(txId, txGroup);
                 return LocalTransactionState.UNKNOWN;
             }
+            // 正常结束：确保租约不残留（线程可能在上面的 finally 之前就被观测为已结束）
+            orphanCheckers.remove(checkerKey, lease);
         }
         LocalTransactionState state = result.get();
         return Objects.nonNull(state) ? state : LocalTransactionState.UNKNOWN;
     }
+
+    /**
+     * 返回当前存活（超时未结束）的孤儿回查线程数（R2-3 诊断指标）。
+     *
+     * @return 孤儿回查线程数
+     */
+    public int getOrphanCheckerCount() {
+        return orphanCheckers.size();
+    }
+
+    /**
+     * 返回累计产生的孤儿回查线程数（只增计数，与 {@link #getOrphanCheckerCount()} 的当前存活数配合诊断）。
+     *
+     * @return 累计孤儿回查线程数
+     */
+    public long getOrphanCheckerTotal() {
+        return orphanCheckerTotal.get();
+    }
+
+    /** 孤儿回查线程存活时的限频 WARN（默认 60s 一次，避免每轮扫描刷屏）。 */
+    private void warnOrphanCheckerIfDue(String txId, String txGroup) {
+        int alive = orphanCheckers.size();
+        if (alive <= 0) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long last = lastOrphanCheckerWarnMs.get();
+        if (now - last >= ORPHAN_CHECKER_WARN_INTERVAL_MS
+                && lastOrphanCheckerWarnMs.compareAndSet(last, now)) {
+            LOG.warn(
+                    "TransactionChecker still running past timeout, recheck skipped for the same"
+                            + " transaction until it finishes: aliveOrphans={}, totalOrphans={},"
+                            + " txId={}, txGroup={}",
+                    alive,
+                    orphanCheckerTotal.get(),
+                    txId,
+                    txGroup);
+        }
+    }
+
+    /** 孤儿回查线程的租约：仅承载「身份 + 开始时间」——身份用于 {@code remove(key, lease)} 安全摘除（默认引用相等）。 */
+    private static final class OrphanCheckerLease {
+        private final long startedAtMs;
+
+        private OrphanCheckerLease(long startedAtMs) {
+            this.startedAtMs = startedAtMs;
+        }
+
+        @Override
+        public String toString() {
+            return "startedAtMs=" + startedAtMs;
+        }
+    }
+
+    /** 孤儿回查线程的登记键（txGroup + txId，避免跨事务组同 txId 相互抑制）。 */
+    private record CheckerKey(String txGroup, String txId) {}
 
     /** 将事务降级为 UNKNOWN 并重新调度回查（元数据丢失时的有界兜底路径）。 */
     private void degradeToUnknown(
@@ -1067,6 +1266,8 @@ public class TransactionScanner implements StreamMQScheduler {
                     "Degrade skipped, transaction already terminal: txId={}, state={}",
                     txId,
                     current);
+            // R2-2①：终态收尾标记一并补齐（终态脚本执行后、markTerminalDone 前崩溃的字段才能被清理）
+            markTerminalDone(stateMap, txId);
             removeCheckEntry(txId, txGroup);
             return;
         }
@@ -1157,11 +1358,19 @@ public class TransactionScanner implements StreamMQScheduler {
     /**
      * 强制终结长期卡在 COMMITTING 的事务（有界恢复尝试耗尽）。
      *
-     * <p><b>为什么可以安全终结：</b>转投半消息与写入终态在同一 Lua 脚本中原子完成，状态不是 COMMIT 就等同于「未发布」——因此终态取 ROLLBACK
-     * 是真实语义，不会出现「标记回滚但消息已投递」。
+     * <p><b>为什么可以终结：</b>转投半消息与写入终态在同一 Lua 脚本中原子完成，状态不是 COMMIT 就等同于「未发布」。
+     *
+     * <p><b>为什么要 CAS（R2-1）：</b>「判定卡死」与「写终态」之间隔着多次 Redis 往返，期间并发实例可能已完成转投并置位 COMMIT。无条件的 {@code HSET
+     * ROLLBACK} 会把「消息已投递」覆盖成「回滚」，出现状态与真实投递永久不一致。因此终态 写入必须是 CAS：仅当状态仍为 COMMITTING 时才改写成
+     * ROLLBACK；状态已变（COMMIT/ROLLBACK/…）则放弃终结， 绝不覆盖。
      *
      * <p><b>为什么要告警：</b>调用方（本地事务）通常已提交，消息未投递需要业务方按 {@code .failureReason} 字段
      * 与事务指标对账补偿；同时尽力删除半消息，避免半消息流残留。
+     *
+     * @param txId 事务 ID
+     * @param txGroup 事务组名
+     * @param stateMap txstate Hash 视图
+     * @param attempts 已累计的恢复尝试次数（仅用于日志）
      */
     private void forceFinalizeStuckCommit(
             String txId, String txGroup, RMap<String, String> stateMap, int attempts) {
@@ -1172,9 +1381,19 @@ public class TransactionScanner implements StreamMQScheduler {
                 attempts,
                 txId,
                 txGroup);
+        if (!casFinalizeStuck(
+                txId,
+                txGroup,
+                STATE_COMMITTING,
+                STATE_ROLLBACK,
+                FIELD_FAILURE_REASON_SUFFIX,
+                "COMMIT_FAILED_FORCE_ROLLBACK")) {
+            // 状态在判定与写入之间被并发路径改写（最典型：并发实例转投成功并置位 COMMIT）。
+            // 绝不覆盖：仅补齐终态收尾标记（若已是终态），交由真实状态呈现。
+            handleAbortedCommit(txId, txGroup, stateMap);
+            return;
+        }
         removeHalfMessageQuietly(txId, txGroup, stateMap);
-        stateMap.put(txId + FIELD_FAILURE_REASON_SUFFIX, "COMMIT_FAILED_FORCE_ROLLBACK");
-        stateMap.put(txId, STATE_ROLLBACK);
         removeCheckEntry(txId, txGroup);
         markTerminalDone(stateMap, txId);
         cleanupTerminalState(stateMap, txId);
@@ -1185,6 +1404,13 @@ public class TransactionScanner implements StreamMQScheduler {
      * 强制终结长期卡在 ROLLBACKING 的事务（有界恢复尝试耗尽）。
      *
      * <p>此时 XDEL 半消息可能未成功：终态仍取 ROLLBACK（语义正确），但半消息可能残留，由 ERROR 日志 提示人工清理（保留期维护任务也会兜底清理孤儿半消息）。
+     *
+     * <p>与 COMMITTING 强制终结同样使用状态 CAS：状态若已被并发路径改写则放弃写入，绝不覆盖。
+     *
+     * @param txId 事务 ID
+     * @param txGroup 事务组名
+     * @param stateMap txstate Hash 视图
+     * @param attempts 已累计的恢复尝试次数（仅用于日志）
      */
     private void forceFinalizeStuckRollback(
             String txId, String txGroup, RMap<String, String> stateMap, int attempts) {
@@ -1195,12 +1421,58 @@ public class TransactionScanner implements StreamMQScheduler {
                 attempts,
                 txId,
                 txGroup);
-        stateMap.put(txId + FIELD_FAILURE_REASON_SUFFIX, "ROLLBACK_FAILED_FORCE_FINALIZE");
-        stateMap.put(txId, STATE_ROLLBACK);
+        if (!casFinalizeStuck(
+                txId,
+                txGroup,
+                STATE_ROLLBACKING,
+                STATE_ROLLBACK,
+                FIELD_FAILURE_REASON_SUFFIX,
+                "ROLLBACK_FAILED_FORCE_FINALIZE")) {
+            LOG.warn(
+                    "Force-finalize skipped, state changed under us (not ROLLBACKING anymore):"
+                            + " txId={}, txGroup={}",
+                    txId,
+                    txGroup);
+            return;
+        }
         removeCheckEntry(txId, txGroup);
         markTerminalDone(stateMap, txId);
         cleanupTerminalState(stateMap, txId);
         metricsRecorder.recordRollback(txGroup);
+    }
+
+    /**
+     * 强制终结的状态 CAS（Lua 原子校验 + 写入）。
+     *
+     * @param txId 事务 ID
+     * @param txGroup 事务组名
+     * @param expectedState 期望的中间态（COMMITTING / ROLLBACKING）
+     * @param terminalState 终态值（ROLLBACK）
+     * @param reasonSuffix 原因字段后缀
+     * @param reasonValue 原因值
+     * @return true 表示状态仍为期望中间态、已原子改写成终态（并写入失败原因）
+     */
+    private boolean casFinalizeStuck(
+            String txId,
+            String txGroup,
+            String expectedState,
+            String terminalState,
+            String reasonSuffix,
+            String reasonValue) {
+        String stateHashKey = StreamMQKeys.transactionStateHash(namespace, txGroup);
+        String result =
+                redisson.getScript(StringCodec.INSTANCE)
+                        .eval(
+                                RScript.Mode.READ_WRITE,
+                                LUA_CAS_FINALIZE_STUCK,
+                                RScript.ReturnType.STATUS,
+                                Collections.singletonList(stateHashKey),
+                                txId,
+                                expectedState,
+                                txId + reasonSuffix,
+                                reasonValue,
+                                terminalState);
+        return "OK".equals(result);
     }
 
     /** 尽力删除半消息（失败仅告警：孤儿半消息由保留期维护任务兜底清理）。 */

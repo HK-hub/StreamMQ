@@ -165,14 +165,24 @@ public class StreamMQTracingAutoConfiguration {
     /**
      * 拓扑服务 Bean，当存在追踪查询服务与监听器容器时装配。
      *
+     * <p>查询上界（{@code streammq.tracing.otel.max-trace-query-size}）在此接线：该值此前只有代码内的默认值、 没有属性入口，而截断
+     * WARN 却提示"调大 maxTraceQuerySize"——运维无法照做。{@code @ConditionalOnMissingBean} 允许用户以自定义 Bean 完全接管。
+     *
      * @param traceService 追踪查询服务
      * @param listenerContainer 监听器容器
+     * @param properties 追踪配置
      * @return 拓扑服务实例
      */
     @Bean
     @ConditionalOnBean({StreamMQTraceService.class, StreamMQListenerContainer.class})
+    @ConditionalOnMissingBean(StreamMQTopologyService.class)
     public StreamMQTopologyService streamMQTopologyService(
-            StreamMQTraceService traceService, StreamMQListenerContainer listenerContainer) {
-        return new StreamMQTopologyService(traceService, listenerContainer);
+            StreamMQTraceService traceService,
+            StreamMQListenerContainer listenerContainer,
+            StreamMQTracingProperties properties) {
+        StreamMQTopologyService topologyService =
+                new StreamMQTopologyService(traceService, listenerContainer);
+        topologyService.setMaxTraceQuerySize(properties.getMaxTraceQuerySize());
+        return topologyService;
     }
 }

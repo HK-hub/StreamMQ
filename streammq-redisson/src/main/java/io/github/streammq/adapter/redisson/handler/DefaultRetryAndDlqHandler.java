@@ -10,6 +10,7 @@ import io.github.streammq.adapter.redisson.dlq.LimitedRetryDlqFailureStrategy;
 import io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy;
 import io.github.streammq.adapter.redisson.dlq.SecondaryDlqFailureStrategy;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
+import io.github.streammq.adapter.redisson.support.RedisClusterCompatibility;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.converter.MessageConverter;
@@ -68,10 +69,27 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
     /** 重试/DLQ payload Hash 的保留时长：超期自动过期，防止孤儿 payload 无限累积 */
     static final java.time.Duration RETRY_PAYLOAD_TTL = java.time.Duration.ofDays(7);
 
+    /**
+     * payload TTL 的「投递后宽限」（毫秒）：与延时链路共用同一常量（1 小时）。
+     *
+     * <p>重试/DLQ 重试链路此前把 payload TTL 固定为 7 天，而重试延迟可被策略配置为超过 7 天：到期扫描时 payload 已先过期 → 消息进隔离区
+     * ZSet（而非投递），事实丢失。修复后 TTL = max({@link #RETRY_PAYLOAD_TTL}, 延迟 +
+     * 本宽限)，覆盖扫描间隔、转投耗时与节点间时钟偏差（与延时链路同一姿态）。
+     */
+    static final long RETRY_PAYLOAD_TTL_GRACE_MS =
+            StreamMQConstants.DEFAULT_DELAY_PAYLOAD_TTL_GRACE_MS;
+
+    /** secondary-dlq-enabled=false 时"按 drop 处理"告警的限频窗口（毫秒） */
+    private static final long SECONDARY_DISABLED_WARN_INTERVAL_MS = 60_000L;
+
     private static final Logger LOG = LoggerFactory.getLogger(DefaultRetryAndDlqHandler.class);
 
     private static final String FIELD_ORIGINAL_MESSAGE_ID =
             StreamMQConstants.FIELD_ORIGINAL_MESSAGE_ID;
+
+    /** 上次 secondary 开关关闭告警时间（限频 WARN，避免死信风暴刷爆日志） */
+    private final java.util.concurrent.atomic.AtomicLong lastSecondaryDisabledWarnAt =
+            new java.util.concurrent.atomic.AtomicLong(Long.MIN_VALUE);
 
     @NonNull private final RedissonClient redisson;
     @NonNull private final MessageConverter messageConverter;
@@ -261,7 +279,11 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                             fields,
                             dlqConfig.getMaxDlqRetryAttempts(),
                             dlqConfig.getDlqRetryDelayMs(),
-                            reg.getGroup());
+                            reg.getGroup(),
+                            // R3-5：把"按消费者合并全局后的"生效配置随上下文交给策略。
+                            // 策略实例可能由反射无参构造（配置恒为 builder 默认），若不携带，
+                            // streammq.dlq.* 全局/注解配置对策略完全不可见（三份真源互相矛盾）。
+                            dlqConfig);
 
             LOG.debug(
                     "Calling dlqFailureStrategy.decide: strategy={}, dlqRetryCount={},"
@@ -297,8 +319,17 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                                 messageId,
                                 fields,
                                 dlqRetryCount,
-                                decision.retryDelay());
+                                clampRetryDelay(
+                                        decision.retryDelay(), "DlqFailureDecision.retryDelay"));
                 case SECONDARY_DLQ -> {
+                    // R3-6：secondary-dlq-enabled 是二级路由的权威门控——策略返回 secondaryDlq
+                    // 但开关为 false 时不得写入 dlq2（否则开关形同虚设，且与配置文档矛盾）。
+                    // 关闭时按 drop 处理（ACK），WARN 限频 + DEBUG 留痕，保证可观测。
+                    if (!dlqConfig.isSecondaryDlqEnabled()) {
+                        warnSecondaryDisabled(reg, messageId, dlqRetryCount);
+                        listener.ack(messageId);
+                        return;
+                    }
                     // 仅在成功写入二级 DLQ 后才 ACK；失败保留 PEL 等待重试（否则消息既不在
                     // 二级 DLQ 也不在 PEL，造成静默丢失）
                     if (routeToSecondaryDlq(message, reg, messageId, fields)) {
@@ -348,6 +379,9 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             Map<String, String> fields,
             int dlqRetryCount,
             Duration delay) {
+        // payload Hash + 调度 ZSet 必须同生同死（Cluster 下原子批退化为按节点拆分），前置拒绝
+        RedisClusterCompatibility.requireCrossKeyAtomicity(
+                redisson, "DLQ retry scheduling (payload hash + schedule ZSet)");
         long nextRetryAt = System.currentTimeMillis() + delay.toMillis();
         String msgIdStr = messageId.getStreamEntryId();
         // DLQ 流按 group 命名（与业务 topic 无关），重试调度条目必须统一挂到 {group}:{group}
@@ -364,6 +398,10 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         payload.put(
                 RetryScheduler.FIELD_TARGET_TOPIC,
                 StreamMQConstants.DLQ_RETRY_TARGET_TOPIC_SENTINEL);
+        // R3-7：独立 scope 标记——RetryScheduler 只在"哨兵 targetTopic + scope=dlq"同时成立时
+        // 才按 DLQ 重试转投，避免任何来源的 targetTopic="__dlq__"（如历史/第三方写入的业务 topic）
+        // 被误判为 DLQ 重试目标。
+        payload.put(RetryScheduler.FIELD_RETRY_SCOPE, RetryScheduler.RETRY_SCOPE_DLQ);
 
         // 原子写入：payload Hash（带 TTL）+ 调度 ZSet 必须同生同死——拆成两条命令时，
         // 第二条失败会导致消息既不在 PEL 也不再调度，造成静默丢失
@@ -374,7 +412,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                                 .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
         batch.<String, String>getMap(payloadKey, StringCodec.INSTANCE).putAllAsync(payload);
         batch.<String, String>getMap(payloadKey, StringCodec.INSTANCE)
-                .expireAsync(RETRY_PAYLOAD_TTL);
+                .expireAsync(payloadTtlFor(delay.toMillis()));
         batch.<String>getScoredSortedSet(retryKey, StringCodec.INSTANCE)
                 .addAsync(nextRetryAt, msgIdStr);
         try {
@@ -473,7 +511,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         return 0;
     }
 
-    // ===================== 原方法（不变） =====================
+    // ===================== 消费失败重试 / DEFER 调度 =====================
 
     @Override
     public void handleReconsumeLater(
@@ -492,19 +530,30 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                         messageId,
                         retryCount,
                         reg.getMaxReconsumeTimes());
-                if (routeToDlq(message, reg, messageId, RetryScheduler.DLQ_REASON_MAX_RETRY)) {
-                    listener.ack(messageId);
-                } else {
-                    LOG.error(
-                            "DLQ routing failed, message kept in PEL for re-delivery "
-                                    + "(topic={}, group={}, messageId={})",
-                            reg.getTopic(),
-                            reg.getGroup(),
-                            messageId);
-                }
+                routeToDlqThenAck(
+                        message, reg, listener, messageId, RetryScheduler.DLQ_REASON_MAX_RETRY);
                 return;
             }
-            Duration delay = retryPolicy.nextRetryDelay(retryCount, message);
+            // R3-4：接线 core 的 RetryPolicy.shouldStopRetry（0.1.2 契约：返回 true → 直接进
+            // DLQ，reason=MAX_RETRY，不再调用 nextRetryDelay）。预算唯一由策略/消费者配置决定，
+            // 与"nextRetryDelay 返回 null"这一既有停止信号并存。
+            if (shouldStopRetry(retryCount, message)) {
+                LOG.warn(
+                        "RetryPolicy.shouldStopRetry=true, routing to DLQ (topic={}, group={},"
+                                + " messageId={}, retryCount={}, policy={})",
+                        reg.getTopic(),
+                        reg.getGroup(),
+                        messageId,
+                        retryCount,
+                        retryPolicy.name());
+                routeToDlqThenAck(
+                        message, reg, listener, messageId, RetryScheduler.DLQ_REASON_MAX_RETRY);
+                return;
+            }
+            Duration delay =
+                    clampRetryDelay(
+                            retryPolicy.nextRetryDelay(retryCount, message),
+                            "retryPolicy.nextRetryDelay");
             if (Objects.isNull(delay)) {
                 LOG.warn(
                         "RetryPolicy returned null delay, routing to DLQ "
@@ -513,16 +562,8 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                         reg.getGroup(),
                         messageId,
                         retryCount);
-                if (routeToDlq(message, reg, messageId, RetryScheduler.DLQ_REASON_MAX_RETRY)) {
-                    listener.ack(messageId);
-                } else {
-                    LOG.error(
-                            "DLQ routing failed, message kept in PEL for re-delivery "
-                                    + "(topic={}, group={}, messageId={})",
-                            reg.getTopic(),
-                            reg.getGroup(),
-                            messageId);
-                }
+                routeToDlqThenAck(
+                        message, reg, listener, messageId, RetryScheduler.DLQ_REASON_MAX_RETRY);
                 return;
             }
             Map<String, String> fields = messageConverter.toStreamFields(message);
@@ -535,6 +576,138 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                     messageId,
                     ex.getMessage(),
                     ex);
+        }
+    }
+
+    /**
+     * 调用 {@link RetryPolicy#shouldStopRetry(int, Message)}，对第三方实现做防御。
+     *
+     * <p>SPI 契约要求实现不抛异常；这里仍兜底捕获 RuntimeException 并视为"不停止"，避免一个坏策略 中断消费失败后的 ACK/重投路由（消息滞留 PEL 直到 PEL
+     * 认领，代价是被动恢复）。
+     *
+     * @return true 表示应停止重试（消息进 DLQ，reason=MAX_RETRY）
+     */
+    private boolean shouldStopRetry(int retryCount, Message<?> message) {
+        RetryPolicy policy = this.retryPolicy;
+        if (Objects.isNull(policy)) {
+            return false;
+        }
+        try {
+            return policy.shouldStopRetry(retryCount, message);
+        } catch (RuntimeException ex) {
+            LOG.warn(
+                    "RetryPolicy.shouldStopRetry threw, treating as false and continuing with"
+                            + " nextRetryDelay (policy={}): {}",
+                    policy.name(),
+                    ex.getMessage(),
+                    ex);
+            return false;
+        }
+    }
+
+    /**
+     * 重试延迟上界校验：超过 {@link StreamMQConstants#MAX_DELAY_TIME_MILLIS}（7 天）时<b>夹取</b>到上界并 WARN。
+     *
+     * <p>选择"夹取"而非"拒绝该次延迟（转 DLQ）"：拒绝会让一条本可重试的消息因策略配置笔误被直接丢弃； 夹取保证消息仍在有限时间内重投（并可通过 WARN
+     * 定位配置问题）。负延迟夹取为 0（立即重试）。
+     *
+     * @param delay 策略返回值，可为 null
+     * @param source 调用来源（日志定位用）
+     * @return 夹取后的延迟（null 原样返回，表示"停止重试"）
+     */
+    static Duration clampRetryDelay(Duration delay, String source) {
+        if (Objects.isNull(delay)) {
+            return null;
+        }
+        if (delay.isNegative()) {
+            LOG.warn("{} returned negative delay {}ms, treating as immediate retry", source, delay);
+            return Duration.ZERO;
+        }
+        if (delay.compareTo(Duration.ofMillis(StreamMQConstants.MAX_DELAY_TIME_MILLIS)) > 0) {
+            LOG.warn(
+                    "{} returned delay {}ms which exceeds MAX_DELAY_TIME_MILLIS ({}ms);"
+                            + " clamping to the upper bound so the payload TTL can cover it",
+                    source,
+                    delay,
+                    StreamMQConstants.MAX_DELAY_TIME_MILLIS);
+            return Duration.ofMillis(StreamMQConstants.MAX_DELAY_TIME_MILLIS);
+        }
+        return delay;
+    }
+
+    /**
+     * 计算重试/DLQ-retry payload Hash 的 TTL：{@code max(RETRY_PAYLOAD_TTL, delay + 1h 宽限)}。
+     *
+     * <p>不变式：<b>TTL 必须覆盖"延迟 + 宽限"</b>，否则延迟超过 7 天的调度条目到期时 payload 已过期， RetryScheduler 读不到 payload →
+     * 进隔离区（事实丢失）而非投递（R3-3）。宽限与延时链路共用同一常量。
+     */
+    static Duration payloadTtlFor(long delayMs) {
+        long covered =
+                delayMs > Long.MAX_VALUE - RETRY_PAYLOAD_TTL_GRACE_MS
+                        ? Long.MAX_VALUE
+                        : delayMs + RETRY_PAYLOAD_TTL_GRACE_MS;
+        return Duration.ofMillis(Math.max(RETRY_PAYLOAD_TTL.toMillis(), covered));
+    }
+
+    /**
+     * {@link Duration#toMillis()} 的饱和版本：超大 Duration 不抛 ArithmeticException（按 Long.MAX_VALUE 处理）。
+     */
+    static long delayToMillisSaturated(Duration delay) {
+        try {
+            return delay.toMillis();
+        } catch (ArithmeticException ex) {
+            return Long.MAX_VALUE;
+        }
+    }
+
+    /** 停止/耗尽重试后统一收口：写 DLQ 成功才 ACK；失败保留 PEL（宁可重复，不可丢失）。 */
+    private void routeToDlqThenAck(
+            Message<?> message,
+            ListenerRegistration<?> reg,
+            StreamMQListener listener,
+            MessageId messageId,
+            String reason) {
+        if (routeToDlq(message, reg, messageId, reason)) {
+            listener.ack(messageId);
+        } else {
+            LOG.error(
+                    "DLQ routing failed, message kept in PEL for re-delivery "
+                            + "(topic={}, group={}, messageId={})",
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    messageId);
+        }
+    }
+
+    /** secondary 开关关闭时的限频 WARN（窗口 {@link #SECONDARY_DISABLED_WARN_INTERVAL_MS}），其余走 DEBUG。 */
+    private void warnSecondaryDisabled(
+            ListenerRegistration<?> reg, MessageId messageId, int dlqRetryCount) {
+        long now = System.currentTimeMillis();
+        long last = lastSecondaryDisabledWarnAt.get();
+        boolean warned = false;
+        if (last == Long.MIN_VALUE || now - last >= SECONDARY_DISABLED_WARN_INTERVAL_MS) {
+            if (lastSecondaryDisabledWarnAt.compareAndSet(last, now)) {
+                warned = true;
+            }
+        }
+        if (warned) {
+            LOG.warn(
+                    "DlqFailureStrategy decided SECONDARY_DLQ but"
+                            + " streammq.dlq.secondary-dlq-enabled=false; message is dropped"
+                            + " instead of being written to dlq2 (topic={}, group={},"
+                            + " messageId={}, dlqRetryCount={}). Set secondary-dlq-enabled=true"
+                            + " to enable the secondary DLQ.",
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    messageId,
+                    dlqRetryCount);
+        } else {
+            LOG.debug(
+                    "SECONDARY_DLQ decision suppressed by secondary-dlq-enabled=false, dropped"
+                            + " (topic={}, group={}, messageId={})",
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    messageId);
         }
     }
 
@@ -574,7 +747,13 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             Map<String, String> fields,
             int retryCount,
             Duration delay) {
-        long nextRetryAt = System.currentTimeMillis() + delay.toMillis();
+        // payload Hash + 调度 ZSet 必须同生同死（Cluster 下原子批退化为按节点拆分），前置拒绝
+        RedisClusterCompatibility.requireCrossKeyAtomicity(
+                redisson, "Retry scheduling (payload hash + schedule ZSet)");
+        long delayMs = delayToMillisSaturated(delay);
+        long now = System.currentTimeMillis();
+        // 饱和加法：非法超大延迟不得回绕成"过去时刻"（否则立即重试形成热循环）
+        long nextRetryAt = delayMs > Long.MAX_VALUE - now ? Long.MAX_VALUE : now + delayMs;
         String msgIdStr = messageId.getStreamEntryId();
         String payloadKey =
                 StreamMQKeys.retryPayloadHash(
@@ -593,7 +772,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                                 .executionMode(BatchOptions.ExecutionMode.REDIS_WRITE_ATOMIC));
         batch.<String, String>getMap(payloadKey, StringCodec.INSTANCE).putAllAsync(payload);
         batch.<String, String>getMap(payloadKey, StringCodec.INSTANCE)
-                .expireAsync(RETRY_PAYLOAD_TTL);
+                .expireAsync(payloadTtlFor(delayMs));
         batch.<String>getScoredSortedSet(retryKey, StringCodec.INSTANCE)
                 .addAsync(nextRetryAt, msgIdStr);
         try {
@@ -623,7 +802,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                     reg.getGroup(),
                     messageId,
                     retryCount,
-                    delay.toMillis(),
+                    delayMs,
                     nextRetryAt);
         }
         listener.ack(messageId);

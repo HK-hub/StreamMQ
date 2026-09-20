@@ -193,65 +193,74 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 | 项目 | 配置 |
 |------|------|
-| JDK | OpenJDK 21.0.11 (Eclipse Adoptium) |
+| JDK | OpenJDK 21.0.11 (64-Bit Server VM) |
 | Spring Boot | 3.5.16 |
-| Redisson | 3.34.1（历史测量环境；当前构建基线为 3.52.0） |
-| Redis | 7.x (本地单机, 无密码) |
+| Redisson | 3.52.0（当前构建基线） |
+| Redis | 8.8.0 本地单机、独立实例（端口 6380，`--save '' --appendonly no`，基准期间独占） |
 | JMH | 1.37 |
-| 操作系统 | Windows 11 |
+| 操作系统 | Windows 10 (10.0.28000) x64 |
+| 硬件 | Intel Core i7-14700KF / 32GB（**非生产硬件，绝对值仅供量级参考**） |
 | 连接池 | 16 连接, 4 最小空闲 |
 
 ### 性能基线（方法学声明）
 
-> ⚠️ **重要：以下数字是 0.1.2 本地实测快照**（2026-09-02，localhost Redis，JDK 21，笔记本级硬件）：
+> ⚠️ **重要：以下数字全部为 2026-09-20 本地全量重跑实测**（当前代码 + 当前 JMH 注解参数；独立本地 Redis 实例、JDK 21.0.11、i7-14700KF / 32GB、Windows 10——桌面级硬件，**非生产环境**）：
 > - 序列化基准已加入 JMH `Blackhole` 消费，防止 JIT 死码消除导致吞吐虚高
-> - 消费基准驱动的是**原始 Redisson 读路径**（XREADGROUP → 字段解码 → 业务回调 → **批量** XACK，每 100 条消息 1 次 ACK）并配合持续灌数；它**刻意绕过 listener 容器**，因此生产路径的过滤器/拦截器链、指标、重试/DLQ 处理与逐条 ACK **都不包含在内**——真实容器吞吐会更低，容器驱动的基准列为后续工作
+> - 发送/消费基准使用 `JacksonJsonSerializer`——即 **0.1.2 的生产默认序列化器**，因此不是“旧默认值”下的数字
+> - 消费基准驱动的是**原始 Redisson 读路径**（XREADGROUP → 字段解码 → 业务回调 → **批量** XACK，每 100 条消息 1 次 ACK），口径为**先预灌积压再测消费**：测量期间不再持续补货（只保留低水位保活补货），并由有效性门禁在"积压被耗尽"时直接判该轮 INVALID；它**刻意绕过 listener 容器**，因此生产路径的过滤器/拦截器链、指标、重试/DLQ 处理与逐条 ACK **都不包含在内**——真实容器吞吐会更低，容器驱动的基准列为后续工作
 > - 此前 README 引用的 "Stream 消费吞吐 ~269,760 ops/s" 来自一个测量**空 XREADGROUP 网络往返**的破损基准，已移除
-> - 误差栏为 99.9% CI；笔记本级硬件结果仅供参考，生产环境请以自己的实测为准
+> - 误差栏为 99.9% CI（远宽于常见的 99% CI）；桌面级硬件结果仅供参考，生产环境请以自己的实测为准
 
 > 我们公开承认 v0.1.0 之前曾发布过有方法学缺陷的基准数字（死码消除、灌数耗尽、缺 ACK）。这种透明度比"假装没发过"更重要。**生产容量规划请以你自己环境的实测为准。**
 >
-> **注意（0.1.2 默认值变更）：** 下表中的数字是在 0.1.1 时代的默认值下测得的（Fury 为默认序列化器、并发消费超时 30s）。0.1.2 把**默认序列化器切换为 `JacksonJsonSerializer`**、并**默认关闭逐消息消费超时**（由 PEL 认领兜底 at-least-once）。两者都会改变绝对吞吐数字——请在你的环境中重新运行 `mvn -Pbenchmark` 获取当前数字。
+> 含逐迭代原始值、延迟分位数与机器可读有效性证据的完整报告：[`streammq-benchmark/BENCHMARK_REPORT.md`](streammq-benchmark/BENCHMARK_REPORT.md)。
 
-### 序列化性能 (Throughput, ops/s) — 2026-09-17 实测
+### 序列化性能 (Throughput, ops/s) — 2026-09-20 实测
 
-测试 1KB 消息体的序列化/反序列化吞吐量（`messageCount=1000`，含 Blackhole 消费）。`SerializationBenchmark` 注解声明的 JMH 参数为 `@Fork(3, warmups = 2)`、`@Warmup(3×2s)`、`@Measurement(5×2s)`、`@BenchmarkMode(Throughput, SampleTime)`；下表数字采集时使用了命令行覆盖 `-f 1 -wi 4 -i 5 -w 2s -r 2s -bm thrpt`（单 fork 运行，完整命令见[基准报告](docs/benchmarks/serialization-2026-09-17.md) §2）。覆盖全部 6 个内置序列化器，**含新增的 `FlatBuffersSerializer`（FlexBuffers）与 `SbeSerializer`（SBE 信封）**。完整报告见 [`docs/benchmarks/serialization-2026-09-17.md`](docs/benchmarks/serialization-2026-09-17.md)。
+测试 1KB 消息体的序列化/反序列化吞吐量（含 Blackhole 消费）。JMH 参数**只由 `SerializationBenchmark` 类注解决定**（唯一真源：`main()` 与 CI 都不再覆盖）：`@Fork(1)`、`@Warmup(2×1s)`、`@Measurement(3×2s)`、`@BenchmarkMode(Throughput, SampleTime)`。下表即在该参数下采集（无命令行覆盖）。覆盖全部 6 个内置序列化器，**含 `FlatBuffersSerializer`（FlexBuffers）与 `SbeSerializer`（SBE 信封）**。
 
-| 序列化器 | Serialize (ops/s) | Deserialize (ops/s) | RoundTrip (ops/s) | 单次序列化 (ops/s) | 单次反序列化 (ops/s) | 体积 (字节) |
-|----------|-------------------|---------------------|-------------------|--------------------|----------------------|------------|
-| **Fury** | **~3,483,891** | **~3,800,231** | **~1,880,645** | **~4,036,015** | **~3,995,683** | 1,094 |
-| Protostuff | ~351,231 | ~3,945,355 | ~320,724 | ~342,823 | ~3,717,589 | 1,050 |
-| FlatBuffers (FlexBuffers) | ~657,099 | ~763,086 | ~347,640 | ~645,424 | ~785,224 | 1,150 |
-| SBE (信封) | ~358,310 | ~765,708 | ~246,984 | ~354,743 | ~817,930 | 1,104 |
-| Jackson（默认） | ~416,872 | ~893,418 | ~266,364 | ~410,731 | ~875,660 | 1,092 |
-| JDK | ~442,764 | — | — | ~459,824 | — | — |
+| 序列化器 | Serialize (ops/s) | Deserialize (ops/s) | RoundTrip (ops/s) | 单次序列化 (ops/s) | 单次反序列化 (ops/s) |
+|----------|-------------------|---------------------|-------------------|--------------------|----------------------|
+| **Fury** | **~4,323,664** | **~4,374,579** | **~2,090,991** | **~4,442,831** | **~4,322,816** |
+| Protostuff | ~352,662 | ~4,024,571 | ~333,142 | ~354,637 | ~3,777,286 |
+| FlatBuffers (FlexBuffers) | ~694,202 | ~736,299 | ~374,788 | ~687,661 | ~807,548 |
+| SBE (信封) | ~358,537 | ~789,301 | ~242,670 | ~355,722 | ~795,995 |
+| Jackson（默认） | ~419,588 | ~899,889 | ~279,826 | ~414,844 | ~906,830 |
+| JDK | ~428,211 | ~116,017 | ~86,815 | ~386,110 | ~115,415 |
 
-> **结论/读数说明**：**Fury** 全项最快（序列化约为 Jackson 的 **8×**、反序列化约 **4.3×**），但需类注册白名单并会引入 Guava（需显式 opt-in）；**Protostuff** 反序列化极快（约 **4.4×** Jackson）但序列化偏慢（约 0.85×），适合读多写少；**FlatBuffers**（FlexBuffers，schema-less、安全——纯数据、无 gadget RCE 面）读写均衡，其“零拷贝读”为逐字段特性，`FlatBuffersSerializer` 仍需反射物化 POJO，故端到端反序列化与 Jackson 相当而非显著更快；**SBE** 信封模式受内层 Jackson 编解码限制（约 Jackson 的 0.86×），价值在定长 8 字节头 + `varData` 分帧与可版本化 schema，真正低时延需 schema-first body（生成式 reader）而非信封；**JDK** 反序列化强制反序列化过滤器（安全加固），本基准负载被拒绝，故不测量。体积仅 1KB 字符串负载、差异在 ±10% 内；笔记本级硬件 + IDE 运行，绝对值为参考（数字会因 JDK/硬件/负载而漂移）。
+> **结论/读数说明**：**Fury** 全项最快（序列化约 **10.3×** Jackson、反序列化约 **4.9×**、往返约 **7.5×**，p99 延迟 ~0.6µs 比 Jackson 的 1.8–5.2µs 低一个量级），但需类注册白名单并会引入 Guava（需显式 opt-in）；**Protostuff** 反序列化极快（约 **4.5×** Jackson）但序列化偏慢（约 0.84×），适合读多写少；**FlatBuffers**（FlexBuffers，schema-less、安全——纯数据、无 gadget RCE 面）读写均衡，其“零拷贝读”为逐字段特性，`FlatBuffersSerializer` 仍需反射物化 POJO，故端到端反序列化与 Jackson 相当而非显著更快；**SBE** 信封模式受内层 Jackson 编解码限制（约 Jackson 的 0.86×），价值在定长 8 字节头 + `varData` 分帧与可版本化 schema，真正低时延需 schema-first body（生成式 reader）而非信封；**JDK** 序列化与 Jackson 相当，反序列化慢约 7.8×（~116K vs ~900K），其反序列化过滤器因目标类型在本次调用的放行集内而接受基准载荷，但生产不建议使用（见 [反序列化安全](#反序列化安全)）。绝对值为参考（会因 JDK/硬件/负载而漂移）；带 CLI 覆盖参数的 2026-09-17 快照见 [`docs/benchmarks/serialization-2026-09-17.md`](docs/benchmarks/serialization-2026-09-17.md)，两者同量级但不逐项可比。
 
-### 消息发送性能 (Throughput, ops/s) — 0.1.2 实测
+### 消息发送性能 (Throughput, ops/s) — 2026-09-20 实测
 
-单实例同步/异步发送，直连 localhost Redis。`StreamMessageTemplateBenchmark` 注解声明的 JMH 参数为 `@Fork(3, warmups = 2)`、`@Warmup(3×2s)`、`@Measurement(5×2s)`、`@BenchmarkMode(Throughput, SampleTime)`。
-**如实披露：** 下表的 0.1.2 数字采集于早期的轻量配置（fork=1、warmup=1×2s、measurement=2×3s，见 `streammq-benchmark/BENCHMARK_REPORT.md` §4），此后未按加严后的注解重测，仅供参考；需要全量参数的数字请按本节末尾的复现命令重跑。
+单实例同步/异步发送，直连 localhost Redis。JMH 参数**只由 `StreamMessageTemplateBenchmark` 类注解决定**（唯一真源）：`@Fork(1)`、`@Warmup(2×1s)`、`@Measurement(3×2s)`、`@BenchmarkMode(Throughput, SampleTime)`。批量方法每次调用发送 100 条（`asyncSendThroughput` 并发发出 100 条后全部 join；`syncSendThroughput` 串行发送 100 条），并声明 `@OperationsPerInvocation(100)`。
 
 | 发送模式 | 100B 负载 (ops/s) | 1KB 负载 (ops/s) | 10KB 负载 (ops/s) |
 |----------|-------------------|------------------|-------------------|
-| **异步批量发送** (batch=100) | **~12,513** | **~11,780** | **~8,326** |
-| 同步批量发送 (batch=10) | ~3,640 | ~3,765 | ~2,863 |
-| 同步单条发送 | ~3,741 | ~3,610 | ~2,600 |
+| **异步发送**（100 条并发，全部 join） | **~17,654** | **~16,944** | **~12,527** |
+| 同步发送（每次 100 条串行） | ~3,949 | ~3,499 | ~2,692 |
+| 同步单条发送 | ~3,932 | ~3,886 | ~2,859 |
 
-> **结论**: 异步发送性能约为同步的 **3~4 倍**（同样依赖硬件与 Redis 网络 RTT）。
+> **结论**: 异步并发发送约为同步单条的 **4.5 倍**；10KB 相对 100B 下降约 29%，异步路径 `SampleTime` p99 稳定在 0.11–0.13ms。
 
-### 消息消费性能 — 0.1.2 实测
+### 消息消费性能 (Throughput, ops/s) — 2026-09-20 实测
 
-原始读路径：XREADGROUP + 字段解码 + 回调 + 批量 XACK（每 100 条消息 1 次 ACK，配合持续灌数）。JMH fork=1，warmup=1×2s，measurement=3×3s。**不是容器路径**——见上方方法学说明。
+重建后的 harness（原始读路径：XREADGROUP + 字段解码 + 回调 + 批量 XACK，每 100 条 1 次 ACK）：
+- 测量前**预灌积压**（`-Dstreammq.benchmark.backlog`，默认 50000），预灌速率仅作为**补货端参考指标**打印；
+- 测量期间**不再持续补货**，只保留低水位保活补货（`-Dstreammq.benchmark.feederThreads`，默认 2），使消费端成为唯一瓶颈；
+- **有效性门禁**：测量期间积压一旦被耗尽（出现空读）即打印 `INVALID RUN` 并以非零码退出（提示加大 `-Dstreammq.benchmark.backlog`），否则退出码为 0；每个 payloadSize 的证据落盘在 `target/consume-validity-<payload>.json`。
 
 | 消费模式 | 说明 | 1KB (ops/s) | 10KB (ops/s) |
 |----------|------|-------------|--------------|
-| `consumeThroughput` | 原始读路径（含网络往返、反序列化、业务回调、批量 XACK） | **~2,383** | **~2,018** |
-| `serializationRoundTrip` | Jackson 序列化/反序列化回环（含网络） | ~270,705 | ~19,249 |
+| `consumeThroughput` | 原始读路径（含网络往返、反序列化、业务回调、批量 XACK） | **~12,572** | **~7,521** |
+| `serializationRoundTrip` | 本地 Jackson 往返（无 Redis） | ~312,685 | ~21,813 |
+| `messageCreateAndConsume` | 消息构造 + 回调派发（无 Redis） | ~7,651,608 | ~8,047,889 |
 
-> `consumeThroughput` 测量的是消费路径（含 Redis 网络往返、反序列化、业务回调、批量 XACK），并非空读往返——
-> 但它是 **SDK 容器路径的下界**：不含容器的逐条 ACK 与过滤器/拦截器/指标链。不同硬件、Redis 实例、网络延迟下数字会有显著差异。
+> 本轮证据：两档负载均 `starvedReads=0`、`avgBatchSize=100.0`、`supplyTight=false`、`valid=true`——消费端从未空转，
+> 且同一窗口内**消费量大于补货量**（1KB 160,400 > 123,500；10KB 88,900 > 52,000），差额来自预灌积压。
+> 旧口径（补货端每条一次同步 XADD）下同一基准只有 ~2,383 / ~2,018 ops/s，新口径提升 **5.3× / 3.7×**；
+> 但它仍是 **SDK 容器路径的下界**：不含容器的逐条 ACK 与过滤器/拦截器/指标链，且补货与消费共用同一 Redis 实例（保守方向）。
+>
+> `consumeThroughput` 测量的是消费路径，并非空读往返。不同硬件、Redis 实例、网络延迟下数字会有显著差异。
 
 自行运行基准（与基准报告一致的可复现命令——直接调用 JMH CLI，避免 `exec:exec@...` 作为独立 goal 触发时**跳过 `test-compile`** 而用到陈旧字节码）：
 
@@ -262,14 +271,25 @@ cd streammq-benchmark
 java -Djmh.ignoreLock=true \
      -cp "target/test-classes:target/classes:$(cat target/cp.txt)" \
      org.openjdk.jmh.Main "SerializationBenchmark" \
-     -f 1 -wi 4 -i 5 -w 2s -r 2s -bm thrpt \
      -rf json -rff target/jmh-serialization.json
 ```
 
-发送/消费基准同理，把 `"SerializationBenchmark"` 换成 `"StreamMessageTemplateBenchmark"` / `"StreamConsumerBenchmark"`
-即可（classpath 分隔符在 Linux/macOS 为 `:`，Windows 为 `;`）。
+（不加 `-f/-wi/-i` 覆盖参数：类注解就是声明的参数真源，上表即按此方式采集；直连非容器 Redis 时另加
+`-Dstreammq.redis.mode=local -Dstreammq.benchmark.allowFlush=true`。）
+
+`StreamMessageTemplateBenchmark` 同理，把 `"SerializationBenchmark"` 换成 `"StreamMessageTemplateBenchmark"`；
+消费基准请优先用类入口（会执行有效性门禁，直接调 JMH CLI 会绕过它）：
+
+```bash
+java -Djmh.ignoreLock=true \
+     -Dstreammq.benchmark.backlog=50000 -Dstreammq.benchmark.feederThreads=2 \
+     -cp "target/test-classes:target/classes:$(cat target/cp.txt)" \
+     io.github.streammq.benchmark.StreamConsumerBenchmark
+```
+
+（classpath 分隔符在 Linux/macOS 为 `:`、Windows 为 `;`；若要直连已有 Redis，请追加 `-Dstreammq.redis.mode=local -Dstreammq.benchmark.allowFlush=true`——非容器目标必须显式授权 flushdb，Testcontainers 独占实例则无需。）
 或按 [`.github/workflows/benchmark.yml`](.github/workflows/benchmark.yml) 手动触发 CI 基准任务，
-结果会以 JMH 产物形式回填。
+其 JMH 产物按 run 上传，报告表格即由这些产物回填。
 
 ### 性能优化建议
 
@@ -366,7 +386,26 @@ streammq:
 
 > **注意**：`redisson.singleServerConfig.*` 在本 starter 中**没有属性绑定**（它只绑定
 > `spring.redis.redisson.config` / `spring.redis.redisson.file`），写了不会生效，请勿使用。
-> 集群 / 哨兵等高级拓扑请通过 `spring.redis.redisson.config` 提供 Redisson 原生配置。
+> **哨兵（Sentinel）/ 主从等高级拓扑**请通过 `spring.redis.redisson.config` 提供 Redisson 原生配置。
+>
+> ⚠️ **0.1.x 不支持 Redis Cluster——结论为实测，而非推断。** 数据面刻意使用跨 key 原子操作（PEL 认领
+> `XACK`+`XADD`、事务提交 `XRANGE`+`XADD`+`HSET`、重试转投批、DLQ 重投），且这些 key **不带 `{...}`
+> hash tag**——按设计不做"命名空间族同 slot"（否则用户可控的 topic/group 会把整个命名空间钉死在一个分片，
+> 见 `CHANGELOG.md` 的"事务 key 结构与 Redis Cluster（hash tag）定型声明"）。在**真实 3 主集群**上实测
+> （`RedisClusterCompatibilityIT`），两种失败形态都被逐条钉死：
+>
+> - 发送与基础消费/ACK（单 key `XADD` / `XREADGROUP` / `XACK`）**可用**；
+> - 多 key **Lua** 确定性失败：`CROSSSLOT` + 零副作用（消息留在 PEL/Stream，绝不会被误 ACK、不会丢失）——
+>   例如 `streammq:{ns}:msg:{topic}` 与 `streammq:{ns}:retry:{topic}:{group}` 落在不同 slot；
+> - 多 key **`REDIS_WRITE_ATOMIC` 批**（延时登记/转投、重试与 DLQ 的调度/转投、事务元数据）**取决于 key 落点**：
+>   同一 master 但不同 slot 会被编组为单个 `MULTI`/`EXEC`、被服务端以 `CROSSSLOT` 拒绝；落在不同 master 则被
+>   **按节点拆分**——各分片分别提交、批整体报成功，跨 key 原子性被静默丢弃（可能半写且不报错）。
+>
+> 因为"静默降级"比"直接拒绝"危险得多，StreamMQ 0.1.2 起**失败前置化**：Cluster 配置的客户端上，全部跨 key
+> 原子路径（延时消息登记/转投、重试与 DLQ 调度/转投、事务登记/提交、跨流 PEL 认领）在**写第一个 key 之前**抛出
+> 可操作的 `StreamMQException`；监听器容器与生产者另在检测到 Cluster 拓扑时输出**一次性可操作 WARN**，
+> 让问题在启动期暴露，而不是在运行期以裸 `CROSSSLOT` 出现。集群上已存在的调度状态绝不会被丢弃或半写。
+> **请先使用单实例或 Sentinel / 主从部署**；集群支持列入后续版本。
 
 ### 3. 启用（自动）
 

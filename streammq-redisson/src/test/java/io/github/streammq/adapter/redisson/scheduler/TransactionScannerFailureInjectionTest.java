@@ -305,6 +305,65 @@ class TransactionScannerFailureInjectionTest {
                                         .contains("treated as UNKNOWN"));
     }
 
+    // ===================== 场景 F：R2-2① 终态早退补 .done =====================
+
+    @Test
+    @DisplayName("R2-2①：已终态事务的回查早退分支必须补写 .done（否则保留期清理永远扫不到）")
+    void terminalEarlyExit_marksDoneForRetention() {
+        // 模拟「终态脚本已执行（COMMIT 已写入），实例在 markTerminalDone 前崩溃」：
+        // 状态为终态但缺少 .done，若早退分支不补写，该字段永远不会被 sweepExpiredTerminalStates 清理。
+        stateStore.put(TX_ID, TransactionScanner.STATE_COMMIT);
+
+        scanner.scanTimeoutHalf(TX_GROUP);
+
+        assertThat(stateStore).as("早退分支必须产生可清理标记 .done").containsKey(TX_ID + ".done");
+        verify(checkZset).remove(TX_ID);
+        assertThat(counterStore).doesNotContainKey(TX_ID);
+    }
+
+    // ===================== 场景 G：R2-3 孤儿回查线程有界 =====================
+
+    @Test
+    @DisplayName("R2-3：回查超时后不为同一事务重复起线程，线程结束后标记清除并可再次回查")
+    void timedOutChecker_boundsConcurrentCheckerThreads() throws Exception {
+        givenReadableHalfMessage();
+        java.util.concurrent.atomic.AtomicInteger invocations =
+                new java.util.concurrent.atomic.AtomicInteger();
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        TransactionChecker<String> slowChecker =
+                (message, context) -> {
+                    invocations.incrementAndGet();
+                    release.await(5, java.util.concurrent.TimeUnit.SECONDS);
+                    return LocalTransactionState.UNKNOWN;
+                };
+        // 提高回查预算：本用例关注线程有界性，不触发耗尽强制回滚
+        TransactionScanner boundedScanner =
+                new TransactionScanner(
+                        redisson, NAMESPACE, converter, CHECK_INTERVAL_MS, 10, BATCH_SIZE);
+        boundedScanner.registerChecker(TX_GROUP, slowChecker);
+        boundedScanner.setCheckerTimeoutMillis(100L);
+
+        for (int round = 1; round <= 3; round++) {
+            boundedScanner.scanTimeoutHalf(TX_GROUP);
+        }
+
+        assertThat(invocations.get()).as("超时期间不得为同一 txId 重复启动回查线程（旧实现每轮起一个 → 无界）").isEqualTo(1);
+        assertThat(boundedScanner.getOrphanCheckerCount()).isEqualTo(1);
+        assertThat(boundedScanner.getOrphanCheckerTotal()).isEqualTo(1);
+
+        release.countDown();
+        long deadline = System.currentTimeMillis() + 5_000L;
+        while (boundedScanner.getOrphanCheckerCount() > 0
+                && System.currentTimeMillis() < deadline) {
+            Thread.sleep(20L);
+        }
+        assertThat(boundedScanner.getOrphanCheckerCount()).as("孤儿线程结束后必须摘除标记").isZero();
+
+        // 标记清除后，同一事务恢复可回查
+        boundedScanner.scanTimeoutHalf(TX_GROUP);
+        assertThat(invocations.get()).isEqualTo(2);
+    }
+
     // ===================== 场景 E：MISSING 状态（B-16） =====================
 
     @Test
@@ -416,6 +475,9 @@ class TransactionScannerFailureInjectionTest {
                     if (luaScript.contains("'UNKNOWN'")) {
                         return casToUnknown(scriptArgs);
                     }
+                    if (luaScript.contains("STATE=")) {
+                        return casFinalizeStuck(scriptArgs);
+                    }
                     throw new IllegalStateException(
                             "Unexpected Lua script dispatched by TransactionScanner: " + luaScript);
                 };
@@ -434,6 +496,19 @@ class TransactionScannerFailureInjectionTest {
                         anyString(),
                         any(RScript.ReturnType.class),
                         anyList(),
+                        any(),
+                        any());
+        // 强制终结状态 CAS 脚本：5 个 ARGV（txId / 期望中间态 / 原因字段 / 原因值 / 终态）
+        doAnswer(lua)
+                .when(script)
+                .eval(
+                        any(RScript.Mode.class),
+                        anyString(),
+                        any(RScript.ReturnType.class),
+                        anyList(),
+                        any(),
+                        any(),
+                        any(),
                         any(),
                         any());
         return script;
@@ -491,6 +566,27 @@ class TransactionScannerFailureInjectionTest {
             return current;
         }
         stateStore.put(id, TransactionScanner.STATE_UNKNOWN);
+        return "OK";
+    }
+
+    /**
+     * 复刻 {@code LUA_CAS_FINALIZE_STUCK} 语义（R2-1）：仅当状态仍等于期望中间态时才写终态 + 失败原因； 否则原样返回当前状态（{@code
+     * STATE=...}），绝不改写。
+     *
+     * @param scriptArgs 脚本参数：{@code [0]=txId, [1]=期望中间态, [2]=原因字段, [3]=原因值, [4]=终态}
+     */
+    private String casFinalizeStuck(List<Object> scriptArgs) {
+        String id = String.valueOf(scriptArgs.get(0));
+        String expected = String.valueOf(scriptArgs.get(1));
+        String reasonField = String.valueOf(scriptArgs.get(2));
+        String reasonValue = String.valueOf(scriptArgs.get(3));
+        String terminal = String.valueOf(scriptArgs.get(4));
+        String current = stateStore.get(id);
+        if (!Objects.equals(current, expected)) {
+            return Objects.isNull(current) ? "STATE=absent" : "STATE=" + current;
+        }
+        stateStore.put(reasonField, reasonValue);
+        stateStore.put(id, terminal);
         return "OK";
     }
 

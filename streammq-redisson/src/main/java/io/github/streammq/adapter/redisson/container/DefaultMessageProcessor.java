@@ -25,16 +25,19 @@ import io.github.streammq.core.policy.OrderlyShardLockManager;
 import io.github.streammq.core.policy.RetryAndDlqHandler;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 /**
  * 单条消息的消费管线（God class 拆分，红队审查 F-02-12）。
@@ -93,12 +96,38 @@ public class DefaultMessageProcessor implements MessageProcessor {
     private volatile long timeoutCancelGraceMillis = DEFAULT_TIMEOUT_CANCEL_GRACE_MILLIS;
 
     /**
+     * 顺序消费延迟重投队列（红队审查 R1-1，容器装配时注入；未注入时退化为"消息留在 PEL"）。
+     *
+     * <p>分片锁竞争、ORDERLY 的 {@code defer(delay)}、DLQ 转投失败三条路径都会向它登记；由注册的 primary 读循环按节拍重投（{@code
+     * ConsumeLoopTask}），避免"属主存活期间消息永远不被重投"的静默黑洞。
+     */
+    private volatile OrderlyDeferredRetryQueue deferredRetryQueue;
+
+    /**
      * 上一次分片锁竞争 WARN 的时间戳（毫秒）。
      *
      * <p>仅用于 {@link #SHARD_BUSY_WARN_INTERVAL_MILLIS} 限频：竞争是正常调度状态， 但连续竞争（如 rebalance 窗口）可能每秒数十次，逐条
      * WARN 会淹没日志。
      */
     private final AtomicLong lastShardBusyWarnMillis = new AtomicLong(0L);
+
+    /**
+     * 在途消息计数（K2）：{@link #processMessage} 入口自增、finally 自减。
+     *
+     * <p><b>口径：</b>统计已进入消费管线、尚未完成 ACK/NACK 路由的消息条数（正常路径上等价于「正在执行 handler 的消息 条数」+ 过滤/拦截器拒绝后仍在做 ACK
+     * 路由的瞬时条数）；不包含排队待处理、重试 ZSet 中、PEL 中滞留的消息。该口径与 {@link
+     * io.github.streammq.core.listener.InFlightAware#getInFlightCount()} 一致，由容器实现转发给优雅关闭流程。
+     *
+     * <p><b>唯一收口：</b>所有会执行 handler 的路径（内联 sink / inflight 泵 / PEL 排空 / 延迟重投 / 超时包装）都经由 {@link
+     * #processMessage}；{@code retryDeferredDlqRoute} 只重试 DLQ 转投、不执行 handler，故不计入。
+     *
+     * <p><b>并发安全：</b>{@link #processMessage} 可被多条虚拟线程并发调用（背压泵 + 多读循环）， {@link AtomicInteger}
+     * 的无锁自增/自减相对一次 Redis ACK 的开销可忽略。
+     *
+     * <p><b>已知近似：</b>消费超时取消后若业务线程在宽限期内仍未终止，计数会随 {@link #processMessage} 返回而先归零 （此时消息已按
+     * RECONSUME_LATER 路由，at-least-once 由重试 / PEL 认领兜底）。
+     */
+    private final AtomicInteger inFlightMessages = new AtomicInteger();
 
     public DefaultMessageProcessor(
             ConsumerInterceptorChain interceptorChain,
@@ -119,6 +148,17 @@ public class DefaultMessageProcessor implements MessageProcessor {
     @Override
     public void setExecutor(ExecutorService executor) {
         this.executor = Objects.requireNonNull(executor, "executor");
+    }
+
+    /**
+     * 注入顺序消费延迟重投队列（容器装配；R1-1）。
+     *
+     * <p>未注入（如独立单测直接构造）时，三条登记路径退化为"消息留在 PEL 等认领兜底"的历史行为， 不阻断主流程。
+     *
+     * @param queue 延迟重投队列
+     */
+    void setOrderlyDeferredRetryQueue(OrderlyDeferredRetryQueue queue) {
+        this.deferredRetryQueue = queue;
     }
 
     @Override
@@ -148,6 +188,9 @@ public class DefaultMessageProcessor implements MessageProcessor {
     /**
      * 处理单条消息：支持消费超时取消，以 {@code onMessage} 返回值为路由标准。
      *
+     * <p><b>在途计数（K2）：</b>入口自增、finally 自减，是容器 {@code InFlightAware} 判据的唯一计数点（口径与唯一收口见 {@link
+     * #inFlightMessages}）。
+     *
      * <p><b>Throwable 兜底（发布前修复 P1-6/P1-8）：</b>{@link #doProcessMessage} 内部已捕获业务 {@code Exception}
      * 并路由重试/DLQ；此处再拦截逃逸的 {@code Error}（OOM / StackOverflowError）与 handler 二次故障（如 Redis
      * 彻底不可用导致路由本身再抛）。捕获后统一按 {@code RECONSUME_LATER} 路由——消息要么进入重试 ZSet、要么留在 PEL，绝不因为一次异常
@@ -156,11 +199,27 @@ public class DefaultMessageProcessor implements MessageProcessor {
     @Override
     public void processMessage(
             Message<?> message, ListenerRegistration<?> reg, StreamMQListener listener) {
+        inFlightMessages.incrementAndGet();
         try {
             doProcessMessage(message, reg, listener);
         } catch (Throwable t) {
             handleFailure(message, reg, listener, t);
+        } finally {
+            inFlightMessages.decrementAndGet();
         }
+    }
+
+    /**
+     * 返回当前在途（处理中、尚未完成 ACK/NACK 路由）消息条数。
+     *
+     * <p>供 {@code DefaultStreamMQListenerContainer} 实现 {@link
+     * io.github.streammq.core.listener.InFlightAware#getInFlightCount()}；口径与近似说明见 {@link
+     * #inFlightMessages}。
+     *
+     * @return 在途消息数，不小于 0
+     */
+    int inFlightCount() {
+        return inFlightMessages.get();
     }
 
     /**
@@ -332,6 +391,10 @@ public class DefaultMessageProcessor implements MessageProcessor {
                             message.getMessageId(),
                             RetryScheduler.DLQ_REASON_MAX_RETRY)) {
                         listener.ack(message.getMessageId());
+                    } else {
+                        // R1-1 ②：转投失败此前无分支（消息静默留在 PEL，属主存活期间永不重投）。
+                        // 现登记本地延迟重试——只重试 DLQ 转投，不重新执行 handler。
+                        deferDlqRouteFailure(message, reg);
                     }
                     finalAction = ConsumeAction.SUCCESS;
                 } else {
@@ -385,17 +448,27 @@ public class DefaultMessageProcessor implements MessageProcessor {
             RetryAndDlqHandler handler,
             long consumeStart) {
         AtomicReference<Thread> taskThread = new AtomicReference<>();
+        // R1-10：MDC 只注入在读循环线程，业务回调实际运行在执行器线程——不传递上下文会丢失
+        // topic/groupId/messageId 结构化日志字段。提交前快照，任务内恢复，任务结束清理。
+        Map<String, String> mdcSnapshot = MDC.getCopyOfContextMap();
         Future<ConsumeAction> future =
                 executor.submit(
                         () -> {
                             taskThread.set(Thread.currentThread());
-                            if (reg.isDlqMode()) {
-                                return processDlqMessage(message, reg, ctx);
+                            if (Objects.nonNull(mdcSnapshot)) {
+                                MDC.setContextMap(mdcSnapshot);
                             }
-                            StreamMessageConcurrentlyConsumer consumer =
-                                    (StreamMessageConcurrentlyConsumer) reg.getConsumer();
-                            ConsumeAction action = consumer.onMessage(message, ctx);
-                            return action;
+                            try {
+                                if (reg.isDlqMode()) {
+                                    return processDlqMessage(message, reg, ctx);
+                                }
+                                StreamMessageConcurrentlyConsumer consumer =
+                                        (StreamMessageConcurrentlyConsumer) reg.getConsumer();
+                                ConsumeAction action = consumer.onMessage(message, ctx);
+                                return action;
+                            } finally {
+                                MDC.clear();
+                            }
                         });
         ConsumeAction action = ConsumeAction.RECONSUME_LATER;
         try {
@@ -473,8 +546,11 @@ public class DefaultMessageProcessor implements MessageProcessor {
      *
      * <p><b>竞争 ≠ 业务失败（红队审查 R4-B02 / R3-25）：</b>{@link OrderlyShardBusyException}
      * 表示"分片锁被其它实例持有，本条消息未被 handler 处理"。该信号在 {@code attempt++} 之前单独捕获， 直接返回 {@code
-     * RECONSUME_LATER}——不计数、不挂起等待、不写 retry ZSet、不进 DLQ、不 ACK， 消息继续留在 PEL 由认领机制兜底重投。否则多实例 rebalance
-     * 窗口内的锁竞争会白白耗尽 maxReconsumeTimes 预算，把从未被处理过的消息送进 DLQ。
+     * RECONSUME_LATER}——不计数、不挂起等待、不写 retry ZSet、不进 DLQ、不 ACK， 消息继续留在 PEL 并登记到延迟重投队列（R1-1）。否则多实例
+     * rebalance 窗口内的锁竞争会白白耗尽 maxReconsumeTimes 预算，把从未被处理过的消息送进 DLQ。
+     *
+     * <p><b>DEFER 语义（红队审查 R1-2）：</b>消费端返回 {@link ConsumeAction#defer(Duration)} 时，按声明的
+     * 延迟登记延迟重投并结束本轮——<b>不消耗重试预算、不进 DLQ、不原地 sleep 重试</b>（此前 DEFER 被当作失败， 原地重试后在预算耗尽时进 DLQ）。
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
     private ConsumeAction consumeOrderlyWithRetry(
@@ -495,7 +571,17 @@ public class DefaultMessageProcessor implements MessageProcessor {
             return deferShardBusy(message, reg, busy);
         }
         int attempt = 0;
-        while (!action.isSuccess() && attempt < maxRetries) {
+        while (true) {
+            if (action.isSuccess()) {
+                handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
+                return ConsumeAction.SUCCESS;
+            }
+            if (action.isDefer()) {
+                return deferByOrderlyAction(message, reg, action);
+            }
+            if (attempt >= maxRetries) {
+                break;
+            }
             attempt++;
             LOG.debug(
                     "Orderly consume failed (attempt {}/{}), suspending shard for {}ms: topic={},"
@@ -513,10 +599,6 @@ public class DefaultMessageProcessor implements MessageProcessor {
                 return deferShardBusy(message, reg, busy);
             }
         }
-        if (action.isSuccess()) {
-            handler.handleAction(ConsumeAction.SUCCESS, message, reg, listener, null);
-            return ConsumeAction.SUCCESS;
-        }
         LOG.warn(
                 "Orderly consume exhausted retries (max={}), routing to DLQ: topic={}, group={},"
                         + " messageId={}",
@@ -528,13 +610,70 @@ public class DefaultMessageProcessor implements MessageProcessor {
                 message, reg, message.getMessageId(), RetryScheduler.DLQ_REASON_MAX_RETRY)) {
             listener.ack(message.getMessageId());
         } else {
+            // R1-1 ②：DLQ 转投失败不得只留在 PEL 等认领（属主存活期间认领会跳过）——
+            // 登记本地延迟重试（仅重试 DLQ 转投，不重新执行业务 handler）。
+            deferDlqRouteFailure(message, reg);
+        }
+        return ConsumeAction.RECONSUME_LATER;
+    }
+
+    /**
+     * R1-2：ORDERLY 消费端返回 {@code defer(delay)} 时按声明延迟登记延迟重投。
+     *
+     * <p>不消耗 {@code maxReconsumeTimes} 预算、不写 retry ZSet、不进 DLQ；本轮结束（消息留在 PEL， 到期后由注册的 primary
+     * 读循环重投走正常消费管线，成功即 ACK）。
+     */
+    private ConsumeAction deferByOrderlyAction(
+            Message<?> message, ListenerRegistration<?> reg, ConsumeAction action) {
+        Duration delay = action.deferDelay();
+        long delayMillis = Objects.nonNull(delay) ? Math.max(1L, delay.toMillis()) : 1L;
+        OrderlyDeferredRetryQueue queue = deferredRetryQueue;
+        if (Objects.nonNull(queue)) {
+            boolean registered = queue.deferByAction(reg, message, delayMillis);
+            LOG.debug(
+                    "Orderly deferred by consumer action: delay={}ms, registered={}, topic={},"
+                            + " group={}, messageId={}",
+                    delayMillis,
+                    registered,
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    message.getMessageId());
+        } else {
+            LOG.warn(
+                    "Orderly defer action cannot be scheduled locally (no deferred retry queue),"
+                            + " message stays in PEL for the claim backstop: topic={}, group={},"
+                            + " messageId={}, delay={}ms",
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    message.getMessageId(),
+                    delayMillis);
+        }
+        return ConsumeAction.RECONSUME_LATER;
+    }
+
+    /**
+     * R1-1 ②：DLQ 转投失败后的本地延迟重试登记（只重试转投，不重新执行 handler）。
+     *
+     * <p>队列不可用/容量溢出时保持历史行为（消息留在 PEL），但必须打 ERROR——绝不静默。
+     */
+    private void deferDlqRouteFailure(Message<?> message, ListenerRegistration<?> reg) {
+        OrderlyDeferredRetryQueue queue = deferredRetryQueue;
+        boolean registered = Objects.nonNull(queue) && queue.deferDlqRouteFailure(reg, message);
+        if (registered) {
             LOG.error(
-                    "DLQ routing failed, message kept in PEL (topic={}, group={}, messageId={})",
+                    "DLQ routing failed, message kept in PEL and scheduled for local DLQ retry:"
+                            + " topic={}, group={}, messageId={}",
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    message.getMessageId());
+        } else {
+            LOG.error(
+                    "DLQ routing failed, message kept in PEL (no local DLQ retry scheduled):"
+                            + " topic={}, group={}, messageId={}",
                     reg.getTopic(),
                     reg.getGroup(),
                     message.getMessageId());
         }
-        return ConsumeAction.RECONSUME_LATER;
     }
 
     /**
@@ -544,10 +683,13 @@ public class DefaultMessageProcessor implements MessageProcessor {
      *
      * <ul>
      *   <li>不消耗 {@code maxReconsumeTimes} 预算（不计 attempt、不挂起等待）
-     *   <li>不写 retry ZSet、不进 DLQ、不 ACK——消息保持 pending 留在 PEL 中， 由 {@code PelClaimScheduler}
-     *       在空闲阈值后认领重投（at-least-once 兜底）
+     *   <li>不写 retry ZSet、不进 DLQ、不 ACK——消息保持 pending 留在 PEL 中， 同时登记到延迟重投队列（R1-1），由注册的 primary
+     *       读循环按退避重投； 进程死亡后仍由 {@code PelClaimScheduler} 认领兜底（at-least-once）
      *   <li>返回 {@code RECONSUME_LATER} 仅作为当前投递轮次的结束信号（顺序消费分支不再路由该动作）
      * </ul>
+     *
+     * <p><b>R1-1 根因修复：</b>此前只依赖 PEL 认领兜底，而认领对心跳新鲜的属主实例直接跳过—— 属主存活期间消息永远不会被重投（静默黑洞）。现由队列提供进程内本地重投，
+     * 队列不可用/容量溢出时退化为"留在 PEL"并打限频 ERROR（绝不静默）。
      *
      * <p>日志按 {@link #SHARD_BUSY_WARN_INTERVAL_MILLIS} 限频（每容器每 10s 最多一条）。 竞争计数复用现有消费失败指标（本方法返回后
      * {@code recordConsumeMetrics} 记一次 failure）， 不新增公开 API。
@@ -559,20 +701,41 @@ public class DefaultMessageProcessor implements MessageProcessor {
      */
     private ConsumeAction deferShardBusy(
             Message<?> message, ListenerRegistration<?> reg, OrderlyShardBusyException busy) {
+        OrderlyDeferredRetryQueue queue = deferredRetryQueue;
+        boolean registered = Objects.nonNull(queue) && queue.deferShardBusy(reg, message);
         long now = System.currentTimeMillis();
         long last = lastShardBusyWarnMillis.get();
         if (now - last >= SHARD_BUSY_WARN_INTERVAL_MILLIS
                 && lastShardBusyWarnMillis.compareAndSet(last, now)) {
             LOG.warn(
                     "Orderly shard contended, message deferred WITHOUT consuming retry budget"
-                            + " (stays in PEL for redelivery): topic={}, group={}, messageId={},"
-                            + " cause={}",
+                            + " (stays in PEL, local redelivery registered={}): topic={},"
+                            + " group={}, messageId={}, cause={}",
+                    registered,
                     reg.getTopic(),
                     reg.getGroup(),
                     message.getMessageId(),
                     busy.getMessage());
         }
         return ConsumeAction.RECONSUME_LATER;
+    }
+
+    /**
+     * 延迟重投执行：只重试 DLQ 转投（R1-1 ② 的 {@code DLQ_ROUTE} 条目）。
+     *
+     * <p>重试预算已在首次耗尽时消费完毕，此处<b>不得</b>重新执行业务 handler；转投成功即 ACK 走既有 ACK 路径，失败则由队列按退避再次登记（消息始终留在 PEL）。
+     *
+     * @return true 表示转投成功并已 ACK（本轮结束）；false 表示仍失败（交由队列重新登记）
+     */
+    boolean retryDeferredDlqRoute(
+            Message<?> message, ListenerRegistration<?> reg, StreamMQListener listener) {
+        RetryAndDlqHandler handler = resolveHandler(reg);
+        if (handler.routeToDlq(
+                message, reg, message.getMessageId(), RetryScheduler.DLQ_REASON_MAX_RETRY)) {
+            listener.ack(message.getMessageId());
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -602,10 +765,15 @@ public class DefaultMessageProcessor implements MessageProcessor {
         }
         AtomicReference<Thread> taskThread = new AtomicReference<>();
         AtomicReference<OrderlyShardBusyException> busyRef = new AtomicReference<>();
+        // R1-10：ORDERLY 超时包装路径同样要把读循环线程的 MDC 上下文带进业务线程
+        Map<String, String> mdcSnapshot = MDC.getCopyOfContextMap();
         Future<ConsumeAction> future =
                 executor.submit(
                         () -> {
                             taskThread.set(Thread.currentThread());
+                            if (Objects.nonNull(mdcSnapshot)) {
+                                MDC.setContextMap(mdcSnapshot);
+                            }
                             try {
                                 ConsumeAction a =
                                         shardLockManager.consumeWithShardLock(
@@ -618,6 +786,8 @@ public class DefaultMessageProcessor implements MessageProcessor {
                             } catch (Exception ex) {
                                 // 异常按一次失败处理（与同步路径的 catch 语义一致），保证 Future 正常返回
                                 return ConsumeAction.RECONSUME_LATER;
+                            } finally {
+                                MDC.clear();
                             }
                         });
         try {

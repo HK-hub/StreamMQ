@@ -12,6 +12,7 @@ import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -144,6 +145,40 @@ class StreamMQDiagnosticsEndpointTest {
 
         assertThat(summary.get("status"))
                 .isEqualTo(StreamMQDiagnosticsEndpointConstants.STATUS_DEGRADED);
+    }
+
+    @Test
+    @DisplayName("health：TTL 窗口内命中缓存（下游只采集一次），但 timestamp 每次实时")
+    void health_withinTtl_servesCachedSnapshotWithFreshTimestamp() {
+        when(diagnosticsService.getSlowConsumers()).thenReturn(List.of());
+        when(diagnosticsService.getAllBacklogs()).thenReturn(List.of());
+
+        Map<String, Object> first = endpoint.health();
+        Map<String, Object> second = endpoint.health();
+
+        verify(diagnosticsService, times(1)).getSlowConsumers();
+        verify(diagnosticsService, times(1)).getAllBacklogs();
+        assertThat(second.get("status")).isEqualTo(StreamMQDiagnosticsEndpointConstants.STATUS_UP);
+        // 快照可以陈旧，但 timestamp 必须表达"本次返回"的时间——否则运维会把数据年龄误读为刚采集
+        assertThat((Long) second.get(StreamMQDiagnosticsEndpointConstants.KEY_TIMESTAMP))
+                .isGreaterThanOrEqualTo(
+                        (Long) first.get(StreamMQDiagnosticsEndpointConstants.KEY_TIMESTAMP));
+    }
+
+    @Test
+    @DisplayName("health：TTL 置 0（测试钩子）后每次调用都重新采集")
+    void health_ttlZero_recollectsEveryCall() {
+        endpoint.setHealthCacheTtlMillis(0L);
+        when(diagnosticsService.getSlowConsumers()).thenReturn(List.of());
+        when(diagnosticsService.getAllBacklogs()).thenReturn(List.of());
+        assertThat(endpoint.health().get("status"))
+                .isEqualTo(StreamMQDiagnosticsEndpointConstants.STATUS_UP);
+
+        when(diagnosticsService.getAllBacklogs()).thenReturn(List.of(backlog(Severity.CRITICAL)));
+        assertThat(endpoint.health().get("status"))
+                .isEqualTo(StreamMQDiagnosticsEndpointConstants.STATUS_DOWN);
+
+        verify(diagnosticsService, times(2)).getAllBacklogs();
     }
 
     private static BacklogReport backlog(Severity severity) {

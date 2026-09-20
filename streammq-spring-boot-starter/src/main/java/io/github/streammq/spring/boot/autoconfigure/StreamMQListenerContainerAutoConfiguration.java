@@ -118,7 +118,9 @@ public class StreamMQListenerContainerAutoConfiguration {
         }
 
         // 持久化广播实例身份：使广播消费者组名跨重启稳定（PEL 保留、位点连续、不重放历史）
-        BroadcastInstanceIdResolver broadcastResolver = broadcastResolverProvider.getIfAvailable();
+        BroadcastInstanceIdResolver broadcastResolver =
+                StreamMQBeanResolution.uniqueOrNull(
+                        broadcastResolverProvider, "BroadcastInstanceIdResolver");
         if (broadcastResolver != null) {
             container.setBroadcastInstanceResolver(
                     broadcastResolver, () -> properties.getConsumer().getBroadcastInstanceId());
@@ -144,6 +146,10 @@ public class StreamMQListenerContainerAutoConfiguration {
                 properties.getConsumer().getBrokerErrorBackoffMillis());
         container.setDefaultOrderlyConsumeTimeoutMillis(
                 properties.getConsumer().getOrderlyConsumeTimeoutMillis());
+        // §13 顺序消费分片锁租约（R6-S8）：0 = 看门狗续期 + 严格有序（默认）；
+        // >0 = 有限租约，持有者卡死超时后可被接管（允许至多一次重叠执行/乱序）
+        container.setOrderlyShardLockLeaseMillis(
+                properties.getConsumer().getOrderlyShardLockLeaseMillis());
         container.setDefaultConsumeTimeoutMillis(
                 properties.getConsumer().getConsumeTimeoutMillis());
         container.setDefaultMaxReconsumeTimes(properties.getRetry().getMaxReconsumeTimes());
@@ -154,7 +160,8 @@ public class StreamMQListenerContainerAutoConfiguration {
         // （P1-4 修复：@Component + 注解 Class 声明的 SPI 实现不再被静默忽略）
         container.setApplicationContext(applicationContext);
         // 统一线程模型：容器消费循环复用 streammqExecutor（仅识别该名称的 Bean，用户可同名覆盖自定义）
-        ExecutorService executor = executorProvider.getIfAvailable();
+        ExecutorService executor =
+                StreamMQBeanResolution.uniqueOrNull(executorProvider, "streammqExecutor");
         if (executor != null) {
             container.setConsumeExecutor(executor);
             LOG.info("Injected streammqExecutor into ListenerContainer");
@@ -165,13 +172,17 @@ public class StreamMQListenerContainerAutoConfiguration {
         container.setHeartbeatIntervalMs(properties.getGroup().getHeartbeatIntervalMs());
         container.setInstanceTimeoutMs(properties.getGroup().getInstanceTimeoutMs());
         LOG.info(
-                "ListenerContainer defaults: pullBatchSize={}, pullBlockTimeout={}ms,"
-                        + " pullInterval={}ms, maxBatchSizeLimit={}, virtualNodes={}",
+                "ListenerContainer defaults: pullBatchSize={} (configured {}, clamp limit {}),"
+                        + " pullBlockTimeout={}ms, pullInterval={}ms, maxBatchSizeLimit={},"
+                        + " virtualNodes={}, orderlyShardLockLeaseMillis={}",
+                effectivePullBatchSize(properties),
                 properties.getConsumer().getBatchSize(),
+                properties.getConsumer().getMaxBatchSizeLimit(),
                 properties.getConsumer().getPollTimeout().toMillis(),
                 properties.getConsumer().getPullInterval(),
                 properties.getConsumer().getMaxBatchSizeLimit(),
-                properties.getRebalance().getVirtualNodes());
+                properties.getRebalance().getVirtualNodes(),
+                properties.getConsumer().getOrderlyShardLockLeaseMillis());
 
         container.setFilterResolver(
                 filterClass -> {
@@ -183,7 +194,8 @@ public class StreamMQListenerContainerAutoConfiguration {
                 });
 
         // 注入指标收集器：消费指标记录在容器，重试 / 死信指标传播到内部 DefaultRetryAndDlqHandler
-        StreamMQMetrics metrics = metricsProvider.getIfAvailable();
+        StreamMQMetrics metrics =
+                StreamMQBeanResolution.uniqueOrNull(metricsProvider, "StreamMQMetrics");
         if (metrics != null) {
             container.setMetrics(metrics);
             container.setHandlerMetrics(metrics);
@@ -212,13 +224,26 @@ public class StreamMQListenerContainerAutoConfiguration {
         }
 
         // 注入顺序消费 PEL 认领调度器（可选）：容器启动时注册 ORDERLY 消费目标
-        PelClaimScheduler pelClaimScheduler = pelClaimSchedulerProvider.getIfAvailable();
+        PelClaimScheduler pelClaimScheduler =
+                StreamMQBeanResolution.uniqueOrNull(pelClaimSchedulerProvider, "PelClaimScheduler");
         if (pelClaimScheduler != null) {
             container.setPelClaimScheduler(pelClaimScheduler);
             LOG.info("PelClaimScheduler injected into DefaultStreamMQListenerContainer");
         }
 
         return container;
+    }
+
+    /**
+     * 计算真正生效的拉取批量：{@code min(consumer.batch-size, consumer.max-batch-size-limit)}。
+     *
+     * <p>启动日志必须打印<b>生效值</b>而不是原始配置值（R6-S7）：容器内部会把批量夹取到上限， 只打印配置值会让"配了 5000、实际
+     * 1000"这种偏差在启动日志里完全看不出来。 超限配置本身已在 {@link StreamMQProperties#validate()} 阶段被拒绝。
+     */
+    private static int effectivePullBatchSize(StreamMQProperties properties) {
+        return Math.min(
+                properties.getConsumer().getBatchSize(),
+                properties.getConsumer().getMaxBatchSizeLimit());
     }
 
     /**

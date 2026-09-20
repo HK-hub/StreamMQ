@@ -104,7 +104,7 @@ public final class BatchMessage<T> {
         private final List<Message<T>> messages = new ArrayList<>();
 
         private Builder(String topic) {
-            this.topic = StringUtils.requireValidName(topic, "topic");
+            this.topic = StringUtils.requireValidTopic(topic);
         }
 
         /**

@@ -40,7 +40,9 @@ public interface ConsumerInterceptor {
      * 消费后回调。
      *
      * @param message 已消费消息
-     * @param action 消费动作（SUCCESS / RECONSUME_LATER）；顺序消费的 SUSPEND 会映射为 RECONSUME_LATER
+     * @param action 消费动作（{@link ConsumeAction#SUCCESS} / {@link ConsumeAction#RECONSUME_LATER} /
+     *     {@code ConsumeAction.defer(Duration)}；消费过程中抛出的异常在回调前已归一化为 {@link
+     *     ConsumeAction#RECONSUME_LATER}）
      * @param context 消费上下文
      */
     void afterConsume(Message<?> message, ConsumeAction action, ConsumeContext context);

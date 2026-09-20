@@ -17,8 +17,11 @@ jobs:
   benchmark:
     name: JMH Benchmarks
     runs-on: ubuntu-latest
-    # F-11：JMH 任务耗时较长，显式预算 60 分钟
-    timeout-minutes: 60
+    # F-11 / B2：JMH 任务耗时较长，显式预算 45 分钟（声明参数下的全量运行约 21 分钟，
+    # 由 BenchmarkBudgetTest 静态校验 45 分钟上限；更旧的配置结构性需要 2 小时以上）。
+    timeout-minutes: 45
+    # 基准默认走 docker 模式（Testcontainers 在 runner 内拉起独占 Redis，见 streammq-benchmark/pom.xml），
+    # 因此这里的 service 只在把模式切到 -Dstreammq.redis.mode=local 时才会被用到。
     services:
       redis:
         image: redis:7.2-alpine
@@ -44,19 +47,35 @@ jobs:
       # 干净 runner 上解析不到 reactor 构件（core/redisson/... 不在本地仓库）→ 必然失败。
       # 现在先 install 基准模块及其上游依赖（-am），后续步骤可直接从本地仓库解析。
       - name: Build and install benchmark module and dependencies (skip tests)
+        timeout-minutes: 10
         run: mvn -B -pl streammq-benchmark -am install -DskipTests -Dspotless.check.skip=true
 
-      # 基准准备/清理含 flushdb（Testcontainers 独占实例 + 显式 allowFlush 授权）；
-      # fork/iteration 参数由各 Benchmark 类注解决定，此处不调整。
+      # 参数真源（B4）：fork/预热/测量只由各 Benchmark 类注解决定，main() 不再覆盖，本 workflow 也不再调整。
+      # flushdb 守卫：docker 模式清空的是本进程独占容器，自动放行；如改跑 local 模式必须追加
+      # -Dstreammq.benchmark.allowFlush=true。
       # 必须用 exec:exec：JMH @Fork 依赖真实子进程的 java.class.path，exec:java 会导致
       # fork 进程找不到 ForkedMain 而失败。
-      - name: Run JMH benchmarks (template / serialization / consumer)
+      # 分步骤 + 各自超时：任一基准类卡死只拖垮该步骤，不会吃掉整个 job 预算（预计 10 / 6 / 2 分钟）。
+      - name: Run JMH serialization benchmarks (~10 min)
+        timeout-minutes: 20
+        run: >-
+          mvn -B -Pbenchmark -pl streammq-benchmark
+          exec:exec@benchmark-serialization
+
+      - name: Run JMH template (send) benchmarks (~6 min)
+        timeout-minutes: 12
         run: >-
           mvn -B -Pbenchmark -pl streammq-benchmark
           exec:exec@benchmark-template
-          exec:exec@benchmark-serialization
+
+      # 消费基准带口径有效性门禁（B1）：测量前预灌积压、测量期间只做低水位补货；若测量期间积压被
+      # 耗尽（出现空读），main() 判 INVALID 并以非零码退出——该步骤失败即代表"这一轮消费数字不可用"，
+      # 处理方式是加大 -Dstreammq.benchmark.backlog（必要时加 -Dstreammq.benchmark.feederThreads）。
+      - name: Run JMH consumer benchmarks with validity gate (~2 min)
+        timeout-minutes: 10
+        run: >-
+          mvn -B -Pbenchmark -pl streammq-benchmark
           exec:exec@benchmark-consumer
-          -Dstreammq.benchmark.allowFlush=true
 
       - name: Collect JMH result files
         if: always()
@@ -70,6 +89,12 @@ jobs:
             found=1
           done < <(find streammq-benchmark/target -maxdepth 1 -type f \
                      \( -name 'jmh*.json' -o -name 'jmh*.txt' \) -print0)
+          # 消费基准的口径记录（B1）：一并保留为产物，便于复核"积压是否被耗尽/补货是否跟得上"；
+          # 前缀刻意不是 jmh-，故不会进入下面的回归比对（回归脚本只 glob benchmark-results/jmh*.json）。
+          while IFS= read -r -d '' f; do
+            cp "$f" benchmark-results/
+          done < <(find streammq-benchmark/target -maxdepth 1 -type f \
+                     -name 'consume-validity-*.json' -print0)
           if [ "$found" -eq 0 ]; then
             echo "::error::no jmh*.json result files produced by benchmarks"
             exit 1

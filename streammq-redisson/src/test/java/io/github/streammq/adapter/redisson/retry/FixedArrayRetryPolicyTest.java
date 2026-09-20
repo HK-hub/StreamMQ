@@ -81,6 +81,38 @@ class FixedArrayRetryPolicyTest {
     }
 
     @Test
+    @DisplayName("delay-array 只提供退避序列：预算完全委托给 max-reconsume-times（R3-4）")
+    void customDelayArray_delegatesBudgetInsteadOfUsingArrayLength() {
+        FixedArrayRetryPolicy policy = new FixedArrayRetryPolicy(new long[] {1_000L, 2_000L});
+
+        assertThat(policy.getMaxReconsumeTimes())
+                .as("预算唯一由 max-reconsume-times 决定，策略不得叠加内部预算（更不得取数组长度）")
+                .isEqualTo(Integer.MAX_VALUE);
+        // 数组耗尽后保持最后一档（非 null），而不是提前停止
+        assertThat(policy.nextRetryDelay(1, msg)).isEqualTo(Duration.ofSeconds(2));
+        assertThat(policy.nextRetryDelay(2, msg)).isEqualTo(Duration.ofSeconds(2));
+        assertThat(policy.nextRetryDelay(15, msg)).isEqualTo(Duration.ofSeconds(2));
+        assertThat(policy.nextRetryDelay(1_000, msg)).isEqualTo(Duration.ofSeconds(2));
+        assertThat(policy.shouldStopRetry(16, msg)).isFalse();
+        assertThat(policy.shouldStopRetry(1_000, msg)).isFalse();
+    }
+
+    @Test
+    @DisplayName("delay-array 长度=2 + max-reconsume-times=16：重试可进行到第 16 次（R3-4 失败即红）")
+    void shortDelayArray_withBudget16_retriesUntilBudget() {
+        FixedArrayRetryPolicy policy = new FixedArrayRetryPolicy(new long[] {1_000L, 2_000L}, 16);
+
+        for (int reconsumeTimes = 0; reconsumeTimes < 16; reconsumeTimes++) {
+            assertThat(policy.nextRetryDelay(reconsumeTimes, msg))
+                    .as("第 %s 次重试必须有延迟（数组耗尽用最后一档）", reconsumeTimes + 1)
+                    .isNotNull();
+            assertThat(policy.shouldStopRetry(reconsumeTimes, msg)).isFalse();
+        }
+        assertThat(policy.shouldStopRetry(16, msg)).isTrue();
+        assertThat(policy.nextRetryDelay(16, msg)).isNull();
+    }
+
+    @Test
     @DisplayName("nextRetryDelay(0) = 10s")
     void nextRetryDelayFirstLevel() {
         FixedArrayRetryPolicy policy = new FixedArrayRetryPolicy();

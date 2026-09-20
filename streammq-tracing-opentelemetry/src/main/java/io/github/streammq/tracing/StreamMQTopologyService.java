@@ -29,6 +29,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import lombok.RequiredArgsConstructor;
+import lombok.Setter;
 import lombok.extern.slf4j.Slf4j;
 
 /**
@@ -101,6 +102,16 @@ public class StreamMQTopologyService {
     private final StreamMQListenerContainer listenerContainer;
 
     /**
+     * 单次 {@link #getTopicTraces(String, long, long)} 最多返回的消息链路数。
+     *
+     * <p>公开查询接口必须有结果上界：时间窗口由调用方给定，无上界时一次请求即可把窗口内所有追踪记录 （可能是数百万条 Entry）聚合进堆内存，属于可被外部触发的 OOM
+     * 面。超出部分按聚合顺序截断并计数， 不做静默丢弃。
+     */
+    static final int DEFAULT_MAX_TRACE_QUERY_SIZE = 500;
+
+    @Setter private int maxTraceQuerySize = DEFAULT_MAX_TRACE_QUERY_SIZE;
+
+    /**
      * 构建指定 Topic 的生产-消费拓扑图。
      *
      * @param topic Topic 名称
@@ -148,8 +159,19 @@ public class StreamMQTopologyService {
                     StringUtils.isNotEmpty(record.messageId()) ? record.messageId() : "unknown";
             grouped.computeIfAbsent(mid, k -> new ArrayList<>()).add(record);
         }
-        List<MessageTrace> traces = new ArrayList<>(grouped.size());
+        int limit = maxTraceQuerySize > 0 ? maxTraceQuerySize : DEFAULT_MAX_TRACE_QUERY_SIZE;
+        List<MessageTrace> traces = new ArrayList<>(Math.min(grouped.size(), limit));
         for (Map.Entry<String, List<TraceRecord>> entry : grouped.entrySet()) {
+            if (traces.size() >= limit) {
+                log.warn(
+                        "getTopicTraces truncated: topic={} matched {} message ids, returning the"
+                                + " first {} (increase maxTraceQuerySize only if the caller can"
+                                + " absorb the heap cost)",
+                        topic,
+                        grouped.size(),
+                        limit);
+                break;
+            }
             traces.add(buildMessageTrace(entry.getKey(), entry.getValue()));
         }
         return traces;
@@ -298,13 +320,29 @@ public class StreamMQTopologyService {
         return "消费 by Group=" + orDefault(record.group(), "unknown");
     }
 
-    /** 计算链路总耗时（首个事件到末尾事件）。 */
+    /**
+     * 计算链路总耗时（最早事件到最晚事件）。
+     *
+     * <p>不能用 {@code events.get(0)} / {@code events.get(size-1)}：事件列表由追踪记录的查询顺序派生， 而 {@code
+     * queryByTopic} 不保证按时间排序；一旦顺序变化（例如存储层返回顺序不同、跨天分片合并）， "首尾相减"会算出 0 甚至负数。这里改为取时间戳的极值，结果与列表顺序无关。
+     */
     private long computeTotalDuration(List<TraceEvent> events) {
         if (events.size() < 2) {
             return 0L;
         }
-        long first = events.get(0).timestamp();
-        long last = events.get(events.size() - 1).timestamp();
+        long first = Long.MAX_VALUE;
+        long last = Long.MIN_VALUE;
+        for (TraceEvent event : events) {
+            if (event == null) {
+                continue;
+            }
+            long ts = event.timestamp();
+            first = Math.min(first, ts);
+            last = Math.max(last, ts);
+        }
+        if (first == Long.MAX_VALUE || last == Long.MIN_VALUE) {
+            return 0L;
+        }
         return Math.max(0L, last - first);
     }
 

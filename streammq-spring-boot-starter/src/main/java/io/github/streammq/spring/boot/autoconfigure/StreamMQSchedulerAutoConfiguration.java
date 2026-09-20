@@ -125,7 +125,8 @@ public class StreamMQSchedulerAutoConfiguration {
                 new DelayMessageScheduler(
                         redisson, properties.getNamespace(), interval.toMillis(), batchSize);
         scheduler.setFailureRequeueBackoffMs(properties.getDelay().getFailureRequeueBackoffMs());
-        StreamMQMetrics metrics = metricsProvider.getIfAvailable();
+        StreamMQMetrics metrics =
+                StreamMQBeanResolution.uniqueOrNull(metricsProvider, "StreamMQMetrics");
         if (metrics != null) {
             scheduler.setMetrics(metrics);
             LOG.info(
@@ -170,7 +171,8 @@ public class StreamMQSchedulerAutoConfiguration {
                         maxCheck,
                         TransactionScanner.DEFAULT_BATCH_SIZE,
                         properties.getTransaction().getDefaultGroup());
-        StreamMQMetrics metrics = metricsProvider.getIfAvailable();
+        StreamMQMetrics metrics =
+                StreamMQBeanResolution.uniqueOrNull(metricsProvider, "StreamMQMetrics");
         if (metrics != null) {
             scanner.setMetrics(metrics);
             LOG.info(
@@ -218,7 +220,7 @@ public class StreamMQSchedulerAutoConfiguration {
                 intervalMs,
                 batchSize,
                 minIdleMs,
-                registryProvider.getIfAvailable());
+                StreamMQBeanResolution.uniqueOrNull(registryProvider, "BroadcastGroupRegistry"));
     }
 
     /**
@@ -238,7 +240,8 @@ public class StreamMQSchedulerAutoConfiguration {
             RedissonClient redisson,
             StreamMQProperties properties,
             ObjectProvider<BroadcastGroupRegistry> registryProvider) {
-        BroadcastGroupRegistry registry = registryProvider.getIfAvailable();
+        BroadcastGroupRegistry registry =
+                StreamMQBeanResolution.uniqueOrNull(registryProvider, "BroadcastGroupRegistry");
         BroadcastGroupSweeper sweeper =
                 new BroadcastGroupSweeper(
                         redisson,
@@ -277,23 +280,31 @@ public class StreamMQSchedulerAutoConfiguration {
             org.springframework.beans.factory.ObjectProvider<BroadcastGroupSweeper>
                     broadcastGroupSweeperProvider) {
         List<StreamMQScheduler> schedulers = new ArrayList<>(5);
-        RetryScheduler retryScheduler = retrySchedulerProvider.getIfAvailable();
+        RetryScheduler retryScheduler =
+                StreamMQBeanResolution.uniqueOrNull(retrySchedulerProvider, "RetryScheduler");
         if (retryScheduler != null) {
             schedulers.add(retryScheduler);
         }
-        DelayMessageScheduler delay = delaySchedulerProvider.getIfAvailable();
+        DelayMessageScheduler delay =
+                StreamMQBeanResolution.uniqueOrNull(
+                        delaySchedulerProvider, "DelayMessageScheduler");
         if (delay != null) {
             schedulers.add(delay);
         }
-        TransactionScanner scanner = transactionScannerProvider.getIfAvailable();
+        TransactionScanner scanner =
+                StreamMQBeanResolution.uniqueOrNull(
+                        transactionScannerProvider, "TransactionScanner");
         if (scanner != null) {
             schedulers.add(scanner);
         }
-        PelClaimScheduler pelClaim = pelClaimSchedulerProvider.getIfAvailable();
+        PelClaimScheduler pelClaim =
+                StreamMQBeanResolution.uniqueOrNull(pelClaimSchedulerProvider, "PelClaimScheduler");
         if (pelClaim != null) {
             schedulers.add(pelClaim);
         }
-        BroadcastGroupSweeper sweeper = broadcastGroupSweeperProvider.getIfAvailable();
+        BroadcastGroupSweeper sweeper =
+                StreamMQBeanResolution.uniqueOrNull(
+                        broadcastGroupSweeperProvider, "BroadcastGroupSweeper");
         if (sweeper != null) {
             schedulers.add(sweeper);
         }

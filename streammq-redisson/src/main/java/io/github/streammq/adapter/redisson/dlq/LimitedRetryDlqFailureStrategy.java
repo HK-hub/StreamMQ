@@ -24,6 +24,9 @@ import java.time.Duration;
  *
  * <p>重试延迟计算：{@code min(baseDelay × multiplier^attempts, maxDelay)} 当 multiplier=1.0 时为固定延迟。
  *
+ * <p><b>配置真源（0.1.2）：</b>重试次数与延迟优先读取决策上下文携带的生效配置（{@link
+ * DefaultDlqFailureContext#resolveEffectiveConfig}，由 handler 按消费者合并全局后填充）；仅当上下文未携带时才回退到本实例构造参数。
+ *
  * <p>适用场景：DLQ 消息可能因临时故障（如外部服务不可用）导致消费失败， 允许有限次重试后放弃。
  *
  * @author StreamMQ Contributors
@@ -43,8 +46,9 @@ public class LimitedRetryDlqFailureStrategy extends AbstractDlqFailureStrategy {
 
     @Override
     protected DlqFailureDecision doDecide(Message<?> message, DlqFailureContext context) {
+        DlqConfig effective = DefaultDlqFailureContext.resolveEffectiveConfig(context, config);
         int attempts = context.dlqAttempts();
-        int maxRetries = config.getMaxDlqRetryAttempts();
+        int maxRetries = effective.getMaxDlqRetryAttempts();
 
         if (attempts >= maxRetries) {
             log.warn(
@@ -55,7 +59,7 @@ public class LimitedRetryDlqFailureStrategy extends AbstractDlqFailureStrategy {
             return DlqFailureDecision.drop();
         }
 
-        Duration delay = computeDelay(attempts);
+        Duration delay = computeDelay(effective, attempts);
         log.info(
                 "DLQ retry scheduled: attempt={}/{}, delay={}ms (topic={})",
                 attempts + 1,
@@ -65,13 +69,21 @@ public class LimitedRetryDlqFailureStrategy extends AbstractDlqFailureStrategy {
         return DlqFailureDecision.retry(delay);
     }
 
+    /** 告警阈值同样以生效配置为真源。 */
+    @Override
+    protected boolean shouldAlert(DlqFailureContext context) {
+        DlqConfig effective = DefaultDlqFailureContext.resolveEffectiveConfig(context, config);
+        return effective.getDlqAlertThreshold() > 0
+                && context.dlqAttempts() + 1 >= effective.getDlqAlertThreshold();
+    }
+
     /** 按退避计算重试延迟：{@code min(baseDelay × multiplier^attempt, maxDelay)} */
-    private Duration computeDelay(int attempt) {
-        long base = config.getDlqRetryDelayMs();
-        double multiplier = config.getDlqRetryBackoffMultiplier();
+    private Duration computeDelay(DlqConfig effective, int attempt) {
+        long base = effective.getDlqRetryDelayMs();
+        double multiplier = effective.getDlqRetryBackoffMultiplier();
         long delay = (long) (base * Math.pow(multiplier, attempt));
-        delay = Math.min(delay, config.getDlqRetryMaxDelayMs());
-        return Duration.ofMillis(Math.max(delay, config.getMinRetryDelayMs()));
+        delay = Math.min(delay, effective.getDlqRetryMaxDelayMs());
+        return Duration.ofMillis(Math.max(delay, effective.getMinRetryDelayMs()));
     }
 
     @Override

@@ -375,9 +375,16 @@ public abstract class AbstractMessageConverter implements MessageConverter {
 
         getField(fields, fieldTopic(), value -> draft.topic = value);
 
-        String bodyStr = fields.get(fieldBody());
-        if (StringUtils.isNotEmpty(bodyStr)) {
-            decodeBody(fields, targetType, draft, bodyStr);
+        // body 字段的"存在性"判定（0.1.2 契约）：字段不存在 = 无载荷（body 保持 null）；
+        // 字段存在即使为空串也必须解码——send(topic, "") 的端到端不变式要求消费端还原为 ""
+        // 而非 null（直通型序列化器对 byte[0] 返回空值本身，见 MessageSerializer javadoc）。
+        // 此前用 isNotEmpty 判定会让"空 body"被误判为"字段缺失"。
+        String bodyFieldName = fieldBody();
+        if (fields.containsKey(bodyFieldName)) {
+            String bodyStr = fields.get(bodyFieldName);
+            if (Objects.nonNull(bodyStr)) {
+                decodeBody(fields, targetType, draft, bodyStr);
+            }
         }
 
         getField(fields, fieldTag(), value -> draft.tag = value);

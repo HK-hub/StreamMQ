@@ -8,8 +8,10 @@ package io.github.streammq.adapter.redisson.container;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import io.github.streammq.core.converter.MessageConverter;
+import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.listener.StreamMQListenerFactory;
 import io.github.streammq.core.policy.DlqConfig;
 import io.github.streammq.core.policy.DlqFailureStrategy;
@@ -178,5 +180,65 @@ class DefaultStreamMQListenerContainerTest {
                                         .getConsumeLoopFailures()
                                         .put("k", "v")) // Map.copyOf 的结果不可修改
                 .isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    // ===================== 红队第六轮：R1-6 运行期配置生效性 =====================
+
+    @Test
+    @DisplayName("R1-6②：按 group 暂停只影响目标注册，容器级暂停仍可全停")
+    void pauseGroup_onlyAffectsTargetRegistration() {
+        DefaultStreamMQListenerContainer container = newContainer();
+        ListenerRegistration<?> target = mock(ListenerRegistration.class);
+        when(target.getGroup()).thenReturn("group-a");
+        when(target.getTopic()).thenReturn("topic-a");
+        ListenerRegistration<?> other = mock(ListenerRegistration.class);
+        when(other.getGroup()).thenReturn("group-b");
+        when(other.getTopic()).thenReturn("topic-b");
+
+        java.util.function.BooleanSupplier targetPaused = container.pausedSupplierFor(target);
+        java.util.function.BooleanSupplier otherPaused = container.pausedSupplierFor(other);
+
+        // 初始：都未暂停
+        assertThat(targetPaused.getAsBoolean()).isFalse();
+        assertThat(otherPaused.getAsBoolean()).isFalse();
+
+        // 只暂停 group-a：group-b 不受影响（旧实现为容器级 paused，会把两者都停掉）
+        container.pauseGroup("group-a");
+        assertThat(targetPaused.getAsBoolean()).as("目标 group 必须暂停").isTrue();
+        assertThat(otherPaused.getAsBoolean()).as("其它 group 不得被连带暂停").isFalse();
+        assertThat(container.isGroupPaused("group-a")).isTrue();
+        assertThat(container.isGroupPaused("group-b")).isFalse();
+
+        // 按 group 恢复
+        container.resumeGroup("group-a");
+        assertThat(targetPaused.getAsBoolean()).isFalse();
+
+        // 容器级暂停仍可全停
+        container.pause();
+        assertThat(targetPaused.getAsBoolean()).isTrue();
+        assertThat(otherPaused.getAsBoolean()).isTrue();
+        assertThat(container.isPaused()).isTrue();
+    }
+
+    @Test
+    @DisplayName("R1-6③：inflightCapacity 未被运行中循环采用时必须回 false（不得宣称已生效）")
+    void inflightCapacityApplied_reportsHonestly() {
+        DefaultStreamMQListenerContainer container = newContainer();
+        // 无运行中循环：不存在"运行中的旧值"，视为已应用
+        assertThat(container.isInflightCapacityApplied("topic-x", "group-x")).isTrue();
+
+        // 模拟该注册的循环已用容量 0 启动（记录启动快照）——快照与当前值一致 → true
+        container.recordAppliedInflightCapacityForTest("topic-x", "group-x", 0);
+        assertThat(container.isInflightCapacityApplied("topic-x", "group-x")).isTrue();
+
+        // 运行期改为 128 但循环未重启：队列仍是旧容量，必须如实回 false
+        container.setInflightCapacity(128);
+        assertThat(container.isInflightCapacityApplied("topic-x", "group-x"))
+                .as("运行期改容量未重启循环：必须如实回 false")
+                .isFalse();
+
+        // 循环重启（新的启动快照）后回 true
+        container.recordAppliedInflightCapacityForTest("topic-x", "group-x", 128);
+        assertThat(container.isInflightCapacityApplied("topic-x", "group-x")).isTrue();
     }
 }

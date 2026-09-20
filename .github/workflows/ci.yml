@@ -537,9 +537,49 @@ jobs:
           mvn -q -f /tmp/streammq-smoke/pom.xml clean compile \
             -Dmaven.repo.local="${RUNNER_TEMP}/streammq-staging-repo"
 
+          # F-4：隔离不彻底的两处缺口——① 上面的 compile 未离线，② 没有任何版本断言。
+          # 于是从第二次发布起，若 BOM/属性漂移把依赖指回**上一版**，Maven 会从 Central（或隔离仓库里
+          # 已 install 的旧物）解析成功、构建照样变绿（假绿），而字节其实来自旧版本。
+          # 现按"使用方视角"列出实际解析到的 io.github.streammq:*，硬断言其版本全部 == 本次构建版本 VER。
+          # 选择版本断言而非 `-o` 离线解析：隔离仓库是全新目录，`-o` 会连带要求所有插件/父 POM 都已在
+          # 本地（失败信息与"版本漂移"混淆），而版本断言直接命中回归语义，且对 Central 回退同样有效。
+          mvn -f /tmp/streammq-smoke/pom.xml dependency:list \
+            -Dmaven.repo.local="${RUNNER_TEMP}/streammq-staging-repo" \
+            -DincludeGroupIds=io.github.streammq -B \
+            2>&1 | tee "${RUNNER_TEMP}/streammq-smoke-deps.log"
+          python3 - "${RUNNER_TEMP}/streammq-smoke-deps.log" "${VER}" <<'PY'
+          import re
+          import sys
+
+          log_path, expected = sys.argv[1], sys.argv[2]
+          rows = []
+          with open(log_path, encoding='utf-8', errors='replace') as fh:
+              for line in fh:
+                  for coord in re.findall(r'io\.github\.streammq:[^\s,]+', line):
+                      parts = coord.split(':')
+                      if len(parts) >= 4:
+                          rows.append((parts[1], parts[3]))
+          rows = sorted(set(rows))
+          print(f"staging smoke resolved streammq artifacts: {rows}")
+          if not rows:
+              print("::error::staging smoke resolved NO io.github.streammq artifacts — the consumer resolve is broken")
+              sys.exit(1)
+          wrong = [(a, v) for a, v in rows if v != expected]
+          if wrong:
+              print(f"::error::staging smoke resolved streammq artifacts at the WRONG version"
+                    f" (expected {expected}): {wrong}")
+              print("::error::a stale version resolvable from Maven Central means the release would silently mix old binaries")
+              sys.exit(1)
+          missing = {'streammq-core', 'streammq-spring-boot-starter'} - {a for a, _ in rows}
+          if missing:
+              print(f"::error::staging smoke did not resolve expected artifacts: {sorted(missing)}")
+              sys.exit(1)
+          print(f"staging smoke version assertion OK: every io.github.streammq artifact is at {expected}")
+          PY
+
       # 反向断言：未纳入发布清单的构件必须无法解析（防止再次把“永不发布的构件”写进 BOM——
       # 那会让使用方按 BOM 版本号依赖时解析到中央仓库不存在的构件）。
-      # E-06：清单改为从根 pom 的 maven-deploy-plugin <excludeArtifacts> 动态读取（与 release.yml 一致），
+      # E-06：清单改为从根 pom 的 central-publishing-maven-plugin <excludeArtifacts> 动态读取（与 release.yml 一致），
       # 不再硬编码 4 项，避免新增/移除发布模块后两处清单漂移。
       - name: Assert unpublished modules are NOT resolvable
         shell: bash

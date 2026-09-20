@@ -7,6 +7,7 @@ package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.BroadcastGroupNaming;
+import io.github.streammq.adapter.redisson.support.RedisClusterCompatibility;
 import io.github.streammq.adapter.redisson.support.RedisServerClock;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
@@ -607,9 +608,6 @@ public class PelClaimScheduler implements StreamMQScheduler {
         String streamKey = StreamMQKeys.topicStream(target.namespace, target.topic);
         RStream<String, String> stream = redisson.getStream(streamKey, StringCodec.INSTANCE);
         String dlqStreamKey = StreamMQKeys.dlqStream(target.namespace, target.group);
-        if (!warnIfDestinationUnwritable(target, dlqStreamKey)) {
-            return;
-        }
 
         // 读取 PEL 中的 pending 消息（游标分页：头部被存活消费者长期占据时，尾部条目仍会被检查到）
         try {
@@ -658,6 +656,12 @@ public class PelClaimScheduler implements StreamMQScheduler {
                             (Map<String, String>) readResult.values().iterator().next();
                     int retryTimes = parseRetryTimes(fields);
                     if (retryTimes >= target.maxReconsumeTimes) {
+                        // 目的键自检只作用于**确实要写 DLQ 的这一条分支**：DLQ 键被非 stream 占用时
+                        // 跳过本条（消息留在 PEL，绝不丢），但同批次里未超限、只需同流重投的条目
+                        // 仍会被正常认领——此前把自检放在扫描入口，会让一条错误键拖停整个目标。
+                        if (!warnIfDestinationUnwritable(target, dlqStreamKey)) {
+                            continue;
+                        }
                         fields.put(
                                 RetryScheduler.FIELD_DLQ_REASON,
                                 DlqReason.MAX_RETRY_ORDERLY.getCode());
@@ -793,7 +797,12 @@ public class PelClaimScheduler implements StreamMQScheduler {
                             (Map<String, String>) readResult.values().iterator().next();
                     int retryTimes = parseRetryTimes(fields);
                     if (retryTimes >= target.maxReconsumeTimes) {
-                        // 超限 → 原子认领后进 DLQ（先 XACK 旧条目，认领成功才 XADD DLQ）
+                        // 超限 → 原子认领后进 DLQ（先 XACK 旧条目，认领成功才 XADD DLQ）。
+                        // 目的键自检同样只作用于这条分支：DLQ 键不可写时跳过本条（留 PEL），
+                        // 同批次未超限的重投条目不受影响。
+                        if (!warnIfDestinationUnwritable(target, dlqStreamKey)) {
+                            continue;
+                        }
                         fields.put(RetryScheduler.FIELD_DLQ_REASON, DlqReason.MAX_RETRY.getCode());
                         fields.put(
                                 RetryScheduler.FIELD_ORIGINAL_RETRY_COUNT,
@@ -962,6 +971,12 @@ public class PelClaimScheduler implements StreamMQScheduler {
             String group,
             StreamMessageId id,
             Map<String, String> fields) {
+        // 同流重投（KEYS[1]==KEYS[2]）是单 key 脚本，Cluster 安全；跨流转投（如 DLQ 目标）触达两个
+        // key 家族，Cluster 上必然 CROSSSLOT——前置拒绝并给出可操作错误
+        if (!sourceStreamKey.equals(destStreamKey)) {
+            RedisClusterCompatibility.requireCrossKeyAtomicity(
+                    redisson, "PEL claim across streams (source stream + destination stream)");
+        }
         String[] argv = new String[fields.size() * 2 + 2];
         argv[0] = group;
         argv[1] = id.toString();

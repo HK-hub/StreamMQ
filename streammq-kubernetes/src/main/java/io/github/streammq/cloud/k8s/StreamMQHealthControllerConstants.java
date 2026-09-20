@@ -9,7 +9,7 @@ package io.github.streammq.cloud.k8s;
  * K8s 健康探针端点常量：路径与响应 key。
  *
  * @author StreamMQ Contributors
- * @since 1.1.0
+ * @since 0.1.2
  */
 public final class StreamMQHealthControllerConstants {
 

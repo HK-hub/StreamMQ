@@ -19,6 +19,11 @@ import org.springframework.stereotype.Component;
  *
  * <p>延时消息在到达指定时间后会被投递到目标 Topic，本消费者接收并处理这些消息。
  *
+ * <p><b>失败处理（推荐模式）：</b>消费成功返回 {@link ConsumeAction#SUCCESS}；失败返回 {@link
+ * ConsumeAction#RECONSUME_LATER} 或抛出异常，由框架按 {@code maxReconsumeTimes}（本示例为 3）重试， 重试耗尽后自动路由到死信队列
+ * {@code streammq:{ns}:dlq:{consumerGroup}}——<b>不静默 ACK 吞消息</b>。 如需消费死信请参考 {@code
+ * streammq-sample-dlq}。
+ *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
@@ -31,6 +36,9 @@ public class DelayMessageConsumer implements StreamMessageConcurrentlyConsumer<S
 
     private static final Logger log = LoggerFactory.getLogger(DelayMessageConsumer.class);
 
+    /** 失败注入（演示/测试用）：该 orderId 的消息消费时抛出异常，触发重试与 DLQ 路由 */
+    private volatile String failOrderId;
+
     @Override
     public ConsumeAction onMessage(Message<String> message, ConsumeContext context)
             throws Exception {
@@ -40,6 +48,10 @@ public class DelayMessageConsumer implements StreamMessageConcurrentlyConsumer<S
                 message.getTag(),
                 message.getBody(),
                 context.reconsumeTimes());
+
+        if (failOrderId != null && failOrderId.equals(message.getKeys())) {
+            throw new RuntimeException("Simulated delay-message failure: " + message.getKeys());
+        }
 
         try {
             if ("delay".equals(message.getTag())) {
@@ -54,16 +66,12 @@ public class DelayMessageConsumer implements StreamMessageConcurrentlyConsumer<S
             return ConsumeAction.SUCCESS;
         } catch (Exception e) {
             log.error(
-                    "Failed to process delay message: orderId={}, error={}",
+                    "Failed to process delay message: orderId={}, reconsumeTimes={}, error={}",
                     message.getKeys(),
+                    context.reconsumeTimes(),
                     e.getMessage(),
                     e);
-
-            if (context.reconsumeTimes() >= 3) {
-                log.error("Delay message exhausted retries: orderId={}", message.getKeys());
-                return ConsumeAction.SUCCESS;
-            }
-
+            // 不吞消息：返回 RECONSUME_LATER 交给框架重试；重试耗尽后自动进入 DLQ
             return ConsumeAction.RECONSUME_LATER;
         }
     }
@@ -78,5 +86,19 @@ public class DelayMessageConsumer implements StreamMessageConcurrentlyConsumer<S
 
     private void handleGenericDelayMessage(Message<String> message) {
         log.debug("Handling generic delay message: orderId={}", message.getKeys());
+    }
+
+    /**
+     * 注入一个必然失败的 orderId（演示 / 集成测试用，用于观察「失败 → 重试 → DLQ」链路）。
+     *
+     * @param orderId 订单 ID；为 null 表示取消失败注入
+     */
+    public void setFailOrderId(String orderId) {
+        this.failOrderId = orderId;
+    }
+
+    /** 取消失败注入。 */
+    public void clearFailOrderId() {
+        this.failOrderId = null;
     }
 }

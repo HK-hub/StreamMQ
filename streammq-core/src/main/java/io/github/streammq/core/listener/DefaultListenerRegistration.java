@@ -32,9 +32,12 @@ import org.slf4j.LoggerFactory;
  * ListenerConfig#from(ListenerRegistration)} 单点映射， 供底层 {@link StreamMQListenerFactory} SPI
  * 消费，二者不再各自维护可漂移的字段副本。
  *
- * <p>与 {@link ListenerConfig} 的校验差异（有意保留）：本类对 {@code consumeThreads}/{@code shardCount}
- * 等运行时参数采取「夹取（clamp）」策略以保证注册期弹性； 而 {@link ListenerConfig} 构造器对同类参数直接抛出 IllegalArgumentException
- * 以便配置错误尽早暴露。详见两者各自的字段注释。
+ * <p><b>校验策略（R6 起与 {@link ListenerConfig} 完全一致）：</b>全部数值型运行时参数一律 <b>fail-fast</b>—— 低于各自下界即抛 {@link
+ * IllegalArgumentException}（{@code maxReconsumeTimes}/{@code shardCount}/{@code
+ * consumeTimeoutMillis}/{@code orderlyConsumeTimeoutMillis}/{@code pullBatchSize}/{@code
+ * pullBlockTimeoutMillis}/{@code pullIntervalMillis}/{@code suspendCurrentQueueTimeMillis}/{@code
+ * streamMaxLen}）。 这里不再有任何"夹取"字段：静默把非法值改成合法值会让配置错误一路带到线上（例如 {@code shardCount = -1} 被夹成 0
+ * 会得到一个零分片的顺序消费者）。
  *
  * @param <T> body 类型
  * @author StreamMQ Contributors
@@ -113,11 +116,14 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
     private DefaultListenerRegistration(Builder<T> b) {
         this.type = b.type;
         this.consumer = b.consumer;
-        this.topic = StringUtils.requireValidName(b.topic, "topic");
-        this.group = StringUtils.requireValidName(b.group, "consumerGroup");
+        this.topic = StringUtils.requireValidTopic(b.topic);
+        this.group = StringUtils.requireValidGroup(b.group);
         this.consumeMode = b.consumeMode;
         this.maxReconsumeTimes = (int) requireMin("maxReconsumeTimes", b.maxReconsumeTimes, 0);
-        this.shardCount = Math.max(0, b.shardCount);
+        // R6：与同类数值字段统一为 fail-fast。此前 shardCount 用 Math.max(0, x) 静默夹取，
+        // 使得 shardCount = -1 变成 0 —— 顺序消费的"零分片"是不可用状态，却没有任何提示；
+        // 同一构造器里其它数值字段（maxReconsumeTimes / pullBatchSize / …）全是抛错，口径必须一致。
+        this.shardCount = (int) requireMin("shardCount", b.shardCount, 0);
         this.consumeTimeoutMillis = requireMin("consumeTimeoutMillis", b.consumeTimeoutMillis, 0);
         this.orderlyConsumeTimeoutMillis =
                 requireMin("orderlyConsumeTimeoutMillis", b.orderlyConsumeTimeoutMillis, 0);
@@ -134,7 +140,8 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         this.rebalanceStrategy = b.rebalanceStrategy;
         this.suspendCurrentQueueTimeMillis =
                 requireMin("suspendCurrentQueueTimeMillis", b.suspendCurrentQueueTimeMillis, 0);
-        this.streamMaxLen = Math.max(0, b.streamMaxLen);
+        // 同上：0 已有明确的"不限制"语义，负值只能是配置错误，不应静默夹取
+        this.streamMaxLen = (int) requireMin("streamMaxLen", b.streamMaxLen, 0);
         this.consumeFromWhere =
                 Objects.isNull(b.consumeFromWhere) ? ConsumeFromWhere.DEFAULT : b.consumeFromWhere;
         this.enableMsgTrace = b.enableMsgTrace;

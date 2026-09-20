@@ -8,8 +8,6 @@ package io.github.streammq.test;
 import java.io.Closeable;
 import java.io.IOException;
 import lombok.extern.slf4j.Slf4j;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.utility.DockerImageName;
 
@@ -17,6 +15,9 @@ import org.testcontainers.utility.DockerImageName;
  * 嵌入式 Redis 服务器，基于 Testcontainers。
  *
  * <p>提供测试环境下的 Redis 实例，支持启动、停止和获取连接信息。
+ *
+ * <p>容器使用 {@code redis:7.2-alpine} 镜像的<b>默认配置</b>启动（不开启 AOF 持久化， 数据随容器销毁即丢弃）。需要持久化的场景请在宿主机运行带
+ * {@code --appendonly yes} 的 Redis。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -30,28 +31,23 @@ public class ContainerizedRedisServer implements Closeable {
                     + "请启动 Docker Desktop / dockerd 后重试，"
                     + "或改用本地模式：streammq.test.redis.mode=local";
 
-    private static final Logger LOG = LoggerFactory.getLogger(ContainerizedRedisServer.class);
-
     /** Redis 容器镜像 */
     private static final String REDIS_IMAGE = "redis:7.2-alpine";
 
     /** 容器暴露的 Redis 端口 */
     private static final int EXPOSED_REDIS_PORT = StreamMQTestBase.DEFAULT_PORT;
 
-    /** Redis 服务器启动参数：开启 AOF 持久化 */
-    private static final String ARG_APPENDONLY = "--appendonly";
-
     private GenericContainer<?> container;
 
     /** 启动嵌入式 Redis 服务器。 */
     public void start() {
         if (container != null && container.isRunning()) {
-            LOG.warn("Redis container already running");
+            log.warn("Redis container already running");
             return;
         }
         ensureDockerAvailable();
 
-        LOG.info("Starting Redis test container...");
+        log.info("Starting Redis test container...");
         // 注意：本类并非真正的"嵌入式"进程内 Redis，而是基于 Testcontainers 的容器化 Redis，
         // 需要可用的 Docker daemon（见类 javadoc 与 ensureDockerAvailable 的失败提示）
         container =
@@ -59,7 +55,7 @@ public class ContainerizedRedisServer implements Closeable {
                         .withExposedPorts(EXPOSED_REDIS_PORT);
 
         container.start();
-        LOG.info("Redis test container started: {}:{}", getHost(), getPort());
+        log.info("Redis test container started: {}:{}", getHost(), getPort());
     }
 
     /**
@@ -83,9 +79,9 @@ public class ContainerizedRedisServer implements Closeable {
     /** 停止嵌入式 Redis 服务器。 */
     public void stop() {
         if (container != null && container.isRunning()) {
-            LOG.info("Stopping embedded Redis server...");
+            log.info("Stopping embedded Redis server...");
             container.stop();
-            LOG.info("Embedded Redis server stopped");
+            log.info("Embedded Redis server stopped");
         }
     }
 

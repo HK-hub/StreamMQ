@@ -13,7 +13,7 @@ import io.github.streammq.core.StreamMQConstants;
  * <p>所有 {@link MessageConverter} 实现共享同一套线上协议字段名， 避免各转换器各自维护导致协议漂移。转换器内的 public 常量均委托到本类。
  *
  * @author StreamMQ Contributors
- * @since 1.1.0
+ * @since 0.1.2
  */
 public final class MessageFields {
 

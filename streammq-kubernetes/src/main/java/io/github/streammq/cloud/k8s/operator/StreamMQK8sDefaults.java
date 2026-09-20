@@ -14,7 +14,7 @@ import io.github.streammq.core.StreamMQConstants;
  * 控制器与 CRD 模型共享， 避免同一默认值散落在多个模型中导致漂移。
  *
  * @author StreamMQ Contributors
- * @since 1.1.0
+ * @since 0.1.2
  */
 public final class StreamMQK8sDefaults {
 

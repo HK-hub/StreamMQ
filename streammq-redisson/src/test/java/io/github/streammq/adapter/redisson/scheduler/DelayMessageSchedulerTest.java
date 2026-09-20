@@ -9,11 +9,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -30,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.redisson.api.BatchOptions;
 import org.redisson.api.RBatch;
 import org.redisson.api.RBucket;
+import org.redisson.api.RKeys;
 import org.redisson.api.RMap;
 import org.redisson.api.RMapAsync;
 import org.redisson.api.RScoredSortedSet;
@@ -177,6 +180,70 @@ class DelayMessageSchedulerTest {
         verify(retryZset)
                 .valueRange(eq(0.0), eq(true), anyDouble(), eq(true), eq(0), eq(BATCH_SIZE));
         assertThat(retryScheduler.getTargetCount()).isZero();
+    }
+
+    // ===================== 第六轮红队修复（R2-4 / R2-5） =====================
+
+    /** 可辨识的假服务器时钟（远大于本机 now，避免与真实时钟混淆） */
+    private static final long FAKE_SERVER_NOW = 1_800_000_000_123L;
+
+    @Test
+    @DisplayName("R2-4：到期扫描窗口上界 = Redis 服务器时钟（不是本机时钟）")
+    void scanExpired_usesRedisServerClock() {
+        DelayMessageScheduler spy = spy(scheduler);
+        doReturn(FAKE_SERVER_NOW).when(spy).scheduleClockMillis();
+        when(zset.valueRange(anyDouble(), eq(true), anyDouble(), eq(true), anyInt(), anyInt()))
+                .thenReturn(List.of());
+
+        spy.scanExpired(LEVEL);
+
+        // 本机时钟与其偏差不再影响到期判定：下发给 Redis 的扫描上界必须等于服务器时钟
+        verify(zset)
+                .valueRange(
+                        eq(0.0),
+                        eq(true),
+                        eq((double) FAKE_SERVER_NOW),
+                        eq(true),
+                        eq(0),
+                        eq(BATCH_SIZE));
+    }
+
+    @Test
+    @DisplayName("R2-5：延时 ZSet 孤儿清理单次 Lua 批量下发，不再逐条 isExists（N+1）")
+    @SuppressWarnings("unchecked")
+    void cleanupOrphanedEntries_singleBatchRoundTrip() {
+        RScript script = mock(RScript.class);
+        doReturn(script).when(redisson).getScript(StringCodec.INSTANCE);
+        doReturn(List.of(3L, 2L))
+                .when(script)
+                .eval(
+                        any(RScript.Mode.class),
+                        anyString(),
+                        eq(RScript.ReturnType.MULTI),
+                        anyList(),
+                        any(),
+                        any());
+        RKeys keys = mock(RKeys.class);
+        doReturn(keys).when(redisson).getKeys();
+        doReturn(List.of()).when(keys).getKeysByPattern(anyString(), anyInt());
+        // 反向孤儿清扫（payload → ZSet）会枚举全部延时 ZSet 做引用差集：本用例只关注 ZSet 侧批量清理
+        doReturn(zset)
+                .when(redisson)
+                .<String>getScoredSortedSet(anyString(), eq(StringCodec.INSTANCE));
+        when(zset.readAll()).thenReturn(List.of());
+
+        scheduler.cleanupOrphanedEntries();
+
+        // 每个延时 ZSet（各延时等级 + 自定义）一次批量脚本调用；过程中不得逐条读取 payload Hash
+        verify(script, times(DelayLevel.values().length + 1))
+                .eval(
+                        any(RScript.Mode.class),
+                        anyString(),
+                        eq(RScript.ReturnType.MULTI),
+                        anyList(),
+                        any(),
+                        any());
+        verify(redisson, never()).getMap(anyString(), eq(StringCodec.INSTANCE));
     }
 
     /** 布置"原子批提交成功"的 mock：XADD + DEL payload + ZREM 三步各自返回异步占位对象。 */

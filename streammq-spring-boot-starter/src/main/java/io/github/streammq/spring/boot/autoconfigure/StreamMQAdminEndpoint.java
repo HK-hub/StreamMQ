@@ -5,6 +5,7 @@
  */
 package io.github.streammq.spring.boot.autoconfigure;
 
+import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.adapter.redisson.converter.MessageFields;
 import io.github.streammq.adapter.redisson.listener.RedissonBroadcastGroupRegistry;
 import io.github.streammq.adapter.redisson.metrics.RuntimeStatsRegistry;
@@ -98,14 +99,27 @@ public class StreamMQAdminEndpoint {
     private volatile int maxPendingQuerySize = StreamMQSpringConstants.MAX_PENDING_QUERY_SIZE;
 
     /**
-     * 设置 pending 列表单次最大拉取条数。
+     * 设置 pending / DLQ 列表单次最大拉取条数。
+     *
+     * <p>上界为 {@link StreamMQSpringConstants#MAX_ADMIN_LIST_LIMIT}（10000）：超过上界按上界生效， 避免管理面一次请求把
+     * Redis Stream 条目无界装载进响应体（R6-S5）。
      *
      * @param size 最大拉取条数，必须 &gt; 0
      */
     public void setMaxPendingQuerySize(int size) {
         if (size > 0) {
-            this.maxPendingQuerySize = size;
+            this.maxPendingQuerySize = Math.min(size, StreamMQSpringConstants.MAX_ADMIN_LIST_LIMIT);
         }
+    }
+
+    /**
+     * 计算列表类查询的生效条数：夹取到 {@code [1, maxPendingQuerySize]}。
+     *
+     * <p>{@code listPending} / {@code listDlq} 的 {@code count} 来自管理面请求，此前 {@code listDlq} 直传 {@code
+     * count} 未夹取——{@code ?count=2000000000} 即可让端点把整条 DLQ Stream 载入内存（R6-S5）。
+     */
+    private int effectiveListCount(int count) {
+        return Math.max(1, Math.min(count, maxPendingQuerySize));
     }
 
     /**
@@ -210,7 +224,7 @@ public class StreamMQAdminEndpoint {
                 + ")";
     }
 
-    /** 列出指定 ConsumerGroup 的 pending 消息。 */
+    /** 列出指定 ConsumerGroup 的 pending 消息（条数夹取到 {@code [1, maxPendingQuerySize]}）。 */
     public List<Map<String, Object>> listPending(String group, String topic, int count) {
         List<Map<String, Object>> result = new ArrayList<>();
         String streamKey = StreamMQKeys.topicStream(namespace, topic);
@@ -221,7 +235,7 @@ public class StreamMQAdminEndpoint {
                             group,
                             StreamMessageId.MIN,
                             StreamMessageId.MAX,
-                            Math.min(count, maxPendingQuerySize));
+                            effectiveListCount(count));
             for (var entry : pendingInfo) {
                 Map<String, Object> info = new LinkedHashMap<>();
                 info.put("messageId", entry.getId().toString());
@@ -238,13 +252,19 @@ public class StreamMQAdminEndpoint {
         return result;
     }
 
-    /** 列出 DLQ 消息。 */
+    /**
+     * 列出 DLQ 消息（条数夹取到 {@code [1, maxPendingQuerySize]}，与 {@link #listPending} 一致）。
+     *
+     * <p>此前 {@code listDlq} 把请求方的 {@code count} 直传 {@code RStream#range}，无任何上界（R6-S5）。
+     */
     public List<Map<String, Object>> listDlq(String group, int count) {
         List<Map<String, Object>> result = new ArrayList<>();
         String dlqKey = StreamMQKeys.dlqStream(namespace, group);
         RStream<String, String> dlqStream = redisson.getStream(dlqKey, StringCodec.INSTANCE);
         try {
-            var entries = dlqStream.range(count, StreamMessageId.MIN, StreamMessageId.MAX);
+            var entries =
+                    dlqStream.range(
+                            effectiveListCount(count), StreamMessageId.MIN, StreamMessageId.MAX);
             if (entries != null) {
                 for (var entry : entries.entrySet()) {
                     Map<String, Object> info = new LinkedHashMap<>();
@@ -543,14 +563,9 @@ public class StreamMQAdminEndpoint {
             LOG.info("Pending message acked: group={}, topic={}, msgId={}", group, topic, msgId);
         } catch (RuntimeException ex) {
             result.put("success", false);
-            result.put("error", ex.getMessage());
+            // R6：响应体只回吐脱敏描述（完整信息含堆栈进日志），与其余管理操作统一口径
+            result.put("error", describeFailure("ackPending", ex));
             failureRetryLimiter.recordFailure(limitKey);
-            LOG.warn(
-                    "Ack pending failed: group={}, topic={}, msgId={}: {}",
-                    group,
-                    topic,
-                    msgId,
-                    ex.getMessage());
         }
         return result;
     }
@@ -590,9 +605,9 @@ public class StreamMQAdminEndpoint {
                     rebalanced);
         } catch (RuntimeException ex) {
             result.put("success", false);
-            result.put("error", ex.getMessage());
+            // R6：响应体只回吐脱敏描述（完整信息含堆栈进日志），与其余管理操作统一口径
+            result.put("error", describeFailure("triggerRebalance", ex));
             failureRetryLimiter.recordFailure(limitKey);
-            LOG.warn("Trigger rebalance failed: group={}: {}", group, ex.getMessage());
         }
         return result;
     }
@@ -684,9 +699,9 @@ public class StreamMQAdminEndpoint {
             LOG.info("Topic deleted: topic={}, deleted={}", topic, deleted);
         } catch (RuntimeException ex) {
             result.put("success", false);
-            result.put("error", ex.getMessage());
+            // R6：响应体只回吐脱敏描述（完整信息含堆栈进日志），与其余管理操作统一口径
+            result.put("error", describeFailure("deleteTopic", ex));
             failureRetryLimiter.recordFailure(limitKey);
-            LOG.warn("Delete topic failed: topic={}: {}", topic, ex.getMessage());
         }
         return result;
     }
@@ -697,23 +712,32 @@ public class StreamMQAdminEndpoint {
      * <p><b>发布前修复 P1-4：</b>旧实现把配置写入 {@code streammq:{ns}:meta:config:{group}} Hash 后就 结束了 ——
      * 全项目<b>没有任何代码读取该 Hash</b>。用户以为参数已生效，实际什么都没发生 （静默失败比没有这个功能更危险）。
      *
-     * <p>新实现逐 key 执行真实的运行期变更，并把结果（含被拒绝的 key 及原因）完整回传：
+     * <p>新实现逐 key 执行真实的运行期变更，并把结果（含被拒绝的 key 及原因、以及"是否即时生效"的诚实标注）完整回传：
      *
      * <table>
      *   <tr><th>key</th><th>取值</th><th>效果</th></tr>
-     *   <tr><td>{@code paused}</td><td>true/false</td><td>暂停 / 恢复消费循环</td></tr>
-     *   <tr><td>{@code inflightCapacity}</td><td>整数 [0, 100000]</td><td>背压队列容量（0=禁用）</td></tr>
-     *   <tr><td>{@code pausedSleepMillis}</td><td>整数 [1, 300000]</td><td>暂停状态下的休眠间隔</td></tr>
-     *   <tr><td>{@code brokerErrorBackoffMillis}</td><td>整数 [1, 300000]</td><td>Broker 异常后的退避间隔</td></tr>
-     *   <tr><td>{@code timeoutCancelGraceMillis}</td><td>整数 [1, 300000]</td><td>消费超时取消后的宽限期</td></tr>
+     *   <tr><td>{@code paused}</td><td>true/false</td><td><b>按组</b>暂停 / 恢复该 group 的消费循环（{@code
+     *       pauseGroup}/{@code resumeGroup}），对已运行循环即时生效；其它组不受影响。注意：容器级暂停（{@code
+     *       container.pause()}）会让所有组都视为暂停，本 key 不清除它——响应中的 {@code groupPaused} 字段如实回显该组
+     *       当前是否真的暂停</td></tr>
+     *   <tr><td>{@code inflightCapacity}</td><td>整数 [0, 100000]</td><td>背压队列容量（0=禁用）。队列容量是消费循环启动时的
+     *       构造参数，<b>运行期不可热改</b>：响应中 {@code effects.inflightCapacity} 为 {@code
+     *       immediate}（当前值的循环均已采用）或 {@code next-consume-loop-start}（需重启消费循环才生效）</td></tr>
+     *   <tr><td>{@code pausedSleepMillis}</td><td>整数 [1, 300000]</td><td>暂停状态下的休眠间隔（每轮读取，即时生效）</td></tr>
+     *   <tr><td>{@code brokerErrorBackoffMillis}</td><td>整数 [1, 300000]</td><td>Broker 异常后的退避间隔（每轮读取，即时生效）</td></tr>
+     *   <tr><td>{@code timeoutCancelGraceMillis}</td><td>整数 [1, 300000]</td><td>消费超时取消后的宽限期（volatile 字段直接读取，即时生效）</td></tr>
      * </table>
      *
      * <p><b>不支持的 key 会被显式拒绝并在响应中列出</b>，而不是静默写入一个无人读取的 Hash。 无法在运行期安全变更的参数（如 {@code
      * consumeThreadMin}、{@code maxReconsumeTimes}） 需要重启生效 —— 响应以 {@code rejected} 明确告知，不假装生效。
      *
+     * <p><b>诚实回显（R6-S9）：</b>响应体包含 {@code effects}（key → {@code immediate} / {@code
+     * next-consume-loop-start} / {@code unverifiable}），以及 {@code groupPaused}（该组当前真实暂停状态）。
+     * 调用方无需自行推断"配置到底生效了没有"。
+     *
      * @param group 消费者组名
      * @param config 配置键值对
-     * @return 操作结果（含 {@code applied} / {@code rejected} 明细）
+     * @return 操作结果（含 {@code applied} / {@code rejected} / {@code effects} 明细）
      */
     public Map<String, Object> updateGroupConfig(String group, Map<String, String> config) {
         Map<String, Object> result = new LinkedHashMap<>();
@@ -729,6 +753,7 @@ public class StreamMQAdminEndpoint {
 
         Map<String, Object> applied = new LinkedHashMap<>();
         Map<String, String> rejected = new LinkedHashMap<>();
+        DefaultStreamMQListenerContainer defaultContainer = defaultContainer();
 
         for (Map.Entry<String, String> entry : config.entrySet()) {
             String key = entry.getKey();
@@ -738,17 +763,7 @@ public class StreamMQAdminEndpoint {
                 continue;
             }
             switch (key) {
-                case "paused" -> {
-                    if ("true".equalsIgnoreCase(raw)) {
-                        container.pause();
-                        applied.put(key, Boolean.TRUE);
-                    } else if ("false".equalsIgnoreCase(raw)) {
-                        container.resume();
-                        applied.put(key, Boolean.FALSE);
-                    } else {
-                        rejected.put(key, "expected 'true' or 'false', got '" + raw + "'");
-                    }
-                }
+                case "paused" -> applyPaused(group, raw, defaultContainer, applied, rejected);
                 case "inflightCapacity" ->
                         applyLong(
                                 key,
@@ -799,6 +814,12 @@ public class StreamMQAdminEndpoint {
         result.put("rejected", rejected);
         result.put("success", rejected.isEmpty());
         result.put("group", group);
+        // R6-S9：诚实回显"配置是否真的生效"——不做任何"已生效"的假定
+        result.put("effects", describeEffects(group, applied, defaultContainer));
+        if (defaultContainer != null && applied.containsKey("paused")) {
+            // isGroupPaused 含容器级暂停：容器级暂停时 resumeGroup 不足以让该组恢复消费，必须如实回显
+            result.put("groupPaused", defaultContainer.isGroupPaused(group));
+        }
         if (!rejected.isEmpty()) {
             LOG.warn(
                     "Group config partially rejected: group={}, rejected={}",
@@ -826,6 +847,105 @@ public class StreamMQAdminEndpoint {
                     "pausedSleepMillis",
                     "brokerErrorBackoffMillis",
                     "timeoutCancelGraceMillis");
+
+    /** 运行期配置项"立即生效"的诚实标注值（{@link #updateGroupConfig} 响应的 {@code effects}）。 */
+    public static final String EFFECT_IMMEDIATE = "immediate";
+
+    /** 运行期配置项"下次消费循环启动时生效"的诚实标注值（背压队列容量属于此类）。 */
+    public static final String EFFECT_NEXT_CONSUME_LOOP_START = "next-consume-loop-start";
+
+    /** 当前容器实现无法验证生效状态时的诚实标注值（自定义容器不暴露运行期读回能力）。 */
+    public static final String EFFECT_UNVERIFIABLE = "unverifiable";
+
+    /**
+     * 返回本实例的 {@link DefaultStreamMQListenerContainer} 形态（编译期类型安全的 {@code instanceof} 收窄）。
+     *
+     * <p>按组暂停（{@code pauseGroup}）/ 背压容量生效判定（{@code isInflightCapacityAppliedForGroup}）是 Redisson
+     * 容器的能力，未进入 core 的 {@code StreamMQListenerContainer} 接口。这里不做"脆弱强转"——自定义容器实现 一律返回 null，相关 key 以
+     * {@code rejected} / {@code effects=unverifiable} 如实告知，而不是错误宣称成功。
+     */
+    private DefaultStreamMQListenerContainer defaultContainer() {
+        return container instanceof DefaultStreamMQListenerContainer dlc ? dlc : null;
+    }
+
+    /** 应用 {@code paused}（按组）：见 {@link #updateGroupConfig} 的响应契约。 */
+    private void applyPaused(
+            String group,
+            String raw,
+            DefaultStreamMQListenerContainer defaultContainer,
+            Map<String, Object> applied,
+            Map<String, String> rejected) {
+        if ("true".equalsIgnoreCase(raw) || "false".equalsIgnoreCase(raw)) {
+            if (defaultContainer == null) {
+                rejected.put(
+                        "paused",
+                        "per-group pause requires a DefaultStreamMQListenerContainer (current"
+                                + " container implementation: "
+                                + container.getClass().getName()
+                                + " does not expose group-scoped pause); the container-wide"
+                                + " pause() would affect other groups and is not used here");
+                return;
+            }
+            boolean pause = Boolean.parseBoolean(raw);
+            if (pause) {
+                defaultContainer.pauseGroup(group);
+            } else {
+                defaultContainer.resumeGroup(group);
+            }
+            applied.put("paused", pause);
+            return;
+        }
+        rejected.put("paused", "expected 'true' or 'false', got '" + raw + "'");
+    }
+
+    /**
+     * 为本次 {@code applied} 的 key 生成"是否即时生效"的诚实标注。
+     *
+     * <p>依据（Redisson 容器实现，R1）：
+     *
+     * <ul>
+     *   <li>{@code paused}：组暂停标志由每个消费循环每轮迭代读取 → 即时；
+     *   <li>{@code inflightCapacity}：队列容量是循环启动时的构造参数 → 由 {@code isInflightCapacityAppliedForGroup}
+     *       判定"已即时生效"或"下次循环启动时生效"；
+     *   <li>{@code pausedSleepMillis} / {@code brokerErrorBackoffMillis}：每轮读取 → 即时；
+     *   <li>{@code timeoutCancelGraceMillis}：volatile 字段在使用点直接读取 → 即时。
+     * </ul>
+     */
+    private Map<String, String> describeEffects(
+            String group,
+            Map<String, Object> applied,
+            DefaultStreamMQListenerContainer defaultContainer) {
+        Map<String, String> effects = new LinkedHashMap<>();
+        if (applied.containsKey("paused")) {
+            effects.put(
+                    "paused", defaultContainer == null ? EFFECT_UNVERIFIABLE : EFFECT_IMMEDIATE);
+        }
+        if (applied.containsKey("inflightCapacity")) {
+            effects.put(
+                    "inflightCapacity",
+                    defaultContainer == null
+                            ? EFFECT_UNVERIFIABLE
+                            : (defaultContainer.isInflightCapacityAppliedForGroup(group)
+                                    ? EFFECT_IMMEDIATE
+                                    : EFFECT_NEXT_CONSUME_LOOP_START));
+        }
+        if (applied.containsKey("pausedSleepMillis")) {
+            effects.put(
+                    "pausedSleepMillis",
+                    defaultContainer == null ? EFFECT_UNVERIFIABLE : EFFECT_IMMEDIATE);
+        }
+        if (applied.containsKey("brokerErrorBackoffMillis")) {
+            effects.put(
+                    "brokerErrorBackoffMillis",
+                    defaultContainer == null ? EFFECT_UNVERIFIABLE : EFFECT_IMMEDIATE);
+        }
+        if (applied.containsKey("timeoutCancelGraceMillis")) {
+            effects.put(
+                    "timeoutCancelGraceMillis",
+                    defaultContainer == null ? EFFECT_UNVERIFIABLE : EFFECT_IMMEDIATE);
+        }
+        return effects;
+    }
 
     /**
      * 运行期 {@code inflightCapacity} 的硬上限。

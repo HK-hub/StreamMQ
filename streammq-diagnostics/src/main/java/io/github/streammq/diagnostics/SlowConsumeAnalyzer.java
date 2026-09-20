@@ -99,7 +99,6 @@ public class SlowConsumeAnalyzer {
                 maxConsumeTime,
                 p99ConsumeTime,
                 consumerCount,
-                consumerCount,
                 bottleneck,
                 recommendation,
                 code);
@@ -122,8 +121,7 @@ public class SlowConsumeAnalyzer {
                 0.0,
                 0L,
                 0L,
-                0,
-                Math.max(consumerCount, 1),
+                consumerCount,
                 "No trace data available for bottleneck analysis",
                 "Verify that message tracing is enabled and the trace service is healthy",
                 SlowConsumeCodes.NO_TRACE_DATA);

@@ -9,7 +9,7 @@ package io.github.streammq.sample.orderly;
  * 顺序消息示例常量：Topic、消费组与 tag。
  *
  * @author StreamMQ Contributors
- * @since 1.1.0
+ * @since 0.1.2
  */
 public final class SampleConstants {
 

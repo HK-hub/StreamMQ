@@ -98,7 +98,9 @@ public class CloudK8sAutoConfiguration {
         /**
          * 优雅关闭处理器：容器关闭时暂停拉取、等待 in-flight 消息完成、停止容器。
          *
-         * <p>实现 {@link org.springframework.beans.factory.DisposableBean}，由 Spring 容器在关闭期回调。
+         * <p>实现 {@link org.springframework.context.SmartLifecycle}（phase = {@code Integer.MAX_VALUE
+         * - 150}），由 Spring 在停止阶段先行回调（早于 starter 的容器生命周期 phase=MAX_VALUE-200）， 保证 pause 有效；{@link
+         * org.springframework.beans.factory.DisposableBean} 仅作幂等兜底。
          */
         @Bean
         @ConditionalOnMissingBean(GracefulShutdownHandler.class)
@@ -130,13 +132,24 @@ public class CloudK8sAutoConfiguration {
             return controller;
         }
 
+        /**
+         * HPA 自动扩缩器。
+         *
+         * <p>{@code @ConditionalOnMissingBean}：{@link HpaAutoScaler} 自身带 {@code @Component}， 若用户把
+         * {@code io.github.streammq.cloud.k8s} 包纳入组件扫描，朴素 {@code @Bean} 会让容器里出现 <b>两个</b>
+         * scaler（各自启动一个调度线程），与 {@code hpaMetricsProvider} 的消歧口径也不一致。
+         */
         @Bean
+        @ConditionalOnMissingBean(HpaAutoScaler.class)
         public HpaAutoScaler hpaAutoScaler(CloudK8sProperties properties) {
             HpaAutoScaler scaler = new HpaAutoScaler();
             scaler.setSyncIntervalSeconds(properties.getHpaSyncIntervalSeconds());
             scaler.setDefaultTargetLag(properties.getHpaDefaultTargetLag());
             scaler.setScaleUpThreshold(properties.getHpaScaleUpThreshold());
             scaler.setScaleDownThreshold(properties.getHpaScaleDownThreshold());
+            // 扫描范围与 operator watch 语义一致（K9）：默认全命名空间，可收敛为指定列表
+            scaler.setWatchAllNamespaces(properties.isOperatorWatchAllNamespaces());
+            scaler.setWatchNamespaces(properties.getOperatorWatchNamespaces());
             return scaler;
         }
 

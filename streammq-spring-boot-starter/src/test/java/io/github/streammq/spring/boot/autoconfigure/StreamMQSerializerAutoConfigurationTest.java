@@ -6,6 +6,7 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.streammq.adapter.redisson.serializer.FurySerializer;
 import io.github.streammq.adapter.redisson.serializer.JacksonJsonSerializer;
@@ -64,5 +65,44 @@ class StreamMQSerializerAutoConfigurationTest {
         MessageSerializer<?> serializer =
                 new StreamMQCoreAutoConfiguration(properties).streamMQMessageSerializer(properties);
         assertThat(serializer).isInstanceOf(JacksonJsonSerializer.class);
+    }
+
+    @Test
+    @DisplayName("宽松模式门禁未开启：报出安全门禁提示，不得误报为『缺 fory-core 依赖』（R6-S4）")
+    void unrestrictedFuryWithoutGate_reportsSecurityGateInsteadOfMissingDependency() {
+        // 前提：显式清除门禁属性（@AfterEach 亦会清理），构造宽松模式 FurySerializer
+        System.clearProperty("streammq.security.allowUnrestrictedSerializer");
+        StreamMQProperties properties = new StreamMQProperties();
+        properties.getProducer().setSerializer(FurySerializer.class);
+        properties.getProducer().setFuryRequireClassRegistration(false);
+
+        assertThatThrownBy(
+                        () ->
+                                new StreamMQCoreAutoConfiguration(properties)
+                                        .streamMQMessageSerializer(properties))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("streammq.security.allowUnrestrictedSerializer")
+                .hasMessageContaining("fury-require-class-registration")
+                .hasMessageNotContaining("is not on the classpath")
+                .hasMessageNotContaining("Add the dependency");
+    }
+
+    @Test
+    @DisplayName("宽松模式门禁已开启：FurySerializer 正常装配（门禁通过路径不受影响）")
+    void unrestrictedFuryWithGate_stillInstantiates() {
+        System.setProperty("streammq.security.allowUnrestrictedSerializer", "true");
+        try {
+            StreamMQProperties properties = new StreamMQProperties();
+            properties.getProducer().setSerializer(FurySerializer.class);
+            properties.getProducer().setFuryRequireClassRegistration(false);
+
+            MessageSerializer<?> serializer =
+                    new StreamMQCoreAutoConfiguration(properties)
+                            .streamMQMessageSerializer(properties);
+
+            assertThat(serializer).isInstanceOf(FurySerializer.class);
+        } finally {
+            System.clearProperty("streammq.security.allowUnrestrictedSerializer");
+        }
     }
 }

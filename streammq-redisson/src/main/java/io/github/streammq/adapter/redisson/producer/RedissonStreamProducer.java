@@ -6,6 +6,8 @@
 package io.github.streammq.adapter.redisson.producer;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
+import io.github.streammq.adapter.redisson.support.RedisClusterCompatibility;
+import io.github.streammq.adapter.redisson.support.RedisServerClock;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.compression.CompressionCodec;
@@ -76,6 +78,20 @@ public class RedissonStreamProducer implements StreamMessageProducer {
     private volatile boolean ownsAsyncExecutor = true;
 
     private final AtomicBoolean closed = new AtomicBoolean(false);
+
+    /** Redis 服务器时钟不可用（回退本机时钟）时的告警限频间隔（毫秒） */
+    private static final long CLOCK_FALLBACK_WARN_INTERVAL_MS = 60_000L;
+
+    /**
+     * 延时消息投递时刻的时间基准（R2-4）。
+     *
+     * <p>{@code deliverAt} 同时是延时 ZSet 的 score，扫描侧（{@link
+     * io.github.streammq.adapter.redisson.scheduler.DelayMessageScheduler}）以 Redis 服务器时钟判定到期。若生产侧用
+     * 本机时钟，跨主机 NTP 偏差会把延时时长整体平移（拨快的实例提前投递、拨慢的实例延后投递）。因此写入时刻也统一取 Redis 服务器时钟；读取失败时回退本机时钟并限频
+     * WARN（不阻塞发送）。
+     */
+    private final java.util.concurrent.atomic.AtomicLong lastClockFallbackWarnMs =
+            new java.util.concurrent.atomic.AtomicLong();
 
     /** 压缩编解码器（可选注入，配合 compressThreshold 使用） */
     @Setter private CompressionCodec compressionCodec;
@@ -155,6 +171,10 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         // 默认统一虚拟线程池；可通过 setAsyncExecutor 注入外部实现（Spring 统一线程模型）
         this.asyncExecutor = Executors.newVirtualThreadPerTaskExecutor();
         this.ownsAsyncExecutor = true;
+        // R6-CLUSTER：发送本身是单 key XADD（Cluster 可用），但同一部署上的重试/DLQ/事务路径会以
+        // CROSSSLOT 失败；构造期提示一次，把"文档约定"变成运行期可见事实
+        io.github.streammq.adapter.redisson.support.RedisClusterCompatibility.warnIfCluster(
+                redisson, "producer");
     }
 
     @Override
@@ -478,13 +498,40 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                 message.getTopic(),
                 reason);
         return new SendResult(
-                MessageId.sentinel(),
+                MessageId.pending(),
                 message.getTopic(),
                 message.getTag(),
                 SendStatus.SEND_FAILED,
                 message.getBornTimestamp(),
                 null,
                 reason);
+    }
+
+    /**
+     * 延时消息写入的时间基准（R2-4）：Redis 服务器时钟优先（与调度器扫描侧 {@code deliverAt} 判定同一时间源）， 读取失败回退本机时钟并限频
+     * WARN（服务器时钟不可用不得阻塞发送）。
+     *
+     * @return 当前毫秒时间戳（服务器时钟优先）
+     */
+    long scheduleClockMillis() {
+        long serverNow = RedisServerClock.nowMillis(redisson);
+        if (serverNow == RedisServerClock.UNKNOWN) {
+            warnClockFallback();
+            return System.currentTimeMillis();
+        }
+        return serverNow;
+    }
+
+    /** 服务器时钟不可用的限频 WARN（默认 60s 一次）。 */
+    private void warnClockFallback() {
+        long now = System.currentTimeMillis();
+        long last = lastClockFallbackWarnMs.get();
+        if (now - last >= CLOCK_FALLBACK_WARN_INTERVAL_MS
+                && lastClockFallbackWarnMs.compareAndSet(last, now)) {
+            LOG.warn(
+                    "Redis TIME unavailable, falling back to LOCAL clock for delay deliverAt;"
+                            + " cross-host NTP skew may shift delay delivery times");
+        }
     }
 
     /**
@@ -501,7 +548,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
      * <p><b>延时边界：</b>{@code delayTimeMillis} 超过 {@link StreamMQConstants#MAX_DELAY_TIME_MILLIS} （7
      * 天，产品上界）时直接抛 {@link StreamMQException}（fail-fast）。
      *
-     * <p>发送结果中的 messageId 为占位 ID（{@link MessageId#sentinel()}）： 延时消息的真实 Stream Entry ID 在到期投递时才由
+     * <p>发送结果中的 messageId 为占位 ID（{@link MessageId#pending()}）： 延时消息的真实 Stream Entry ID 在到期投递时才由
      * Redis 生成。
      *
      * @param message 延时消息
@@ -526,7 +573,8 @@ public class RedissonStreamProducer implements StreamMessageProducer {
         }
 
         String msgId = UUID.randomUUID().toString();
-        long now = System.currentTimeMillis();
+        // R2-4：投递时刻基于 Redis 服务器时钟（与调度器扫描侧同一时间基准），避免跨主机 NTP 偏差平移延时时长
+        long now = scheduleClockMillis();
 
         DelayLevel level = message.getDelayLevel();
         Long delayTimeMillis = message.getDelayTimeMillis();
@@ -559,7 +607,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                     deliverAt,
                     message.getTopic());
             return new SendResult(
-                    MessageId.sentinel(),
+                    MessageId.pending(),
                     message.getTopic(),
                     message.getTag(),
                     message.getBornTimestamp());
@@ -586,7 +634,7 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                 deliverAt,
                 message.getTopic());
         return new SendResult(
-                MessageId.sentinel(),
+                MessageId.pending(),
                 message.getTopic(),
                 message.getTag(),
                 message.getBornTimestamp());
@@ -621,6 +669,9 @@ public class RedissonStreamProducer implements StreamMessageProducer {
             long deliverAt,
             long delayMillis,
             String msgId) {
+        // Cluster 客户端下该原子批会被 Redisson 按节点拆分提交（静默失去原子性），前置拒绝
+        RedisClusterCompatibility.requireCrossKeyAtomicity(
+                redisson, "Delayed message enqueue (payload hash + schedule ZSet)");
         long payloadTtl = delayMillis + StreamMQConstants.DEFAULT_DELAY_PAYLOAD_TTL_GRACE_MS;
         try {
             RBatch batch =

@@ -25,6 +25,18 @@ import lombok.Getter;
  *       equals 不等）
  * </ul>
  *
+ * <p><b>占位 ID（"尚未投递"，0.1.2 定稿，发布即冻结）：</b>延时消息在登记延时投递时、事务 UNKNOWN 路径下消息在提交前， 都还没有真实 Entry
+ * ID，此时使用<b>稳定且可辨识</b>的占位值 {@link #pending()}（{@code "0-0"}）：
+ *
+ * <ul>
+ *   <li>{@link #isPending()} 判定当前 ID 是否为占位值，不与任何真实 Entry ID 混淆
+ *   <li>取值域不重叠：Redis 生成的 Entry ID 时间戳恒为服务器毫秒时钟（{@code > 0}），且 XADD 拒绝写入 {@code 0-0}； 因此真实 Entry ID
+ *       恒满足 {@code (timestamp, sequence) > (0, 0)}，占位值（零值域）只可能是框架给出的"尚未投递"标记
+ *   <li>{@code equals/hashCode/compareTo/toString} 对占位值自洽：所有 {@code pending()} 实例彼此相等（占位值无身份语义），
+ *       且与任意真实 ID 不相等、比较不为 0
+ *   <li>{@link #of(long, long)} 的非负校验与规范化规则不变（{@code of(0, 0)} 得到的即是占位值，语义等价于 {@link #pending()}）
+ * </ul>
+ *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
@@ -32,6 +44,12 @@ import lombok.Getter;
 public final class MessageId implements Serializable, Comparable<MessageId> {
 
     @Serial private static final long serialVersionUID = 1L;
+
+    /** 占位 ID 的保留文本形式：Redis XADD 拒绝写入 {@code 0-0}，真实 Entry ID 恒大于该值 */
+    public static final String PENDING_STREAM_ENTRY_ID = "0-0";
+
+    /** 占位 ID 单例（稳定值，多次调用返回同一实例）。 */
+    private static final MessageId PENDING = new MessageId(0L, 0L);
 
     /** Redis Stream Entry ID 规范化字符串，格式：{timestamp}-{sequence} 返回规范化后的 Stream Entry ID。 */
     private final String streamEntryId;
@@ -117,13 +135,49 @@ public final class MessageId implements Serializable, Comparable<MessageId> {
         return new MessageId(streamMessageId.toString());
     }
 
-    /** 生成一个表示发送失败/占位的 MessageId。 使用当前时间戳 + 序列号 0，表示该消息未经 Redis 分配真实 Entry ID。 */
+    /**
+     * 生成"尚未投递"的占位 ID（稳定值：{@value #PENDING_STREAM_ENTRY_ID}）。
+     *
+     * <p>用于延时消息（登记延时投递时）与事务 UNKNOWN（半消息尚未提交）等真实 Entry ID 尚未产生的场景。 占位值不与任何真实 Entry ID 重叠（真实 ID 恒满足
+     * {@code (timestamp, sequence) > (0, 0)}）， 且可用 {@link #isPending()} 辨识； 所有占位实例彼此相等（占位值无身份语义）。
+     *
+     * @return 占位 ID（每次返回同一稳定值）
+     */
+    public static MessageId pending() {
+        return PENDING;
+    }
+
+    /**
+     * 生成一个表示发送失败/占位的 MessageId。
+     *
+     * @return 占位 ID
+     * @deprecated 旧名占位工厂，值域与真实 Entry ID 不可区分（旧实现返回"当前时间戳-0"，可能与真实 Entry ID 碰撞）。 请改用语义明确且稳定可辨识的
+     *     {@link #pending()}（失败场景配合 {@code SendStatus.SEND_FAILED} 表达）；本方法保留为 {@link #pending()}
+     *     的别名，计划于 0.2.0 移除
+     */
+    @Deprecated(since = "0.1.2")
     public static MessageId sentinel() {
-        return new MessageId(System.currentTimeMillis(), 0);
+        return pending();
+    }
+
+    /**
+     * 是否为占位 ID（"尚未投递"标记）。
+     *
+     * <p>判定规则：{@code (timestamp, sequence) == (0, 0)}（即 {@value #PENDING_STREAM_ENTRY_ID}）。 Redis
+     * 生成的 Entry ID 时间戳恒 {@code > 0}，因此占位值不会与真实 ID 混淆；{@link #of(long, long)} / {@link
+     * #fromStreamEntry(String)} 构造出的零值同样是占位值。
+     *
+     * @return true 表示当前 ID 为占位值（无真实 Stream Entry）
+     */
+    public boolean isPending() {
+        return timestamp == 0L && sequence == 0L;
     }
 
     /**
      * 从时间戳 + 序列号直接构造（延时消息 / 自定义 ID 场景）。
+     *
+     * <p>注意：{@code (0, 0)} 是保留的占位值（见 {@link #pending()}），{@code of(0, 0)} 得到的实例 {@link
+     * #isPending()} 为 true。
      *
      * @param timestamp 时间戳（毫秒），必须 &gt;= 0
      * @param sequence 序列号，必须 &gt;= 0

@@ -11,7 +11,7 @@ package io.github.streammq.spring.boot;
  * <p>集中管理配置属性前缀、条件装配属性名、Bean 名称与健康检查详情 key， 供自动装配类与注解（{@code @ConditionalOnProperty}）引用编译期常量。
  *
  * @author StreamMQ Contributors
- * @since 1.1.0
+ * @since 0.1.2
  */
 public final class StreamMQSpringConstants {
 
@@ -105,6 +105,16 @@ public final class StreamMQSpringConstants {
 
     /** 管理端点 pending 列表最大拉取条数 */
     public static final int MAX_PENDING_QUERY_SIZE = 1000;
+
+    /**
+     * 管理面列表类查询的硬上限：{@code streammq.admin.list-page-size} 与 {@code
+     * streammq.admin.max-pending-query-size} 不得超过该值。
+     *
+     * <p><b>为什么需要上界：</b>管理端点是高危操作面，列表查询会一次性把 Redis Stream 条目装载进响应体。取值 无上界（如 {@code
+     * Integer.MAX_VALUE}）时，一次合法凭据的查询即可把服务端内存打满、并让响应体大小脱离 可控范围。10000 已是常规运维列表诉求的量级上限，需要更大批量应使用分页或直接走
+     * Redis 工具。
+     */
+    public static final int MAX_ADMIN_LIST_LIMIT = 10_000;
 
     // ==================== 管理鉴权资源名 ====================
     /** 鉴权资源：总览 */

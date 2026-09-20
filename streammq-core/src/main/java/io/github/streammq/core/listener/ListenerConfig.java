@@ -217,8 +217,8 @@ public class ListenerConfig {
             int streamMaxLen,
             ConsumeFromWhere consumeFromWhere,
             boolean enableMsgTrace) {
-        this.topic = StringUtils.requireValidName(topic, "topic");
-        this.consumerGroup = StringUtils.requireValidName(consumerGroup, "consumerGroup");
+        this.topic = StringUtils.requireValidTopic(topic);
+        this.consumerGroup = StringUtils.requireValidGroup(consumerGroup);
         if (pullBatchSize <= 0) {
             throw new IllegalArgumentException("pullBatchSize must be > 0, got: " + pullBatchSize);
         }

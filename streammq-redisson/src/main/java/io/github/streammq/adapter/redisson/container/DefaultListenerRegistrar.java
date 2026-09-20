@@ -215,15 +215,28 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
                         0,
                         null,
                         /* dlqMode */ annotation.dlqMode());
+        ListenerRegistration<T> built = b.consumer(consumer).targetBodyType(bodyType).build();
         finalizeAndWire(
-                b.consumer(consumer).targetBodyType(bodyType).build(),
-                "Registered StreamMQ Consumer: topic={}, group={}, dlqMode={}, bodyType={}",
+                built,
+                "Registered StreamMQ Consumer: topic={}, group={}, dlqMode={},"
+                        + " consumeFromWhere={}, bodyType={}",
                 annotation.topic(),
                 annotation.consumerGroup(),
                 annotation.dlqMode(),
+                built.getConsumeFromWhere(),
                 bodyType);
     }
 
+    /**
+     * 注册顺序消费监听器。
+     *
+     * <p><b>不支持 {@code consumeMode=BROADCASTING}（0.1.2 起注册期 fail-fast）：</b>顺序消费的 PEL 恢复目标按基组名登记（见
+     * {@code DefaultSchedulerTargetBinder} 的 ORDERLY 分支）， 而广播消费的生效组是每实例独立的 {@code
+     * {group}:{group}-{instanceId}}——目标会被登记到一个 在 topic 流上根本不存在的组：认领循环每轮 {@code listPending} 失败刷
+     * WARN，且该注册的 PEL 恢复完全失效（实例崩溃后分片条目永久滞留）。此组合此前静默接受、错误只在运行期以日志噪音与 丢失恢复能力的形式暴露，故改为注册期直接拒绝。
+     *
+     * @throws IllegalArgumentException 当注解同时声明 ORDERLY 与 BROADCASTING 时
+     */
     @Override
     public <T> void registerOrderly(
             StreamMessageOrderlyConsumer<T> consumer, StreamMQConsumer annotation) {
@@ -233,6 +246,20 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
         StringUtils.requireValidTopic(annotation.topic());
         StringUtils.requireValidGroup(annotation.consumerGroup());
         StringUtils.requireValidNamespace(annotation.namespace());
+        if (annotation.consumeMode() == ConsumeMode.BROADCASTING) {
+            throw new IllegalArgumentException(
+                    "Unsupported combination: messageModel=ORDERLY cannot be used with"
+                            + " consumeMode=BROADCASTING (topic='"
+                            + annotation.topic()
+                            + "', consumerGroup='"
+                            + annotation.consumerGroup()
+                            + "'). Orderly PEL recovery targets are registered on the base"
+                            + " group, but broadcast runs on per-instance groups"
+                            + " '{group}:{group}-{instanceId}' — recovery would poll a"
+                            + " non-existent group and never reclaim a crashed instance's"
+                            + " pending entries. Use consumeMode=CLUSTERING for orderly"
+                            + " consumers, or MessageModel.CONCURRENT for broadcast.");
+        }
 
         int shardCount = annotation.shardCount();
         List<Lock> shardLocks =
@@ -246,13 +273,15 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
         DefaultListenerRegistration.Builder<T> b =
                 concurrentOrOrderlyBuilder(
                         ListenerType.ORDERLY, annotation, shardCount, shardLocks, false);
+        ListenerRegistration<T> built = b.consumer(consumer).targetBodyType(bodyType).build();
         finalizeAndWire(
-                b.consumer(consumer).targetBodyType(bodyType).build(),
+                built,
                 "Registered StreamMQ Orderly Consumer: topic={}, group={}, shardCount={},"
-                        + " bodyType={}",
+                        + " consumeFromWhere={}, bodyType={}",
                 annotation.topic(),
                 annotation.consumerGroup(),
                 shardCount,
+                built.getConsumeFromWhere(),
                 bodyType);
     }
 
@@ -267,10 +296,13 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
         String effectiveGroup = annotation.consumerGroup();
         Class<?> bodyType = BodyTypeResolver.resolve(consumer);
         DefaultListenerRegistration.Builder<T> b = dlqBuilder(annotation, effectiveGroup);
+        ListenerRegistration<T> built = b.consumer(consumer).targetBodyType(bodyType).build();
         finalizeAndWire(
-                b.consumer(consumer).targetBodyType(bodyType).build(),
-                "Registered StreamMQ DLQ Consumer: group={}, bodyType={}",
+                built,
+                "Registered StreamMQ DLQ Consumer: group={}, consumeFromWhere={} (fixed, drains"
+                        + " existing dead letters), bodyType={}",
                 effectiveGroup,
+                built.getConsumeFromWhere(),
                 bodyType);
     }
 
@@ -305,7 +337,14 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
                 .rebalanceStrategy(ann.rebalanceStrategy())
                 .suspendCurrentQueueTimeMillis(ann.suspendCurrentQueueTimeMillis())
                 .streamMaxLen(ann.streamMaxLen())
-                .consumeFromWhere(resolveConsumeFromWhere(ann.consumeFromWhere()))
+                // DLQ 注册固定 FIRST（见 dlqBuilder 的同款说明）：死信消费语义即"排空存量"，
+                // 全局 defaultConsumeFromWhere 与注解值都不参与——否则首次建组会以 LAST($)
+                // 静默跳过建组前已存在的全部死信（无投递、无日志、无 PEL 可补偿）。
+                // 注意：对 @StreamMQConsumer(dlqMode=true) 与 @StreamMQDlqConsumer 两条路径同一口径。
+                .consumeFromWhere(
+                        dlqMode
+                                ? ConsumeFromWhere.CONSUME_FROM_FIRST
+                                : resolveConsumeFromWhere(ann.consumeFromWhere()))
                 .enableMsgTrace(ann.enableMsgTrace())
                 .dlqMode(dlqMode)
                 .dlqFailureStrategy(DlqFailureStrategy.class)
@@ -326,7 +365,18 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
                 .consumeThreadMax(ann.consumeThreadMax());
     }
 
-    /** DLQ 注册装配：topic 即 group，重试/DLQ 参数固定为安全默认。 */
+    /**
+     * DLQ 注册装配：topic 即 group，重试/DLQ 参数固定为安全默认。
+     *
+     * <p><b>起始位点固定 {@link ConsumeFromWhere#CONSUME_FROM_FIRST}（0.1.2 定稿，不随全局/注解漂移）：</b>
+     * 死信消费的语义就是"排空存量"——DLQ 消费者通常在事后才部署（排查/补偿），此时死信流里已有存量条目。 旧实现沿用全局默认 {@code
+     * CONSUME_FROM_LAST}（{@code $}）：首次建组会把组位点钉在流尾， <b>建组前已存在的 N 条死信永不被投递</b>，且它们不在任何 PEL
+     * 里（认领/补偿机制也无从恢复）， 属于无错误、无日志的静默丢失。因此 DLQ 路径显式覆盖，且与 {@code @StreamMQConsumer(dlqMode=true)}
+     * 路径保持同一口径。
+     *
+     * @param ann DLQ 注解
+     * @param effectiveGroup 生效消费者组名（= topic）
+     */
     @SuppressWarnings({"unchecked", "rawtypes"})
     private <T> DefaultListenerRegistration.Builder<T> dlqBuilder(
             StreamMQDlqConsumer ann, String effectiveGroup) {
@@ -351,6 +401,8 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
                 .suspendCurrentQueueTimeMillis(
                         StreamMQConstants.DEFAULT_SUSPEND_CURRENT_QUEUE_TIME_MS)
                 .streamMaxLen(StreamMQConstants.DEFAULT_STREAM_MAX_LEN)
+                // 显式 FIRST：DLQ 消费者首次建组时必须把存量死信一并投递，详见方法 javadoc
+                .consumeFromWhere(ConsumeFromWhere.CONSUME_FROM_FIRST)
                 .enableMsgTrace(false)
                 .dlqMode(true)
                 .dlqFailureStrategy(ann.failureStrategy())

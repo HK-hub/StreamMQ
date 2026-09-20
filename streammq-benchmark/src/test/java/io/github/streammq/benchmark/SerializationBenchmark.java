@@ -21,14 +21,22 @@ import org.openjdk.jmh.runner.Runner;
 import org.openjdk.jmh.runner.RunnerException;
 import org.openjdk.jmh.runner.options.Options;
 import org.openjdk.jmh.runner.options.OptionsBuilder;
-import org.openjdk.jmh.runner.options.TimeValue;
 
+/**
+ * 序列化器横向对比基准（6 个内置实现 × 吞吐/采样两种模式 × 30 个方法）。
+ *
+ * <p>参数真源：fork/预热/测量<b>只由本类注解决定</b>（{@code main()} 不再用 {@code OptionsBuilder} 覆盖，
+ * 消除"注解一套、实际一套"的双源）。默认值按 CI 的 60 分钟 job 预算收敛——旧的 {@code @Fork(3, warmups = 2)} + 30 方法 × 双模式结构性需要
+ * ≈100 分钟：现在单 fork、不再单独的 warmup fork、更短迭代， 全量默认运行约 12 分钟。预算校验见 {@code
+ * BenchmarkBudgetTest}；需要更细的分布可用 JMH 命令行参数 （{@code -f}/{@code -wi}/{@code -i}/{@code -w}/{@code
+ * -r}）临时覆盖。
+ */
 @State(Scope.Benchmark)
 @BenchmarkMode({Mode.Throughput, Mode.SampleTime})
 @OutputTimeUnit(TimeUnit.SECONDS)
-@Warmup(iterations = 3, time = 2, timeUnit = TimeUnit.SECONDS)
-@Measurement(iterations = 5, time = 2, timeUnit = TimeUnit.SECONDS)
-@Fork(value = 3, warmups = 2)
+@Warmup(iterations = 2, time = 1, timeUnit = TimeUnit.SECONDS)
+@Measurement(iterations = 3, time = 2, timeUnit = TimeUnit.SECONDS)
+@Fork(1)
 public class SerializationBenchmark {
 
     private static final int PAYLOAD_SIZE = 1024;
@@ -288,14 +296,10 @@ public class SerializationBenchmark {
     }
 
     public static void main(String[] args) throws RunnerException {
+        // fork/预热/测量参数只由类注解决定（此处不再覆盖），需要临时覆盖请用 JMH 命令行参数
         Options opt =
                 new OptionsBuilder()
                         .include(SerializationBenchmark.class.getSimpleName())
-                        .warmupTime(TimeValue.seconds(2))
-                        .warmupIterations(3)
-                        .measurementTime(TimeValue.seconds(3))
-                        .measurementIterations(5)
-                        .forks(3)
                         .result("target/jmh-serialization.json")
                         .resultFormat(ResultFormatType.JSON)
                         .build();

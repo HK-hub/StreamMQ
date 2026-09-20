@@ -9,6 +9,8 @@ streammq:
     group: dlq-producer-group
   retry:
     max-reconsume-times: 3
+    # 默认演示用固定退避数组（毫秒）：让「失败 → 重试 → DLQ」在秒级完成，便于在控制台观察
+    delay-array: 2000,2000,2000
 
 # Redis 连接：Redisson Spring Boot Starter 依据 spring.data.redis.* 构建客户端。
 # 注意：redisson.singleServerConfig.* 在本 starter 中无属性绑定，写了也不会生效，请勿使用。

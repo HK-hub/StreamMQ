@@ -34,7 +34,7 @@ class SendCallbackTest {
     @DisplayName("onSuccess 为唯一抽象方法，lambda 可直接构造")
     void functionalInterfaceSmoke() {
         SendResult result =
-                new SendResult(MessageId.sentinel(), "topic", null, System.currentTimeMillis());
+                new SendResult(MessageId.pending(), "topic", null, System.currentTimeMillis());
         SendCallback callback = r -> assertThatReceived(r, result);
         callback.onSuccess(result);
     }

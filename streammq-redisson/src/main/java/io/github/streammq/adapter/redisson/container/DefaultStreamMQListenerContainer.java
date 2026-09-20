@@ -49,6 +49,7 @@ import org.slf4j.LoggerFactory;
  *   <li>注册并发 / 顺序 / DLQ Listener（统一通过 {@link StreamMQConsumer} 注解驱动）
  *   <li>管理容器生命周期（start / stop / pause / resume）
  *   <li>为每个 Listener 启动虚拟线程读循环（含并发循环数与背压队列编排）
+ *   <li>实现 core 契约 {@link InFlightAware}（K2）：以真实在途消息计数支撑优雅关闭的收敛判据
  * </ul>
  *
  * <p>以下职责已委托给独立的协作类（组合模式，红队审查 F-02-12 God class 拆分）：
@@ -69,7 +70,7 @@ import org.slf4j.LoggerFactory;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public class DefaultStreamMQListenerContainer implements StreamMQListenerContainer {
+public class DefaultStreamMQListenerContainer implements StreamMQListenerContainer, InFlightAware {
 
     private static final Logger LOG =
             LoggerFactory.getLogger(DefaultStreamMQListenerContainer.class);
@@ -335,12 +336,39 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 生命周期状态机（State：集中迁移表） */
     private final ContainerStateMachine lifecycle = new DefaultContainerStateMachine();
 
-    /** 运行期暂停标志（独立于生命周期状态） */
+    /** 运行期暂停标志（独立于生命周期状态）——容器级：暂停全部注册 */
     private volatile boolean paused = false;
 
-    /** 消费循环监督者（Command 登记表：幂等提交/并发度/按注册取消） */
-    private final ConsumeLoopSupervisor loopSupervisor =
+    /**
+     * 运行期"按注册维度"暂停的消费者组集合（R1-6 ②）。
+     *
+     * <p>此前 {@code paused} 是容器级布尔：管理端点对某个 group 暂停会停掉整容器的全部注册。现按 group 维度 记录暂停标志，每个读循环在每轮迭代读取
+     * {@code containerPaused || groupPaused(reg.group)}；容器级 {@link #pause()} 仍可全停。
+     */
+    private final java.util.Set<String> pausedGroups =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** 消费循环监督者（Command 登记表：幂等提交/并发度/按注册取消/重注册替换） */
+    private final DefaultConsumeLoopSupervisor loopSupervisor =
             new DefaultConsumeLoopSupervisor(this::launchLoop);
+
+    /**
+     * 已接线的注册键集合（R1-7）：用于在"同一 (topic, group) 运行期重复注册"时改走 {@link
+     * DefaultConsumeLoopSupervisor#replaceLoops}，以新注册替换旧循环（此前静默不生效）。
+     */
+    private final java.util.Set<String> wiredRegistrations =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
+     * 顺序消费延迟重投队列（R1-1）：分片锁竞争 / ORDERLY defer / DLQ 转投失败三条路径的本地重投， 由各注册的 primary 读循环驱动；容器停止时清空（剩余消息由
+     * PEL 认领兜底）。
+     */
+    private final OrderlyDeferredRetryQueue orderlyDeferredRetryQueue =
+            new OrderlyDeferredRetryQueue();
+
+    /** 每个注册键最近一次启动循环时采用的背压容量快照（R1-6 ③：回显 inflightCapacity 是否已生效）。 */
+    private final java.util.Map<String, Integer> appliedInflightCapacity =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
      * 本容器实例的唯一标识：广播模式消费者组名使用它区分不同容器。
@@ -470,8 +498,13 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 策略类：顺序消费分片锁 */
     private final OrderlyShardLockManager shardLockManager;
 
-    /** 单条消息消费管线（接口注入，懒构建） */
-    private final MessageProcessor messageProcessor;
+    /**
+     * 单条消息消费管线。
+     *
+     * <p>声明为实现类（而非 {@link MessageProcessor} 接口）：容器需要调用接口之外的容器内部扩展点 （延迟重投队列注入 / DLQ
+     * 转投重试，R1-1）。接口文件不在本轮修改范围内，故不提升到接口。
+     */
+    private final DefaultMessageProcessor messageProcessor;
 
     /** 是否启用 per-consumer 策略实例化（高级构造器注入自定义 handler 时关闭） */
     private final boolean perConsumerEnabled;
@@ -606,12 +639,20 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         }
     }
 
-    /** 注入暂停休眠间隔（毫秒，{@code streammq.consumer.paused-sleep-millis}）。 */
+    /**
+     * 注入暂停休眠间隔（毫秒，{@code streammq.consumer.paused-sleep-millis}）。
+     *
+     * <p><b>R1-6 ①：</b>消费循环每轮读取该值（supplier），运行期修改对<b>已运行</b>的循环即时生效。
+     */
     public void setPausedSleepMillis(long millis) {
         tuning.setPausedSleepMillis(millis);
     }
 
-    /** 注入 Broker 异常退避间隔（毫秒，{@code streammq.consumer.broker-error-backoff-millis}）。 */
+    /**
+     * 注入 Broker 异常退避间隔（毫秒，{@code streammq.consumer.broker-error-backoff-millis}）。
+     *
+     * <p><b>R1-6 ①：</b>消费循环每轮读取该值（supplier），运行期修改对<b>已运行</b>的循环即时生效。
+     */
     public void setBrokerErrorBackoffMillis(long millis) {
         tuning.setBrokerErrorBackoffMillis(millis);
     }
@@ -774,6 +815,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         this.sharedRetryDlqHandler,
                         true,
                         consumeExecutor);
+        // R1-1：延迟重投队列必须与读循环共享同一实例（三条登记路径 → primary 循环排空）
+        this.messageProcessor.setOrderlyDeferredRetryQueue(orderlyDeferredRetryQueue);
         this.messageProcessor.setRuntimeStats(runtimeStats);
     }
 
@@ -826,14 +869,19 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         this.sharedRetryDlqHandler,
                         false,
                         consumeExecutor);
+        // R1-1：延迟重投队列必须与读循环共享同一实例（三条登记路径 → primary 循环排空）
+        this.messageProcessor.setOrderlyDeferredRetryQueue(orderlyDeferredRetryQueue);
         this.messageProcessor.setRuntimeStats(runtimeStats);
     }
 
     /**
      * 设置背压队列容量（{@code >0} 启用：拉取与处理解耦，队列满时拉取阻塞；{@code 0} 禁用）。
      *
-     * <p>默认 {@link StreamMQConstants#DEFAULT_INFLIGHT_CAPACITY}（禁用）。可在容器启动前或
-     * 运行期调整；运行期调整仅影响之后注册的消费者。
+     * <p>默认 {@link StreamMQConstants#DEFAULT_INFLIGHT_CAPACITY}（禁用）。
+     *
+     * <p><b>生效时机（R1-6 ③）：</b>队列容量是消费循环启动时的构造参数，<b>运行期不可热改</b>—— 本 setter 只对之后启动的循环生效。管理端点/调用方用
+     * {@link #isInflightCapacityApplied(String, String)} 或 {@link
+     * #isInflightCapacityAppliedForGroup(String)} 判断当前值是否已被运行中的循环采用， 不得直接宣称"已生效"。
      */
     public void setInflightCapacity(int capacity) {
         tuning.setInflightCapacity(capacity);
@@ -967,6 +1015,10 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         lifecycle.beginStart();
         try {
             ensureRuntimeAlive();
+            // R6-CLUSTER：Cluster 部署下多 key 原子脚本（重试/DLQ、PEL 认领、事务、广播注册表）会被
+            // 服务端以 CROSSSLOT 拒绝。启动即提示一次，避免用户只能从运行期裸异常反推拓扑问题。
+            io.github.streammq.adapter.redisson.support.RedisClusterCompatibility.warnIfCluster(
+                    redisson, "consumer container");
             LOG.info(
                     "Starting ListenerContainer with {} registration(s)",
                     store.registrationCount());
@@ -1069,6 +1121,11 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         LOG.info("Stopping ListenerContainer...");
         // 先取消消费循环，再注销组管理器：避免除名后仍在拉取导致 rebalance 短暂双重消费
         loopSupervisor.cancelAll();
+        // R1-1：延迟重投队列不持久化，停止时清空（未 ACK 消息留在 PEL 等认领兜底）
+        orderlyDeferredRetryQueue.clearAll();
+        wiredRegistrations.clear();
+        appliedInflightCapacity.clear();
+        pausedGroups.clear();
         for (ListenerRegistration<?> reg : store.registrations()) {
             releaseBroadcastInstance(reg);
         }
@@ -1103,16 +1160,66 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         LOG.info("ListenerContainer stopped, state=STOPPED");
     }
 
+    /** 容器级暂停：暂停本容器<b>全部</b>注册的消费循环（每轮迭代读取，立即对已运行循环生效）。 */
     @Override
     public void pause() {
         paused = true;
         LOG.info("ListenerContainer paused");
     }
 
+    /** 容器级恢复：恢复全部注册（不影响 {@link #pauseGroup(String)} 单独暂停的组）。 */
     @Override
     public void resume() {
         paused = false;
         LOG.info("ListenerContainer resumed");
+    }
+
+    /**
+     * 按消费者组暂停（R1-6 ②）：只暂停该 group 的注册，其它消费者组不受影响。
+     *
+     * <p>供管理端点使用（管理端点按 group 维度下发配置）。每个读循环在每轮迭代读取该标志， 对已运行的循环即时生效；恢复用 {@link #resumeGroup(String)}。
+     *
+     * @param consumerGroup 消费者组名
+     */
+    public void pauseGroup(String consumerGroup) {
+        if (Objects.nonNull(consumerGroup) && !consumerGroup.isBlank()) {
+            pausedGroups.add(consumerGroup);
+            LOG.info("ListenerContainer paused for group={}", consumerGroup);
+        }
+    }
+
+    /**
+     * 按消费者组恢复（R1-6 ②）。
+     *
+     * @param consumerGroup 消费者组名
+     */
+    public void resumeGroup(String consumerGroup) {
+        if (Objects.nonNull(consumerGroup) && pausedGroups.remove(consumerGroup)) {
+            LOG.info("ListenerContainer resumed for group={}", consumerGroup);
+        }
+    }
+
+    /** 指定消费者组是否处于暂停状态（R1-6 ②；含容器级暂停——容器级暂停时所有组都视为暂停）。 */
+    public boolean isGroupPaused(String consumerGroup) {
+        return paused || (Objects.nonNull(consumerGroup) && pausedGroups.contains(consumerGroup));
+    }
+
+    /** 容器级暂停标志（不含按组暂停）。 */
+    public boolean isPaused() {
+        return paused;
+    }
+
+    /**
+     * 读循环的暂停判定（R1-6 ②）：容器级暂停 或 该注册所属 group 被单独暂停。
+     *
+     * <p>由 {@code launchLoop} 注入 LoopContext，读循环每轮迭代调用——因此运行期 {@link #pauseGroup(String)}
+     * 对已运行循环立即生效，且只影响目标 group 的注册。
+     *
+     * @param reg 注册信息
+     * @return 该注册当前是否应暂停
+     */
+    java.util.function.BooleanSupplier pausedSupplierFor(ListenerRegistration<?> reg) {
+        return () -> paused || pausedGroups.contains(reg.getGroup());
     }
 
     @Override
@@ -1124,10 +1231,29 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         return lifecycle.current();
     }
 
+    // ===================== 在途消息计数（K2：优雅关闭的收敛判据） =====================
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p><b>口径：</b>当前正在执行 handler（消息已进入消费管线、尚未完成 ACK/NACK 路由）的条数，由 {@link
+     * DefaultMessageProcessor#processMessage} 入口自增、finally 自减；不包含排队待处理、重试 ZSet 中、 PEL
+     * 中滞留的消息。读值随处理进度实时变化，停止后自然归零（{@code processMessage} 的 finally 保证无泄漏）。
+     *
+     * <p>kubernetes 优雅关闭处理器（{@code GracefulShutdownHandler}）在 pause 后按有界轮询读取本值：归零即提前结束 grace
+     * 等待。已知近似：消费超时取消后业务线程超出宽限期仍未终止时，计数会先归零（消息已按 RECONSUME_LATER 路由）。
+     */
+    @Override
+    public int getInFlightCount() {
+        return messageProcessor.inFlightCount();
+    }
+
     // ===================== 内部编排方法 =====================
     private void doStartListeners() {
         for (ListenerRegistration<?> reg : store.registrations()) {
             loopSupervisor.submitLoops(reg);
+            // R1-7：登记"已接线"，运行期重注册才能识别为替换而非新增
+            wiredRegistrations.add(reg.key());
         }
     }
 
@@ -1145,6 +1271,10 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             }
             removed = true;
             loopSupervisor.cancelForRegistration(key);
+            // R1-7：解除"已接线"标记；R1-1：清空该注册的延迟重投条目（未 ACK 消息留在 PEL 等认领）
+            wiredRegistrations.remove(key);
+            appliedInflightCapacity.remove(key);
+            orderlyDeferredRetryQueue.clear(reg);
             // 解除调度目标：否则调度器会一直扫描已注销的 (topic, group)，开销随注册变更单调增长
             schedulerBinder().unbindTargets(retryScheduler, pelClaimScheduler, reg);
             store.removeFilters(key);
@@ -1219,6 +1349,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 循环命令工厂：装配 LoopContext 并提交到消费线程池。 */
     private Future<?> launchLoop(
             ListenerRegistration<?> reg, boolean retryMode, boolean primaryLoop, int loopIndex) {
+        // R1-6 ③：记录本循环启动时采用的背压容量快照，供 isInflightCapacityApplied 如实回显
+        appliedInflightCapacity.put(reg.key(), tuning.inflightCapacity());
         ConsumeLoopTask.LoopContext ctx =
                 new ConsumeLoopTask.LoopContext(
                         reg,
@@ -1229,14 +1361,41 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         loopSupervisor,
                         consumeExecutor,
                         lifecycle::isRunning,
-                        () -> paused,
+                        // R1-6 ②：容器级暂停 或 该 group 被单独暂停
+                        pausedSupplierFor(reg),
                         tuning::inflightCapacity,
                         this::createConsumerFor,
                         this::reportConsumeLoopFailure,
-                        this::clearConsumeLoopFailure);
-        return consumeExecutor.submit(
-                new ConsumeLoopTask(
-                        ctx, tuning.getPausedSleepMillis(), tuning.getBrokerErrorBackoffMillis()));
+                        this::clearConsumeLoopFailure,
+                        // R1-6 ①：每轮读取，运行期 setter 对已运行循环即时生效
+                        tuning::getPausedSleepMillis,
+                        tuning::getBrokerErrorBackoffMillis,
+                        // R1-5：暂停期心跳按容器心跳间隔节流
+                        () -> heartbeatIntervalMs,
+                        // R1-1：延迟重投队列（仅 primary 循环排空）
+                        orderlyDeferredRetryQueue,
+                        this::dispatchDeferredRetry);
+        return consumeExecutor.submit(new ConsumeLoopTask(ctx));
+    }
+
+    /**
+     * R1-1：延迟重投执行器——重投走与正常消息相同的消费管线。
+     *
+     * <p>{@code DLQ_ROUTE} 条目只重试 DLQ 转投（重试预算已耗尽，不重新执行业务 handler）；其余条目 走 {@code
+     * processMessage}（自然再次经过分片锁：锁空闲即成功并由既有 ACK 路径 ACK，仍繁忙则再次登记退避）。
+     */
+    private void dispatchDeferredRetry(
+            OrderlyDeferredRetryQueue.Entry entry,
+            ListenerRegistration<?> reg,
+            StreamMQListener listener) {
+        if (entry.kind() == OrderlyDeferredRetryQueue.Kind.DLQ_ROUTE) {
+            if (!messageProcessor.retryDeferredDlqRoute(entry.message(), reg, listener)) {
+                // 仍失败：重新登记（退避），消息始终留在 PEL
+                orderlyDeferredRetryQueue.deferDlqRouteFailure(reg, entry.message());
+            }
+            return;
+        }
+        messageProcessor.processMessage(entry.message(), reg, listener);
     }
 
     /**
@@ -1270,6 +1429,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         if (!lifecycle.isRunning()) {
             return;
         }
+        // R1-7：同一 (topic, group) 运行期重复注册 = 替换而非新增。旧循环继续消费、新 consumer
+        // 永不生效（旧实现 submitLoops 幂等守卫静默返回）——已接线过的注册键必须走 replaceLoops。
+        boolean reRegistered = !wiredRegistrations.add(reg.key());
         // DLQ 注册与业务注册一致地建组管理器：DLQ 消费者同样需要实例心跳行，
         // 否则 PelClaim 的 DLQ 目标判活恒为 false（活跃慢 DLQ 消费者被复制重投，见 B-10）。
         if (Objects.isNull(store.groupManager(reg.key()))) {
@@ -1280,6 +1442,7 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             // 复查状态并立即回滚注销——与 stop() 的 clearGroupManagers 二者必有一个先看到对方。
             if (!lifecycle.isRunning()) {
                 store.removeAndUnregisterGroupManager(reg.key());
+                wiredRegistrations.remove(reg.key());
                 LOG.warn(
                         "Container stopped during dynamic registration; orphan group manager"
                                 + " rolled back: topic={}, group={}",
@@ -1288,15 +1451,86 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                 return;
             }
         }
-        loopSupervisor.submitLoops(reg);
+        if (reRegistered) {
+            // 先取消旧循环与 inflight 泵，再以新注册提交新循环（R1-7）
+            loopSupervisor.replaceLoops(reg);
+            orderlyDeferredRetryQueue.clear(reg);
+        } else {
+            loopSupervisor.submitLoops(reg);
+        }
         // 调度目标必须同步补绑：动态注册的消费者若缺重试目标，其失败消息写入重试 ZSet 后
         // 永远无人扫描（payload 7 天后过期 → 隔离/丢失）；缺 PEL 认领目标则崩溃遗留的 pending
         // 无人恢复。两条都属于"能消费但部分消息静默不重投"，极难排查。
         schedulerBinder().bindTargets(retryScheduler, pelClaimScheduler, reg);
         LOG.info(
-                "Dynamically wired registration while container running: topic={}, group={}",
+                "Dynamically {} registration while container running: topic={}, group={}",
+                reRegistered ? "replaced" : "wired",
                 reg.getTopic(),
                 reg.getGroup());
+    }
+
+    // ===================== 运行期配置生效性回显（R1-6 ③） =====================
+
+    /**
+     * 判断当前配置的背压队列容量是否已被该注册的运行中循环采用（R1-6 ③，供管理端点如实回显）。
+     *
+     * <p>背压队列容量是消费循环启动时构造的（{@code MessageSink.forCapacity}），<b>无法热改</b>： 运行期 {@link
+     * #setInflightCapacity(int)} 只对该注册之后启动的循环生效。本方法语义：
+     *
+     * <ul>
+     *   <li>{@code true} = 该注册最近一次启动的循环读取到的容量 == 当前配置值（或该注册尚未启动过循环， 不存在"运行中的旧值"）
+     *   <li>{@code false} = 循环启动后配置又被修改，需要重启消费循环（换新值）才能生效
+     * </ul>
+     *
+     * @param topic 主题
+     * @param consumerGroup 消费者组
+     * @return 运行中的循环是否已采用当前值
+     */
+    public boolean isInflightCapacityApplied(String topic, String consumerGroup) {
+        Integer applied = appliedInflightCapacity.get(topic + REG_KEY_SEPARATOR + consumerGroup);
+        return Objects.isNull(applied) || applied == tuning.inflightCapacity();
+    }
+
+    /**
+     * group 维度版本：该 group 下<b>全部</b>注册的运行中循环是否都已采用当前背压容量（R1-6 ③）。
+     *
+     * <p>管理端点按 group 下发配置，用本方法决定 {@code inflightCapacity} 是回显"已生效"还是 "下次循环启动时生效"。
+     *
+     * @param consumerGroup 消费者组
+     * @return true = 该组全部注册均满足 {@link #isInflightCapacityApplied(String, String)}
+     */
+    public boolean isInflightCapacityAppliedForGroup(String consumerGroup) {
+        for (ListenerRegistration<?> reg : store.registrations()) {
+            if (Objects.equals(reg.getGroup(), consumerGroup)
+                    && !isInflightCapacityApplied(reg.getTopic(), consumerGroup)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** 测试钩子：登记某注册的循环启动容量快照（仅同包测试使用；运行期由 {@code launchLoop} 记录）。 */
+    void recordAppliedInflightCapacityForTest(String topic, String consumerGroup, int capacity) {
+        appliedInflightCapacity.put(topic + REG_KEY_SEPARATOR + consumerGroup, capacity);
+    }
+
+    /**
+     * 设置顺序消费分片锁的有限租约（毫秒，R1-9；{@code 0} = 默认看门狗续期 + 严格有序）。
+     *
+     * <p>由 starter 侧属性 {@code streammq.consumer.orderly-shard-lock-lease-millis} 注入。{@code > 0} 时
+     * 分片锁使用有限租约且不续期：持有者进程卡死（handler 不响应中断）超时后其它实例可接管， 语义降级为"至多一次重叠执行、可能乱序"（详见 {@code
+     * RedissonOrderlyShardLockManager} javadoc）。
+     *
+     * @param millis 租约毫秒数，{@code >= 0}；{@code > 0} 建议不小于 5000
+     */
+    public void setOrderlyShardLockLeaseMillis(long millis) {
+        tuning.setOrderlyShardLockLeaseMillis(millis);
+        if (shardLockManager
+                instanceof
+                io.github.streammq.adapter.redisson.lock.RedissonOrderlyShardLockManager
+                                redissonLockManager) {
+            redissonLockManager.setLeaseMillis(tuning.getOrderlyShardLockLeaseMillis());
+        }
     }
 
     // ===================== 协作类懒构建与覆盖点（仅 INIT 状态可覆盖） =====================

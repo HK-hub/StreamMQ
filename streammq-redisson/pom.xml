@@ -87,8 +87,12 @@
             <optional>true</optional>
         </dependency>
 
-        <!-- 可选序列化：SBE（Simple Binary Encoding）。运行时依赖 agrona（生成代码引用）；
-             sbe-tool 仅构建期代码生成，不进运行时。同为 optional。 -->
+        <!-- 可选序列化：SBE（Simple Binary Encoding）。运行时依赖 agrona（生成的编解码桩引用）。
+             sbe-tool 是纯构建期工具（generate-sources 阶段由 exec-maven-plugin 运行 SbeTool 生成桩代码），
+             但它**必须**留在 <dependencies> 中：exec-maven-plugin 的默认 classpathScope=runtime，
+             从模块依赖类路径解析 SbeTool（实测移除后 generate-sbe 立即失败）。用 optional 而不是 provided
+             是刻意的——provided 不在 runtime classpath 上，会同样导致生成失败；而 optional 已保证它
+             不会作为可传递依赖到达任何使用方（生成出的桩代码在运行期也不需要 sbe-tool）。 -->
         <dependency>
             <groupId>org.agrona</groupId>
             <artifactId>agrona</artifactId>

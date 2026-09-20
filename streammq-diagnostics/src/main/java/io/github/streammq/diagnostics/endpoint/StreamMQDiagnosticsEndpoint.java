@@ -74,6 +74,18 @@ public class StreamMQDiagnosticsEndpoint {
     private final ManagementAuthenticator authenticator;
 
     /**
+     * 健康概览缓存 TTL（毫秒）。
+     *
+     * <p>取值依据：积压 / 慢消费是"慢变化"信号，而 {@code /health} 是监控轮询入口；5 秒陈旧度对告警判据无影响， 却能把"每次轮询 2N 次 Redis
+     * 往返"降为每窗口一次。可从测试置 0 关闭缓存。
+     */
+    private static final long DEFAULT_HEALTH_CACHE_TTL_MILLIS = 5_000L;
+
+    private volatile long healthCacheTtlMillis = DEFAULT_HEALTH_CACHE_TTL_MILLIS;
+    private volatile Map<String, Object> cachedHealthOverview;
+    private volatile long cachedHealthOverviewAt;
+
+    /**
      * 构造诊断端点。
      *
      * @param diagnosticsService 诊断服务
@@ -87,6 +99,17 @@ public class StreamMQDiagnosticsEndpoint {
         this.diagnosticsService = Objects.requireNonNull(diagnosticsService, "diagnosticsService");
         this.profileService = Objects.requireNonNull(profileService, "profileService");
         this.authenticator = Objects.requireNonNull(authenticator, "authenticator");
+    }
+
+    /**
+     * 覆盖健康概览缓存 TTL（毫秒），主要用于测试关闭缓存（置 0 即每次重新采集）。
+     *
+     * @param ttlMillis TTL，负值视为 0（不缓存）
+     */
+    void setHealthCacheTtlMillis(long ttlMillis) {
+        this.healthCacheTtlMillis = Math.max(0L, ttlMillis);
+        this.cachedHealthOverview = null;
+        this.cachedHealthOverviewAt = 0L;
     }
 
     /**
@@ -207,6 +230,30 @@ public class StreamMQDiagnosticsEndpoint {
     @GetMapping("/health")
     public Map<String, Object> health() {
         checkPermission(StreamMQDiagnosticsEndpointConstants.RES_HEALTH);
+        long now = System.currentTimeMillis();
+        Map<String, Object> cached = cachedHealthOverview;
+        if (cached == null || now - cachedHealthOverviewAt >= healthCacheTtlMillis) {
+            cached = buildHealthOverview();
+            cachedHealthOverview = cached;
+            cachedHealthOverviewAt = now;
+        }
+        // 返回可变副本：避免调用方（序列化器 / 测试）修改共享缓存；timestamp 每次取实时值，
+        // 不让"数据快照的年龄"被误读为"刚采集"。
+        Map<String, Object> summary = new LinkedHashMap<>(cached);
+        summary.put(StreamMQDiagnosticsEndpointConstants.KEY_TIMESTAMP, now);
+        return summary;
+    }
+
+    /**
+     * 构建健康概览快照。
+     *
+     * <p><b>为什么整块缓存（R6）：</b>{@code getSlowConsumers()} 与 {@code getAllBacklogs()} 各自遍历全部已注册消费者，
+     * 每个消费者一次追踪查询——{@code /health} 一次调用就是约 {@code 2N} 次 Redis 往返（N = 消费者数）。 该端点是监控/看板的高频轮询入口，N
+     * 稍大就会把 Redis 打满，而积压/慢消费本身就是"慢变化"信号， 5 秒的陈旧度对告警判据没有影响。
+     *
+     * @return 概览快照（不含 timestamp，由 {@link #health()} 每次填入实时值）
+     */
+    private Map<String, Object> buildHealthOverview() {
         List<String> slowConsumers = diagnosticsService.getSlowConsumers();
         List<BacklogReport> backlogs = diagnosticsService.getAllBacklogs();
         long totalBacklog = backlogs.stream().mapToLong(BacklogReport::currentBacklog).sum();
@@ -220,7 +267,6 @@ public class StreamMQDiagnosticsEndpoint {
         summary.put(StreamMQDiagnosticsEndpointConstants.KEY_SLOW_CONSUMERS, slowConsumers);
         summary.put(StreamMQDiagnosticsEndpointConstants.KEY_TOTAL_BACKLOG, totalBacklog);
         summary.put(StreamMQDiagnosticsEndpointConstants.KEY_BACKLOG_REPORTS, backlogs);
-        summary.put(StreamMQDiagnosticsEndpointConstants.KEY_TIMESTAMP, System.currentTimeMillis());
         return summary;
     }
 

@@ -31,6 +31,16 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- Diagnostics 积压探针 SPI（provided：可选集成。存在 BacklogProbe Bean 时 HPA 以真实
+             XLEN/XPENDING 刷新 lag 指标；缺失时由用户自定义 HpaMetricsProvider 生产者提供，跳过决策
+             一定伴随限频 WARN，不静默失效）。该构件不在 BOM 中，需显式声明版本。 -->
+        <dependency>
+            <groupId>io.github.streammq</groupId>
+            <artifactId>streammq-diagnostics</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Jackson: JSON 处理 CRD 对象 -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
@@ -65,6 +75,15 @@
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+
+        <!-- 测试：fabric8 Mock Server（CRUD 模式），版本与 kubernetes-client 对齐。
+             用于 Operator/HPA 的回写与幂等性回归（K7/K8） -->
+        <dependency>
+            <groupId>io.fabric8</groupId>
+            <artifactId>kubernetes-server-mock</artifactId>
+            <version>6.13.1</version>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>
@@ -84,12 +103,6 @@
             <plugin>
                 <groupId>org.jacoco</groupId>
                 <artifactId>jacoco-maven-plugin</artifactId>
-            </plugin>
-            <!-- 本模块的 *IT 回归测试（KubernetesHealthRegistrationIT）此前因未声明 failsafe
-                 而从未执行：surefire 默认不匹配 *IT 命名。声明后由 mvn verify 真实执行。 -->
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-failsafe-plugin</artifactId>
             </plugin>
         </plugins>
     </build>

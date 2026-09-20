@@ -15,7 +15,9 @@ import java.util.Objects;
  * 定时轮询投递实现。
  *
  * <p><b>自定义延时：</b>18 级固定延时为 RocketMQ 兼容设计。如需任意毫秒级延时， 请使用 {@link
- * io.github.streammq.core.message.Message#delayTimeMillis} 字段， 支持 1ms ~ 任意时长的精确定时投递。
+ * io.github.streammq.core.message.Message#delayTimeMillis} 字段，支持 1ms ~ 7 天（{@link
+ * io.github.streammq.core.StreamMQConstants#MAX_DELAY_TIME_MILLIS}）的精确定时投递； 超过 7
+ * 天（产品上界）的值在发送侧快速失败（{@link IllegalArgumentException}）。
  *
  * <p>级别清单：
  *

@@ -28,7 +28,13 @@ import java.util.Map;
 final class BoundedSpanRegistry {
 
     /** 注册表条目：Span 与可选的当前作用域 */
-    record Entry(Span span, Scope scope) {}
+    /**
+     * 注册条目。
+     *
+     * <p>{@code owner} 记录创建 Scope 的线程：OTel 的 {@link Scope#close()} 会回退<b>当前线程</b>的
+     * 上下文栈，因此只有在创建线程上关闭才是安全的；跨线程关闭会污染另一个线程的 current context。
+     */
+    record Entry(Span span, Scope scope, Thread owner) {}
 
     private final int capacity;
 
@@ -56,8 +62,8 @@ final class BoundedSpanRegistry {
         Entry previous = entries.get(key);
         if (previous != null) {
             endQuietly(previous.span());
-            closeQuietly(previous.scope());
-            entries.put(key, new Entry(span, scope));
+            closeScopeIfOwner(previous);
+            entries.put(key, new Entry(span, scope, Thread.currentThread()));
             return;
         }
         while (entries.size() >= capacity) {
@@ -65,10 +71,10 @@ final class BoundedSpanRegistry {
             Entry eldest = entries.remove(eldestKey);
             if (eldest != null) {
                 endQuietly(eldest.span());
-                closeQuietly(eldest.scope());
+                closeScopeIfOwner(eldest);
             }
         }
-        entries.put(key, new Entry(span, scope));
+        entries.put(key, new Entry(span, scope, Thread.currentThread()));
     }
 
     /**
@@ -85,7 +91,7 @@ final class BoundedSpanRegistry {
     synchronized void clear() {
         for (Entry entry : entries.values()) {
             endQuietly(entry.span());
-            closeQuietly(entry.scope());
+            closeScopeIfOwner(entry);
         }
         entries.clear();
     }
@@ -109,13 +115,24 @@ final class BoundedSpanRegistry {
         }
     }
 
-    private static void closeQuietly(Scope scope) {
+    /**
+     * 仅在<b>创建该 Scope 的线程</b>上关闭它。
+     *
+     * <p>淘汰 / 替换 / 清空可能发生在任意线程（例如调度线程、销毁钩子），而 {@link Scope#close()} 会把 <b>当前线程</b>的 OTel
+     * 上下文栈回退一格——在错误线程上关闭会静默破坏该线程的 current context （表现为无关请求的 trace 链路错挂或丢失）。因此这里显式做 owner 判定；非 owner
+     * 线程只结束 Span， 不关闭 Scope。作用域仍由创建线程在其终态回调（afterConsume / onException 等）中关闭。
+     */
+    private static void closeScopeIfOwner(Entry entry) {
+        if (entry == null || entry.scope() == null) {
+            return;
+        }
+        if (entry.owner() != Thread.currentThread()) {
+            return;
+        }
         try {
-            if (scope != null) {
-                scope.close();
-            }
+            entry.scope().close();
         } catch (RuntimeException ignored) {
-            // 跨线程或重复关闭场景下的安全忽略
+            // 重复关闭等场景下的安全忽略
         }
     }
 }

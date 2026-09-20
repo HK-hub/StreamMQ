@@ -47,6 +47,14 @@ public class DefaultConsumerTuning implements ConsumerTuning {
     private volatile long brokerErrorBackoffMillis =
             StreamMQConstants.DEFAULT_BROKER_ERROR_BACKOFF_MS;
 
+    /**
+     * 顺序消费分片锁的有限租约（毫秒，R1-9）——来自 {@code streammq.consumer.orderly-shard-lock-lease-millis}。
+     *
+     * <p>{@code 0}（默认）= 不启用有限租约：Redisson 看门狗持续续期，进程存活期间锁不释放， 严格有序；卡死 handler 需要重启进程才能让位。{@code > 0}
+     * = 使用有限租约且不续期：租约到期后 其它实例可接管该分片，语义降级为"至多一次重叠执行、可能乱序"（逃生舱，建议不小于 5000）。
+     */
+    private volatile long orderlyShardLockLeaseMillis;
+
     @Override
     public int defaultPullBatchSize() {
         return defaultPullBatchSize;
@@ -75,6 +83,11 @@ public class DefaultConsumerTuning implements ConsumerTuning {
     /** 暴露 brokerErrorBackoffMillis 给容器装配 LoopContext 时使用。 */
     public long getBrokerErrorBackoffMillis() {
         return brokerErrorBackoffMillis;
+    }
+
+    /** 顺序消费分片锁的有限租约（毫秒，0 = 看门狗续期 + 严格有序）。 */
+    public long getOrderlyShardLockLeaseMillis() {
+        return orderlyShardLockLeaseMillis;
     }
 
     public void setDefaultPullBatchSize(int batchSize) {
@@ -148,6 +161,30 @@ public class DefaultConsumerTuning implements ConsumerTuning {
         if (millis > 0) {
             this.brokerErrorBackoffMillis = millis;
         }
+    }
+
+    /**
+     * 注入顺序消费分片锁的有限租约（毫秒，R1-9），{@code >= 0} 才生效。
+     *
+     * <p>校验：非法值（{@code < 0}）忽略；{@code > 0} 但小于 5000 时打 WARN（值过小会让正常慢 handler
+     * 被判为卡死并让位，产生重叠执行/乱序，属于"逃生舱"参数，不建议低于 5s）。
+     *
+     * @param millis 租约毫秒数；0 = 看门狗续期 + 严格有序
+     */
+    public void setOrderlyShardLockLeaseMillis(long millis) {
+        if (millis < 0) {
+            return;
+        }
+        if (millis > 0 && millis < 5_000L) {
+            org.slf4j.LoggerFactory.getLogger(DefaultConsumerTuning.class)
+                    .warn(
+                            "orderly-shard-lock-lease-millis={} is below the recommended minimum"
+                                    + " 5000ms: slow handlers may be treated as stuck and another"
+                                    + " instance may take over the shard (at-most-once overlap,"
+                                    + " ordering not strict)",
+                            millis);
+        }
+        this.orderlyShardLockLeaseMillis = millis;
     }
 
     /**

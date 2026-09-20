@@ -189,6 +189,7 @@ public final class MessageBuilder<T> {
      * @param key 属性键
      * @param value 属性值
      * @return this
+     * @throws NullPointerException 如果 key 或 value 为 null（立即失败）
      */
     public MessageBuilder<T> withProperty(String key, String value) {
         this.properties.put(
@@ -198,14 +199,22 @@ public final class MessageBuilder<T> {
     }
 
     /**
-     * 批量设置系统属性。
+     * 批量设置系统属性（追加，不覆盖已有同名键）。
      *
-     * @param properties 系统属性
+     * <p><b>null 契约（0.1.2 统一，与 {@link #withProperty(String, String)} / {@link
+     * MessageMetadataBuilder} 同口径）：</b>Map 中<b>任一 key/value 为 null 立即抛 {@link
+     * NullPointerException}</b>（不把非法值推迟到 {@link #build()} 或属性快照时才暴露）；{@code properties} 为 {@code
+     * null} 表示"不追加"（保持既有属性不变）。
+     *
+     * @param properties 系统属性 Map，可为 null（表示不追加）
      * @return this
+     * @throws NullPointerException 如果任一 key 或 value 为 null
      */
     public MessageBuilder<T> properties(Map<String, String> properties) {
         if (Objects.nonNull(properties)) {
-            this.properties.putAll(properties);
+            for (Map.Entry<String, String> entry : properties.entrySet()) {
+                withProperty(entry.getKey(), entry.getValue());
+            }
         }
         return this;
     }
@@ -216,6 +225,7 @@ public final class MessageBuilder<T> {
      * @param key 属性键
      * @param value 属性值
      * @return this
+     * @throws NullPointerException 如果 key 或 value 为 null（立即失败）
      */
     public MessageBuilder<T> withUserProperty(String key, String value) {
         this.userProperties.put(
@@ -225,14 +235,21 @@ public final class MessageBuilder<T> {
     }
 
     /**
-     * 批量设置用户属性。
+     * 批量设置用户属性（追加，不覆盖已有同名键）。
      *
-     * @param userProperties 用户属性
+     * <p><b>null 契约（0.1.2 统一，与 {@link #withUserProperty(String, String)} / {@link
+     * MessageMetadataBuilder} 同口径）：</b>Map 中<b>任一 key/value 为 null 立即抛 {@link
+     * NullPointerException}</b>；{@code userProperties} 为 {@code null} 表示"不追加"（保持既有属性不变）。
+     *
+     * @param userProperties 用户属性 Map，可为 null（表示不追加）
      * @return this
+     * @throws NullPointerException 如果任一 key 或 value 为 null
      */
     public MessageBuilder<T> userProperties(Map<String, String> userProperties) {
         if (Objects.nonNull(userProperties)) {
-            this.userProperties.putAll(userProperties);
+            for (Map.Entry<String, String> entry : userProperties.entrySet()) {
+                withUserProperty(entry.getKey(), entry.getValue());
+            }
         }
         return this;
     }
@@ -338,7 +355,18 @@ public final class MessageBuilder<T> {
      */
     public Message<T> build() {
         Objects.requireNonNull(topic, "topic");
-        Objects.requireNonNull(body, "body");
+        // 边界（与 Message 值对象刻意不同）：Message 允许 body == null（消费端可能收到无载荷消息，
+        // 内置序列化器统一 serialize(null) -> null / deserialize(null|empty) -> null），
+        // 但 MessageBuilder 是**发送侧**构造器，发送一条无载荷消息几乎总是调用方漏设 body 的笔误
+        // （历史上正是它让"占位消息"污染了业务流），因此这里保持 fail-fast。
+        // 由此推出一个重要推论：MessageBuilder.from(m) 无法往返 body 为 null 的消息——
+        // 那是"把收到的无载荷消息原样再发一次"，语义上属于发送 null body，同样被拒绝。
+        if (body == null) {
+            throw new NullPointerException(
+                    "body must not be null: MessageBuilder builds send-side messages and a null"
+                        + " body (a payload-less message) cannot be sent; use a non-null body, or"
+                        + " forward the original Message instead of rebuilding it");
+        }
         if (topic.isEmpty()) {
             throw new IllegalArgumentException("topic must not be empty");
         }

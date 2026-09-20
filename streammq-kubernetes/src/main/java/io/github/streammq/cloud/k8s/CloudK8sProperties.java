@@ -86,15 +86,32 @@ public class CloudK8sProperties {
     /** ConfigMap 热更新 watch 命名空间列表（默认 default） */
     private java.util.List<String> configWatchNamespaces;
 
-    /** Operator 是否监听全部命名空间（默认 true；为 false 时使用 {@link #operatorWatchNamespaces}） */
-    private boolean operatorWatchAllNamespaces = true;
-
     /**
-     * Operator 监听的命名空间列表（仅当 {@code operator.watch-all-namespaces=false} 时生效）。
+     * Operator 子配置（嵌套绑定）。
      *
-     * <p>注意：收敛到指定命名空间时，部署仍需对应命名空间的读权限，但不再要求 ClusterRole 全局 watch 权限。
+     * <p><b>item-7 修复：</b>文档、CRD yaml 与运行时 WARN 文案统一使用点号写法（{@code
+     * streammq.cloud.k8s.operator.watch-all-namespaces} / {@code operator.watch-namespaces}），但扁平的
+     * {@code operatorWatchAllNamespaces} 字段只能被 kebab 写法（{@code
+     * operator-watch-all-namespaces}）绑定——按文档配置时两个开关会被 静默忽略，收敛模式失效、部署仍需 ClusterRole 全局 watch
+     * 权限。此处把开关收进嵌套的 {@link Operator} 子对象： 点号写法生效；同时保留扁平访问器（委托到子对象）以兼容既有 kebab 写法与自动装配调用点。
      */
-    private java.util.List<String> operatorWatchNamespaces;
+    private final Operator operator = new Operator();
+
+    /** Operator 的 watch 范围开关（嵌套绑定，点号与 kebab 写法均可生效）。 */
+    @Getter
+    @Setter
+    public static class Operator {
+
+        /** 是否监听全部命名空间（默认 true；为 false 时使用 {@link #watchNamespaces}） */
+        private boolean watchAllNamespaces = true;
+
+        /**
+         * 监听的命名空间列表（仅当 {@code watch-all-namespaces=false} 时生效）。
+         *
+         * <p>注意：收敛到指定命名空间时，部署仍需对应命名空间的读权限，但不再要求 ClusterRole 全局 watch 权限。
+         */
+        private java.util.List<String> watchNamespaces;
+    }
 
     public java.util.List<String> getConfigWatchNamespaces() {
         return configWatchNamespaces;
@@ -104,19 +121,24 @@ public class CloudK8sProperties {
         this.configWatchNamespaces = namespaces;
     }
 
+    /** 嵌套子配置访问器（供 Spring Boot 绑定 {@code operator.*}）。 */
+    public Operator getOperator() {
+        return operator;
+    }
+
     public boolean isOperatorWatchAllNamespaces() {
-        return operatorWatchAllNamespaces;
+        return operator.isWatchAllNamespaces();
     }
 
     public void setOperatorWatchAllNamespaces(boolean watchAllNamespaces) {
-        this.operatorWatchAllNamespaces = watchAllNamespaces;
+        operator.setWatchAllNamespaces(watchAllNamespaces);
     }
 
     public java.util.List<String> getOperatorWatchNamespaces() {
-        return operatorWatchNamespaces;
+        return operator.getWatchNamespaces();
     }
 
     public void setOperatorWatchNamespaces(java.util.List<String> namespaces) {
-        this.operatorWatchNamespaces = namespaces;
+        operator.setWatchNamespaces(namespaces);
     }
 }

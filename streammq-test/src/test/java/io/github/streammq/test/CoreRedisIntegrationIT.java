@@ -1084,7 +1084,7 @@ class CoreRedisIntegrationIT extends StreamMQTestBase {
         void assertions_isSuccess_failedResult() {
             SendResult failedResult =
                     new SendResult(
-                            MessageId.sentinel(),
+                            MessageId.pending(),
                             "test-topic",
                             null,
                             SendStatus.SEND_FAILED,
@@ -1098,9 +1098,9 @@ class CoreRedisIntegrationIT extends StreamMQTestBase {
         }
 
         @Test
-        @DisplayName("SendResult 构造: sentinel MessageId 不抛异常")
+        @DisplayName("SendResult 构造: 占位 MessageId 不抛异常")
         void sendResult_sentinelMessageId_constructs() {
-            MessageId sentinel = MessageId.sentinel();
+            MessageId sentinel = MessageId.pending();
             SendResult result =
                     new SendResult(
                             sentinel,
@@ -1243,11 +1243,13 @@ class CoreRedisIntegrationIT extends StreamMQTestBase {
         }
 
         @Test
-        @DisplayName("MessageId 工厂方法: sentinel 与 fromStreamEntry 正确")
+        @DisplayName("MessageId 工厂方法: 占位 ID 稳定可辨识，fromStreamEntry 解析正确")
         void messageId_factoryMethods() {
-            MessageId sentinel = MessageId.sentinel();
-            assertThat(sentinel.getStreamEntryId()).isNotEmpty();
-            assertThat(sentinel.getTimestamp()).isGreaterThan(0);
+            MessageId pending = MessageId.pending();
+            assertThat(pending.getStreamEntryId()).isEqualTo(MessageId.PENDING_STREAM_ENTRY_ID);
+            // 占位 ID 的值域与真实 Entry ID 不重叠（Redis 生成的时间戳恒 > 0），因此可辨识、不会混淆
+            assertThat(pending.isPending()).isTrue();
+            assertThat(pending.getTimestamp()).isZero();
 
             MessageId fromEntry = MessageId.fromStreamEntry("1700000000000-0");
             assertThat(fromEntry.getTimestamp()).isEqualTo(1700000000000L);

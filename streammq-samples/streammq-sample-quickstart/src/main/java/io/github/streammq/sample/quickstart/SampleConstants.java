@@ -11,7 +11,7 @@ package io.github.streammq.sample.quickstart;
  * <p>生产者（{@code OrderProducer}）、消费者（{@code OrderConsumer}） 与集成测试共享同一组取值，避免各处硬编码导致收发不一致。
  *
  * @author StreamMQ Contributors
- * @since 1.1.0
+ * @since 0.1.2
  */
 public final class SampleConstants {
 

@@ -116,6 +116,17 @@ public class ConfigMapConfigRefresher
         this.watchNamespaces = namespaces;
     }
 
+    /**
+     * 设置 KubernetesClient。
+     *
+     * <p>生产环境由 Spring 按类型注入；显式 setter 供测试装配（fabric8 mock server / mock factory）使用。
+     *
+     * @param kubernetesClient fabric8 客户端
+     */
+    public void setKubernetesClient(KubernetesClient kubernetesClient) {
+        this.kubernetesClient = kubernetesClient;
+    }
+
     private SharedInformerFactory informerFactory;
 
     private final List<ConfigMapWatchConfig> watchConfigs = new ArrayList<>();
@@ -222,7 +233,7 @@ public class ConfigMapConfigRefresher
                 if (informer != null) {
                     var configMaps = informer.getIndexer().list();
                     for (var cm : configMaps) {
-                        processConfigMap(cm, watchConfig);
+                        processConfigMap(cm);
                     }
                 }
             }
@@ -231,11 +242,23 @@ public class ConfigMapConfigRefresher
         }
     }
 
+    /**
+     * 注册 ConfigMap watch informer。
+     *
+     * <p><b>K3：为什么必须 {@code inNamespace(ns)}</b>——fabric8 的 {@code SharedInformerFactory}
+     * 在未设置命名空间时按 {@code resources.inAnyNamespace()} 构造 informer，即实际 list/watch 整个集群： {@code
+     * config-watch-namespaces=[ns-a]} 此前只做事件层过滤（{@link #matches}），仍会因缺少 ClusterRole 权限收到 403，或对全集群
+     * ConfigMap 建立无损监听。 这里改为按命名空间逐个注册（与 {@code StreamMQClusterController#start} 的收敛模式一致），每个名字空间各自一个
+     * informer。
+     */
+    @SuppressWarnings("deprecation")
     private void registerInformer(ConfigMapWatchConfig watchConfig) {
         String informerKey = watchConfig.getNamespace() + "/" + watchConfig.getName();
         var informer =
-                informerFactory.sharedIndexInformerFor(
-                        ConfigMap.class, watchConfig.getRefreshIntervalMs());
+                informerFactory
+                        .inNamespace(watchConfig.getNamespace())
+                        .sharedIndexInformerFor(
+                                ConfigMap.class, watchConfig.getRefreshIntervalMs());
 
         informer.addEventHandler(
                 new ResourceEventHandler<ConfigMap>() {
@@ -247,7 +270,7 @@ public class ConfigMapConfigRefresher
                                     configMap.getMetadata().getNamespace(),
                                     configMap.getMetadata().getName(),
                                     configMap.getMetadata().getResourceVersion());
-                            processConfigMap(configMap, watchConfig);
+                            processConfigMap(configMap);
                         }
                     }
 
@@ -255,7 +278,10 @@ public class ConfigMapConfigRefresher
                     public void onUpdate(ConfigMap oldConfigMap, ConfigMap newConfigMap) {
                         if (matches(newConfigMap, watchConfig)) {
                             String newVersion = newConfigMap.getMetadata().getResourceVersion();
-                            String oldVersion = processedVersions.get(informerKey);
+                            // K10：版本键必须用实际 ConfigMap 的 ns/name——label 模式下同一命名空间可能匹配多个
+                            // CM，用 watchConfig 的 ns/name 作键会互相覆盖，导致更新被判为「已处理」。
+                            String versionKey = configMapKey(newConfigMap);
+                            String oldVersion = processedVersions.get(versionKey);
                             if (!newVersion.equals(oldVersion)) {
                                 log.info(
                                         "ConfigMap updated: {}/{} (version: {} -> {})",
@@ -263,7 +289,7 @@ public class ConfigMapConfigRefresher
                                         newConfigMap.getMetadata().getName(),
                                         oldVersion,
                                         newVersion);
-                                processConfigMap(newConfigMap, watchConfig);
+                                processConfigMap(newConfigMap);
                             }
                         }
                     }
@@ -274,11 +300,16 @@ public class ConfigMapConfigRefresher
                                 "ConfigMap deleted: {}/{}",
                                 configMap.getMetadata().getNamespace(),
                                 configMap.getMetadata().getName());
-                        processedVersions.remove(informerKey);
+                        processedVersions.remove(configMapKey(configMap));
                     }
                 });
 
         informers.put(informerKey, informer);
+    }
+
+    /** 版本键：实际 ConfigMap 的 {@code namespace/name}。 */
+    private static String configMapKey(ConfigMap configMap) {
+        return configMap.getMetadata().getNamespace() + "/" + configMap.getMetadata().getName();
     }
 
     private boolean matches(ConfigMap configMap, ConfigMapWatchConfig watchConfig) {
@@ -299,8 +330,7 @@ public class ConfigMapConfigRefresher
                 && watchConfig.getName().equals(configMap.getMetadata().getName());
     }
 
-    private void processConfigMap(ConfigMap configMap, ConfigMapWatchConfig watchConfig) {
-        String informerKey = watchConfig.getNamespace() + "/" + watchConfig.getName();
+    private void processConfigMap(ConfigMap configMap) {
         String version = configMap.getMetadata().getResourceVersion();
         Map<String, String> data = configMap.getData();
         if (data == null || data.isEmpty()) {
@@ -313,7 +343,8 @@ public class ConfigMapConfigRefresher
         try {
             boolean changed = applyConfigMapData(data);
             if (changed) {
-                processedVersions.put(informerKey, version);
+                // K10：按实际 ConfigMap 的 ns/name 记录版本，而非 watch 配置的 ns/name
+                processedVersions.put(configMapKey(configMap), version);
                 log.info(
                         "Applied config from ConfigMap {}/{} (version: {})",
                         configMap.getMetadata().getNamespace(),
@@ -485,10 +516,28 @@ public class ConfigMapConfigRefresher
         watchConfigs.add(defaultConfig);
     }
 
+    /**
+     * 追加一个 ConfigMap watch 配置。
+     *
+     * <p><b>K10（行为契约）：必须在本刷新器 {@link #start()} 之前调用。</b>{@code start()} 通过 {@code
+     * informerFactory.startAllRegisteredInformers()} 一次性启动当时已注册的 informer，之后追加的配置不会被注册
+     * （也不做动态注册），因此会记录一条 WARN 并忽略该配置，而不是静默无效果。需要新增 watch 目标时，请在启动前注册 （或重启刷新器）。
+     *
+     * @param config watch 配置；null 时忽略
+     */
     public void addWatchConfig(ConfigMapWatchConfig config) {
-        if (config != null) {
-            watchConfigs.add(config);
+        if (config == null) {
+            return;
         }
+        if (running.get()) {
+            log.warn(
+                    "addWatchConfig after start() is not supported; ignoring watch config {}/{}"
+                            + " (register watch configs before start)",
+                    config.getNamespace(),
+                    config.getName());
+            return;
+        }
+        watchConfigs.add(config);
     }
 
     public List<ConfigMapWatchConfig> getWatchConfigs() {

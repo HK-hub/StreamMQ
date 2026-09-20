@@ -22,6 +22,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
  *       service-name: streammq
  *       otlp-endpoint: http://localhost:4317
  *       exporter-interval-ms: 5000
+ *       max-trace-query-size: 500
  * }</pre>
  *
  * <p>当未提供自定义 {@link io.opentelemetry.api.OpenTelemetry} Bean 时， 自动装配将基于 {@code serviceName} 创建
@@ -52,6 +53,14 @@ public class StreamMQTracingProperties {
 
     /** 是否启用 OpenTelemetry 追踪自动装配，默认 false */
     private boolean enabled = false;
+
+    /**
+     * 单次链路查询（{@code getTopicTraces}）最多返回的消息链路数，{@code <= 0} 时回退默认上界。
+     *
+     * <p>上界是防御性契约（时间窗口由调用方给定，无上界时一次请求即可把窗口内全部追踪记录聚合进堆内存）， 但默认值未必适配高吞吐 Topic——必须可配置，否则运维看到截断 WARN
+     * 也无从调整。
+     */
+    private int maxTraceQuerySize = StreamMQTopologyService.DEFAULT_MAX_TRACE_QUERY_SIZE;
 
     /** OTLP 导出端点（如 {@code http://localhost:4317}），未配置时默认 OpenTelemetry 为 no-op */
     private String otlpEndpoint;

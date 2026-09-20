@@ -6,6 +6,8 @@
 package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
+import io.github.streammq.adapter.redisson.support.RedisClusterCompatibility;
+import io.github.streammq.adapter.redisson.support.RedisServerClock;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.DlqReason;
@@ -15,6 +17,7 @@ import io.github.streammq.core.util.StringUtils;
 import java.time.Duration;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
@@ -79,6 +82,18 @@ public class RetryScheduler implements StreamMQScheduler {
     /** DLQ Stream Entry 字段：进入 DLQ 的原因 */
     public static final String FIELD_DLQ_REASON = StreamMQConstants.FIELD_DLQ_REASON;
 
+    /**
+     * payload Hash 中的调度作用域字段名（R3-7 防御：与哨兵 topic 组成双重判定）。
+     *
+     * <p>仅 {@link #FIELD_TARGET_TOPIC} 为 {@code __dlq__} 哨兵<b>且</b>本字段为 {@link #RETRY_SCOPE_DLQ}
+     * 时才按 DLQ 重试转投——业务 topic 名恰为 {@code __dlq__}（经核心命名校验已拒绝，此处为纵深防御） 或第三方写入的同名 targetTopic 不会被误判为
+     * DLQ 重试。
+     */
+    public static final String FIELD_RETRY_SCOPE = "retryScope";
+
+    /** {@link #FIELD_RETRY_SCOPE} 的 DLQ 重试取值 */
+    public static final String RETRY_SCOPE_DLQ = "dlq";
+
     /** DLQ Stream Entry 字段：原始重试次数 */
     public static final String FIELD_ORIGINAL_RETRY_COUNT = "originalRetryCount";
 
@@ -106,8 +121,34 @@ public class RetryScheduler implements StreamMQScheduler {
      */
     private static final int MAX_ORPHAN_ZSET_SCAN = 1000;
 
+    /** Redis 服务器时钟不可用（回退本机时钟）时的告警限频间隔（毫秒） */
+    private static final long CLOCK_FALLBACK_WARN_INTERVAL_MS = 60_000L;
+
+    /**
+     * Lua：批量清理孤儿调度条目（R2-5）。
+     *
+     * <p>此前逐个 msgId 发 {@code EXISTS}（N+1 往返，1000 条即 1000 次 RTT）；现在在服务端一次遍历窗口，仅对 payload 缺失的条目
+     * {@code ZREM}。语义与逐条检查完全一致（只删「无对应 payload」的条目，绝不误删仍有 payload 的条目）。
+     *
+     * <p>KEYS[1] = 重试 ZSet key；ARGV[1] = payload Hash key 前缀；ARGV[2] = 单次扫描窗口上限。 返回 {@code
+     * {scanned, removed}}。
+     */
+    static final String LUA_PURGE_ORPHAN_ZSET =
+            "local ids = redis.call('ZRANGE', KEYS[1], 0, tonumber(ARGV[2]) - 1);"
+                    + "local removed = 0;"
+                    + "for i = 1, #ids do"
+                    + "  if redis.call('EXISTS', ARGV[1] .. ids[i]) == 0 then"
+                    + "    removed = removed + redis.call('ZREM', KEYS[1], ids[i]);"
+                    + "  end;"
+                    + "end;"
+                    + "return { #ids, removed };";
+
     /** 转移失败后的回写退避（毫秒），可通过 {@link #setFailureRequeueBackoffMs(long)} 覆盖 */
     private volatile long failureRequeueBackoffMs = DEFAULT_FAILURE_REQUEUE_BACKOFF_MS;
+
+    /** Redis 服务器时钟回退告警限频时间戳 */
+    private final java.util.concurrent.atomic.AtomicLong lastClockFallbackWarnMs =
+            new java.util.concurrent.atomic.AtomicLong();
 
     /**
      * 设置转移失败后的回写退避间隔（毫秒）。
@@ -191,6 +232,18 @@ public class RetryScheduler implements StreamMQScheduler {
         this.scanIntervalMs = scanIntervalMs > 0 ? scanIntervalMs : DEFAULT_SCAN_INTERVAL_MS;
         this.batchSize = batchSize > 0 ? batchSize : DEFAULT_BATCH_SIZE;
         this.streamMaxLen = Math.max(0, streamMaxLen);
+        if (this.streamMaxLen > 0) {
+            // R2-6：重试/死信流中的条目是消息的<b>唯一副本</b>（原 topic 条目已 XACK、payload Hash 已在同一原子批中删除），
+            // 头部被 MAXLEN 裁剪 = 永久丢消息，且被裁条目在 PEL 中只能 ACK+WARN。因此本调度器不再对该流施加有损裁剪，
+            // 配置项在此显式失效（启动期限频 WARN 提示，避免静默）。
+            LOG.warn(
+                    "Configured retry stream maxLen={} is IGNORED: entries in the retry/DLQ stream"
+                        + " are the only copy of a message (the source entry was XACKed and its"
+                        + " payload hash deleted), so trimming them would silently lose messages."
+                        + " Remove streammq.retry.stream-max-len or set it to 0 to silence this"
+                        + " warning.",
+                    this.streamMaxLen);
+        }
         this.scanExecutor =
                 Executors.newSingleThreadScheduledExecutor(
                         r -> {
@@ -216,6 +269,17 @@ public class RetryScheduler implements StreamMQScheduler {
             String namespace, String topic, String group, int maxReconsumeTimes) {
         Objects.requireNonNull(topic, "topic");
         Objects.requireNonNull(group, "group");
+        // R3-7 防御：保留前缀 __ 属于框架内部哨兵（如 __dlq__ = DLQ 重试目标），
+        // 拒绝注册可保证业务 topic 永不会与哨兵混淆（core 的 requireValidTopic 已拒绝，
+        // 此处是调度器入口的纵深防御——注册目标可能来自第三方直接调用）。
+        if (topic.startsWith("__")) {
+            throw new IllegalArgumentException(
+                    "Retry target topic must not start with reserved prefix '__'"
+                            + " (internal sentinels like "
+                            + StreamMQConstants.DLQ_RETRY_TARGET_TOPIC_SENTINEL
+                            + "): "
+                            + topic);
+        }
         String key = namespace + ":" + topic + ":" + group;
         targets.put(key, new RetryTarget(namespace, topic, group, maxReconsumeTimes));
         LOG.info(
@@ -336,7 +400,9 @@ public class RetryScheduler implements StreamMQScheduler {
     void scanRetryEntries(RetryTarget target) {
         String retryKey = StreamMQKeys.retryZSet(target.namespace, target.topic, target.group);
         RScoredSortedSet<String> zset = redisson.getScoredSortedSet(retryKey, StringCodec.INSTANCE);
-        long now = System.currentTimeMillis();
+        // R2-4：到期判定使用 Redis 服务器时钟（与写入侧 ZADD score 同一时间基准），
+        // 避免跨主机 NTP 偏差平移重试时长；服务器时钟不可用时回退本机时钟并限频 WARN。
+        long now = scheduleClockMillis();
 
         // LIMIT count 必须等于 batchSize：此前写成 batchSize - 1，每轮少转投一条（B-18）。
         // 无游标语义依赖（本处按 score 一次性取窗口，不推进分页游标），改动不影响重试顺序。
@@ -393,6 +459,11 @@ public class RetryScheduler implements StreamMQScheduler {
             String dlqStreamKey,
             RScoredSortedSet<String> zset,
             String payloadKey) {
+        // XADD 目标/DLQ 流 + DEL payload + ZREM 跨三个 key 家族：Cluster 下该批按节点拆分提交
+        // （半写即丢失/重复），前置拒绝比静默降级安全
+        RedisClusterCompatibility.requireCrossKeyAtomicity(
+                redisson,
+                "Retry/DLQ message transfer (destination stream + payload hash + schedule ZSet)");
         RMap<String, String> payloadMap = redisson.getMap(payloadKey, StringCodec.INSTANCE);
         Map<String, String> fields = payloadMap.readAllMap();
         if (CollectionUtils.isEmpty(fields)) {
@@ -408,9 +479,22 @@ public class RetryScheduler implements StreamMQScheduler {
             return;
         }
 
-        // 检查是否为 DLQ 重试哨兵
+        // 检查是否为 DLQ 重试哨兵（R3-7 双重判定：哨兵 topic + 调度作用域标记同时成立）。
+        // 仅凭 targetTopic == "__dlq__" 判定时，任何以该保留名为业务 topic 的写入都会被错误
+        // 路由到 DLQ Stream；scope 标记由写侧（DefaultRetryAndDlqHandler#scheduleDlqRetry）显式写入。
         String targetTopic = fields.get(FIELD_TARGET_TOPIC);
-        boolean isDlqRetry = StreamMQConstants.DLQ_RETRY_TARGET_TOPIC_SENTINEL.equals(targetTopic);
+        boolean sentinelTopic =
+                StreamMQConstants.DLQ_RETRY_TARGET_TOPIC_SENTINEL.equals(targetTopic);
+        boolean dlqScope = RETRY_SCOPE_DLQ.equals(fields.get(FIELD_RETRY_SCOPE));
+        boolean isDlqRetry = sentinelTopic && dlqScope;
+        if (sentinelTopic && !dlqScope) {
+            LOG.warn(
+                    "targetTopic equals the DLQ sentinel but retryScope marker is missing;"
+                            + " treating it as a business topic (msgId={}, topic={}, group={})",
+                    msgId,
+                    target.topic,
+                    target.group);
+        }
         boolean deferred = Boolean.parseBoolean(fields.get(StreamMQConstants.FIELD_DEFERRED));
 
         int retryCount = 0;
@@ -426,6 +510,7 @@ public class RetryScheduler implements StreamMQScheduler {
         // 移除调度元数据字段，只保留 Stream Entry 字段（XADD 后不得残留）
         fields.remove(FIELD_RETRY_COUNT);
         fields.remove(FIELD_TARGET_TOPIC);
+        fields.remove(FIELD_RETRY_SCOPE);
         fields.remove(StreamMQConstants.FIELD_DEFERRED);
 
         String destStreamKey;
@@ -463,9 +548,12 @@ public class RetryScheduler implements StreamMQScheduler {
         }
 
         StreamAddArgs<String, String> args = StreamAddArgs.entries(fields);
-        if (destStreamKey.equals(targetStreamKey) && streamMaxLen > 0) {
-            args = args.trimNonStrict().maxLen(streamMaxLen).noLimit();
-        }
+        // R2-6：<b>不对重试流/DLQ 流施加 MAXLEN 有损裁剪</b>——此处 XADD 的条目是消息的唯一副本
+        // （原 topic 条目已 XACK、payload Hash 紧随其后在同一原子批中删除），头部裁剪即永久丢消息。
+        // 历史实现的 `destStreamKey.equals(targetStreamKey) && streamMaxLen > 0` 分支已移除；
+        // 配置非 0 时在构造期 WARN 提示该配置对重试/死信流不生效（见构造函数）。
+        // 说明：如需限制重试流长度，只能做「安全裁剪」（PEL 为空且无未读条目时按 XTRIM MINID <已投递位置>），
+        // 该能力默认关闭且不在此处隐式启用。
 
         // 原子批：XADD + DEL payload + ZREM 同生同死。批失败则整体不生效，
         // entry 留在 ZSet 等待下轮扫描；批成功则消息已投递且调度状态一致清理。
@@ -491,7 +579,8 @@ public class RetryScheduler implements StreamMQScheduler {
     /** 转移失败后的退避回写：仅调整 score 推迟下一轮处理（entry 本身仍在 ZSet 中）。 */
     private void requeueWithBackoff(RScoredSortedSet<String> zset, String msgId) {
         try {
-            zset.add(System.currentTimeMillis() + failureRequeueBackoffMs, msgId);
+            // R2-4：退避 score 与扫描侧/写入侧统一使用 Redis 服务器时钟
+            zset.add(scheduleClockMillis() + failureRequeueBackoffMs, msgId);
             LOG.warn("Requeued msgId={} with backoff {}ms", msgId, failureRequeueBackoffMs);
         } catch (RuntimeException reAddEx) {
             LOG.error(
@@ -500,6 +589,53 @@ public class RetryScheduler implements StreamMQScheduler {
                     reAddEx.getMessage(),
                     reAddEx);
         }
+    }
+
+    /**
+     * 调度时间基准（R2-4）：Redis 服务器时钟（与重试 ZSet score 的写入侧同一时间源，规避跨主机 NTP 偏差把 「到期时间」整体平移）；读取失败时回退本机时钟并限频
+     * WARN（服务器时钟不可用不会导致调度停摆）。
+     *
+     * @return 调度用当前毫秒时间戳（服务器时钟优先）
+     */
+    long scheduleClockMillis() {
+        long serverNow = RedisServerClock.nowMillis(redisson);
+        if (serverNow == RedisServerClock.UNKNOWN) {
+            warnClockFallback();
+            return System.currentTimeMillis();
+        }
+        return serverNow;
+    }
+
+    /** 服务器时钟不可用的限频 WARN（默认 60s 一次）。 */
+    private void warnClockFallback() {
+        long now = System.currentTimeMillis();
+        long last = lastClockFallbackWarnMs.get();
+        if (now - last >= CLOCK_FALLBACK_WARN_INTERVAL_MS
+                && lastClockFallbackWarnMs.compareAndSet(last, now)) {
+            LOG.warn(
+                    "Redis TIME unavailable, falling back to LOCAL clock for retry scheduling;"
+                            + " cross-host NTP skew may shift retry delivery times");
+        }
+    }
+
+    /**
+     * 将脚本返回值稳健转为 long（协议漂移时返回 0，绝不抛 ClassCastException 中断清理）。
+     *
+     * @param value 脚本返回元素
+     * @return long 值；不可解析时为 0
+     */
+    private static long asLong(Object value) {
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        if (value instanceof String str) {
+            try {
+                return Long.parseLong(str);
+            } catch (NumberFormatException ignored) {
+                return 0L;
+            }
+        }
+        return 0L;
     }
 
     /** 转移执行权 claim Key。scope 多段以 ':' 连接（topic/group 禁止冒号，无碰撞风险）。 */
@@ -555,37 +691,43 @@ public class RetryScheduler implements StreamMQScheduler {
         int totalCleaned = 0;
         for (RetryTarget target : targets.values()) {
             String retryKey = StreamMQKeys.retryZSet(target.namespace, target.topic, target.group);
-            RScoredSortedSet<String> zset =
-                    redisson.getScoredSortedSet(retryKey, StringCodec.INSTANCE);
+            // payload key 前缀 = 完整 key 去掉末段 msgId（msgId 由 key 构造器强制非空，故用探针 key 截断）
+            String probeKey =
+                    StreamMQKeys.retryPayloadHash(
+                            target.namespace, target.topic, target.group, "0");
+            String payloadPrefix = probeKey.substring(0, probeKey.length() - 1);
             // 有界扫描：ZRANGEBYSCORE ... LIMIT 0 N（重试积压可达百万级，禁止 readAll 全量物化）
-            Collection<String> allMembers =
-                    zset.valueRange(
-                            0, true, Double.POSITIVE_INFINITY, true, 0, MAX_ORPHAN_ZSET_SCAN);
-            if (allMembers.isEmpty()) {
+            // R2-5：孤儿判定在服务端一次完成（单条 Lua），不再逐条 isExists（N+1 往返）
+            List<Object> purgeResult =
+                    redisson.getScript(StringCodec.INSTANCE)
+                            .eval(
+                                    RScript.Mode.READ_WRITE,
+                                    LUA_PURGE_ORPHAN_ZSET,
+                                    RScript.ReturnType.MULTI,
+                                    Collections.singletonList(retryKey),
+                                    payloadPrefix,
+                                    MAX_ORPHAN_ZSET_SCAN);
+            long scanned =
+                    purgeResult != null && purgeResult.size() > 0 ? asLong(purgeResult.get(0)) : 0L;
+            long removed =
+                    purgeResult != null && purgeResult.size() > 1 ? asLong(purgeResult.get(1)) : 0L;
+            if (scanned <= 0) {
                 continue;
             }
-            if (allMembers.size() >= MAX_ORPHAN_ZSET_SCAN) {
+            if (scanned >= MAX_ORPHAN_ZSET_SCAN) {
                 LOG.warn(
                         "Retry ZSet orphan cleanup truncated at {} entries (more may remain);"
                                 + " call again to continue: retryKey={}",
                         MAX_ORPHAN_ZSET_SCAN,
                         retryKey);
             }
-            for (String msgId : allMembers) {
-                String payloadKey =
-                        StreamMQKeys.retryPayloadHash(
-                                target.namespace, target.topic, target.group, msgId);
-                RMap<String, String> payloadMap = redisson.getMap(payloadKey, StringCodec.INSTANCE);
-                if (!payloadMap.isExists()) {
-                    boolean removed = zset.remove(msgId);
-                    if (removed) {
-                        totalCleaned++;
-                        LOG.debug(
-                                "Removed orphaned retry ZSet entry: retryKey={}, msgId={}",
-                                retryKey,
-                                msgId);
-                    }
-                }
+            if (removed > 0) {
+                totalCleaned += (int) removed;
+                LOG.debug(
+                        "Removed orphaned retry ZSet entries: retryKey={}, scanned={}, removed={}",
+                        retryKey,
+                        scanned,
+                        removed);
             }
         }
         if (totalCleaned > 0) {

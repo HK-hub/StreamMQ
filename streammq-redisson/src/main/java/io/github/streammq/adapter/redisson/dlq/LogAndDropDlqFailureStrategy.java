@@ -19,6 +19,9 @@ import io.github.streammq.core.policy.DlqFailureDecision;
  *
  * <p>通过配置 {@link DlqConfig#getDlqAlertThreshold()} 可控制告警触发。
  *
+ * <p><b>配置真源（0.1.2）：</b>告警阈值优先读取决策上下文携带的生效配置（{@link
+ * DefaultDlqFailureContext#resolveEffectiveConfig}，由 handler 按消费者合并全局后填充）；仅当上下文未携带时才回退到本实例构造参数。
+ *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
@@ -40,6 +43,14 @@ public class LogAndDropDlqFailureStrategy extends AbstractDlqFailureStrategy {
     @Override
     protected DlqFailureDecision doDecide(Message<?> message, DlqFailureContext context) {
         return DlqFailureDecision.drop();
+    }
+
+    /** 告警阈值同样以生效配置为真源。 */
+    @Override
+    protected boolean shouldAlert(DlqFailureContext context) {
+        DlqConfig effective = DefaultDlqFailureContext.resolveEffectiveConfig(context, config);
+        return effective.getDlqAlertThreshold() > 0
+                && context.dlqAttempts() + 1 >= effective.getDlqAlertThreshold();
     }
 
     @Override

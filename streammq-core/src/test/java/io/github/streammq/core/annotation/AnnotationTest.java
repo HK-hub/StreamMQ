@@ -77,12 +77,22 @@ class AnnotationTest {
 
         @Test
         @DisplayName(
-                "consumeTimeout 默认 -1（=未设置，回落全局 streammq.consumer.consume-timeout-millis，其默认"
-                        + " 0L = 不启用每条消息的超时包装；卡死消息由 PelClaimScheduler 兜底）")
+                "consumeTimeout 默认 -1（=未声明，跟随全局 streammq.consumer.consume-timeout-millis，其默认"
+                        + " 0L；统一三态：-1=未声明、0=显式关闭、>0=超时毫秒）")
         void consumeTimeoutDefault() {
             StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
             assertThat(ann.consumeTimeout()).isEqualTo(-1L);
+            assertThat(StreamMQConstants.ANNOTATION_UNSET_LONG).isEqualTo(-1L);
             assertThat(StreamMQConstants.DEFAULT_CONSUME_TIMEOUT_MS).isEqualTo(0L);
+        }
+
+        @Test
+        @DisplayName("orderlyConsumeTimeout 默认 -1（=未声明，跟随全局；0=显式关闭、>0=超时毫秒，与 consumeTimeout 同口径）")
+        void orderlyConsumeTimeoutDefault() {
+            StreamMQConsumer ann = ListenerSample.class.getAnnotation(StreamMQConsumer.class);
+            assertThat(ann.orderlyConsumeTimeout()).isEqualTo(-1L);
+            assertThat(ann.orderlyConsumeTimeout())
+                    .isEqualTo(StreamMQConstants.ANNOTATION_UNSET_LONG);
         }
 
         @Test

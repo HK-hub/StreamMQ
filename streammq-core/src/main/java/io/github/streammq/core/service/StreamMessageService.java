@@ -148,6 +148,9 @@ public interface StreamMessageService extends TransactionExecutor {
      */
     default <T> void asyncSend(
             String topic, T body, MessageMetadataBuilder metadata, SendCallback callback) {
+        // fail-fast：callback 为 null 时，NPE 会在完成线程上抛出并被下方 catch(Throwable) 吞成一行
+        // WARN —— 调用方既不会收到结果、也不会收到异常，是典型的静默失败。必须在入口拒绝。
+        Objects.requireNonNull(callback, "callback");
         asyncSend(topic, body, metadata)
                 .whenComplete(
                         (result, ex) -> {

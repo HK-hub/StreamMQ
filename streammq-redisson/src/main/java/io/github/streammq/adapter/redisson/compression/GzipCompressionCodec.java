@@ -7,7 +7,6 @@ package io.github.streammq.adapter.redisson.compression;
 
 import io.github.streammq.core.compression.CompressionCodec;
 import io.github.streammq.core.exception.SerializationException;
-import io.github.streammq.core.exception.StreamMQException;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -55,7 +54,9 @@ public class GzipCompressionCodec implements CompressionCodec {
             gzip.finish();
             return bos.toByteArray();
         } catch (IOException ex) {
-            throw new StreamMQException("GZIP compress failed", ex);
+            // 统一异常契约（见 CompressionCodec#compress）：SerializationException 是 StreamMQException
+            // 的子类，对既有调用方仍按 StreamMQException 可捕获，但毒丸消息路由按 SerializationException 识别。
+            throw new SerializationException("GZIP compress failed", ex);
         }
     }
 
@@ -81,7 +82,9 @@ public class GzipCompressionCodec implements CompressionCodec {
             }
             return bos.toByteArray();
         } catch (IOException ex) {
-            throw new StreamMQException("GZIP decompress failed", ex);
+            // 关键路径：解压失败必须抛 SerializationException，否则消费侧"毒丸消息"分支识别不到，
+            // 会被当作业务异常反复重试而不是按策略进 DLQ。
+            throw new SerializationException("GZIP decompress failed", ex);
         }
     }
 

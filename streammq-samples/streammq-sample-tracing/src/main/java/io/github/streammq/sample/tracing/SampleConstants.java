@@ -9,7 +9,7 @@ package io.github.streammq.sample.tracing;
  * 链路追踪示例常量：Topic、消费组、tag 与用户属性 key。
  *
  * @author StreamMQ Contributors
- * @since 1.1.0
+ * @since 0.1.2
  */
 public final class SampleConstants {
 

@@ -134,6 +134,17 @@ public class StreamMQClusterController
         this.watchNamespaces = namespaces == null ? List.of() : List.copyOf(namespaces);
     }
 
+    /**
+     * 设置 KubernetesClient。
+     *
+     * <p>生产环境由 Spring 按类型注入；显式 setter 供测试装配（fabric8 mock server）使用。
+     *
+     * @param kubernetesClient fabric8 客户端
+     */
+    public void setKubernetesClient(KubernetesClient kubernetesClient) {
+        this.kubernetesClient = kubernetesClient;
+    }
+
     @Override
     public void afterPropertiesSet() {
         start();
@@ -253,15 +264,20 @@ public class StreamMQClusterController
     /**
      * Reconcile a single StreamMQCluster resource: compute desired state, update status,
      * create/patch child Deployment.
+     *
+     * <p>除 informer 事件与周期全量同步外，本方法亦为唯一「单次调和」入口（测试可直接调用， 断言调和幂等性与状态写入行为）。
+     *
+     * @param cluster 待调和的 CR（通常来自 informer 缓存）
      */
-    private void reconcile(StreamMQCluster cluster) {
+    public void reconcile(StreamMQCluster cluster) {
         String ns = cluster.getMetadata().getNamespace();
         String name = cluster.getMetadata().getName();
         String key = clusterKey(cluster);
 
         var spec = cluster.getSpec();
         if (spec == null) {
-            updateStatus(cluster, StreamMQK8sDefaults.PHASE_FAILED, "Spec is null");
+            // K5：Pending/Failed 分支必须显式写 readyReplicas=0，否则其它 CR 的旧观测值会串值
+            updateStatus(cluster, StreamMQK8sDefaults.PHASE_FAILED, "Spec is null", 0);
             return;
         }
         // 镜像必填校验：内置默认镜像名不可拉取，缺省时直接 Failed 并给出可操作提示
@@ -269,7 +285,8 @@ public class StreamMQClusterController
             updateStatus(
                     cluster,
                     StreamMQK8sDefaults.PHASE_FAILED,
-                    "spec.image is required (e.g. your-registry/streammq-consumer:1.0.0)");
+                    "spec.image is required (e.g. your-registry/streammq-consumer:1.0.0)",
+                    0);
             return;
         }
 
@@ -282,7 +299,7 @@ public class StreamMQClusterController
             ensureDeployment(cluster, ns, name, replicas, spec);
         } catch (Exception e) {
             log.error("Failed to ensure Deployment for {}/{}: {}", ns, name, e.getMessage(), e);
-            updateStatus(cluster, StreamMQK8sDefaults.PHASE_FAILED, e.getMessage());
+            updateStatus(cluster, StreamMQK8sDefaults.PHASE_FAILED, e.getMessage(), 0);
             return;
         }
 
@@ -299,29 +316,25 @@ public class StreamMQClusterController
         var deploy = kubernetesClient.apps().deployments().inNamespace(ns).withName(name).get();
         String phase;
         String message = null;
+        int readyReplicas = 0;
         if (deploy == null || deploy.getStatus() == null) {
             phase = StreamMQK8sDefaults.PHASE_PENDING;
         } else {
-            Integer ready =
+            readyReplicas =
                     deploy.getStatus().getReadyReplicas() != null
                             ? deploy.getStatus().getReadyReplicas()
                             : 0;
-            status_readyReplicas.set(ready);
-            if (ready >= desiredReplicas && desiredReplicas > 0) {
+            if (readyReplicas >= desiredReplicas && desiredReplicas > 0) {
                 phase = StreamMQK8sDefaults.PHASE_READY;
-            } else if (ready > 0) {
+            } else if (readyReplicas > 0) {
                 phase = StreamMQK8sDefaults.PHASE_UPDATING;
-                message = "ready=" + ready + ", desired=" + desiredReplicas;
+                message = "ready=" + readyReplicas + ", desired=" + desiredReplicas;
             } else {
                 phase = StreamMQK8sDefaults.PHASE_NOT_READY;
             }
         }
-        updateStatus(cluster, phase, message);
+        updateStatus(cluster, phase, message, readyReplicas);
     }
-
-    /** 最近一次 reconcile 观测到的就绪副本数（写入 status.readyReplicas）。 */
-    private final java.util.concurrent.atomic.AtomicInteger status_readyReplicas =
-            new java.util.concurrent.atomic.AtomicInteger(0);
 
     @SuppressWarnings("deprecation")
     private void ensureDeployment(
@@ -396,7 +409,11 @@ public class StreamMQClusterController
         boolean imageDrift =
                 spec.getImage() != null && !spec.getImage().equals(container.getImage());
         List<io.fabric8.kubernetes.api.model.EnvVar> desiredEnv = collectEnvVars(name, ns, spec);
-        boolean envDrift = !desiredEnv.equals(container.getEnv());
+        // 漂移判定按「变量名 → 值」的集合语义，而不是 List.equals（顺序敏感）：
+        // K8s 的 admission webhook / sidecar 注入 / 人工编辑都可能改变 env 列表的顺序或追加变量，
+        // 用 List.equals 会让 envDrift 永久为 true —— 每次 reconcile 都 patch 一次 Deployment，
+        // 形成无意义的热循环（并可能把注入的变量整段抹掉）。
+        boolean envDrift = envVarsDrift(container.getEnv(), desiredEnv);
         if (!imageDrift && !envDrift) {
             return;
         }
@@ -413,7 +430,10 @@ public class StreamMQClusterController
                         .editSpec()
                         .editContainer(0)
                         .withImage(imageDrift ? spec.getImage() : container.getImage())
-                        .withEnv(envDrift ? desiredEnv : container.getEnv())
+                        .withEnv(
+                                envDrift
+                                        ? mergeEnvVars(container.getEnv(), desiredEnv)
+                                        : container.getEnv())
                         .endContainer()
                         .endSpec()
                         .endTemplate()
@@ -470,6 +490,72 @@ public class StreamMQClusterController
                 .endTemplate()
                 .endSpec()
                 .build();
+    }
+
+    /**
+     * 环境变量漂移判定：期望集合中的每个变量都必须在当前容器上存在且取值一致。
+     *
+     * <p>顺序无关，且<b>容忍</b>当前容器上多出的变量（由 sidecar / admission webhook / 人工注入），
+     * 那些不属于本控制器的管理面，不能因为它们的出现就判定为需要 patch。
+     */
+    private static boolean envVarsDrift(
+            List<io.fabric8.kubernetes.api.model.EnvVar> current,
+            List<io.fabric8.kubernetes.api.model.EnvVar> desired) {
+        java.util.Map<String, String> currentByName = new java.util.HashMap<>();
+        if (current != null) {
+            for (io.fabric8.kubernetes.api.model.EnvVar env : current) {
+                if (env != null && env.getName() != null) {
+                    currentByName.put(env.getName(), env.getValue() == null ? "" : env.getValue());
+                }
+            }
+        }
+        for (io.fabric8.kubernetes.api.model.EnvVar env : desired) {
+            if (env == null || env.getName() == null) {
+                continue;
+            }
+            String wanted = env.getValue() == null ? "" : env.getValue();
+            if (!Objects.equals(currentByName.get(env.getName()), wanted)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** 把期望的环境变量合并进当前列表：同名覆盖、缺失追加，<b>保留</b>当前列表中的额外变量与其顺序。 */
+    private static List<io.fabric8.kubernetes.api.model.EnvVar> mergeEnvVars(
+            List<io.fabric8.kubernetes.api.model.EnvVar> current,
+            List<io.fabric8.kubernetes.api.model.EnvVar> desired) {
+        java.util.Map<String, io.fabric8.kubernetes.api.model.EnvVar> desiredByName =
+                new java.util.LinkedHashMap<>();
+        for (io.fabric8.kubernetes.api.model.EnvVar env : desired) {
+            if (env != null && env.getName() != null) {
+                desiredByName.put(env.getName(), env);
+            }
+        }
+        List<io.fabric8.kubernetes.api.model.EnvVar> merged = new java.util.ArrayList<>();
+        java.util.Set<String> applied = new java.util.HashSet<>();
+        if (current != null) {
+            for (io.fabric8.kubernetes.api.model.EnvVar env : current) {
+                if (env == null || env.getName() == null) {
+                    merged.add(env);
+                    continue;
+                }
+                io.fabric8.kubernetes.api.model.EnvVar replacement =
+                        desiredByName.get(env.getName());
+                if (replacement != null) {
+                    merged.add(replacement);
+                    applied.add(env.getName());
+                } else {
+                    merged.add(env);
+                }
+            }
+        }
+        for (io.fabric8.kubernetes.api.model.EnvVar env : desired) {
+            if (env != null && env.getName() != null && applied.add(env.getName())) {
+                merged.add(env);
+            }
+        }
+        return merged;
     }
 
     private List<io.fabric8.kubernetes.api.model.EnvVar> collectEnvVars(
@@ -666,8 +752,42 @@ public class StreamMQClusterController
         }
     }
 
+    /**
+     * 写入 CR 状态（仅当语义发生变化时）。
+     *
+     * <p><b>K4：为什么必须「先比较再写」</b>——{@code updateStatus} 会触发 informer 的 onUpdate → 再次调和。若每次调和都无条件写入且
+     * {@code lastUpdateTime} 恒为 {@code Instant.now()}，调和就被自激成死循环（写 → update → 再写）。 因此这里先与 CR 当前状态比较
+     * phase / replicas / readyReplicas / message / observedGeneration，全部一致时跳过写； {@code
+     * lastUpdateTime} 仅在语义真正变化时刷新。
+     *
+     * @param cluster 待写状态的 CR
+     * @param phase 目标 phase
+     * @param message 目标附加说明（可为 null）
+     * @param readyReplicas 本次观测到的就绪副本数（K5：按 CR 显式传入，不再使用实例级共享计数器）
+     */
     @SuppressWarnings("deprecation")
-    private void updateStatus(StreamMQCluster cluster, String phase, String message) {
+    private void updateStatus(
+            StreamMQCluster cluster, String phase, String message, int readyReplicas) {
+        String ns = cluster.getMetadata().getNamespace();
+        String name = cluster.getMetadata().getName();
+        int desiredReplicas =
+                cluster.getSpec() != null && cluster.getSpec().getReplicas() != null
+                        ? cluster.getSpec().getReplicas()
+                        : StreamMQK8sDefaults.DEFAULT_REPLICAS;
+        Long observedGeneration = cluster.getMetadata().getGeneration();
+
+        var current = cluster.getStatus();
+        if (current != null
+                && Objects.equals(phase, current.getPhase())
+                && Objects.equals(Integer.valueOf(desiredReplicas), current.getReplicas())
+                && Objects.equals(Integer.valueOf(readyReplicas), current.getReadyReplicas())
+                && Objects.equals(message, current.getMessage())
+                && Objects.equals(observedGeneration, current.getObservedGeneration())) {
+            log.debug(
+                    "Status of {}/{} unchanged (phase={}), skipping status write", ns, name, phase);
+            return;
+        }
+
         // 不修改 informer 缓存的共享对象：构造仅含元数据的副本写入状态，
         // 避免污染本地缓存导致后续 reconcile 基于脏数据决策
         StreamMQCluster shell = new StreamMQCluster();
@@ -678,13 +798,9 @@ public class StreamMQClusterController
         var status = new StreamMQCluster.Status();
         status.setPhase(phase);
         status.setLastUpdateTime(Instant.now().toString());
-        status.setReadyReplicas(status_readyReplicas.get());
-        if (cluster.getSpec() != null) {
-            status.setReplicas(
-                    cluster.getSpec().getReplicas() != null
-                            ? cluster.getSpec().getReplicas()
-                            : StreamMQK8sDefaults.DEFAULT_REPLICAS);
-        }
+        status.setReadyReplicas(readyReplicas);
+        status.setReplicas(desiredReplicas);
+        status.setObservedGeneration(observedGeneration);
         if (message != null) {
             status.setMessage(message);
         }
@@ -693,15 +809,11 @@ public class StreamMQClusterController
         try {
             kubernetesClient
                     .resources(StreamMQCluster.class)
-                    .inNamespace(cluster.getMetadata().getNamespace())
-                    .withName(cluster.getMetadata().getName())
+                    .inNamespace(ns)
+                    .withName(name)
                     .updateStatus(shell);
         } catch (Exception e) {
-            log.warn(
-                    "Failed to update status for {}/{}: {}",
-                    cluster.getMetadata().getNamespace(),
-                    cluster.getMetadata().getName(),
-                    e.getMessage());
+            log.warn("Failed to update status for {}/{}: {}", ns, name, e.getMessage());
         }
     }
 

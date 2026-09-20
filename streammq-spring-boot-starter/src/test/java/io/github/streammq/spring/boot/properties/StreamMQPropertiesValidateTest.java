@@ -109,4 +109,105 @@ class StreamMQPropertiesValidateTest {
                 .hasMessageContaining("streammq.admin.failure-retry-cooldown-millis must be >= 0")
                 .hasMessageNotContaining("failure-retry-cooldown-ms ");
     }
+
+    // ===================== R6-S5：管理面列表参数上界 =====================
+
+    @Test
+    @DisplayName("admin.list-page-size 超过硬上限 10000 应被拒绝")
+    void adminListPageSizeAboveUpperBound_rejected() {
+        StreamMQProperties properties = new StreamMQProperties();
+        properties.getAdmin().setListPageSize(StreamMQSpringConstants.MAX_ADMIN_LIST_LIMIT + 1);
+
+        assertThatThrownBy(properties::validate)
+                .isInstanceOf(StreamMQClientException.class)
+                .hasMessageContaining("streammq.admin.list-page-size must be <= 10000");
+    }
+
+    @Test
+    @DisplayName("admin.max-pending-query-size 超过硬上限 10000 应被拒绝")
+    void adminMaxPendingQuerySizeAboveUpperBound_rejected() {
+        StreamMQProperties properties = new StreamMQProperties();
+        properties
+                .getAdmin()
+                .setMaxPendingQuerySize(StreamMQSpringConstants.MAX_ADMIN_LIST_LIMIT + 1);
+
+        assertThatThrownBy(properties::validate)
+                .isInstanceOf(StreamMQClientException.class)
+                .hasMessageContaining("streammq.admin.max-pending-query-size must be <= 10000");
+    }
+
+    @Test
+    @DisplayName("admin 列表参数恰为上限 10000 时应被接受")
+    void adminListParamsAtUpperBound_accepted() {
+        StreamMQProperties properties = new StreamMQProperties();
+        properties.getAdmin().setListPageSize(StreamMQSpringConstants.MAX_ADMIN_LIST_LIMIT);
+        properties.getAdmin().setMaxPendingQuerySize(StreamMQSpringConstants.MAX_ADMIN_LIST_LIMIT);
+
+        assertThatCode(properties::validate).doesNotThrowAnyException();
+    }
+
+    // ===================== R6-S6：rebalance.virtual-nodes =====================
+
+    @Test
+    @DisplayName("rebalance.virtual-nodes <= 0 应被拒绝（此前静默回退默认 160）")
+    void nonPositiveVirtualNodes_rejected() {
+        StreamMQProperties properties = new StreamMQProperties();
+        properties.getRebalance().setVirtualNodes(0);
+
+        assertThatThrownBy(properties::validate)
+                .isInstanceOf(StreamMQClientException.class)
+                .hasMessageContaining("streammq.rebalance.virtual-nodes must be > 0");
+    }
+
+    // ===================== R6-S7：batch-size 与 max-batch-size-limit 交叉校验 =====================
+
+    @Test
+    @DisplayName("consumer.batch-size 超过 max-batch-size-limit 应被拒绝（此前被静默夹取）")
+    void batchSizeAboveLimit_rejected() {
+        StreamMQProperties properties = new StreamMQProperties();
+        properties.getConsumer().setMaxBatchSizeLimit(1000);
+        properties.getConsumer().setBatchSize(1001);
+
+        assertThatThrownBy(properties::validate)
+                .isInstanceOf(StreamMQClientException.class)
+                .hasMessageContaining("streammq.consumer.batch-size")
+                .hasMessageContaining("must be <= streammq.consumer.max-batch-size-limit");
+    }
+
+    @Test
+    @DisplayName("consumer.batch-size 等于 max-batch-size-limit 应被接受")
+    void batchSizeEqualToLimit_accepted() {
+        StreamMQProperties properties = new StreamMQProperties();
+        properties.getConsumer().setMaxBatchSizeLimit(1000);
+        properties.getConsumer().setBatchSize(1000);
+
+        assertThatCode(properties::validate).doesNotThrowAnyException();
+    }
+
+    // ===================== R6-S8：orderly-shard-lock-lease-millis =====================
+
+    @Test
+    @DisplayName("consumer.orderly-shard-lock-lease-millis < 0 应被拒绝")
+    void negativeOrderlyShardLockLease_rejected() {
+        StreamMQProperties properties = new StreamMQProperties();
+        properties.getConsumer().setOrderlyShardLockLeaseMillis(-1);
+
+        assertThatThrownBy(properties::validate)
+                .isInstanceOf(StreamMQClientException.class)
+                .hasMessageContaining(
+                        "streammq.consumer.orderly-shard-lock-lease-millis must be >= 0");
+    }
+
+    @Test
+    @DisplayName("orderly-shard-lock-lease-millis: 0（默认看门狗）与 >= 5000（推荐值）均通过校验")
+    void orderlyShardLockLease_validValuesAccepted() {
+        StreamMQProperties properties = new StreamMQProperties();
+        assertThatCode(properties::validate).doesNotThrowAnyException();
+
+        properties.getConsumer().setOrderlyShardLockLeaseMillis(0L);
+        assertThatCode(properties::validate).doesNotThrowAnyException();
+
+        properties.getConsumer().setOrderlyShardLockLeaseMillis(30_000L);
+        assertThatCode(properties::validate).doesNotThrowAnyException();
+    }
 }

@@ -20,11 +20,16 @@
         <maven.deploy.skip>true</maven.deploy.skip>
         <jmh.version>1.37</jmh.version>
         <!-- 基准运行时属性默认值：exec:exec 的子进程不会自动继承 mvn -D 参数，
-             通过下方 <systemProperties> 插值透传；命令行 -D 可覆盖这些默认值 -->
+             通过下方 <systemProperties> 插值透传；命令行 -D 可覆盖这些默认值。
+             注意 fork/预热/测量参数不在这里：它们只由各 Benchmark 类注解决定（见 profile 注释）。 -->
         <streammq.redis.mode>docker</streammq.redis.mode>
         <streammq.redis.host>localhost</streammq.redis.host>
         <streammq.redis.port>6379</streammq.redis.port>
         <streammq.benchmark.allowFlush>false</streammq.benchmark.allowFlush>
+        <!-- 消费基准：测量前预灌的积压条数（10KB 负载时约 500MB Redis 内存，按可用内存调整） -->
+        <streammq.benchmark.backlog>50000</streammq.benchmark.backlog>
+        <!-- 消费基准：低水位补货线程数（出现 INVALID 时优先加大） -->
+        <streammq.benchmark.feederThreads>2</streammq.benchmark.feederThreads>
     </properties>
 
     <dependencies>
@@ -191,23 +196,36 @@
 
     <profiles>
         <!--
-            运行 JMH 基准：mvn -Pbenchmark -pl streammq-benchmark test
-            基准耗时较长且默认通过 Testcontainers 启动 Redis（需 Docker），
-            因此不绑定到默认生命周期，避免 mvn test / mvn verify 被劫持。
+            JMH 基准运行入口（CI benchmark.yml 采用同一组 exec 目标）。
 
-            也可单独触发某一组基准（CI benchmark.yml 采用此方式）：
-            mvn -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-template
-            mvn -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-serialization
-            mvn -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-consumer
+            干净机器一条命令跑通（需 JDK 21 + Docker，docker 模式由 Testcontainers 拉起独占 Redis）：
+              mvn -pl streammq-benchmark -am install -DskipTests   # 先把上游构件装进本地仓库
+              mvn -Pbenchmark -pl streammq-benchmark test          # 全量三类基准，约 21 分钟
 
-            注意：
-            1. 必须用 exec:exec（真实子进程）而非 exec:java：JMH 的 @Fork 会基于
-               java.class.path 启动 fork 进程，而 exec:java 在 Maven 进程内运行，
-               fork 拿到的 classpath 不含 jmh-core，会报 ForkedMain 类找不到。
-            2. exec:exec 不会自动继承 mvn 命令行 -D 参数，因此子进程的命令行参数里
-               显式透传了基准运行时属性（默认值见 pom <properties>，命令行 -D 可覆盖）：
-               包括 streammq.redis.mode/host/port 与 streammq.benchmark.allowFlush。
-            3. 基准准备/清理阶段含 flushdb，直连非独占 Redis 时必须追加
+            也可单独触发某一组基准：
+              mvn -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-template
+              mvn -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-serialization
+              mvn -Pbenchmark -pl streammq-benchmark exec:exec@benchmark-consumer
+
+            参数真源（B4 修复：消除"注解一套、main() 里又覆盖一套"的双源）：
+            1. fork/预热/测量只由各 Benchmark 类注解决定（main() 不再用 OptionsBuilder 覆盖）。
+               当前默认值：Serialization / StreamMessageTemplate 为 @Fork(1) + @Warmup(2×1s)
+               + @Measurement(3×2s)；StreamConsumer 为 @Fork(1) + @Warmup(1×2s) + @Measurement(3×3s)。
+               全量默认运行约 21 分钟，上限预算 45 分钟由 BenchmarkBudgetTest 静态校验（超预算即红）。
+               需要临时覆盖时用 JMH 命令行参数（-f/-wi/-i/-w/-r），不要再回到 main() 里覆盖。
+            2. 系统性运行时属性只在本 profile 透传（exec:exec 不继承 mvn 命令行 -D），默认值见
+               <properties>，命令行 -D 可覆盖：streammq.redis.mode/host/port、
+               streammq.benchmark.backlog（消费基准预灌积压条数）、
+               streammq.benchmark.feederThreads（低水位补货线程数）、
+               streammq.benchmark.allowFlush（仅 local 模式需要）。
+            3. 消费基准口径：测量前预灌积压、测量期间只做低水位补货（不持续补货），使消费端成为
+               唯一瓶颈；若测量期间积压被耗尽（出现空读），该轮判 INVALID 并以非零码退出，并提示
+               加大 -Dstreammq.benchmark.backlog。
+            4. 必须用 exec:exec（真实子进程）而非 exec:java：JMH 的 @Fork 会基于 java.class.path
+               启动 fork 进程，而 exec:java 在 Maven 进程内运行，fork 拿到的 classpath 不含
+               jmh-core，会报 ForkedMain 类找不到。
+            5. flushdb 守卫：docker 模式清空的是本进程独占容器（随机映射端口），自动放行；
+               -Dstreammq.redis.mode=local 直连本地/共享 Redis 时必须追加
                -Dstreammq.benchmark.allowFlush=true 显式授权。
         -->
         <profile>
@@ -274,6 +292,8 @@
                                         <argument>-Dstreammq.redis.host=${streammq.redis.host}</argument>
                                         <argument>-Dstreammq.redis.port=${streammq.redis.port}</argument>
                                         <argument>-Dstreammq.benchmark.allowFlush=${streammq.benchmark.allowFlush}</argument>
+                                        <argument>-Dstreammq.benchmark.backlog=${streammq.benchmark.backlog}</argument>
+                                        <argument>-Dstreammq.benchmark.feederThreads=${streammq.benchmark.feederThreads}</argument>
                                         <argument>-classpath</argument>
                                         <classpath/>
                                         <argument>io.github.streammq.benchmark.StreamConsumerBenchmark</argument>

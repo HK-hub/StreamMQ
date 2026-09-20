@@ -8,12 +8,14 @@ package io.github.streammq.sample.quickstart;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
+import io.github.streammq.adapter.redisson.retry.FixedIntervalRetryPolicy;
 import io.github.streammq.core.annotation.StreamMQConsumer;
 import io.github.streammq.core.consumer.ConsumeContext;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.SendResult;
+import io.github.streammq.core.policy.RetryPolicy;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -25,11 +27,14 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
 import org.redisson.Redisson;
+import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.client.codec.StringCodec;
 import org.redisson.config.Config;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.annotation.DirtiesContext;
 import org.springframework.test.context.ActiveProfiles;
@@ -50,6 +55,7 @@ import org.springframework.test.context.TestPropertySource;
  *   <li>{@code createOrderWithBuilder} Builder 模式发送 → 验证 tag/keys/userProps 正确性
  *   <li>{@code createOrderAsync} 异步发送 → 验证 CompletableFuture 完成与消息接收
  *   <li>{@code createOrdersBatch} 批量发送 → 验证多条消息全部接收
+ *   <li>{@code failedMessageEntersDlqAfterRetries} 消费失败 → 重试耗尽 → 最终进入 DLQ（不丢消息）
  * </ul>
  *
  * @author StreamMQ Contributors
@@ -57,7 +63,7 @@ import org.springframework.test.context.TestPropertySource;
  */
 @SpringBootTest(classes = QuickStartApplication.class)
 @ActiveProfiles("it")
-@Import(QuickStartSampleIT.TestMessageCollector.class)
+@Import({QuickStartSampleIT.TestMessageCollector.class, QuickStartSampleIT.TestConfig.class})
 @DirtiesContext(classMode = DirtiesContext.ClassMode.AFTER_EACH_TEST_METHOD)
 @TestPropertySource(
         properties = {"spring.data.redis.host=127.0.0.1", "spring.data.redis.port=6379"})
@@ -76,10 +82,12 @@ class QuickStartSampleIT {
     /** 本次运行的专属命名空间（覆写 streammq.namespace），配合 {@link #cleanupNamespace()} 实现跨运行隔离 */
     private static final String IT_NAMESPACE = "quickstart-it-" + RUN_ID;
 
-    /** 覆写全局命名空间，避免与历史运行/其它示例共享 streammq:quickstart:* 键 */
+    /** 覆写全局命名空间与重试预算：命名空间带运行后缀以避免跨运行污染； 重试预算调小（2 次）使「失败 → 重试耗尽 → DLQ」在秒级完成。 */
     @DynamicPropertySource
     static void overrideNamespace(DynamicPropertyRegistry registry) {
         registry.add("streammq.namespace", () -> IT_NAMESPACE);
+        // 示例消费者未在注解上声明 maxReconsumeTimes（默认回落全局配置），此处调小以便快速验证 DLQ 路由
+        registry.add("streammq.retry.max-reconsume-times", () -> 2);
     }
 
     /**
@@ -104,6 +112,11 @@ class QuickStartSampleIT {
     @Autowired private OrderProducer orderProducer;
 
     @Autowired private TestMessageCollector testCollector;
+
+    /** 示例自带的消费者：用于注入失败，验证失败消息最终进入 DLQ 而不是被静默 ACK 吞掉 */
+    @Autowired private OrderConsumer orderConsumer;
+
+    @Autowired private RedissonClient redissonClient;
 
     /** 每个测试前清空已接收消息队列，避免测试间干扰。 */
     @BeforeEach
@@ -234,6 +247,49 @@ class QuickStartSampleIT {
                                     .extracting(Message::getTag)
                                     .allMatch(tag -> tag.equals("batch"));
                         });
+    }
+
+    /**
+     * 验证消费失败的消息不会被静默 ACK 吞掉：重试耗尽（{@code max-reconsume-times=2}）后由框架路由到 DLQ Stream {@code
+     * streammq:{ns}:dlq:{consumerGroup}}，供 DLQ 消费者 / 运维处理。
+     *
+     * <p>该用例守护「重试用尽即 SUCCESS 吞消息」这一历史反模式：失败消息必须最终出现在 DLQ 中。
+     */
+    @Test
+    @DisplayName("消费失败的消息重试耗尽后进入 DLQ")
+    void failedMessageEntersDlqAfterRetries() {
+        String orderId = "IT-FAIL-001-" + RUN_ID;
+        String content = "fail-order-content-" + RUN_ID;
+
+        orderConsumer.setFailOrderId(orderId);
+        try {
+            SendResult result = orderProducer.createOrder(orderId, content);
+            assertThat(result.isSuccess()).isTrue();
+
+            RStream<String, String> dlqStream =
+                    redissonClient.getStream(
+                            "streammq:" + IT_NAMESPACE + ":dlq:" + SampleConstants.CONSUMER_GROUP,
+                            StringCodec.INSTANCE);
+            await().atMost(20, TimeUnit.SECONDS)
+                    .untilAsserted(
+                            () ->
+                                    assertThat(dlqStream.size())
+                                            .as("失败消息应在重试耗尽后进入 DLQ，而不是被静默丢弃")
+                                            .isGreaterThanOrEqualTo(1));
+        } finally {
+            orderConsumer.clearFailOrderId();
+        }
+    }
+
+    // ===================== 测试配置 =====================
+
+    /** 测试专用配置：短间隔重试策略，使「失败 → 重试耗尽 → DLQ」在秒级完成（示例默认退避为分钟级）。 */
+    @Configuration
+    static class TestConfig {
+        @Bean
+        public RetryPolicy streamMQRetryPolicy() {
+            return new FixedIntervalRetryPolicy(100L, 2);
+        }
     }
 
     // ===================== 测试消息收集器 =====================

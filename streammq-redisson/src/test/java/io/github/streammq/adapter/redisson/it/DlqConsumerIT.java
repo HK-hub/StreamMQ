@@ -222,6 +222,78 @@ class DlqConsumerIT extends AbstractRedisIT {
     }
 
     @Test
+    @DisplayName("R4-x2 存量死信排空：先有死信、后部署 DLQ 消费者（不手工建组）→ 建组前已存在的死信被投递")
+    void dlqConsumer_drainsPreExistingDeadLetters() {
+        String topic = "dlq-backlog-topic";
+        String group = "dlq-backlog-group";
+        String dlqStreamKey = StreamMQKeys.dlqStream(namespace, group);
+
+        RetryPolicy noRetryPolicy = new NoRetryPolicy();
+
+        // 阶段一：只部署业务消费者（始终失败），把死信写进 DLQ Stream。
+        // 关键：此阶段不存在 DLQ 消费者，也绝不调用 createDlqConsumerGroup —— DLQ Stream 上无任何消费者组，
+        // 与"DLQ 消费者事后才部署"的真实运维场景一致（旧实现首次建组用 LAST($)，会静默跳过这批存量死信）。
+        DefaultStreamMQListenerContainer businessSide =
+                new DefaultStreamMQListenerContainer(
+                        redisson,
+                        new RedissonStreamListenerFactory(redisson, converter),
+                        converter,
+                        noRetryPolicy,
+                        namespace);
+        businessSide.registerConsumer(
+                (msg, ctx) -> {
+                    throw new RuntimeException("always fails, trigger DLQ");
+                },
+                mkListenerAnnotation(topic, group, 0));
+        createConsumerGroup(topic, group);
+        businessSide.start();
+        try {
+            RedissonStreamProducer producer =
+                    new RedissonStreamProducer(
+                            redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
+            producer.syncSend(
+                    MessageBuilder.<String>withTopic(topic).body("backlog-dead-letter").build());
+            producer.close();
+
+            // 等待死信落入 DLQ Stream，并确认此刻 DLQ Stream 上没有任何消费者组
+            await().atMost(20, TimeUnit.SECONDS)
+                    .untilAsserted(
+                            () ->
+                                    assertThat(redisson.getStream(dlqStreamKey).size())
+                                            .isGreaterThanOrEqualTo(1));
+            assertThat(redisson.getStream(dlqStreamKey).listGroups())
+                    .as("阶段一不得存在 DLQ 消费者组（否则测试退化为已建组场景）")
+                    .isEmpty();
+        } finally {
+            businessSide.stop();
+        }
+
+        // 阶段二：事后部署 DLQ 消费者（不手工建组）——必须从 FIRST 建组并排空存量死信
+        AtomicReference<Message<?>> received = new AtomicReference<>();
+        DefaultStreamMQListenerContainer dlqSide =
+                new DefaultStreamMQListenerContainer(
+                        redisson,
+                        new RedissonStreamListenerFactory(redisson, converter),
+                        converter,
+                        noRetryPolicy,
+                        namespace);
+        dlqSide.registerConsumer(
+                (StreamMessageConcurrentlyConsumer<String>)
+                        (msg, ctx) -> {
+                            received.set(msg);
+                            return ConsumeAction.SUCCESS;
+                        },
+                mkListenerAnnotation(topic, group, 0, true));
+        dlqSide.start();
+        try {
+            await().atMost(20, TimeUnit.SECONDS).until(() -> received.get() != null);
+            assertThat(received.get().getBody()).isEqualTo("backlog-dead-letter");
+        } finally {
+            dlqSide.stop();
+        }
+    }
+
+    @Test
     @DisplayName("DLQ 消费者使用 dlqMode=true（对齐 RocketMQ %DLQ%{group}）")
     void dlqConsumer_defaultDlqConsumerGroup() {
         String topic = "dlq-default-group-topic";

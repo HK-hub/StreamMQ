@@ -33,11 +33,13 @@ import io.github.streammq.core.serializer.MessageSerializer;
 import java.lang.reflect.Proxy;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.redisson.api.RLock;
 import org.redisson.api.RScoredSortedSet;
 import org.redisson.api.RStream;
 import org.redisson.api.StreamMessageId;
@@ -581,15 +583,15 @@ class OrderlyMessageIT extends AbstractRedisIT {
     }
 
     /**
-     * 分片锁竞争路径（红队审查 R4-B02 / R3-25 新语义）：
+     * 分片锁竞争路径（红队审查 R4-B02 / R3-25 新语义 + R1-1 本地延迟重投）：
      *
-     * <p>僵尸 handler 忽略中断并持续持锁，导致后续投递全部命中"分片锁繁忙"。新语义下该竞争抛 {@link
-     * OrderlyShardBusyException}：不消耗重试预算、不写 retry ZSet、不进 DLQ、不 ACK， 消息保持 pending 留在 PEL，由 PEL
-     * 认领机制兜底重投。
+     * <p>僵尸 handler 忽略中断并持续持锁（本用例由闸门持有到断言完成，保证观察窗口内锁恒定被占用），导致后续投递全部命中"分片锁繁忙"。新语义下该竞争抛 {@link
+     * OrderlyShardBusyException}：不消耗重试预算、不写 retry ZSet、不进 DLQ、不 ACK， 消息保持 pending 留在 PEL；同时按 R1-1
+     * 登记本地延迟重投（1s 起、每次翻倍、上限 30s），所以竞争信号会随退避间隔重复出现——这是受退避约束的正常重投，不是忙等。
      *
-     * <p>修复前该竞争与业务失败共用 {@code RECONSUME_LATER}：{@code maxReconsumeTimes=2} 的预算 被 2 次竞争耗尽后，{@code
-     * routeToDlq} + {@code ack} 会把"<b>从未被 handler 处理</b>"的消息 送进 DLQ——本用例以"DLQ 为空 + 消息仍在 pending +
-     * handler 只被调用一次"锁死新语义。
+     * <p>本用例锁定竞争路径的全部可观测约束：不消耗预算（retry ZSet 为空）、不进 DLQ、不 ACK（消息留在 PEL）、 竞争期间绝不调用业务 handler。旧语义下
+     * {@code maxReconsumeTimes=2} 的预算被 2 次竞争耗尽后 {@code routeToDlq} + {@code ack} 会把"<b>从未被 handler
+     * 处理</b>"的消息送进 DLQ。
      */
     @Test
     @DisplayName("分片锁竞争:僵尸 handler 仍持锁 → 不消耗预算,消息留在 PEL 且不进 DLQ")
@@ -609,7 +611,7 @@ class OrderlyMessageIT extends AbstractRedisIT {
                         new LogAndDropDlqFailureStrategy(),
                         DlqConfig.builder().build());
 
-        // 竞争信号计数 + 压缩锁等待：2 轮 × 60ms + 轮间 30ms ≈ 150ms，远小于 orderlyConsumeTimeout(800ms)
+        // 竞争信号计数 + 压缩锁等待：2 轮 × 60ms + 轮间 30ms，避免每次竞争烧掉默认 15s
         AtomicInteger busySignals = new AtomicInteger();
         RedissonOrderlyShardLockManager lockManager =
                 new RedissonOrderlyShardLockManager(redisson, 2, 30L) {
@@ -645,14 +647,15 @@ class OrderlyMessageIT extends AbstractRedisIT {
         container.setTimeoutCancelGraceMillis(100L);
 
         AtomicInteger handlerInvocations = new AtomicInteger();
+        CountDownLatch zombieRelease = new CountDownLatch(1);
         StreamMessageOrderlyConsumer<String> listener =
                 (msg, ctx) -> {
                     handlerInvocations.incrementAndGet();
-                    // 僵尸 handler：吞掉超时取消的中断并持续持锁约 4s（模拟"业务不响应中断"的卡死线程）
-                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(4L);
-                    while (System.nanoTime() < deadline) {
+                    // 僵尸 handler：吞掉超时取消的中断并持续持锁（模拟"业务不响应中断"的卡死线程），
+                    // 直到测试收尾释放闸门——保证观察窗口内锁恒定被占用（不依赖墙钟时长，确定性）
+                    while (zombieRelease.getCount() > 0) {
                         try {
-                            Thread.sleep(100L);
+                            zombieRelease.await();
                         } catch (InterruptedException ignored) {
                             // 故意不退出：锁不释放，后续投递只能命中"分片锁繁忙"
                         }
@@ -675,15 +678,13 @@ class OrderlyMessageIT extends AbstractRedisIT {
             // 旧语义（竞争复用 RECONSUME_LATER）下该信号永远不会出现，此处直接超时失败。
             await().atMost(15, TimeUnit.SECONDS).until(() -> busySignals.get() >= 1);
 
-            // 稳定性断言（须持续 1s 成立）：竞争信号仅一次、DLQ 为空、handler 只被调用一次。
+            // 稳定性断言（须持续 1s 成立）：竞争不消耗预算的全部可观测后果。
+            // 不断言信号次数：R1-1 起本地延迟重投会按退避反复尝试（信号随之重复），
             // 旧语义在此失败：第 2/3 次竞争耗尽预算并 routeToDlq → DLQ 非空。
             await().atMost(15, TimeUnit.SECONDS)
                     .during(1, TimeUnit.SECONDS)
                     .untilAsserted(
                             () -> {
-                                assertThat(busySignals.get())
-                                        .as("竞争信号只出现一次：不消耗重试预算、不进入挂起重试")
-                                        .isEqualTo(1);
                                 assertThat(handlerInvocations.get())
                                         .as("竞争尝试不得调用业务 handler（仅僵尸 handler 的那一次）")
                                         .isEqualTo(1);
@@ -694,18 +695,23 @@ class OrderlyMessageIT extends AbstractRedisIT {
                                                         .size())
                                         .as("竞争不得把从未被处理的消息送进 DLQ")
                                         .isZero();
+                                assertThat(
+                                                redisson.getScoredSortedSet(
+                                                                StreamMQKeys.retryZSet(
+                                                                        namespace, topic, group))
+                                                        .size())
+                                        .as("竞争不得写入 retry ZSet（不消耗重试预算）")
+                                        .isZero();
                             });
 
-            // 消息未被 ACK：仍留在 PEL 等待 PEL 认领兜底重投
+            // 消息未被 ACK：仍留在 PEL 等待锁释放后的本地重投 / PEL 认领兜底
             RStream<String, String> stream =
                     redisson.getStream(StreamMQKeys.topicStream(namespace, topic));
             assertThat(stream.listPending(group, StreamMessageId.MIN, StreamMessageId.MAX, 100))
                     .as("竞争路径不得 ACK：消息必须留在 PEL")
                     .isNotEmpty();
-            RScoredSortedSet<String> retryZset =
-                    redisson.getScoredSortedSet(StreamMQKeys.retryZSet(namespace, topic, group));
-            assertThat(retryZset.size()).as("竞争路径不得写入 retry ZSet").isZero();
         } finally {
+            zombieRelease.countDown();
             producer.close();
             container.stop();
         }
@@ -761,6 +767,203 @@ class OrderlyMessageIT extends AbstractRedisIT {
                             });
             // maxReconsumeTimes=1 → 首投 1 次 + 重试 1 次
             assertThat(attempts.get()).as("应触发首投 + 1 次重试").isGreaterThanOrEqualTo(2);
+        } finally {
+            producer.close();
+            container.stop();
+        }
+    }
+
+    // ===================== 红队第六轮 R1-1 / R1-2 =====================
+
+    @Test
+    @DisplayName("R1-1:分片锁竞争解除后延迟重投把消息最终送达 handler(修复前永不重投=静默黑洞)")
+    @SuppressWarnings({"rawtypes", "unchecked"})
+    void orderlyListener_shardBusy_defersThenRedeliversAfterContention() throws Exception {
+        String topic = "orderly-defer-retry-topic";
+        String group = "orderly-defer-retry-group";
+
+        RetryPolicy retryPolicy = new FastRetryPolicy(100, 100);
+        DefaultConsumerInterceptorChain chain = new DefaultConsumerInterceptorChain();
+        DefaultRetryAndDlqHandler retryDlqHandler =
+                new DefaultRetryAndDlqHandler(
+                        redisson,
+                        converter,
+                        retryPolicy,
+                        chain,
+                        new LogAndDropDlqFailureStrategy(),
+                        DlqConfig.builder().build());
+
+        // 压缩锁等待：2 轮 × 60ms + 轮间 30ms，避免每次竞争烧掉默认 15s
+        AtomicInteger busySignals = new AtomicInteger();
+        RedissonOrderlyShardLockManager lockManager =
+                new RedissonOrderlyShardLockManager(redisson, 2, 30L) {
+                    @Override
+                    public ConsumeAction consumeWithShardLock(
+                            Message<?> message,
+                            ListenerRegistration reg,
+                            ConsumeOrderlyContext ctx,
+                            StreamMessageOrderlyConsumer orderly)
+                            throws Exception {
+                        try {
+                            return super.consumeWithShardLock(message, reg, ctx, orderly);
+                        } catch (OrderlyShardBusyException busy) {
+                            busySignals.incrementAndGet();
+                            throw busy;
+                        }
+                    }
+                };
+        lockManager.setAcquireTimeoutMs(60L);
+
+        DefaultStreamMQListenerContainer container =
+                new DefaultStreamMQListenerContainer(
+                        redisson,
+                        new RedissonStreamListenerFactory(redisson, converter),
+                        converter,
+                        retryPolicy,
+                        new LogAndDropDlqFailureStrategy(),
+                        DlqConfig.builder().build(),
+                        namespace,
+                        chain,
+                        retryDlqHandler,
+                        lockManager);
+
+        AtomicInteger invocations = new AtomicInteger();
+        StreamMessageOrderlyConsumer<String> listener =
+                (msg, ctx) -> {
+                    invocations.incrementAndGet();
+                    return ConsumeAction.SUCCESS;
+                };
+        // maxReconsumeTimes=0：竞争绝不能耗尽预算；修复前消息会永远留在 PEL（无人重投）
+        container.registerOrderlyConsumer(listener, mkOrderlyAnnotation(topic, group, 0));
+        createConsumerGroup(topic, group);
+
+        RedissonStreamProducer producer =
+                new RedissonStreamProducer(
+                        redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
+
+        // 模拟"另一实例的慢 handler"：先由外部线程占住全部 4 个分片锁
+        java.util.List<RLock> externalLocks = new java.util.ArrayList<>();
+        for (int i = 0; i < 4; i++) {
+            RLock lock = redisson.getLock(StreamMQKeys.shardLock(namespace, topic, group, i));
+            lock.lock();
+            externalLocks.add(lock);
+        }
+        try {
+            container.start();
+            producer.syncSend(
+                    MessageBuilder.<String>withTopic(topic).body("deferred-body").build());
+
+            // 竞争发生且消息未被处理（handler 零调用）
+            await().atMost(15, TimeUnit.SECONDS).until(() -> busySignals.get() >= 1);
+            assertThat(invocations.get()).as("竞争期间消息不得被处理").isZero();
+
+            // 解除竞争 → 本地延迟重投（1s 起退避）最终送达 handler
+            for (RLock lock : externalLocks) {
+                if (lock.isHeldByCurrentThread()) {
+                    lock.unlock();
+                }
+            }
+            await().atMost(25, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(invocations.get()).isEqualTo(1));
+
+            // 成功走既有 ACK 路径：PEL 清空、DLQ 为空
+            await().atMost(10, TimeUnit.SECONDS)
+                    .untilAsserted(
+                            () ->
+                                    assertThat(
+                                                    redisson.getStream(
+                                                                    StreamMQKeys.topicStream(
+                                                                            namespace, topic))
+                                                            .listPending(
+                                                                    group,
+                                                                    StreamMessageId.MIN,
+                                                                    StreamMessageId.MAX,
+                                                                    100))
+                                            .isEmpty());
+            assertThat(redisson.getStream(StreamMQKeys.dlqStream(namespace, group)).size())
+                    .as("竞争重投不得进 DLQ")
+                    .isZero();
+        } finally {
+            for (RLock lock : externalLocks) {
+                try {
+                    if (lock.isHeldByCurrentThread()) {
+                        lock.unlock();
+                    }
+                } catch (RuntimeException ignored) {
+                    // 断言失败路径下的清理，忽略
+                }
+            }
+            producer.close();
+            container.stop();
+        }
+    }
+
+    @Test
+    @DisplayName("R1-2:ORDERLY 返回 defer(delay) → 延迟后重投且不进 DLQ、不消耗重试预算(maxReconsumeTimes=0)")
+    void orderlyListener_deferAction_delayedRedeliveryWithoutDlq() throws Exception {
+        String topic = "orderly-action-defer-topic";
+        String group = "orderly-action-defer-group";
+
+        RetryPolicy retryPolicy = new FastRetryPolicy(100, 100);
+        DefaultStreamMQListenerContainer container =
+                new DefaultStreamMQListenerContainer(
+                        redisson,
+                        new RedissonStreamListenerFactory(redisson, converter),
+                        converter,
+                        retryPolicy,
+                        namespace);
+
+        AtomicInteger invocations = new AtomicInteger();
+        java.util.List<Long> invocationTimes = new java.util.concurrent.CopyOnWriteArrayList<>();
+        StreamMessageOrderlyConsumer<String> listener =
+                (msg, ctx) -> {
+                    invocationTimes.add(System.currentTimeMillis());
+                    int n = invocations.incrementAndGet();
+                    // 首次消费显式 defer 500ms（不消耗预算、不进 DLQ）；重投后成功
+                    return n == 1
+                            ? ConsumeAction.defer(Duration.ofMillis(500))
+                            : ConsumeAction.SUCCESS;
+                };
+        // maxReconsumeTimes=0：修复前 DEFER 被当作失败 → 直接 DLQ（第二次调用永远不会发生）
+        container.registerOrderlyConsumer(listener, mkOrderlyAnnotation(topic, group, 0));
+        createConsumerGroup(topic, group);
+        container.start();
+
+        RedissonStreamProducer producer =
+                new RedissonStreamProducer(
+                        redisson, namespace, group + "-p", converter, 3000L, 0, 0, 0);
+        try {
+            producer.syncSend(MessageBuilder.<String>withTopic(topic).body("defer-body").build());
+
+            await().atMost(20, TimeUnit.SECONDS)
+                    .untilAsserted(() -> assertThat(invocations.get()).isEqualTo(2));
+
+            assertThat(invocationTimes.get(1) - invocationTimes.get(0))
+                    .as("defer(500ms) 必须按声明延迟重投（留 200ms 容差）")
+                    .isGreaterThanOrEqualTo(300L);
+
+            assertThat(redisson.getStream(StreamMQKeys.dlqStream(namespace, group)).size())
+                    .as("DEFER 不得进 DLQ")
+                    .isZero();
+            assertThat(
+                            redisson.getScoredSortedSet(
+                                            StreamMQKeys.retryZSet(namespace, topic, group))
+                                    .size())
+                    .as("DEFER 不得写 retry ZSet")
+                    .isZero();
+            await().atMost(10, TimeUnit.SECONDS)
+                    .untilAsserted(
+                            () ->
+                                    assertThat(
+                                                    redisson.getStream(
+                                                                    StreamMQKeys.topicStream(
+                                                                            namespace, topic))
+                                                            .listPending(
+                                                                    group,
+                                                                    StreamMessageId.MIN,
+                                                                    StreamMessageId.MAX,
+                                                                    100))
+                                            .isEmpty());
         } finally {
             producer.close();
             container.stop();

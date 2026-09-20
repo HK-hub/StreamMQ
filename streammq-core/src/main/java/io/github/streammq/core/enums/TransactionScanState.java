@@ -22,7 +22,7 @@ import java.util.Arrays;
  * </ul>
  *
  * @author StreamMQ Contributors
- * @since 1.1.0
+ * @since 0.1.2
  */
 public enum TransactionScanState {
 

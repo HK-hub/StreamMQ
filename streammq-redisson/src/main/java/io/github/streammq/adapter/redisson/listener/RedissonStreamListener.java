@@ -77,6 +77,9 @@ public class RedissonStreamListener implements StreamMQListener {
     /** Class.forName 缓存上限（LRU 淘汰）：bodyTypeName 来自外部可控的流字段，缓存必须有界，防止无界增长。 */
     private static final int CLASS_CACHE_MAX_SIZE = 256;
 
+    /** 隔离区 payload Hash 的 TTL（R1-3）：与 {@code PelClaimScheduler} 的补偿落盘一致（7 天）， 避免隔离数据无限增长。 */
+    private static final java.time.Duration QUARANTINE_PAYLOAD_TTL = java.time.Duration.ofDays(7);
+
     /**
      * Class.forName 缓存，避免每条消息重复类加载查找（正结果缓存，负结果不缓存）。
      *
@@ -349,6 +352,9 @@ public class RedissonStreamListener implements StreamMQListener {
      * 排空本消费者 PEL 中已投递未确认的消息（XREADGROUP id=0 语义）。
      *
      * <p>实例崩溃/停止时，已投递到该消费者 PEL 但未 ACK 的消息会永久滞留； 本方法在消费循环启动前 将这些消息重新交付处理，补齐 at-least-once 恢复路径。
+     *
+     * <p><b>契约（R1-8 对齐 core）：</b>本实现已支持该能力，<b>永不返回 {@code null}</b>： 返回空列表 = PEL 已清空或本轮无遗留；返回非空列表 =
+     * 待处理消息。 调用方（{@code ConsumeLoopTask}）对 {@code null}（= 未实现）只 WARN 一次并跳过。
      */
     @Override
     public List<Message<?>> drainPendingOnce(int maxMessages) {
@@ -712,7 +718,11 @@ public class RedissonStreamListener implements StreamMQListener {
      * <p>失败语义：DLQ 转存成功 → 返回 true，调用方将其 ACK 移出 PEL（消息不丢，运维可排查/重放）； 转存失败 → 返回 false 且不 ACK，消息保留在 PEL
      * 等待下次投递（宁可重复隔离也不静默丢失）。
      *
-     * @return true 表示已转存 DLQ（应 ACK）；false 表示转存失败（保留 PEL）
+     * <p><b>DLQ 模式毒丸（R1-3 修复）：</b>目标流与当前消费流相同（写回去会自复制无限循环）， 此前直接返回 true 让调用方
+     * ACK——把死信的<b>唯一副本</b>静默丢弃（日志只有字段名/数量）。 现改为先写入二级隔离区（quarantine payload Hash + ZSet，与 PelClaim
+     * 补偿同款落盘方式）： 落盘成功才返回 true（可 ACK）；落盘失败返回 false（不 ACK，保留 PEL 等待重投）。
+     *
+     * @return true 表示消息已被隔离落盘（应 ACK）；false 表示隔离失败（保留 PEL）
      */
     private boolean handlePoisonEntry(
             StreamMessageId streamId, Map<String, String> fields, RuntimeException cause) {
@@ -726,19 +736,9 @@ public class RedissonStreamListener implements StreamMQListener {
                 cause.getMessage());
 
         // DLQ 模式下的毒丸：目标流（dlqStream）与当前消费的流相同——写回去会自复制无限循环。
-        // 毒丸已到达 DLQ 边界（已经是重试耗尽后的死信），直接 ACK 并记录最完整的可观测信息。
+        // 毒丸已到达 DLQ 边界（已经是重试耗尽后的死信）：R1-3 要求不得裸 ACK，先隔离落盘再 ACK。
         if (dlqMode) {
-            LOG.error(
-                    "Poison message in DLQ stream (cannot route to same stream):"
-                            + " topic={}, group={}, entryId={}, fieldNames={}, fieldCount={},"
-                            + " cause={}",
-                    topic,
-                    group,
-                    entryId,
-                    fields.keySet(),
-                    fields.size(),
-                    cause.toString());
-            return true;
+            return quarantineDlqPoison(streamId, fields, cause);
         }
 
         try {
@@ -762,6 +762,63 @@ public class RedissonStreamListener implements StreamMQListener {
                     group,
                     entryId,
                     dlqEx);
+            return false;
+        }
+    }
+
+    /**
+     * R1-3：DLQ 模式毒丸的二级隔离落盘。
+     *
+     * <p>把原始字段与失败原因写入隔离区（{@code streammq:{ns}:quarantine:payload:{group}:{entryId}} Hash + {@code
+     * streammq:{ns}:quarantine:{kind}} ZSet，与 {@code PelClaimScheduler} 的补偿落盘同一约定），
+     * 使死信内容可排查/可重放；<b>落盘成功才允许 ACK</b>，失败则不 ACK（消息留在 PEL，由认领重投再次尝试隔离）。
+     *
+     * @return true 已隔离落盘（应 ACK）；false 隔离失败（保留 PEL）
+     */
+    private boolean quarantineDlqPoison(
+            StreamMessageId streamId, Map<String, String> fields, RuntimeException cause) {
+        String entryId = streamId.toString();
+        String quarantineKind = "dlq-poison";
+        try {
+            Map<String, String> quarantineFields = new java.util.LinkedHashMap<>(fields);
+            quarantineFields.put(FIELD_DLQ_REASON, DlqReason.DESERIALIZE.getCode());
+            quarantineFields.put("dlqEntryId", entryId);
+            quarantineFields.put(
+                    "dlqError",
+                    Objects.nonNull(cause.getMessage())
+                            ? cause.getMessage()
+                            : cause.getClass().getName());
+            io.github.streammq.core.message.MessageId messageId =
+                    io.github.streammq.core.message.MessageId.fromStreamEntry(entryId);
+            String payloadKey =
+                    StreamMQKeys.quarantinePayloadHash(namespace, group, messageId.toString());
+            org.redisson.api.RMap<String, String> quarantinePayload =
+                    redisson.getMap(payloadKey, StringCodec.INSTANCE);
+            quarantinePayload.putAll(quarantineFields);
+            quarantinePayload.expire(QUARANTINE_PAYLOAD_TTL);
+            redisson.getScoredSortedSet(
+                            StreamMQKeys.quarantineZset(namespace, quarantineKind),
+                            StringCodec.INSTANCE)
+                    .add(System.currentTimeMillis(), entryId + "|" + quarantineKind);
+            LOG.error(
+                    "Poison message in DLQ stream quarantined (raw fields preserved for manual"
+                            + " replay): topic={}, group={}, entryId={}, fieldCount={},"
+                            + " quarantineKey={}, cause={}",
+                    topic,
+                    group,
+                    entryId,
+                    fields.size(),
+                    payloadKey,
+                    cause.toString());
+            return true;
+        } catch (RuntimeException quarantineEx) {
+            LOG.error(
+                    "Failed to quarantine DLQ-mode poison message, keeping it in PEL (NOT acked):"
+                            + " topic={}, group={}, entryId={}",
+                    topic,
+                    group,
+                    entryId,
+                    quarantineEx);
             return false;
         }
     }

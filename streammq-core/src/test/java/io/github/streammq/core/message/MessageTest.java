@@ -11,7 +11,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.streammq.core.enums.DelayLevel;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -399,6 +401,155 @@ class MessageTest {
             assertThat(sample()).isNotEqualTo("not-a-message");
             // 不抛异常即可
             sample().hashCode();
+        }
+    }
+
+    @Nested
+    @DisplayName("equals 字段集（用户可感知语义）")
+    class EqualsFieldSet {
+
+        /** 构造一条 messageId 为 null 的消息（可指定出生元数据与内容字段）。 */
+        private Message<String> content(
+                long bornTimestamp, String bornHost, int reconsumeTimes, String body) {
+            return new Message<>(
+                    "topic",
+                    "tag",
+                    "keys",
+                    "shard",
+                    null,
+                    null,
+                    body,
+                    null,
+                    null,
+                    bornTimestamp,
+                    bornHost,
+                    null,
+                    reconsumeTimes);
+        }
+
+        @Test
+        @DisplayName("bornTimestamp/bornHost/reconsumeTimes（运行时元数据）不参与比较：内容相同即相等")
+        void runtimeMetadataIgnored() {
+            Message<String> a = content(111L, "host-a", 0, "body");
+            Message<String> b = content(222L, "host-b", 3, "body");
+            assertThat(a).isEqualTo(b);
+            assertThat(a.hashCode()).isEqualTo(b.hashCode());
+        }
+
+        @Test
+        @DisplayName("Builder 自动填充 bornTimestamp 不影响 Set 去重（内容相同视为同一元素）")
+        void setDedupWithAutoFilledMetadata() {
+            Message<String> m1 =
+                    MessageBuilder.<String>withTopic("t").body("b").bornTimestamp(1L).build();
+            Message<String> m2 =
+                    MessageBuilder.<String>withTopic("t")
+                            .body("b")
+                            .bornTimestamp(2L)
+                            .bornHost("another-host")
+                            .build();
+            Set<Message<String>> set = new HashSet<>();
+            set.add(m1);
+            set.add(m2);
+            assertThat(set).hasSize(1).contains(m2);
+        }
+
+        @Test
+        @DisplayName("delayLevel 参与比较")
+        void delayLevelParticipates() {
+            Message<String> base = content(1L, "h", 0, "body");
+            assertThat(base.withDelayLevel(DelayLevel.SECOND_1))
+                    .isNotEqualTo(base.withDelayLevel(DelayLevel.SECOND_5))
+                    .isNotEqualTo(base);
+        }
+
+        @Test
+        @DisplayName("delayTimeMillis 参与比较")
+        void delayTimeMillisParticipates() {
+            Message<String> base = content(1L, "h", 0, "body");
+            assertThat(base.withDelayTimeMillis(100L))
+                    .isNotEqualTo(base.withDelayTimeMillis(200L))
+                    .isNotEqualTo(base);
+        }
+
+        @Test
+        @DisplayName("transactionId 参与比较")
+        void transactionIdParticipates() {
+            Message<String> base = content(1L, "h", 0, "body");
+            assertThat(base.withTransactionId("tx-1"))
+                    .isNotEqualTo(base.withTransactionId("tx-2"))
+                    .isNotEqualTo(base);
+        }
+
+        @Test
+        @DisplayName("properties / userProperties 按内容参与比较")
+        void propertiesParticipate() {
+            Message<String> base = content(1L, "h", 0, "body");
+            assertThat(base.addProperty("traceId", "t-1")).isNotEqualTo(base);
+            assertThat(base.addProperty("traceId", "t-1"))
+                    .isNotEqualTo(base.addProperty("traceId", "t-2"));
+            assertThat(base.addProperty("traceId", "t-1"))
+                    .isEqualTo(base.addProperty("traceId", "t-1"));
+            assertThat(base.addUserProperty("biz", "v")).isNotEqualTo(base);
+        }
+    }
+
+    @Nested
+    @DisplayName("properties null 契约（0.1.2 统一）")
+    class PropertiesNullContract {
+
+        @Test
+        @DisplayName("全参构造：Map 中 null value 抛 NPE（不再静默接受）")
+        void constructorNullValueRejected() {
+            Map<String, String> props = new HashMap<>();
+            props.put("k", null);
+            assertThatThrownBy(
+                            () ->
+                                    new Message<>(
+                                            "topic", null, null, null, props, null, "body", null,
+                                            null, 0L, null, null, 0))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("property value");
+        }
+
+        @Test
+        @DisplayName("全参构造：Map 中 null key 抛 NPE")
+        void constructorNullKeyRejected() {
+            Map<String, String> userProps = new HashMap<>();
+            userProps.put(null, "v");
+            assertThatThrownBy(
+                            () ->
+                                    new Message<>(
+                                            "topic", null, null, null, null, userProps, "body",
+                                            null, null, 0L, null, null, 0))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("userProperty key");
+        }
+
+        @Test
+        @DisplayName("withProperties(null) 视为空 Map；withProperties 含 null value 抛 NPE")
+        void withPropertiesContract() {
+            assertThat(sample().addProperty("k", "v").withProperties(null).getProperties())
+                    .isEmpty();
+            Map<String, String> props = new HashMap<>();
+            props.put("k", null);
+            assertThatThrownBy(() -> sample().withProperties(props))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("property value");
+        }
+
+        @Test
+        @DisplayName("withUserProperties：null Map 视为空；含 null key 抛 NPE")
+        void withUserPropertiesContract() {
+            assertThat(
+                            sample().addUserProperty("k", "v")
+                                    .withUserProperties(null)
+                                    .getUserProperties())
+                    .isEmpty();
+            Map<String, String> userProps = new HashMap<>();
+            userProps.put(null, "v");
+            assertThatThrownBy(() -> sample().withUserProperties(userProps))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("userProperty key");
         }
     }
 

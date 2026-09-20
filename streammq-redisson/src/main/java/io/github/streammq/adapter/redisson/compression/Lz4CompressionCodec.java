@@ -164,9 +164,9 @@ public class Lz4CompressionCodec implements CompressionCodec {
             System.arraycopy(out, 0, result, 0, result.length);
             return result;
         } catch (InvocationTargetException ex) {
-            throw new StreamMQException("LZ4 compress failed", ex.getCause());
+            throw new SerializationException("LZ4 compress failed", ex.getCause());
         } catch (IllegalAccessException ex) {
-            throw new StreamMQException("LZ4 compress failed", ex);
+            throw new SerializationException("LZ4 compress failed", ex);
         }
     }
 
@@ -201,9 +201,10 @@ public class Lz4CompressionCodec implements CompressionCodec {
                 throw new SerializationException(
                         "LZ4 decompress failed: " + cause.getMessage(), cause);
             }
-            throw new StreamMQException("LZ4 decompress failed", cause);
+            // 关键路径：解压失败必须抛 SerializationException（毒丸消息分支识别的类型）
+            throw new SerializationException("LZ4 decompress failed", cause);
         } catch (IllegalAccessException ex) {
-            throw new StreamMQException("LZ4 decompress failed", ex);
+            throw new SerializationException("LZ4 decompress failed", ex);
         }
     }
 

@@ -233,6 +233,31 @@ public class StreamMQCoreAutoConfiguration {
             return clazz.getDeclaredConstructor(boolean.class)
                     .newInstance(requireClassRegistration);
         } catch (ReflectiveOperationException | LinkageError e) {
+            // 反射调用把构造器内部抛出的异常包成 InvocationTargetException：必须先解包，
+            // 否则宽松模式的安全门禁（SecurityException）会被误报成"缺 fory-core 依赖"，
+            // 用户照着提示加依赖后仍失败，且看不到真正原因（发布前修复 R6-S4）。
+            Throwable cause =
+                    (e instanceof java.lang.reflect.InvocationTargetException ite
+                                    && ite.getCause() != null)
+                            ? ite.getCause()
+                            : e;
+            if (cause instanceof SecurityException) {
+                throw new IllegalStateException(
+                        "streammq.producer.serializer="
+                                + StreamMQSpringConstants.FURY_SERIALIZER_CLASS_NAME
+                                + " with streammq.producer.fury-require-class-registration=false"
+                                + " requests Fury UNRESTRICTED (loose) mode, which is gated for"
+                                + " security reasons: Redis bytes may be deserialized into any"
+                                + " class on the classpath (deserialization RCE on shared /"
+                                + " multi-tenant Redis). To enable it explicitly, start the JVM"
+                                + " with -Dstreammq.security.allowUnrestrictedSerializer=true"
+                                + " (only for fully trusted single-tenant Redis), or keep"
+                                + " streammq.producer.fury-require-class-registration=true and"
+                                + " register payload types via"
+                                + " streammq.producer.fury-registered-classes. Cause: "
+                                + cause.getMessage(),
+                        cause);
+            }
             throw new IllegalStateException(
                     "streammq.producer.serializer is set to "
                             + StreamMQSpringConstants.FURY_SERIALIZER_CLASS_NAME
@@ -264,8 +289,14 @@ public class StreamMQCoreAutoConfiguration {
     /**
      * 默认消息转换器：DefaultMessageConverter。
      *
+     * <p><b>多 Codec 语义（R6-S3）：</b>允许注册多个 {@link CompressionCodec} Bean（按名称写入/解压、由注册表索引）。
+     * 此处只解析"默认"Codec：{@code streammq.producer.compression-codec} 精确匹配（显式配置优先）→ {@code @Primary} →
+     * 唯一候选；多候选且无法消歧时不会静默取任意一个。
+     *
      * @param serializer 序列化器
-     * @param compressionCodecProvider 压缩编解码器（可选）
+     * @param compressionCodecProvider 压缩编解码器 Bean（可选，可多个）
+     * @param properties 配置
+     * @param codecRegistry 压缩编解码器注册表
      * @return 消息转换器
      */
     @Bean
@@ -273,9 +304,15 @@ public class StreamMQCoreAutoConfiguration {
     public MessageConverter streamMQMessageConverter(
             MessageSerializer<?> serializer,
             ObjectProvider<CompressionCodec> compressionCodecProvider,
+            StreamMQProperties properties,
             CompressionCodecRegistry codecRegistry) {
         DefaultMessageConverter converter = new DefaultMessageConverter(serializer);
-        CompressionCodec codec = compressionCodecProvider.getIfAvailable();
+        CompressionCodec codec =
+                resolveDefaultCompressionCodec(
+                        compressionCodecProvider,
+                        codecRegistry,
+                        properties,
+                        "DefaultMessageConverter");
         if (codec != null) {
             converter.setCompressionCodec(codec);
             LOG.debug("CompressionCodec injected into DefaultMessageConverter: {}", codec.name());
@@ -364,9 +401,45 @@ public class StreamMQCoreAutoConfiguration {
         // 可选 LZ4 Codec：仅当 classpath 存在 lz4-java 时注册，避免硬依赖
         registerOptionalLz4(registry);
         // 用户自定义 Codec
+        // 全量注册（允许多个 Codec：按 name() 索引，供 compressed 字段按名解压）
         codecs.forEach(registry::register);
         LOG.debug("CompressionCodecRegistry created with codecs: {}", registry.availableCodecs());
         return registry;
+    }
+
+    /**
+     * 解析"默认"压缩 Codec（选择顺序见 {@link StreamMQBeanResolution#defaultCompressionCodec}）。
+     *
+     * <p>多候选且无需压缩时返回 null 并记录 WARN——不静默取任意一个，避免"线上压缩格式取决于 Bean 注册顺序"。
+     */
+    private CompressionCodec resolveDefaultCompressionCodec(
+            ObjectProvider<CompressionCodec> provider,
+            CompressionCodecRegistry registry,
+            StreamMQProperties properties,
+            String injectionPoint) {
+        java.util.List<CompressionCodec> candidates = provider.orderedStream().toList();
+        boolean compressionRequired = properties.getProducer().getCompressThreshold() > 0;
+        CompressionCodec codec =
+                StreamMQBeanResolution.defaultCompressionCodec(
+                        candidates,
+                        candidates.size() > 1 ? provider.getIfUnique() : null,
+                        registry,
+                        properties.getProducer().getCompressionCodec(),
+                        compressionRequired,
+                        injectionPoint);
+        if (codec == null && candidates.size() > 1) {
+            LOG.warn(
+                    "{}: {} CompressionCodec beans are registered but none is @Primary and"
+                        + " streammq.producer.compression-codec is not set; no default codec was"
+                        + " selected (nothing is picked arbitrarily). Decompression still resolves"
+                        + " codecs by name from the registry. Set"
+                        + " streammq.producer.compression-codec=<name> or mark one @Primary when"
+                        + " compression-on-send is needed. Candidates: {}",
+                    injectionPoint,
+                    candidates.size(),
+                    StreamMQBeanResolution.describe(candidates));
+        }
+        return codec;
     }
 
     /**
@@ -502,10 +575,15 @@ public class StreamMQCoreAutoConfiguration {
      * <p>用户可直接注入 {@link StreamMessageProducer} 发送消息，或通过 {@link StreamMessageTemplate} / {@link
      * io.github.streammq.core.service.StreamMessageService} 使用。 生命周期由 Spring 容器管理，与 Template 解耦。
      *
+     * <p><b>多 Codec 语义（R6-S3）：</b>注册多个 {@link CompressionCodec} Bean 时，默认压缩 Codec 按 {@code
+     * streammq.producer.compression-codec} 精确匹配（显式配置优先）→ {@code @Primary} → 唯一候选 解析；多候选且
+     * 无法消歧时不会静默取任意一个（压缩已启用则启动失败并列出候选）。
+     *
      * @param redisson Redisson 客户端
      * @param converter 消息转换器
      * @param properties 配置
-     * @param compressionCodecProvider 压缩编解码器（可选）
+     * @param compressionCodecProvider 压缩编解码器 Bean（可选，可多个）
+     * @param codecRegistry 压缩编解码器注册表（用于按名称解析内置 Codec）
      * @return 生产者实例
      */
     @Bean(destroyMethod = "close")
@@ -514,7 +592,8 @@ public class StreamMQCoreAutoConfiguration {
             RedissonClient redisson,
             MessageConverter converter,
             StreamMQProperties properties,
-            ObjectProvider<CompressionCodec> compressionCodecProvider) {
+            ObjectProvider<CompressionCodec> compressionCodecProvider,
+            CompressionCodecRegistry codecRegistry) {
         RedissonStreamProducer producer =
                 RedissonStreamProducer.builder()
                         .redisson(redisson)
@@ -526,7 +605,12 @@ public class StreamMQCoreAutoConfiguration {
                         .compressThreshold(properties.getProducer().getCompressThreshold())
                         .maxMessageSize(properties.getProducer().getMaxMessageSize())
                         .build();
-        CompressionCodec codec = compressionCodecProvider.getIfAvailable();
+        CompressionCodec codec =
+                resolveDefaultCompressionCodec(
+                        compressionCodecProvider,
+                        codecRegistry,
+                        properties,
+                        "RedissonStreamProducer");
         if (codec != null) {
             producer.setCompressionCodec(codec);
             LOG.debug("CompressionCodec injected into RedissonStreamProducer: {}", codec.name());
@@ -609,14 +693,17 @@ public class StreamMQCoreAutoConfiguration {
                 new DefaultStreamMessageTemplate(
                         producer, defaultGroup, converter, defaultConfig, txGroup);
         template.setAsyncSendExecutor(streammqExecutor);
-        TransactionScanner scanner = transactionScannerProvider.getIfAvailable();
+        TransactionScanner scanner =
+                StreamMQBeanResolution.uniqueOrNull(
+                        transactionScannerProvider, "TransactionScanner");
         if (scanner != null) {
             template.setTransactionScanner(scanner);
             LOG.debug(
                     "TransactionScanner injected into DefaultStreamMessageTemplate: full"
                             + " half-message flow enabled");
         }
-        StreamMQMetrics metrics = metricsProvider.getIfAvailable();
+        StreamMQMetrics metrics =
+                StreamMQBeanResolution.uniqueOrNull(metricsProvider, "StreamMQMetrics");
         if (metrics != null) {
             template.setMetrics(metrics);
             LOG.debug(
@@ -708,7 +795,9 @@ public class StreamMQCoreAutoConfiguration {
             StreamMQProperties properties,
             ObjectProvider<BroadcastInstanceRegistry> instanceRegistryProvider) {
         LOG.debug("Using RedissonBroadcastGroupRegistry");
-        BroadcastInstanceRegistry instanceRegistry = instanceRegistryProvider.getIfAvailable();
+        BroadcastInstanceRegistry instanceRegistry =
+                StreamMQBeanResolution.uniqueOrNull(
+                        instanceRegistryProvider, "BroadcastInstanceRegistry");
         StreamMQProperties.Consumer consumer = properties.getConsumer();
         return new RedissonBroadcastGroupRegistry(
                 redisson,

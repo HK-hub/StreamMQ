@@ -9,7 +9,7 @@ package io.github.streammq.diagnostics.endpoint;
  * 诊断 REST 端点常量定义：基础路径、鉴权资源名与健康概览响应 key。
  *
  * @author StreamMQ Contributors
- * @since 1.1.0
+ * @since 0.1.2
  */
 public final class StreamMQDiagnosticsEndpointConstants {
 

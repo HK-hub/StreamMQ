@@ -18,7 +18,8 @@
             <dependency>
                 <groupId>io.opentelemetry</groupId>
                 <artifactId>opentelemetry-bom</artifactId>
-                <version>1.40.0</version>
+                <!-- 版本由根 POM 的 opentelemetry.version 统一管理，避免升级时样例漂移 -->
+                <version>${opentelemetry.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

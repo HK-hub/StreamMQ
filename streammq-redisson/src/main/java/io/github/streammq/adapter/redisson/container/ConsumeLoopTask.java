@@ -45,12 +45,6 @@ final class ConsumeLoopTask implements Runnable {
      */
     static final int RUNTIME_FAILURE_REPORT_THRESHOLD = 10;
 
-    /** 暂停状态下消费循环的休眠间隔（毫秒）——由容器从 {@code streammq.consumer.paused-sleep-millis} 注入 */
-    private final long pausedSleepMillis;
-
-    /** Broker 异常后消费循环的退避休眠间隔（毫秒）——由容器从 {@code streammq.consumer.broker-error-backoff-millis} 注入 */
-    private final long brokerErrorBackoffMillis;
-
     /** 循环依赖集合（由容器装配，字段收拢避免长参数列表——Parameter Object）。 */
     record LoopContext(
             ListenerRegistration<?> reg,
@@ -65,7 +59,15 @@ final class ConsumeLoopTask implements Runnable {
             java.util.function.IntSupplier inflightCapacity,
             ListenerFactory listenerFactory,
             LoopFailureReporter failureReporter,
-            LoopFailureCleaner failureCleaner) {
+            LoopFailureCleaner failureCleaner,
+            // ===== R1-6：以下配置改为每轮读取（supplier），运行期 setter 对已运行的循环即时生效 =====
+            java.util.function.LongSupplier pausedSleepMillis,
+            java.util.function.LongSupplier brokerErrorBackoffMillis,
+            // ===== R1-5：暂停期心跳节流间隔（与容器心跳间隔一致） =====
+            java.util.function.LongSupplier heartbeatIntervalMillis,
+            // ===== R1-1：延迟重投队列与执行器（仅 primary 循环执行排空；允许为 null） =====
+            OrderlyDeferredRetryQueue deferredRetryQueue,
+            OrderlyDeferredRetryQueue.DeferredRetryDispatcher deferredRetryDispatcher) {
 
         /** 监听器创建函数式抽象（容器侧委托 {@code ListenerConfig.from(reg, retryMode)}）。 */
         interface ListenerFactory {
@@ -107,10 +109,8 @@ final class ConsumeLoopTask implements Runnable {
     /** 连续可恢复失败计数：达到 {@link #RUNTIME_FAILURE_REPORT_THRESHOLD} 后上报健康信号，成功拉取后复位 */
     private int consecutiveFailures = 0;
 
-    ConsumeLoopTask(LoopContext ctx, long pausedSleepMillis, long brokerErrorBackoffMillis) {
+    ConsumeLoopTask(LoopContext ctx) {
         this.ctx = Objects.requireNonNull(ctx, "ctx");
-        this.pausedSleepMillis = pausedSleepMillis;
-        this.brokerErrorBackoffMillis = brokerErrorBackoffMillis;
     }
 
     // ===================== Template Method =====================
@@ -169,12 +169,32 @@ final class ConsumeLoopTask implements Runnable {
         }
         try {
             hookDrainOwnPending(sink);
+            // R1-5：暂停期心跳节流状态。暂停是"降载"语义，不能按 pausedSleepMillis（默认 100ms，
+            // 即 ~20 写/秒）持续刷注册表心跳；按容器心跳间隔节流，恢复后立即补一次心跳。
+            long lastPauseHeartbeatAtMillis = 0L;
+            boolean pausedOnPreviousIteration = false;
             while (ctx.running().getAsBoolean()) {
                 if (ctx.paused().getAsBoolean()) {
-                    heartbeatHook.run();
-                    ContainerSupport.sleepQuietly(pausedSleepMillis);
+                    pausedOnPreviousIteration = true;
+                    long now = System.currentTimeMillis();
+                    long heartbeatInterval =
+                            Math.max(1L, ctx.heartbeatIntervalMillis().getAsLong());
+                    if (now - lastPauseHeartbeatAtMillis >= heartbeatInterval) {
+                        lastPauseHeartbeatAtMillis = now;
+                        heartbeatHook.run();
+                    }
+                    ContainerSupport.sleepQuietly(
+                            Math.max(1L, ctx.pausedSleepMillis().getAsLong()));
                     continue;
                 }
+                if (pausedOnPreviousIteration) {
+                    // 恢复后立即心跳一次：暂停期被节流，避免恢复瞬间注册表心跳已接近过期
+                    pausedOnPreviousIteration = false;
+                    lastPauseHeartbeatAtMillis = System.currentTimeMillis();
+                    heartbeatHook.run();
+                }
+                // R1-1：先重投到期的延迟条目（仅 primary 循环；不新增线程、不阻塞其它注册）
+                drainDeferredRetries();
                 if (!pullAndDispatch(sink)) {
                     break;
                 }
@@ -217,6 +237,32 @@ final class ConsumeLoopTask implements Runnable {
     }
 
     /**
+     * R1-1：重投本注册到期的延迟条目（仅 primary 循环执行）。
+     *
+     * <p>执行在循环线程上（不新增线程、不阻塞其它注册）：队列每次最多取 {@link OrderlyDeferredRetryQueue#MAX_DRAIN_PER_TICK}
+     * 条，逐条走与正常消息相同的消费管线—— 分片锁空闲即成功并走既有 ACK 路径，仍繁忙则再次登记退避。重投异常已在队列内部兜底（条目保留退避）。
+     */
+    private void drainDeferredRetries() {
+        OrderlyDeferredRetryQueue queue = ctx.deferredRetryQueue();
+        if (Objects.isNull(queue)
+                || !ctx.primaryLoop()
+                || Objects.isNull(ctx.deferredRetryDispatcher())) {
+            return;
+        }
+        try {
+            queue.drainDue(
+                    ctx.reg(), System.currentTimeMillis(), listener, ctx.deferredRetryDispatcher());
+        } catch (RuntimeException ex) {
+            LOG.warn(
+                    "Deferred retry drain failed (will retry on next loop tick): topic={},"
+                            + " group={}: {}",
+                    ctx.reg().getTopic(),
+                    ctx.reg().getGroup(),
+                    ex.toString());
+        }
+    }
+
+    /**
      * 钩子：primary 且并发集群消费时排空本消费者 PEL 遗留消息（at-least-once 补齐）。
      *
      * <p>背压启用时排空条目经由 inflight sink 派发（与主循环一致的解耦路径）； 背压禁用（sink 为同步直发）时保持原内联同步处理。
@@ -225,6 +271,9 @@ final class ConsumeLoopTask implements Runnable {
      * XREADGROUP 读入、尚未 ACK 的在途消息（XREADGROUP id=0 按消费者名读取整段 PEL），导致同一消息被两条循环各处理一次——重复投递。因此并发度 &gt; 1
      * 时跳过 启动排空：遗留未 ACK 消息由 PelClaimScheduler 按 group 级空闲阈值（默认 60s）认领重投， at-least-once 语义不变；并发度 =
      * 1（单循环独占该消费者 PEL）时保留快速恢复路径。
+     *
+     * <p><b>契约（R1-8）：</b>{@code drainPendingOnce} 返回 {@code null} = 监听器未实现该能力（core 默认 实现），只 WARN
+     * 一次并跳过；返回空列表 = PEL 已清空。
      */
     private void hookDrainOwnPending(MessageSink sink) {
         if (!ctx.primaryLoop()
@@ -237,6 +286,15 @@ final class ConsumeLoopTask implements Runnable {
         int drained = 0;
         while (ctx.running().getAsBoolean() && !ctx.paused().getAsBoolean()) {
             List<Message<?>> pending = listener.drainPendingOnce(ctx.reg().getPullBatchSize());
+            if (Objects.isNull(pending)) {
+                LOG.warn(
+                        "drainPendingOnce is not implemented by this listener (null = unimplemented"
+                                + " per StreamMQListener contract), skipping startup PEL drain:"
+                                + " topic={}, group={}",
+                        ctx.reg().getTopic(),
+                        ctx.reg().getGroup());
+                return;
+            }
             if (pending.isEmpty()) {
                 if (drained > 0) {
                     LOG.info(
@@ -338,7 +396,8 @@ final class ConsumeLoopTask implements Runnable {
                     ex.getMessage());
             reportRuntimeFailure(ex);
         }
-        ContainerSupport.sleepQuietly(brokerErrorBackoffMillis);
+        // R1-6：每轮读取（而非构造时快照），运行期 setter 对已运行的循环即时生效
+        ContainerSupport.sleepQuietly(Math.max(1L, ctx.brokerErrorBackoffMillis().getAsLong()));
         return true;
     }
 

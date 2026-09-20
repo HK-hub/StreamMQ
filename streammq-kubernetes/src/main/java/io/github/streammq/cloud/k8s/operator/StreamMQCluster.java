@@ -8,7 +8,10 @@ package io.github.streammq.cloud.k8s.operator;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import io.fabric8.kubernetes.api.model.Namespaced;
 import io.fabric8.kubernetes.client.CustomResource;
+import io.fabric8.kubernetes.model.annotation.Group;
+import io.fabric8.kubernetes.model.annotation.Version;
 import io.github.streammq.core.StreamMQConstants;
 import java.util.List;
 import java.util.Map;
@@ -50,6 +53,11 @@ import lombok.ToString;
  *   replicas: 3
  * }</pre>
  *
+ * <p><b>fabric8 契约（K1）：</b>{@link CustomResource} 的构造器强制要求 {@code @Group} 与 {@code @Version}——缺失时任何
+ * {@code new StreamMQCluster()}（含 Jackson 反序列化）都会抛 {@link IllegalArgumentException}，导致 informer
+ * 反序列化失败、{@code updateStatus()} 与 HPA 回写恒抛。 此处与 {@code
+ * src/main/resources/crd/streammq-cluster.yaml} 的 {@code streammq.io/v1} 对齐。
+ *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
@@ -58,7 +66,15 @@ import lombok.ToString;
 @ToString(callSuper = true)
 @JsonIgnoreProperties(ignoreUnknown = true)
 @JsonInclude(JsonInclude.Include.NON_NULL)
-public class StreamMQCluster extends CustomResource {
+@Group(StreamMQCluster.GROUP)
+@Version(StreamMQCluster.VERSION)
+public class StreamMQCluster extends CustomResource implements Namespaced {
+
+    /** CRD API 组（与 CRD yaml 的 {@code spec.group} 一致）。 */
+    public static final String GROUP = "streammq.io";
+
+    /** CRD API 版本（与 CRD yaml 的 {@code spec.versions[].name} 一致）。 */
+    public static final String VERSION = "v1";
 
     /** StreamMQ 集群规格配置 */
     @JsonProperty("spec")
@@ -550,6 +566,21 @@ public class StreamMQCluster extends CustomResource {
         /** 是否启用自动扩缩容 */
         private Boolean enabled = false;
 
+        /**
+         * 消费侧主题（K6）。
+         *
+         * <p>取值必须与消费者部署中 {@code @StreamMQConsumer(topic = ...)} 完全一致——HPA 指标按「topic +
+         * consumerGroup」 维度读取，框架不存在由 CR 名派生的约定。留空时 HPA 不做扩缩决策（fail-closed）。
+         */
+        private String topic;
+
+        /**
+         * 消费侧消费者组（K6）。
+         *
+         * <p>取值必须与消费者部署中 {@code @StreamMQConsumer(consumerGroup = ...)} 完全一致。留空时 HPA 不做扩缩决策。
+         */
+        private String consumerGroup;
+
         /** 最小副本数 */
         private Integer minReplicas = StreamMQK8sDefaults.AUTOSCALE_MIN_REPLICAS;
 
@@ -583,6 +614,22 @@ public class StreamMQCluster extends CustomResource {
 
         public void setEnabled(Boolean enabled) {
             this.enabled = enabled;
+        }
+
+        public String getTopic() {
+            return topic;
+        }
+
+        public void setTopic(String topic) {
+            this.topic = topic;
+        }
+
+        public String getConsumerGroup() {
+            return consumerGroup;
+        }
+
+        public void setConsumerGroup(String consumerGroup) {
+            this.consumerGroup = consumerGroup;
         }
 
         public Integer getMinReplicas() {

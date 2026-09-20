@@ -146,10 +146,14 @@ written as Base64 text in stream fields. Still, keep Redis reachable only by tru
   Spring Boot 3.5.16 (Spring Framework 6.2.x, Spring Data 3.5.x, Micrometer 1.15.x), Redisson 3.52.0 (Netty 4.1.135+),
   Jackson 2.21.4, AssertJ 3.27.7 and commons-compress 1.27.1. Remaining Medium/Low upstream advisories (if any) are
   reported but do not block the gate.
-- **CVE scanning channel**: every PR/push runs a **keyless hard gate** — a CycloneDX SBOM of the four published
-  artifacts' dependency closure (`bom-shipped.json`) is scanned with `osv-scanner` (OSV database). Any advisory with
-  CVSS ≥ 7.0 in that closure fails the build; the full JSON report is uploaded as a build artifact. OWASP
-  Dependency-Check / NVD **deep scan** runs weekly and on demand (it requires `secrets.NVD_API_KEY`). Local
+- **CVE scanning channel**: every PR/push **and every release run** a **keyless hard gate** — a CycloneDX SBOM of
+  the four published artifacts' dependency closure (`bom-shipped.json`) is scanned with `osv-scanner` (OSV database).
+  Any advisory with CVSS ≥ 7.0 in that closure fails the build; the full JSON report is uploaded as a build artifact.
+  The release channel (`release.yml`) runs the **same** `sbom-scan` job and its `publish` job depends on it (together
+  with the `guard` publish-set consistency job), so a High/Critical advisory in the shipped closure blocks the Central
+  upload even for a tag that was pushed directly and never went through CI. OWASP
+  Dependency-Check / NVD **deep scan** runs weekly and on demand (it requires `secrets.NVD_API_KEY` and is an
+  enhancement, not the default gate). Local
   equivalent: `mvn -DskipTests -Dcyclonedx.skip=false -Dcyclonedx.skipNotDeployed=false
   org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom`. Security advisories are published through
   [GitHub Security Advisories](https://github.com/HK-hub/StreamMQ/security/advisories).
@@ -199,8 +203,10 @@ and authenticator credentials via environment variables or a secret manager.
   它是纵深防御而非完整性边界，生产环境请显式声明消费者泛型。
 - **依赖与 CVE**：Jackson 已升级到 **2.21.4**（修复 GHSA-r7wm-3cxj-wff9 / GHSA-72hv-8253-57qq，且 `jackson-bom`
   声明在 Boot BOM 之前以免被覆盖）；构建基线为 Spring Boot 3.5.16 / Redisson 3.52.0，宿主依赖（Spring/Netty）
-  版本由使用方自管。CI 的**默认 CVE 硬门禁**是**无需密钥**的发布构件依赖闭包扫描（CycloneDX SBOM +
-  `osv-scanner`，任意 CVSS ≥ 7.0 即阻断发布）；OWASP Dependency-Check（NVD）为**增强扫描**，仅在配置
+  版本由使用方自管。CI **与发布通道**（`release.yml` 的 `sbom-scan` job，`publish` 依赖它）的**默认 CVE 硬门禁**
+  都是**无需密钥**的发布构件依赖闭包扫描（CycloneDX SBOM + `osv-scanner`，任意 CVSS ≥ 7.0 即阻断发布；
+  因此即使 tag 直接推送、从未跑过 CI，High/Critical 公告也会在 Central 上传前被拦住）；
+  OWASP Dependency-Check（NVD）为**增强扫描**，仅在配置
   `secrets.NVD_API_KEY` 时于每周计划任务中执行（`mvn verify -Dowasp.skip=false`），缺失密钥不会使发布通道变红。
 - **其他**：内置序列化器 `serialize(null)→null`、`deserialize(null|空)→null`；SDK 自有 Redis 键显式使用
   `StringCodec`；凭据不落日志（口令在堆上无法擦除，高敏感环境请做网络隔离并优先短周期令牌）。

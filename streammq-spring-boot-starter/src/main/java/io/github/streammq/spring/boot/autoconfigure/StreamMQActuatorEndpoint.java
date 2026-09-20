@@ -103,6 +103,19 @@ public class StreamMQActuatorEndpoint {
     /** 健康状态缓存 TTL（毫秒）：overview 高频轮询时不至于每次都触发 Redis PING */
     private static final long HEALTH_CACHE_TTL_MILLIS = 5_000L;
 
+    /**
+     * 消费组快照缓存 TTL（毫秒）。
+     *
+     * <p><b>为什么需要（R6）：</b>{@code listGroups()} 会对每个已注册消费者执行一次 {@code instances.readAllMap()} +
+     * {@code XPENDING}——即每次调用约 {@code 2N} 次 Redis 往返。 overview 是监控/看板的高频入口，没有缓存时 N 越大越容易把 Redis 打满。
+     * 这里刻意只缓存 overview 的聚合视图：直接访问 {@code /actuator/streammq/groups} 仍取实时数据， 避免"刚触发 rebalance
+     * 却看到旧列表"的困惑。
+     */
+    private static final long GROUPS_CACHE_TTL_MILLIS = 3_000L;
+
+    private volatile List<Map<String, Object>> cachedGroupSnapshot;
+    private volatile long cachedGroupSnapshotAt;
+
     /** 最近一次健康状态（volatile：缓存读写无需强一致） */
     private volatile String cachedHealthStatus;
 
@@ -130,6 +143,25 @@ public class StreamMQActuatorEndpoint {
         cachedHealthStatus = status;
         cachedHealthStatusAt = now;
         return status;
+    }
+
+    /**
+     * 返回消费组列表的短 TTL 快照（仅供 {@code overview} 使用）。
+     *
+     * <p>并发下可能重复计算一次，幂等无害（与 {@link #cachedHealthStatus()} 同一取舍）。
+     *
+     * @return 消费组列表快照
+     */
+    private List<Map<String, Object>> cachedGroupSnapshot() {
+        long now = System.currentTimeMillis();
+        List<Map<String, Object>> cached = cachedGroupSnapshot;
+        if (cached != null && now - cachedGroupSnapshotAt < GROUPS_CACHE_TTL_MILLIS) {
+            return cached;
+        }
+        List<Map<String, Object>> fresh = adminEndpoint.listGroups();
+        cachedGroupSnapshot = fresh;
+        cachedGroupSnapshotAt = now;
+        return fresh;
     }
 
     public StreamMQActuatorEndpoint(
@@ -361,7 +393,7 @@ public class StreamMQActuatorEndpoint {
         }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("status", cachedHealthStatus());
-        result.put("groups", adminEndpoint.listGroups());
+        result.put("groups", cachedGroupSnapshot());
         result.put("topics", adminEndpoint.listTopics());
         // 广播消费组数量是容量规划级指标：它随实例重启累积，持续增长说明实例崩溃循环
         // 或心跳超时配置过长，最终表现为 Redis 内存无声上涨。

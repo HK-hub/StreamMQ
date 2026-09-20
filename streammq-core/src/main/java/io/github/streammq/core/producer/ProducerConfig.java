@@ -7,6 +7,7 @@ package io.github.streammq.core.producer;
 
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.serializer.MessageSerializer;
+import java.util.Objects;
 import lombok.Builder;
 import lombok.Getter;
 import lombok.NonNull;
@@ -56,4 +57,43 @@ public class ProducerConfig {
 
     /** 序列化器类（可选，为 null 表示使用全局配置） */
     private final Class<? extends MessageSerializer<?>> serializer;
+
+    /**
+     * 全参构造器（由 Lombok {@code @Builder} 调用），统一执行构造期校验。
+     *
+     * <p><b>为什么需要显式构造器：</b>{@code PublisherConfig} 的 {@code namespace} 此前完全没有校验， 而 namespace
+     * 会被直接拼进所有 Redis Key（{@code streammq:{ns}:msg:{topic}}）——含 {@code ':'} 会让 Key 结构错位，含 {@code
+     * '{'}/{@code '}'} 会在 Redis Cluster 下把整个 Key 家族钉到同一 slot。 消费侧（{@link
+     * io.github.streammq.core.listener.ListenerConfig}）早已 fail-fast，生产侧却静默接受， 同一份 namespace
+     * 配置在两侧行为不一致。
+     *
+     * @param group 生产者组名
+     * @param namespace 命名空间
+     * @param sendMessageTimeout 发送超时（毫秒）
+     * @param streamMaxLen Stream 最大长度（0 = 不限）
+     * @param compressThreshold 压缩阈值（字节，0 = 禁用）
+     * @param maxMessageSize 单条消息最大字节数
+     * @param retryTimes 同步发送重试次数
+     * @param serializer 序列化器类
+     */
+    @SuppressWarnings("java:S107")
+    ProducerConfig(
+            String group,
+            String namespace,
+            long sendMessageTimeout,
+            int streamMaxLen,
+            int compressThreshold,
+            long maxMessageSize,
+            int retryTimes,
+            Class<? extends MessageSerializer<?>> serializer) {
+        this.group = Objects.requireNonNull(group, "group");
+        // 与 ListenerConfig 同一校验入口：null/空归一为空串，非法字符快速失败
+        this.namespace = io.github.streammq.core.util.StringUtils.requireValidNamespace(namespace);
+        this.sendMessageTimeout = sendMessageTimeout;
+        this.streamMaxLen = streamMaxLen;
+        this.compressThreshold = compressThreshold;
+        this.maxMessageSize = maxMessageSize;
+        this.retryTimes = retryTimes;
+        this.serializer = serializer;
+    }
 }

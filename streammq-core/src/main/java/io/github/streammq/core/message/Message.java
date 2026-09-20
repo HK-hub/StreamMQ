@@ -48,10 +48,22 @@ public final class Message<T> implements Serializable {
     /** 分片键（可选），仅顺序消费场景使用，相同 shardingKey 的消息路由到同一分片保证顺序 */
     private final String shardingKey;
 
-    /** 系统属性（防御性拷贝），框架使用，例如 traceId。getter 返回不可修改视图。 */
+    /**
+     * 系统属性（防御性拷贝），框架使用，例如 traceId。getter 返回不可修改视图。
+     *
+     * <p><b>null 契约（0.1.2 统一）：</b>传入的 Map 为 {@code null} 时视为空 Map；Map 中任一 key/value 为 {@code null}
+     * 立即抛 {@link NullPointerException}（与 {@code MessageBuilder} / {@link MessageMetadataBuilder}
+     * 同口径）。
+     */
     private final Map<String, String> properties;
 
-    /** 用户属性（防御性拷贝），用户自定义透传。getter 返回不可修改视图。 */
+    /**
+     * 用户属性（防御性拷贝），用户自定义透传。getter 返回不可修改视图。
+     *
+     * <p><b>null 契约（0.1.2 统一）：</b>传入的 Map 为 {@code null} 时视为空 Map；Map 中任一 key/value 为 {@code null}
+     * 立即抛 {@link NullPointerException}（与 {@code MessageBuilder} / {@link MessageMetadataBuilder}
+     * 同口径）。
+     */
     private final Map<String, String> userProperties;
 
     /**
@@ -164,11 +176,8 @@ public final class Message<T> implements Serializable {
         this.tag = tag;
         this.keys = keys;
         this.shardingKey = shardingKey;
-        this.properties = Objects.isNull(properties) ? new HashMap<>() : new HashMap<>(properties);
-        this.userProperties =
-                Objects.isNull(userProperties)
-                        ? new HashMap<>()
-                        : new LinkedHashMap<>(userProperties);
+        this.properties = copyProperties(properties, false, "property");
+        this.userProperties = copyProperties(userProperties, true, "userProperty");
         this.body = body;
         this.delayLevel = delayLevel;
         this.delayTimeMillis = requireValidDelayTimeMillis(delayTimeMillis);
@@ -177,6 +186,31 @@ public final class Message<T> implements Serializable {
         this.bornHost = bornHost;
         this.transactionId = transactionId;
         this.reconsumeTimes = reconsumeTimes;
+    }
+
+    /**
+     * 拷贝属性 Map 并统一 null 契约（0.1.2 定稿）：{@code null} Map 视为空 Map； Map 中<b>任一 key/value 为 null 立即抛
+     * {@link NullPointerException}</b>（与 {@link MessageMetadataBuilder#property(String, String)}
+     * 同口径， 不把非法值推迟到属性快照/序列化时才暴露）。
+     *
+     * @param source 源 Map，可为 null
+     * @param linked true 保留插入顺序（userProperties），false 使用普通 HashMap（properties）
+     * @param field 字段前缀（用于异常信息）
+     * @return 防御性拷贝（可修改副本；对外由 getter 返回不可修改视图）
+     * @throws NullPointerException 如果任一 key 或 value 为 null
+     */
+    private static Map<String, String> copyProperties(
+            Map<String, String> source, boolean linked, String field) {
+        Map<String, String> copy = linked ? new LinkedHashMap<>() : new HashMap<>();
+        if (Objects.isNull(source)) {
+            return copy;
+        }
+        for (Map.Entry<String, String> entry : source.entrySet()) {
+            copy.put(
+                    Objects.requireNonNull(entry.getKey(), field + " key"),
+                    Objects.requireNonNull(entry.getValue(), field + " value"));
+        }
+        return copy;
     }
 
     /**
@@ -518,15 +552,24 @@ public final class Message<T> implements Serializable {
     }
 
     /**
-     * 返回带有指定系统属性的新 Message 实例（替换现有属性）。
+     * 返回带有指定系统属性的新 Message 实例（<b>替换</b>现有属性）。
      *
-     * @param properties 新的系统属性
+     * <p><b>null 契约（0.1.2 统一）：</b>{@code properties} 为 {@code null} 时替换为空 Map；Map 中任一 key/value 为
+     * {@code null} 立即抛 {@link NullPointerException}（与 {@link #addProperty(String, String)} 和 {@code
+     * MessageMetadataBuilder} 同口径）。
+     *
+     * @param properties 新的系统属性，可为 null（表示空属性）
      * @return 新的 Message 实例
+     * @throws NullPointerException 如果任一 key 或 value 为 null
      */
     public Message<T> withProperties(Map<String, String> properties) {
-        Map<String, String> copied =
-                Objects.isNull(properties) ? new HashMap<>() : new LinkedHashMap<>(properties);
-        return derive(tag, keys, shardingKey, copied, userProperties, body);
+        return derive(
+                tag,
+                keys,
+                shardingKey,
+                copyProperties(properties, true, "property"),
+                userProperties,
+                body);
     }
 
     /**
@@ -535,6 +578,7 @@ public final class Message<T> implements Serializable {
      * @param key 属性键
      * @param value 属性值
      * @return 新的 Message 实例
+     * @throws NullPointerException 如果 key 或 value 为 null（null 键/null 值非法，立即失败）
      */
     public Message<T> addProperty(String key, String value) {
         Objects.requireNonNull(key, "property key");
@@ -545,17 +589,24 @@ public final class Message<T> implements Serializable {
     }
 
     /**
-     * 返回带有指定用户属性的新 Message 实例（替换现有属性）。
+     * 返回带有指定用户属性的新 Message 实例（<b>替换</b>现有属性）。
      *
-     * @param userProperties 新的用户属性
+     * <p><b>null 契约（0.1.2 统一）：</b>{@code userProperties} 为 {@code null} 时替换为空 Map；Map 中任一 key/value
+     * 为 {@code null} 立即抛 {@link NullPointerException}（与 {@link #addUserProperty(String, String)} 和
+     * {@code MessageMetadataBuilder} 同口径）。
+     *
+     * @param userProperties 新的用户属性，可为 null（表示空属性）
      * @return 新的 Message 实例
+     * @throws NullPointerException 如果任一 key 或 value 为 null
      */
     public Message<T> withUserProperties(Map<String, String> userProperties) {
-        Map<String, String> copied =
-                Objects.isNull(userProperties)
-                        ? new HashMap<>()
-                        : new LinkedHashMap<>(userProperties);
-        return derive(tag, keys, shardingKey, properties, copied, body);
+        return derive(
+                tag,
+                keys,
+                shardingKey,
+                properties,
+                copyProperties(userProperties, true, "userProperty"),
+                body);
     }
 
     /**
@@ -564,9 +615,10 @@ public final class Message<T> implements Serializable {
      * @param key 属性键
      * @param value 属性值
      * @return 新的 Message 实例
+     * @throws NullPointerException 如果 key 或 value 为 null（null 键/null 值非法，立即失败）
      */
     public Message<T> addUserProperty(String key, String value) {
-        Objects.requireNonNull(key, "property key");
+        Objects.requireNonNull(key, "userProperty key");
         Objects.requireNonNull(value, "userProperty value");
         Map<String, String> copied = new LinkedHashMap<>(this.userProperties);
         copied.put(key, value);
@@ -605,10 +657,16 @@ public final class Message<T> implements Serializable {
      *
      * <ul>
      *   <li>已分配 messageId 的消息：按 {@code (topic, messageId)} 比较，与发送前后身份一致
-     *   <li>发送前 messageId 为 null 的消息：退化为基于内容（topic/tag/keys/shardingKey/body/延迟/出生时间）
-     *       的值比较，保证两个内容相同但尚未获得 ID 的消息被判定为相等，而非退化为同一性语义
+     *   <li>发送前 messageId 为 null 的消息：退化为基于<b>用户可感知语义</b>的值比较——{@code
+     *       topic/tag/keys/shardingKey/body/delayLevel/delayTimeMillis/properties/userProperties/transactionId}
+     *       （{@code properties} 为内容比较），保证两个内容相同但尚未获得 ID 的消息被判定为相等
+     *   <li><b>运行时元数据不参与比较</b>：{@code bornTimestamp} / {@code bornHost} / {@code reconsumeTimes}
+     *       由框架或 Builder 自动填充，同一内容的两次构造必然不同，参与比较会让"内容相同即相等"不可达
      *   <li>已分配 ID 与未分配 ID 的消息始终不等（身份不同）
      * </ul>
+     *
+     * <p>本方法与 {@link #hashCode()} 的字段集合严格一致；<b>同一内容 + 不同出生元数据的消息可安全用于 {@code Set}/{@code Map}
+     * 去重</b>。
      *
      * @param o 比较对象
      * @return true 如果语义上相等
@@ -628,18 +686,23 @@ public final class Message<T> implements Serializable {
         if (Objects.nonNull(messageId)) {
             return topic.equals(other.topic) && messageId.equals(other.messageId);
         }
-        // 两者 messageId 均为 null：基于内容的值比较（保持值对象契约）
+        // 两者 messageId 均为 null：基于用户可感知语义的值比较（不含运行时元数据）
         return Objects.equals(topic, other.topic)
                 && Objects.equals(tag, other.tag)
                 && Objects.equals(keys, other.keys)
                 && Objects.equals(shardingKey, other.shardingKey)
                 && Objects.equals(body, other.body)
+                && Objects.equals(delayLevel, other.delayLevel)
                 && Objects.equals(delayTimeMillis, other.delayTimeMillis)
-                && Objects.equals(bornTimestamp, other.bornTimestamp);
+                && Objects.equals(properties, other.properties)
+                && Objects.equals(userProperties, other.userProperties)
+                && Objects.equals(transactionId, other.transactionId);
     }
 
     /**
-     * 与 {@link #equals} 一致：messageId 非 null 时为 {@code hash(topic, messageId)}， 否则为内容哈希。
+     * 与 {@link #equals} 一致：messageId 非 null 时为 {@code hash(topic, messageId)}， 否则为 {@code
+     * hash(topic, tag, keys, shardingKey, body, delayLevel, delayTimeMillis, properties,
+     * userProperties, transactionId)}（不含 bornTimestamp/bornHost/reconsumeTimes 等运行时元数据）。
      *
      * @return 哈希值
      */
@@ -648,7 +711,17 @@ public final class Message<T> implements Serializable {
         if (Objects.nonNull(messageId)) {
             return Objects.hash(topic, messageId);
         }
-        return Objects.hash(topic, tag, keys, shardingKey, body, delayTimeMillis, bornTimestamp);
+        return Objects.hash(
+                topic,
+                tag,
+                keys,
+                shardingKey,
+                body,
+                delayLevel,
+                delayTimeMillis,
+                properties,
+                userProperties,
+                transactionId);
     }
 
     @Override

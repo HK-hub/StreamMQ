@@ -12,7 +12,7 @@ package io.github.streammq.core.enums;
  * 处理器）写入，消费/展示侧（管理端点、拓扑追踪）读取。
  *
  * @author StreamMQ Contributors
- * @since 1.1.0
+ * @since 0.1.2
  */
 public enum DlqReason {
 

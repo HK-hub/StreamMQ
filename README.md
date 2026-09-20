@@ -152,58 +152,66 @@ Serializers, converters, filters, interceptors, retry policies, rebalance strate
 
 ## Benchmarks — methodology disclosure
 
-> **Important: the numbers below are 0.1.2 locally measured benchmarks** (2026-09-02, localhost Redis, JDK 21, laptop-grade hardware):
-> - Serialization benchmarks now use JMH `Blackhole` consumers (prevents JIT dead-code elimination from inflating throughput)
-> - Consumer benchmark drives the **raw Redisson read path** (XREADGROUP → field decode → callback → **batched** XACK, 1 ACK per 100 messages) with continuous producers. It deliberately **bypasses the listener container**, so the filter/interceptor chains, metrics, retry/DLQ handling and per-message ACK of the production path are **not** included — expect real container throughput to be lower. A container-driven benchmark is tracked as follow-up work.
+> **Important: the numbers below are locally measured benchmarks, all re-run on 2026-09-20** against the current code and the current JMH annotation profile (dedicated localhost Redis 8.8.0, JDK 21.0.11, Intel i7-14700KF / 32 GB / Windows 10 — desktop-grade hardware, **not** production hardware):
+> - Serialization benchmarks use JMH `Blackhole` consumers (prevents JIT dead-code elimination from inflating throughput)
+> - Send and consume benchmarks run with `JacksonJsonSerializer` — the **0.1.2 production default** — so these are not "old default" figures
+> - Consumer benchmark drives the **raw Redisson read path** (XREADGROUP → field decode → callback → **batched** XACK, 1 ACK per 100 messages) against a **pre-loaded backlog**, with no continuous refeeding during the measurement (only a low-watermark keep-alive feeder) and a validity gate that fails the run when the backlog runs dry. It deliberately **bypasses the listener container**, so the filter/interceptor chains, metrics, retry/DLQ handling and per-message ACK of the production path are **not** included — expect real container throughput to be lower. A container-driven benchmark is tracked as follow-up work.
 > - The previous README number "Stream consume ~269,760 ops/s" was removed because it measured an empty XREADGROUP roundtrip — a broken benchmark
-> - Error bars are 99.9% CI; laptop-grade results are for reference only — measure on your own production hardware
+> - Error bars are 99.9% CI (much wider than the usual 99% one); results are for reference only — measure on your own production hardware
 
 > We openly acknowledge that before 0.1.0 we published methodology-flawed benchmark numbers. This transparency matters more than "pretending it didn't happen". **Use your own environment's measurements for production capacity planning.**
 >
-> **Note (0.1.2 defaults changed):** the numbers below were measured under the 0.1.1-era defaults (Fury as default serializer, concurrent consume-timeout = 30s). 0.1.2 flips the **default serializer to `JacksonJsonSerializer`** and **disables the per-message consume-timeout by default** (PEL-reclaim fallback keeps at-least-once). Both change the absolute throughput figures — re-run `mvn -Pbenchmark` in your environment for current numbers.
+> Full report with per-iteration raw values, latency percentiles and the machine-readable validity evidence: [`streammq-benchmark/BENCHMARK_REPORT.md`](streammq-benchmark/BENCHMARK_REPORT.md).
 
-### Serialization Throughput (ops/s) — 2026-09-17 measured
+### Serialization Throughput (ops/s) — 2026-09-20 measured
 
-1KB message body, `messageCount=1000`, with Blackhole consumer. JMH profile **declared in `SerializationBenchmark`**: `@Fork(3, warmups = 2)`, `@Warmup(3×2s)`, `@Measurement(5×2s)`, `@BenchmarkMode(Throughput, SampleTime)`; the table below was collected with the CLI overrides `-f 1 -wi 4 -i 5 -w 2s -r 2s -bm thrpt` (single-fork run — see §2 of the [full report](docs/benchmarks/serialization-2026-09-17.md) for the exact command). All six built-in serializers, **including the new `FlatBuffersSerializer` (FlexBuffers) and `SbeSerializer` (SBE envelope)**. Full report: [`docs/benchmarks/serialization-2026-09-17.md`](docs/benchmarks/serialization-2026-09-17.md).
+1KB message body, with Blackhole consumer. JMH profile **declared in `SerializationBenchmark`** — the class annotations are the single source of truth (`main()` no longer overrides them, and neither does CI): `@Fork(1)`, `@Warmup(2×1s)`, `@Measurement(3×2s)`, `@BenchmarkMode(Throughput, SampleTime)`. All six built-in serializers, **including `FlatBuffersSerializer` (FlexBuffers) and `SbeSerializer` (SBE envelope)**.
 
-| Serializer | Serialize (ops/s) | Deserialize (ops/s) | RoundTrip (ops/s) | Single Serialize | Single Deserialize | Size (bytes) |
-|---|---|---|---|---|---|---|
-| **Fury** | **~3,483,891** | **~3,800,231** | **~1,880,645** | **~4,036,015** | **~3,995,683** | 1,094 |
-| Protostuff | ~351,231 | ~3,945,355 | ~320,724 | ~342,823 | ~3,717,589 | 1,050 |
-| FlatBuffers (FlexBuffers) | ~657,099 | ~763,086 | ~347,640 | ~645,424 | ~785,224 | 1,150 |
-| SBE (envelope) | ~358,310 | ~765,708 | ~246,984 | ~354,743 | ~817,930 | 1,104 |
-| Jackson (default) | ~416,872 | ~893,418 | ~266,364 | ~410,731 | ~875,660 | 1,092 |
-| JDK | ~442,764 | — | — | ~459,824 | — | — |
+| Serializer | Serialize (ops/s) | Deserialize (ops/s) | RoundTrip (ops/s) | Single Serialize | Single Deserialize |
+|---|---|---|---|---|---|
+| **Fury** | **~4,323,664** | **~4,374,579** | **~2,090,991** | **~4,442,831** | **~4,322,816** |
+| Protostuff | ~352,662 | ~4,024,571 | ~333,142 | ~354,637 | ~3,777,286 |
+| FlatBuffers (FlexBuffers) | ~694,202 | ~736,299 | ~374,788 | ~687,661 | ~807,548 |
+| SBE (envelope) | ~358,537 | ~789,301 | ~242,670 | ~355,722 | ~795,995 |
+| Jackson (default) | ~419,588 | ~899,889 | ~279,826 | ~414,844 | ~906,830 |
+| JDK | ~428,211 | ~116,017 | ~86,815 | ~386,110 | ~115,415 |
 
 > **Reading the numbers.**
-> - **Fury** is fastest overall (~8× Jackson on serialize, ~4.3× on deserialize) but requires the class-registration whitelist (safety) and pulls Guava.
-> - **Protostuff** deserializes very fast (~4.4× Jackson) yet serializes slowly (~0.85× Jackson) — good for read-heavy paths.
-> - **FlatBuffers** (FlexBuffers, schema-less, safe — pure data, no gadget RCE surface) is balanced. Its zero-copy read applies *per field*; because `FlatBuffersSerializer` still materializes a POJO via reflection, end-to-end deserialize (~763K) is comparable to Jackson, not dramatically faster.
+> - **Fury** is fastest overall (~10.3× Jackson on serialize, ~4.9× on deserialize, ~7.5× on round-trip) but requires the class-registration whitelist (safety) and pulls Guava. Its p99 latency (~0.6 µs) is roughly an order of magnitude below Jackson's (1.8–5.2 µs).
+> - **Protostuff** deserializes very fast (~4.5× Jackson) yet serializes slowly (~0.84× Jackson) — good for read-heavy paths.
+> - **FlatBuffers** (FlexBuffers, schema-less, safe — pure data, no gadget RCE surface) is balanced. Its zero-copy read applies *per field*; because `FlatBuffersSerializer` still materializes a POJO via reflection, end-to-end deserialize (~736K) is comparable to Jackson, not dramatically faster.
 > - **SBE** (envelope mode) is bounded by its inner Jackson codec (~0.86× Jackson both ways) plus the fixed 8-byte header + `varData` framing (~10–16 B). Its value is the framed, schema-versioned container; true low-latency gains need schema-first bodies (codegen readers), not the envelope.
-> - **JDK** deserialize is not measured: `JdkSerializer` enforces a deserialization filter (security) that rejects this payload.
-> - `Size` is dominated by the 1KB string; differences are within ±10%. Laptop-grade hardware with an IDE running → reference only.
+> - **JDK** serializes on par with Jackson but deserializes ~7.8× slower (~116K vs ~900K); its deserialization filter accepts the benchmark payload because the target type is allow-listed for the call. Not recommended for production (see [SECURITY.md](SECURITY.md)).
+> - Laptop/desktop-grade hardware → reference only. An earlier snapshot with different CLI-override parameters lives in [`docs/benchmarks/serialization-2026-09-17.md`](docs/benchmarks/serialization-2026-09-17.md); it is the same order of magnitude but not item-by-item comparable.
 
-### Send Throughput (ops/s) — 0.1.2 measured
+### Send Throughput (ops/s) — 2026-09-20 measured
 
-Single instance, localhost Redis. JMH profile declared in `StreamMessageTemplateBenchmark`: `@Fork(3, warmups = 2)`, `@Warmup(3×2s)`, `@Measurement(5×2s)`, `@BenchmarkMode(Throughput, SampleTime)`.
-**Disclosure:** the 0.1.2 numbers below were collected with an earlier, lighter profile (fork=1, warmup=1×2s, measurement=2×3s — as recorded in `streammq-benchmark/BENCHMARK_REPORT.md` §4) and were not re-measured after the profile was tightened; treat them as indicative and re-run the reproducible command at the end of this section for full-profile numbers.
+Single instance, localhost Redis. JMH profile declared in `StreamMessageTemplateBenchmark` (single source of truth): `@Fork(1)`, `@Warmup(2×1s)`, `@Measurement(3×2s)`, `@BenchmarkMode(Throughput, SampleTime)`. Batch methods send 100 messages per invocation (`asyncSendThroughput` issues all 100 concurrently and then joins them; `syncSendThroughput` sends them serially) and declare `@OperationsPerInvocation(100)`.
 
 | Send Mode | 100B | 1KB | 10KB |
 |---|---|---|---|
-| **Async batch (batch=100)** | **~12,513** | **~11,780** | **~8,326** |
-| Sync batch (batch=10) | ~3,640 | ~3,765 | ~2,863 |
-| Sync single | ~3,741 | ~3,610 | ~2,600 |
+| **Async (100 concurrent, all joined)** | **~17,654** | **~16,944** | **~12,527** |
+| Sync 100 serial per op | ~3,949 | ~3,499 | ~2,692 |
+| Sync single | ~3,932 | ~3,886 | ~2,859 |
 
-### Consume Throughput (ops/s) — 0.1.2 measured
+> Async beats sync-single by ~4.5×; 10KB costs ~29% versus 100B. `SampleTime` p99 for the async path stays at ~0.11–0.13 ms.
 
-Raw read path: XREADGROUP + field decode + callback + batched XACK (1 ACK per 100 messages, with continuous feed). JMH fork=1, warmup=1×2s, measurement=3×3s. **Not** the container path — see the note above.
+### Consume Throughput (ops/s) — 2026-09-20 measured
+
+Rebuilt harness (raw read path: XREADGROUP + field decode + callback + batched XACK, 1 ACK per 100 messages) with:
+- a **pre-loaded backlog** (`-Dstreammq.benchmark.backlog`, default 50000) built before the measurement, whose build rate is only reported as a feeder reference metric;
+- **no continuous refeeding during the measurement** — only a low-watermark keep-alive feeder (`-Dstreammq.benchmark.feederThreads`, default 2) so the consumer is the single bottleneck;
+- a **validity gate**: if the backlog runs dry at any point (an empty XREADGROUP), the run prints `INVALID RUN` and the process exits non-zero (raise `-Dstreammq.benchmark.backlog`), otherwise it exits 0. Per-payload evidence lands in `target/consume-validity-<payload>.json`.
 
 | Benchmark | Description | 1KB | 10KB |
 |---|---|---|---|
-| `consumeThroughput` | Full path (network RTT, deserialization, ACK) | **~2,383** | **~2,018** |
-| `serializationRoundTrip` | Jackson round-trip (with network) | ~270,705 | ~19,249 |
+| `consumeThroughput` | Full path (network RTT, deserialization, callback, batched ACK) | **~12,572** | **~7,521** |
+| `serializationRoundTrip` | Local Jackson round-trip (no Redis) | ~312,685 | ~21,813 |
+| `messageCreateAndConsume` | Message build + callback dispatch (no Redis) | ~7,651,608 | ~8,047,889 |
 
-> `consumeThroughput` measures the consume path (Redis network round-trip, deserialization, business callback, batched XACK), not an empty read roundtrip — but it is a **lower bound of the SDK container path**, since it omits the container's per-message ACK and its filter/interceptor/metrics chains. Numbers vary significantly across hardware, Redis instances, and network latency.
+> Validity evidence for this run: `starvedReads=0`, `avgBatchSize=100.0`, `supplyTight=false`, `valid=true` for both payload sizes — the consumer never waited on an empty stream, and (same window) it consumed **more** than the feeder replenished (1KB 160,400 > 123,500; 10KB 88,900 > 52,000), the difference coming from the pre-loaded backlog. Under the *old* feeder-capped harness the same benchmark reported only ~2,383 / ~2,018 ops/s, so the rebuilt number is **5.3× / 3.7× higher** — and it is still a **lower bound of the SDK container path**: it omits per-message ACK and the filter/interceptor/metrics chains, and the feeder shares the Redis instance during the measurement (conservative direction).
+>
+> `consumeThroughput` measures the consume path, not an empty read roundtrip. Numbers vary significantly across hardware, Redis instances, and network latency.
 
 Run yourself (same reproducible command as the benchmark report — run the JMH CLI directly so `test-compile` is not skipped and stale bytecode cannot be measured):
 
@@ -214,15 +222,26 @@ cd streammq-benchmark
 java -Djmh.ignoreLock=true \
      -cp "target/test-classes:target/classes:$(cat target/cp.txt)" \
      org.openjdk.jmh.Main "SerializationBenchmark" \
-     -f 1 -wi 4 -i 5 -w 2s -r 2s -bm thrpt \
      -rf json -rff target/jmh-serialization.json
 ```
 
-Send/consume benchmarks run the same way with `org.openjdk.jmh.Main "StreamMessageTemplateBenchmark"` / `"StreamConsumerBenchmark"`
-(the classpath separator is `:` on Linux/macOS and `;` on Windows).
+(no `-f/-wi/-i` overrides: the class annotations are the declared profile — the table above was produced exactly this way,
+plus the `-Dstreammq.redis.mode=local -Dstreammq.benchmark.allowFlush=true` properties when pointed at a non-container Redis.)
+
+`StreamMessageTemplateBenchmark` runs the same way with `org.openjdk.jmh.Main "StreamMessageTemplateBenchmark"`.
+For the consumer benchmark prefer the class entry point (it enforces the validity gate; the raw JMH CLI bypasses it):
+
+```bash
+java -Djmh.ignoreLock=true \
+     -Dstreammq.benchmark.backlog=50000 -Dstreammq.benchmark.feederThreads=2 \
+     -cp "target/test-classes:target/classes:$(cat target/cp.txt)" \
+     io.github.streammq.benchmark.StreamConsumerBenchmark
+```
+
+(the classpath separator is `:` on Linux/macOS and `;` on Windows; add `-Dstreammq.redis.mode=local -Dstreammq.benchmark.allowFlush=true` to point at an existing Redis — the `flushdb` guard requires that explicit authorization for non-container targets, while a Testcontainers-owned instance is flushed without it).
 Or trigger the CI benchmark job defined in
-[`.github/workflows/benchmark.yml`](.github/workflows/benchmark.yml); results are published as JMH
-artifacts and back-filled into this table.
+[`.github/workflows/benchmark.yml`](.github/workflows/benchmark.yml); its JMH artifacts are uploaded per run
+and are what the report tables are back-filled from.
 
 ---
 
@@ -291,8 +310,33 @@ streammq:
 
 > **Note:** `redisson.singleServerConfig.*` has **no property binding** in this starter (it only binds
 > `spring.redis.redisson.config` / `spring.redis.redisson.file`), so writing it has no effect — do not use it.
-> For cluster / sentinel and other advanced topologies, supply Redisson's native configuration through
+> For **Sentinel / master-replica and other advanced topologies**, supply Redisson's native configuration through
 > `spring.redis.redisson.config`.
+>
+> ⚠️ **Redis Cluster is NOT supported in 0.1.x — stated as measured behavior, not an inference.**
+> StreamMQ's data plane deliberately uses multi-key atomic operations (PEL claim `XACK`+`XADD`, transaction commit
+> `XRANGE`+`XADD`+`HSET`, retry transfer batches, DLQ requeue). Those keys carry **no `{...}` hash tag** — the key
+> family is partitioned by design so that a namespace cannot be pinned to a single slot (see `CHANGELOG.md` → "事务 key
+> 结构与 Redis Cluster（hash tag）定型声明"). Measured on a **real 3-master cluster** (`RedisClusterCompatibilityIT`),
+> which pins down **both** failure shapes:
+>
+> - producing and basic consume/ACK (single-key `XADD` / `XREADGROUP` / `XACK`) **do work**;
+> - multi-key **Lua** fails deterministically with `CROSSSLOT` and zero side effects (the message stays in the
+>   PEL/stream and is never falsely ACKed) — e.g. `streammq:{ns}:msg:{topic}` and
+>   `streammq:{ns}:retry:{topic}:{group}` hash to different slots;
+> - multi-key **`REDIS_WRITE_ATOMIC` batches** (delayed enqueue/transfer, retry/DLQ scheduling and transfer, transaction
+>   metadata) are **placement-dependent**: keys owned by the *same* master but different slots are grouped into a single
+>   `MULTI`/`EXEC` that the server rejects with `CROSSSLOT`; keys on *different* masters are **split per node** — every
+>   part commits, the batch reports success, and cross-key atomicity is silently gone (partial writes possible, no error
+>   raised).
+>
+> Because "silently degraded" is worse than "refused", StreamMQ 0.1.2 **fails fast**: with a cluster-configured client,
+> every cross-key atomic path (delayed message enqueue/transfer, retry & DLQ scheduling/transfer, transaction
+> prepare/commit, cross-stream PEL claim) throws an actionable `StreamMQException` **before the first key is written**,
+> and the listener container and producer emit a **one-time actionable WARN** when a cluster topology is detected — so
+> this surfaces at startup instead of as a bare `CROSSSLOT` in production. Scheduling state that already exists in the
+> cluster is never dropped or half-written.
+> **Use a single instance or Sentinel / master-replica for now.** Cluster support is tracked for a later release.
 
 ### 3. Enable (automatic)
 

@@ -18,7 +18,12 @@ import org.springframework.stereotype.Component;
  * 订单消息消费者示例。
  *
  * <p>演示最基本的并发消费：通过 {@link StreamMQConsumer} 注解注册消费者， 实现 {@link StreamMessageConcurrentlyConsumer}
- * 接口处理消息。 消费成功返回 {@link ConsumeAction#SUCCESS}，失败返回 {@link ConsumeAction#RECONSUME_LATER}。
+ * 接口处理消息。
+ *
+ * <p><b>失败处理（推荐模式）：</b>消费成功返回 {@link ConsumeAction#SUCCESS}（框架自动 ACK）； 失败返回 {@link
+ * ConsumeAction#RECONSUME_LATER} 或抛出异常（框架视为 RECONSUME_LATER），由框架按 {@code max-reconsume-times}
+ * 重试，重试耗尽后自动把消息路由到死信队列 {@code streammq:{namespace}:dlq:{consumerGroup}}，<b>绝不在消费者里静默 ACK 吞掉</b>。
+ * 需要消费死信请参考 {@code streammq-sample-dlq}（{@code @StreamMQDlqConsumer}）。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -29,11 +34,14 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 
     private static final Logger log = LoggerFactory.getLogger(OrderConsumer.class);
 
+    /** 失败注入（演示/测试用）：该订单号的消息消费时抛出异常，触发重试与 DLQ 路由 */
+    private volatile String failOrderId;
+
     /**
      * 处理单条订单消息。
      *
      * <p>返回 {@link ConsumeAction#SUCCESS} 表示消费成功，框架自动 ACK； 返回 {@link ConsumeAction#RECONSUME_LATER}
-     * 表示消费失败，框架按 {@code RetryPolicy} 重试。
+     * 表示消费失败，框架按 {@code RetryPolicy} 重试，耗尽重试预算后进入 DLQ。
      *
      * @param message 消息载体，包含 topic、tag、keys、body 等信息
      * @param context 消费上下文，提供 reconsumeTimes、consumerGroup 等元信息
@@ -51,9 +59,13 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
                 message.getBody(),
                 context.reconsumeTimes());
 
+        // 模拟业务处理：解析订单内容并处理
+        String orderContent = message.getBody();
+        if (failOrderId != null && failOrderId.equals(message.getKeys())) {
+            throw new RuntimeException(
+                    "Simulated business failure for order: " + message.getKeys());
+        }
         try {
-            // 模拟业务处理：解析订单内容并处理
-            String orderContent = message.getBody();
             processOrder(message.getKeys(), orderContent);
 
             log.info(
@@ -68,17 +80,7 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
                     context.reconsumeTimes(),
                     e.getMessage(),
                     e);
-
-            // 重试超过一定次数后仍然失败，可以记录到死信或告警
-            if (context.reconsumeTimes() >= 3) {
-                log.error(
-                        "Order processing exhausted retries: id={}, totalRetries={}",
-                        message.getKeys(),
-                        context.reconsumeTimes());
-                // 超过重试次数仍然失败，返回 SUCCESS 避免无限重试（实际生产应使用 DLQ）
-                return ConsumeAction.SUCCESS;
-            }
-
+            // 不吞消息：交给框架重试；重试耗尽后由框架路由到 DLQ（消息不会凭空消失）
             return ConsumeAction.RECONSUME_LATER;
         }
     }
@@ -91,5 +93,19 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
      */
     private void processOrder(String orderId, String content) {
         log.debug("Processing order: orderId={}, content={}", orderId, content);
+    }
+
+    /**
+     * 注入一个必然失败的订单号（演示 / 集成测试用，用于观察「失败 → 重试 → DLQ」链路）。
+     *
+     * @param orderId 订单 ID；为 null 表示取消失败注入
+     */
+    public void setFailOrderId(String orderId) {
+        this.failOrderId = orderId;
+    }
+
+    /** 取消失败注入。 */
+    public void clearFailOrderId() {
+        this.failOrderId = null;
     }
 }

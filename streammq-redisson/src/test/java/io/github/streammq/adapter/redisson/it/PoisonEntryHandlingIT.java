@@ -11,6 +11,7 @@ import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListener;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.core.enums.ConsumeFromWhere;
 import io.github.streammq.core.enums.DlqReason;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageBuilder;
@@ -20,10 +21,12 @@ import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.redisson.api.RMap;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
 import org.redisson.api.StreamMessageId;
 import org.redisson.api.stream.StreamAddArgs;
+import org.redisson.api.stream.StreamCreateGroupArgs;
 import org.redisson.client.codec.StringCodec;
 
 /**
@@ -149,6 +152,83 @@ class PoisonEntryHandlingIT extends AbstractRedisIT {
         } finally {
             consumer.close();
             producer.close();
+        }
+    }
+
+    // ===================== 红队第六轮 R1-3：DLQ 模式毒丸不得裸 ACK =====================
+
+    @Test
+    @DisplayName("R1-3:DLQ 模式毒丸先隔离落盘(原始字段可恢复)再 ACK，合法消息继续消费")
+    void dlqModePoison_isQuarantinedBeforeAck() {
+        RStream<String, String> dlqStream =
+                redisson.getStream(StreamMQKeys.dlqStream(namespace, GROUP));
+        dlqStream.createGroup(
+                StreamCreateGroupArgs.name(GROUP).makeStream().id(new StreamMessageId(0, 0)));
+
+        Map<String, String> poisonFields = new LinkedHashMap<>();
+        poisonFields.put(DefaultMessageConverter.FIELD_BODY, "dlq-poison-body");
+        poisonFields.put(DefaultMessageConverter.FIELD_RETRY_TIMES, "not-a-number");
+        StreamMessageId poisonId = dlqStream.add(StreamAddArgs.entries(poisonFields));
+
+        Map<String, String> validFields = new LinkedHashMap<>();
+        validFields.put(DefaultMessageConverter.FIELD_BODY, "dlq-valid-body");
+        dlqStream.add(StreamAddArgs.entries(validFields));
+
+        // DLQ 模式监听器：topic=group，其余参数按默认值处理
+        RedissonStreamListener consumer =
+                new RedissonStreamListener(
+                        redisson,
+                        namespace,
+                        GROUP,
+                        GROUP,
+                        CONSUMER_NAME,
+                        converter,
+                        true, // dlqMode
+                        false,
+                        false,
+                        null,
+                        ConsumeFromWhere.DEFAULT,
+                        null,
+                        null);
+        try {
+            List<Message<?>> messages = consumer.pull(10);
+
+            // 合法消息仍被正常投递（毒丸不阻断读循环）
+            assertThat(messages).hasSize(1);
+            assertThat(messages.get(0).getBody()).isEqualTo("dlq-valid-body");
+
+            // 毒丸进入二级隔离区：原始字段可恢复（不再是"只剩字段名的日志 + 裸 ACK 丢弃"）
+            RMap<String, String> quarantine =
+                    redisson.getMap(
+                            StreamMQKeys.quarantinePayloadHash(
+                                    namespace, GROUP, poisonId.toString()),
+                            StringCodec.INSTANCE);
+            assertThat(quarantine.readAllMap())
+                    .as("隔离区必须保留死信原始字段（可排查/可重放）")
+                    .containsEntry(DefaultMessageConverter.FIELD_BODY, "dlq-poison-body")
+                    .containsEntry(DefaultMessageConverter.FIELD_RETRY_TIMES, "not-a-number")
+                    .containsEntry("dlqReason", DlqReason.DESERIALIZE.getCode())
+                    .containsEntry("dlqEntryId", poisonId.toString());
+            assertThat(
+                            redisson.getScoredSortedSet(
+                                            StreamMQKeys.quarantineZset(namespace, "dlq-poison"),
+                                            StringCodec.INSTANCE)
+                                    .size())
+                    .as("隔离区 ZSet 必须登记该死信")
+                    .isGreaterThanOrEqualTo(1);
+
+            // 隔离落盘成功后才 ACK：PEL 只剩本条 pull 返回、尚未 ACK 的合法消息
+            assertThat(dlqStream.listPending(GROUP, StreamMessageId.MIN, StreamMessageId.MAX, 100))
+                    .hasSize(1)
+                    .noneSatisfy(
+                            pending ->
+                                    assertThat(pending.getId().toString())
+                                            .isEqualTo(poisonId.toString()));
+            consumer.ackBatch(List.of(messages.get(0).getMessageId()));
+            assertThat(dlqStream.listPending(GROUP, StreamMessageId.MIN, StreamMessageId.MAX, 100))
+                    .isEmpty();
+        } finally {
+            consumer.close();
         }
     }
 

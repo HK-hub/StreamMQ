@@ -29,12 +29,13 @@
 # 1. 确保 Redis 运行
 redis-cli ping
 
-# 2. 构建所有示例工程
-cd streammq-samples
-mvn clean compile -DskipTests
+# 2. 先在仓库根目录安装全部构件到本地仓库（示例通过 BOM 继承版本号，
+#    0.1.2 发布前 Central 上解析不到 io.github.streammq:*，必须先 install）
+cd ..
+mvn -q -DskipTests install
 
-# 3. 启动 quickstart 示例
-cd streammq-sample-quickstart
+# 3. 启动 quickstart 示例（无需单独 compile，spring-boot:run 会自行编译）
+cd streammq-samples/streammq-sample-quickstart
 mvn spring-boot:run
 ```
 
@@ -94,7 +95,8 @@ mvn spring-boot:run
 - **画面**：浏览器
 - **操作**：
   1. 访问 `http://localhost:8080/actuator/health`
-  2. 访问 `http://localhost:8080/streammq/admin/consumer-groups`
+  2. 访问 `http://localhost:8080/actuator/streammq/groups`（管理面全部挂在 `/actuator/streammq/**`；
+     `streammq-diagnostics` 模块的 `/streammq/diagnostics/**` 是另一组端点，需额外依赖且默认关闭）
   3. 展示返回的 JSON 数据
 
 ### Scene 7：结尾（57-60 秒）

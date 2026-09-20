@@ -9,7 +9,7 @@ package io.github.streammq.sample.transaction;
  * 事务消息示例常量：Topic、事务组与 tag。
  *
  * @author StreamMQ Contributors
- * @since 1.1.0
+ * @since 0.1.2
  */
 public final class SampleConstants {
 
@@ -18,6 +18,9 @@ public final class SampleConstants {
 
     /** 事务组（与 {@code StreamMQConstants.DEFAULT_TX_GROUP} 默认值一致） */
     public static final String TRANSACTION_GROUP = "default-tx-group";
+
+    /** 示例消费组（OrderTransactionConsumer 使用，接收已提交的事务消息） */
+    public static final String CONSUMER_GROUP = "transaction-order-consumer-group";
 
     /** 集成测试消费组 */
     public static final String TEST_CONSUMER_GROUP = "test-tx-consumer-group";

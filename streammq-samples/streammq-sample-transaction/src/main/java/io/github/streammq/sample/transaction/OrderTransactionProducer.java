@@ -105,21 +105,24 @@ public class OrderTransactionProducer {
     }
 
     /**
-     * 使用 {@link StreamMessageService} 的便捷方式发送事务消息。
+     * 使用 lambda 形式的事务回调发送事务消息。
      *
-     * <p>与上述方法功能相同，但通过 {@code StreamMessageService.sendTransaction} 简化。 适用于不需要直接操作 {@link
-     * StreamMessageTemplate} 的场景。
+     * <p>与 {@link #sendOrderTransaction(String)} 功能相同，底层同样是 {@link
+     * StreamMessageTemplate#executeInTransaction}（本类未使用任何"简化 API"）； 区别仅在于 {@link
+     * TransactionCallback} 用 lambda 表达式书写，适合回调逻辑较短的场景。
+     *
+     * <p>消息在本地事务 {@code COMMIT_MESSAGE} 之后才对消费者可见（半消息机制）， 消费端见 {@link OrderTransactionConsumer}。
      *
      * @param orderContent 订单内容
      * @return 发送结果
      */
     public SendResult sendOrderTransactionSimple(String orderContent) {
-        log.info("Sending transaction message (simple API): body={}", orderContent);
+        log.info("Sending transaction message (lambda callback): body={}", orderContent);
 
         TransactionCallback<String> callback =
                 (message, ctx) -> {
                     log.info(
-                            "Executing local transaction (simple): txId={}",
+                            "Executing local transaction (lambda): txId={}",
                             ctx.getTransactionId());
                     executeLocalTransaction(message.getBody(), ctx.getTransactionId());
                     return LocalTransactionState.COMMIT_MESSAGE;

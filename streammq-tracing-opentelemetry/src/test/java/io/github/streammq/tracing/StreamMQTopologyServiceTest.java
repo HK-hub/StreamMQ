@@ -18,6 +18,7 @@ import io.github.streammq.core.trace.TraceType;
 import io.github.streammq.tracing.model.MessageTrace;
 import io.github.streammq.tracing.model.TopologyGraph;
 import io.github.streammq.tracing.model.TraceEventType;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -148,6 +149,30 @@ class StreamMQTopologyServiceTest {
     }
 
     @Test
+    @DisplayName("getTopicTraces 超过自定义上界时截断（结果上界是防御性契约）")
+    void getTopicTraces_truncatesAtConfiguredBound() {
+        topologyService.setMaxTraceQuerySize(3);
+        when(traceService.queryByTopic(eq("order-topic"), anyLong(), anyLong()))
+                .thenReturn(records(10));
+
+        List<MessageTrace> traces = topologyService.getTopicTraces("order-topic", 0L, 5000L);
+
+        assertThat(traces).hasSize(3);
+    }
+
+    @Test
+    @DisplayName("maxTraceQuerySize <= 0 回退默认上界，绝不退化为无上界")
+    void getTopicTraces_nonPositiveBound_fallsBackToDefault() {
+        topologyService.setMaxTraceQuerySize(0);
+        when(traceService.queryByTopic(eq("order-topic"), anyLong(), anyLong()))
+                .thenReturn(records(600));
+
+        List<MessageTrace> traces = topologyService.getTopicTraces("order-topic", 0L, 5000L);
+
+        assertThat(traces).hasSize(StreamMQTopologyService.DEFAULT_MAX_TRACE_QUERY_SIZE);
+    }
+
+    @Test
     @DisplayName("getTopicTopology 应构建生产者、消费者与路由")
     void getTopicTopology_shouldBuildGraph() {
         TraceRecord send1 =
@@ -193,5 +218,23 @@ class StreamMQTopologyServiceTest {
         assertThat(graph.routes().get(0).to()).isEqualTo("order-group");
         assertThat(graph.routes().get(0).rate()).isPositive();
         assertThat(graph.lastUpdated()).isPositive();
+    }
+
+    private static List<TraceRecord> records(int count) {
+        List<TraceRecord> records = new ArrayList<>(count);
+        for (int i = 0; i < count; i++) {
+            records.add(
+                    new TraceRecord(
+                            "m" + i,
+                            "order-topic",
+                            "g1",
+                            TraceType.SEND,
+                            true,
+                            1000L + i,
+                            1L,
+                            "t" + i,
+                            Map.of()));
+        }
+        return records;
     }
 }

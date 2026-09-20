@@ -6,18 +6,12 @@
 package io.github.streammq.spring.boot.autoconfigure;
 
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
-import io.github.streammq.adapter.redisson.security.AllowAllAuthenticator;
-import io.github.streammq.adapter.redisson.security.DenyAllAuthenticator;
 import io.github.streammq.core.StreamMQConstants;
-import io.github.streammq.core.listener.BroadcastGroupRegistry;
-import io.github.streammq.core.policy.ManagementAuthenticator;
-import io.github.streammq.core.policy.RateLimitedAuthenticator;
 import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import java.util.Map;
 import org.redisson.api.RedissonClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.actuate.health.Health;
 import org.springframework.boot.actuate.health.HealthIndicator;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnClass;
@@ -37,7 +31,12 @@ import org.springframework.context.annotation.Configuration;
  *   <li>Listener 容器运行状态
  * </ul>
  *
- * <p>禁用方式：{@code streammq.enabled=false}（整体关闭）或 {@code streammq.health.enabled=false} （仅关闭健康检查）。
+ * <p><b>管理端点不在本类（R6-S2）：</b>{@code streammq.health.enabled} 只门控健康指示器；管理端点后端 / Actuator 端点 / 启动提醒组件由
+ * {@link StreamMQAdminAutoConfiguration} 注册，只受 {@code streammq.admin.enabled}（默认 true）门控。此前它们被类级
+ * {@code streammq.health.enabled} 条件包住， 用户按文档关闭健康组件后 {@code /actuator/streammq/**} 会连带 404 且没有日志。
+ *
+ * <p>禁用方式：{@code streammq.enabled=false}（整体关闭）或 {@code streammq.health.enabled=false} （仅关闭健康检查，
+ * 不影响管理端点）。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -78,75 +77,10 @@ public class StreamMQHealthAutoConfiguration {
                     schedulerLifecycleProvider) {
         LOG.debug("Creating StreamMQHealthIndicator");
         return new StreamMQHealthIndicator(
-                redisson, listenerContainerProvider.getIfAvailable(), schedulerLifecycleProvider);
-    }
-
-    /** 管理端点的后端逻辑 Bean（供 StreamMQActuatorEndpoint 使用）。 */
-    @Bean
-    @ConditionalOnMissingBean(name = StreamMQSpringConstants.BEAN_ADMIN_ENDPOINT)
-    @ConditionalOnProperty(
-            prefix = "streammq.admin",
-            name = StreamMQSpringConstants.PROP_NAME_ENABLED,
-            havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
-            matchIfMissing = true)
-    public StreamMQAdminEndpoint streamMQAdminEndpoint(
-            RedissonClient redisson,
-            org.springframework.beans.factory.ObjectProvider<DefaultStreamMQListenerContainer>
-                    listenerContainerProvider,
-            io.github.streammq.spring.boot.properties.StreamMQProperties properties,
-            org.springframework.beans.factory.ObjectProvider<BroadcastGroupRegistry>
-                    registryProvider) {
-        LOG.debug("Creating StreamMQAdminEndpoint");
-        StreamMQAdminEndpoint adminEndpoint =
-                new StreamMQAdminEndpoint(
-                        redisson,
-                        listenerContainerProvider.getIfAvailable(),
-                        properties.getNamespace(),
-                        properties.getAdmin().getFailureRetryCooldownMillis(),
-                        registryProvider.getIfAvailable());
-        adminEndpoint.setMaxPendingQuerySize(properties.getAdmin().getMaxPendingQuerySize());
-        return adminEndpoint;
-    }
-
-    /**
-     * Actuator 端点 Bean（注册到 /actuator/streammq）。
-     *
-     * <p>注入 {@link StreamMQHealthIndicator} 而非泛型 {@link HealthIndicator}， 避免当容器中存在多个 {@code
-     * HealthIndicator} Bean 时触发 {@code NoUniqueBeanDefinitionException}。
-     *
-     * <p>{@link ManagementAuthenticator} 通过 {@link ObjectProvider} 防御性注入：当核心装配因 {@code
-     * streammq.enabled=false} 回退、容器中不存在鉴权器 Bean 时， 使用 {@link DenyAllAuthenticator} 兜底，避免启动期 {@code
-     * UnsatisfiedDependencyException}。
-     */
-    @Bean
-    @ConditionalOnMissingBean(name = StreamMQSpringConstants.BEAN_ACTUATOR_ENDPOINT)
-    @ConditionalOnClass(org.springframework.boot.actuate.endpoint.annotation.Endpoint.class)
-    @ConditionalOnProperty(
-            prefix = "streammq.admin",
-            name = StreamMQSpringConstants.PROP_NAME_ENABLED,
-            havingValue = StreamMQSpringConstants.PROP_VALUE_TRUE,
-            matchIfMissing = true)
-    public StreamMQActuatorEndpoint streamMQActuatorEndpoint(
-            StreamMQAdminEndpoint adminEndpoint,
-            org.springframework.beans.factory.ObjectProvider<StreamMQHealthIndicator>
-                    healthIndicatorProvider,
-            ObjectProvider<ManagementAuthenticator> authenticatorProvider,
-            io.github.streammq.core.util.WebRequestAuthSupport.ClientAddressPolicy
-                    clientAddressPolicy,
-            io.github.streammq.spring.boot.properties.StreamMQProperties properties) {
-        LOG.debug("Creating StreamMQActuatorEndpoint");
-        ManagementAuthenticator authenticator =
-                authenticatorProvider.getIfAvailable(DenyAllAuthenticator::new);
-        // 包一层失败限流：即使启用 Basic/Token 弱凭据，也能抵御针对管理端点的暴力破解
-        ManagementAuthenticator rateLimited =
-                new RateLimitedAuthenticator(authenticator, clientAddressPolicy);
-        StreamMQActuatorEndpoint endpoint =
-                new StreamMQActuatorEndpoint(
-                        adminEndpoint, healthIndicatorProvider.getIfAvailable(), rateLimited);
-        endpoint.setListPageSize(properties.getAdmin().getListPageSize());
-        // 发布前修复 P2-5：标记是否使用了 AllowAll 鉴权器，供启动告警针对最危险场景发出强提示
-        endpoint.setAllowAll(authenticator instanceof AllowAllAuthenticator);
-        return endpoint;
+                redisson,
+                StreamMQBeanResolution.uniqueOrNull(
+                        listenerContainerProvider, "DefaultStreamMQListenerContainer"),
+                schedulerLifecycleProvider);
     }
 
     /** StreamMQ 健康检查实现。 */
@@ -217,7 +151,9 @@ public class StreamMQHealthAutoConfiguration {
             if (schedulerLifecycleProvider == null) {
                 return true;
             }
-            StreamMQSchedulerLifecycle lifecycle = schedulerLifecycleProvider.getIfAvailable();
+            StreamMQSchedulerLifecycle lifecycle =
+                    StreamMQBeanResolution.uniqueOrNull(
+                            schedulerLifecycleProvider, "StreamMQSchedulerLifecycle");
             if (lifecycle == null) {
                 return true;
             }
@@ -232,7 +168,9 @@ public class StreamMQHealthAutoConfiguration {
             if (schedulerLifecycleProvider == null) {
                 return;
             }
-            StreamMQSchedulerLifecycle lifecycle = schedulerLifecycleProvider.getIfAvailable();
+            StreamMQSchedulerLifecycle lifecycle =
+                    StreamMQBeanResolution.uniqueOrNull(
+                            schedulerLifecycleProvider, "StreamMQSchedulerLifecycle");
             if (lifecycle != null) {
                 builder.withDetail(
                         StreamMQSpringConstants.HEALTH_DETAIL_SCHEDULER_STATUSES,

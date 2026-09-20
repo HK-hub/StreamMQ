@@ -11,7 +11,7 @@ import io.github.streammq.core.StreamMQConstants;
  * 拦截器示例常量：Topic、消费组、tag 与用户属性 key。
  *
  * @author StreamMQ Contributors
- * @since 1.1.0
+ * @since 0.1.2
  */
 public final class SampleConstants {
 

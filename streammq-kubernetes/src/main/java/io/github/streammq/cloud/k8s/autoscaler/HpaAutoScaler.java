@@ -6,11 +6,17 @@
 package io.github.streammq.cloud.k8s.autoscaler;
 
 import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.KubernetesClientException;
+import io.fabric8.kubernetes.client.dsl.base.PatchContext;
+import io.fabric8.kubernetes.client.dsl.base.PatchType;
 import io.github.streammq.cloud.k8s.HpaMetricsProvider;
 import io.github.streammq.cloud.k8s.operator.StreamMQCluster;
 import io.github.streammq.cloud.k8s.operator.StreamMQK8sDefaults;
+import io.github.streammq.diagnostics.spi.BacklogProbe;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -20,6 +26,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.InitializingBean;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
@@ -47,9 +54,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class HpaAutoScaler implements InitializingBean, DisposableBean {
 
-    /** 消费者组后缀约定 */
-    private static final String GROUP_SUFFIX = "-cg";
-
     /** 扩缩方向：无操作 */
     private static final String DIRECTION_NONE = "none";
 
@@ -58,6 +62,15 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
 
     /** 扩缩方向：缩容 */
     private static final String DIRECTION_DOWN = "down";
+
+    /** HTTP 409：resourceVersion 乐观锁冲突 */
+    private static final int HTTP_CONFLICT = 409;
+
+    /** spec.replicas 回写时 409 冲突的最大重试次数（每次重试重新读取最新 resourceVersion） */
+    private static final int REPLICAS_PATCH_MAX_RETRIES = 3;
+
+    /** 限频告警最小间隔（毫秒）：避免每轮扫描刷屏 */
+    private static final long WARN_THROTTLE_MS = 300_000L;
 
     @Autowired(required = false)
     private KubernetesClient kubernetesClient;
@@ -69,6 +82,22 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
      */
     @Autowired(required = false)
     private HpaMetricsProvider metricsProvider;
+
+    /** 是否全命名空间扫描（默认 true；与 StreamMQClusterController 的 watch 语义保持一致） */
+    private volatile boolean watchAllNamespaces = true;
+
+    /** 收敛模式下的扫描命名空间列表（仅当 {@code watchAllNamespaces=false} 时生效） */
+    private volatile List<String> watchNamespaces = List.of();
+
+    /**
+     * 积压探针（可选，来自 {@code streammq-diagnostics}）。
+     *
+     * <p><b>K6 生产者侧：</b>kubernetes 模块依赖面只有 core + fabric8，无法直接读 Redis；存在探针 Bean 时每轮扫描前用真实 {@code
+     * XLEN/XPENDING} 数据刷新 lag 指标， 探针缺席时指标需由用户自定义生产者（{@link
+     * HpaMetricsProvider}）写入——两条路径都不会静默失效（跳过决策一定伴随限频 WARN）。
+     */
+    @Autowired(required = false)
+    private ObjectProvider<BacklogProbe> backlogProbeProvider;
 
     /** 同步间隔（秒） */
     private long syncIntervalSeconds = StreamMQK8sDefaults.DEFAULT_RECONCILE_INTERVAL_SECONDS;
@@ -102,6 +131,15 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
     private final ConcurrentHashMap<String, StabilizationWindow> stabilizationWindows =
             new ConcurrentHashMap<>();
 
+    /** 「未声明 autoScale.topic/consumerGroup」告警限频（key → 上次告警毫秒） */
+    private final ConcurrentHashMap<String, Long> lastMissingTopicWarn = new ConcurrentHashMap<>();
+
+    /** 「该 topic/group 无指标」告警限频（key → 上次告警毫秒） */
+    private final ConcurrentHashMap<String, Long> lastNoMetricsWarn = new ConcurrentHashMap<>();
+
+    /** 「扫描范围为空」告警限频（key → 上次告警毫秒） */
+    private final ConcurrentHashMap<String, Long> lastScopeWarn = new ConcurrentHashMap<>();
+
     private final AtomicBoolean running = new AtomicBoolean(false);
 
     @Override
@@ -127,7 +165,7 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
         log.info("Starting HpaAutoScaler with syncIntervalSeconds={}", syncIntervalSeconds);
         scanFuture =
                 scheduler.scheduleAtFixedRate(
-                        this::scanAndScale, 0, syncIntervalSeconds, TimeUnit.SECONDS);
+                        this::scanOnce, 0, syncIntervalSeconds, TimeUnit.SECONDS);
         log.info("HpaAutoScaler started");
     }
 
@@ -152,7 +190,12 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
         log.info("HpaAutoScaler stopped");
     }
 
-    private void scanAndScale() {
+    /**
+     * 执行一次扫描与扩缩决策。
+     *
+     * <p>由调度线程周期调用；同时作为单次扫描入口供测试直接调用（断言扫描范围、指标维度与回写行为）。
+     */
+    public void scanOnce() {
         if (kubernetesClient == null) {
             // KubernetesClient 不可用（非 K8s 环境）时不执行扫描
             return;
@@ -165,17 +208,12 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
             return;
         }
         try {
-            var clusters =
-                    kubernetesClient
-                            .resources(StreamMQCluster.class)
-                            .inAnyNamespace()
-                            .list()
-                            .getItems()
-                            .stream()
-                            .filter(this::isHpaEnabled)
-                            .toList();
-
+            var clusters = listHpaEnabledClusters();
+            // K6：先用积压探针把真实 lag 灌入 HpaMetricsProvider，再做扩缩决策
+            refreshMetricsFromProbe(clusters);
+            Set<String> liveKeys = new HashSet<>();
             for (var cluster : clusters) {
+                liveKeys.add(clusterKey(cluster));
                 try {
                     processCluster(cluster);
                 } catch (Exception e) {
@@ -187,9 +225,101 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
                             e);
                 }
             }
+            // K9：清理已消失 CR 的每-CR 状态，避免 map 随 CR 生命周期只增不减
+            pruneStaleState(liveKeys);
         } catch (Exception e) {
             log.error("HPA scan failed: {}", e.getMessage(), e);
         }
+    }
+
+    /**
+     * 列出扫描范围内的 HPA 启用集群。
+     *
+     * <p>K9：扫描范围与 {@code StreamMQClusterController} 的 watch 语义一致——默认全命名空间（需 ClusterRole RBAC），
+     * {@code operator.watch-all-namespaces=false} 时收敛到 {@code operator.watch-namespaces} 列表， 不再无条件
+     * {@code inAnyNamespace()} 全集群 list。
+     */
+    private List<StreamMQCluster> listHpaEnabledClusters() {
+        var operation = kubernetesClient.resources(StreamMQCluster.class);
+        List<StreamMQCluster> clusters = new ArrayList<>();
+        if (watchAllNamespaces) {
+            clusters.addAll(operation.inAnyNamespace().list().getItems());
+        } else if (watchNamespaces.isEmpty()) {
+            warnThrottled(
+                    lastScopeWarn,
+                    "scope",
+                    "HPA scan scope is empty (operator.watch-all-namespaces=false without"
+                            + " operator.watch-namespaces); no cluster will be scanned");
+            return List.of();
+        } else {
+            for (String ns : watchNamespaces) {
+                clusters.addAll(operation.inNamespace(ns).list().getItems());
+            }
+        }
+        return clusters.stream().filter(this::isHpaEnabled).toList();
+    }
+
+    /**
+     * 以 {@link BacklogProbe} 的真实积压数据刷新 {@link HpaMetricsProvider} 的 lag 指标（K6 生产者侧）。
+     *
+     * <p>只对该 CR 显式声明且与消费侧一致的 {@code autoScale.topic / autoScale.consumerGroup} 采样 {@code
+     * pendingCount}（XPENDING 未确认消息数作为消费积压）；未声明 topic/group 的 CR 由决策路径输出限频 WARN。探针抛出异常时按 CR 隔离，不影响其它
+     * CR 与本轮决策。
+     *
+     * @param clusters 本轮扫描范围内的 CR 列表
+     */
+    private void refreshMetricsFromProbe(List<StreamMQCluster> clusters) {
+        BacklogProbe probe =
+                backlogProbeProvider == null ? null : backlogProbeProvider.getIfAvailable();
+        if (probe == null) {
+            return;
+        }
+        for (var cluster : clusters) {
+            var autoScale = cluster.getSpec() == null ? null : cluster.getSpec().getAutoScale();
+            if (autoScale == null) {
+                continue;
+            }
+            String topic = autoScale.getTopic();
+            String group = autoScale.getConsumerGroup();
+            if (topic == null || topic.isBlank() || group == null || group.isBlank()) {
+                continue;
+            }
+            try {
+                var result = probe.probe(topic, group);
+                if (result != null) {
+                    metricsProvider.recordLag(topic, group, result.pendingCount());
+                }
+            } catch (Exception e) {
+                log.warn(
+                        "BacklogProbe failed for topic={}, group={}: {}",
+                        topic,
+                        group,
+                        e.getMessage());
+            }
+        }
+    }
+
+    /** 清理已不存在 CR 的扩缩状态与告警限频记录（K9）。 */
+    private void pruneStaleState(Set<String> liveKeys) {
+        lastScaleTime.keySet().removeIf(key -> !liveKeys.contains(key));
+        lastScaleDirection.keySet().removeIf(key -> !liveKeys.contains(key));
+        stabilizationWindows.keySet().removeIf(key -> !liveKeys.contains(key));
+        lastMissingTopicWarn.keySet().removeIf(key -> !liveKeys.contains(key));
+        lastNoMetricsWarn.keySet().removeIf(key -> !liveKeys.contains(key));
+    }
+
+    /** 限频告警：同一 key 在 {@link #WARN_THROTTLE_MS} 内只输出一条 WARN。 */
+    private void warnThrottled(
+            ConcurrentHashMap<String, Long> warnState, String key, String message) {
+        long now = System.currentTimeMillis();
+        Long lastWarn = warnState.put(key, now);
+        if (lastWarn == null || now - lastWarn >= WARN_THROTTLE_MS) {
+            log.warn(message);
+        }
+    }
+
+    private static String clusterKey(StreamMQCluster cluster) {
+        return cluster.getMetadata().getNamespace() + "/" + cluster.getMetadata().getName();
     }
 
     private void processCluster(StreamMQCluster cluster) {
@@ -243,8 +373,23 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
                             : StreamMQK8sDefaults.DEFAULT_REPLICAS;
         }
 
-        String topic = cluster.getMetadata().getName();
-        String group = topic + GROUP_SUFFIX;
+        // K6：指标维度必须与真实消费侧一致——topic/consumerGroup 由 CR spec.autoScale 显式声明
+        // （取值即消费者部署中 @StreamMQConsumer 的 topic/consumerGroup），框架不存在
+        // 「CR 名 + -cg」这类命名约定；未声明时 fail-closed 跳过并限频告警。
+        String topic = autoScale.getTopic();
+        String group = autoScale.getConsumerGroup();
+        if (topic == null || topic.isBlank() || group == null || group.isBlank()) {
+            warnThrottled(
+                    lastMissingTopicWarn,
+                    key,
+                    "Cluster "
+                            + key
+                            + " enables autoScale but spec.autoScale.topic/consumerGroup is not"
+                            + " declared; HPA cannot locate metrics. Declare the same"
+                            + " topic/consumerGroup as @StreamMQConsumer in the consumer"
+                            + " deployment. Skipping scaling decision (fail-closed).");
+            return;
+        }
 
         long currentLag = metricsProvider.getConsumerLag(topic, group);
         double currentRate = metricsProvider.getConsumeRate(topic, group);
@@ -252,10 +397,18 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
         // FAIL-CLOSED：无任何真实指标数据时绝不缩容。此前空指标 → avgLag=0 → 命中
         // 缩容分支 → 把繁忙消费者压到 minReplicas，是严重事故源。
         if (currentLag <= 0 && currentRate <= 0) {
-            log.debug(
-                    "No metrics available for {}/{}, skipping scaling decision (fail-closed)",
-                    ns,
-                    name);
+            warnThrottled(
+                    lastNoMetricsWarn,
+                    key,
+                    "No metrics available for cluster "
+                            + key
+                            + " (topic="
+                            + topic
+                            + ", group="
+                            + group
+                            + "), skipping scaling decision (fail-closed). Ensure a producer"
+                            + " records lag/rate for this topic+group (e.g. BacklogProbe-based"
+                            + " collector or a custom HpaMetricsProvider).");
             return;
         }
 
@@ -350,29 +503,93 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
         String name = cluster.getMetadata().getName();
         try {
             kubernetesClient.apps().deployments().inNamespace(ns).withName(name).scale(replicas);
-            // 同步持久化 spec.replicas 到 CR：否则 reconcile 在 resync 周期会按旧 spec 把
-            // Deployment 缩回去，两个控制器互相拉抖。写入后 reconcile 与 HPA 目标一致。
-            StreamMQCluster toUpdate = new StreamMQCluster();
-            toUpdate.setApiVersion(cluster.getApiVersion());
-            toUpdate.setKind(cluster.getKind());
-            toUpdate.setMetadata(cluster.getMetadata());
-            toUpdate.setSpec(cluster.getSpec());
-            toUpdate.getSpec().setReplicas(replicas);
-            kubernetesClient
-                    .resources(StreamMQCluster.class)
-                    .inNamespace(ns)
-                    .withName(name)
-                    .replace(toUpdate);
-            return true;
         } catch (Exception e) {
             log.error(
                     "Failed to scale Deployment {}/{} to {} replicas: {}",
                     ns,
                     name,
                     replicas,
-                    e.getMessage());
+                    e.getMessage(),
+                    e);
             return false;
         }
+        // 同步持久化 spec.replicas 到 CR：否则 reconcile 在 resync 周期会按旧 spec 把
+        // Deployment 缩回去，两个控制器互相拉抖。写入后 reconcile 与 HPA 目标一致。
+        return persistReplicas(ns, name, replicas);
+    }
+
+    /**
+     * 以 JSON merge patch + resourceVersion 乐观锁回写 {@code spec.replicas}。
+     *
+     * <p><b>K7：为什么不是 replace</b>——旧实现把 informer 快照整对象 replace 回去，会用陈旧快照覆盖用户并发修改的 spec
+     * 字段（镜像、backend、resources 等）且无冲突检测。现在：
+     *
+     * <ol>
+     *   <li>每次尝试先 GET 最新 CR，取当前 resourceVersion；
+     *   <li>merge patch 携带该 resourceVersion，只写 {@code spec.replicas} 一个字段，其余字段不动；
+     *   <li>若期间 CR 被改动，APIServer 返回 409，重新读取最新版本后重试（最多 {@link #REPLICAS_PATCH_MAX_RETRIES}
+     *       次），绝不静默覆盖其它字段。
+     * </ol>
+     *
+     * @param ns 命名空间
+     * @param name CR 名
+     * @param replicas 目标副本数
+     * @return true 表示 spec.replicas 已持久化
+     */
+    private boolean persistReplicas(String ns, String name, int replicas) {
+        for (int attempt = 1; attempt <= REPLICAS_PATCH_MAX_RETRIES; attempt++) {
+            var current =
+                    kubernetesClient
+                            .resources(StreamMQCluster.class)
+                            .inNamespace(ns)
+                            .withName(name)
+                            .get();
+            if (current == null || current.getMetadata() == null) {
+                log.error("Cannot persist spec.replicas for {}/{}: CR not found", ns, name);
+                return false;
+            }
+            String resourceVersion = current.getMetadata().getResourceVersion();
+            // resourceVersion 为空（极端场景）时退化为无锁 merge patch，至少不覆盖其它字段
+            String patch =
+                    resourceVersion == null
+                            ? "{\"spec\":{\"replicas\":" + replicas + "}}"
+                            : "{\"metadata\":{\"resourceVersion\":\""
+                                    + resourceVersion
+                                    + "\"},\"spec\":{\"replicas\":"
+                                    + replicas
+                                    + "}}";
+            try {
+                kubernetesClient
+                        .resources(StreamMQCluster.class)
+                        .inNamespace(ns)
+                        .withName(name)
+                        .patch(PatchContext.of(PatchType.JSON_MERGE), patch);
+                return true;
+            } catch (KubernetesClientException e) {
+                if (e.getCode() != HTTP_CONFLICT) {
+                    log.error(
+                            "Failed to patch spec.replicas for {}/{}: {}",
+                            ns,
+                            name,
+                            e.getMessage());
+                    return false;
+                }
+                log.info(
+                        "spec.replicas patch for {}/{} hit 409 (resourceVersion={}) on attempt"
+                                + " {}/{}; re-reading latest version and retrying",
+                        ns,
+                        name,
+                        resourceVersion,
+                        attempt,
+                        REPLICAS_PATCH_MAX_RETRIES);
+            }
+        }
+        log.error(
+                "Failed to patch spec.replicas for {}/{} after {} optimistic-lock retries",
+                ns,
+                name,
+                REPLICAS_PATCH_MAX_RETRIES);
+        return false;
     }
 
     private int getCurrentReplicas(StreamMQCluster cluster) {
@@ -406,6 +623,59 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
 
     public void setScaleDownThreshold(int scaleDownThreshold) {
         this.scaleDownThreshold = scaleDownThreshold;
+    }
+
+    /**
+     * 设置是否全命名空间扫描。
+     *
+     * <p>默认 true（需 ClusterRole 级 RBAC）；与 {@code operator.watch-all-namespaces} 保持同一开关（K9）。
+     *
+     * @param watchAllNamespaces true 表示全命名空间扫描
+     */
+    public void setWatchAllNamespaces(boolean watchAllNamespaces) {
+        this.watchAllNamespaces = watchAllNamespaces;
+    }
+
+    /**
+     * 设置收敛模式的扫描命名空间列表。
+     *
+     * @param namespaces 命名空间列表；为空时扫描范围为空（仅告警，不扩缩）
+     */
+    public void setWatchNamespaces(List<String> namespaces) {
+        this.watchNamespaces = namespaces == null ? List.of() : List.copyOf(namespaces);
+    }
+
+    /**
+     * 设置 KubernetesClient。
+     *
+     * <p>生产环境由 Spring 按类型注入；显式 setter 供测试装配（fabric8 mock server）使用。
+     *
+     * @param kubernetesClient fabric8 客户端
+     */
+    public void setKubernetesClient(KubernetesClient kubernetesClient) {
+        this.kubernetesClient = kubernetesClient;
+    }
+
+    /**
+     * 设置 HPA 指标提供者。
+     *
+     * <p>生产环境由 Spring 注入；显式 setter 供测试装配使用。
+     *
+     * @param metricsProvider 指标提供者
+     */
+    public void setMetricsProvider(HpaMetricsProvider metricsProvider) {
+        this.metricsProvider = metricsProvider;
+    }
+
+    /**
+     * 设置积压探针提供者。
+     *
+     * <p>生产环境由 Spring 注入（{@code ObjectProvider} 以容忍探针缺席）；显式 setter 供测试装配使用。
+     *
+     * @param backlogProbeProvider 积压探针提供者
+     */
+    public void setBacklogProbeProvider(ObjectProvider<BacklogProbe> backlogProbeProvider) {
+        this.backlogProbeProvider = backlogProbeProvider;
     }
 
     /** Stabilization window tracks recent scaling decisions. */

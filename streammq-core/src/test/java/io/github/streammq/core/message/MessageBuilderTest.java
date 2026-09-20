@@ -166,6 +166,35 @@ class MessageBuilderTest {
                             .build();
             assertThat(message.getProperties()).containsOnlyKeys("k");
         }
+
+        @Test
+        @DisplayName("properties 含 null value 立即抛 NPE（与 MessageMetadataBuilder 同口径）")
+        void properties_nullValueRejected() {
+            Map<String, String> props = new LinkedHashMap<>();
+            props.put("k", null);
+            assertThatThrownBy(() -> MessageBuilder.<String>withTopic("t").properties(props))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("property value");
+        }
+
+        @Test
+        @DisplayName("userProperties 含 null key 立即抛 NPE；传入 null Map 不追加")
+        void userProperties_nullKeyRejected() {
+            Map<String, String> userProps = new LinkedHashMap<>();
+            userProps.put(null, "v");
+            assertThatThrownBy(
+                            () -> MessageBuilder.<String>withTopic("t").userProperties(userProps))
+                    .isInstanceOf(NullPointerException.class)
+                    .hasMessageContaining("userProperty key");
+
+            Message<String> message =
+                    MessageBuilder.<String>withTopic("t")
+                            .withUserProperty("k", "v")
+                            .userProperties(null)
+                            .body("b")
+                            .build();
+            assertThat(message.getUserProperties()).containsOnlyKeys("k");
+        }
     }
 
     @Nested

@@ -52,13 +52,22 @@ public interface StreamMQListener {
     /**
      * 排空当前消费者 PEL 中已投递未确认的消息（XREADGROUP id=0 语义），用于实例重启后的恢复。
      *
-     * <p>崩溃/停止时已进入本消费者 PEL 但未处理完的消息，会在下次启动时通过本方法重新交付， 保证 at-least-once。默认空实现（不支持恢复语义的监听器）。
+     * <p>崩溃/停止时已进入本消费者 PEL 但未处理完的消息，会在下次启动时通过本方法重新交付， 保证 at-least-once。
+     *
+     * <p><b>返回值契约（0.1.2 定稿，发布即冻结）：</b>三种结果语义不同，调用方必须区分：
+     *
+     * <ul>
+     *   <li>{@code null}——<b>本监听器未实现 PEL 恢复</b>（默认实现即返回 {@code null}）；调用方应记录 WARN 提示
+     *       "不支持恢复"，而不是把它当作"PEL 已清空"
+     *   <li>空列表——<b>PEL 已清空</b>（恢复完成，已无待处理消息）
+     *   <li>非空列表——本轮恢复出的待处理消息
+     * </ul>
      *
      * @param maxMessages 单次最大恢复条数
-     * @return 待处理消息列表；为空表示 PEL 已清空
+     * @return 待处理消息列表；{@code null} 表示该监听器不支持 PEL 恢复，空列表表示 PEL 已清空
      */
     default List<Message<?>> drainPendingOnce(int maxMessages) {
-        return List.of();
+        return null;
     }
 
     /**

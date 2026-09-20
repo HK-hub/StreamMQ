@@ -141,8 +141,11 @@ class StreamMQSchedulerLifecycleTest {
 
         ObjectProvider<StreamMQSchedulerLifecycle> provider =
                 (ObjectProvider) org.mockito.Mockito.mock(ObjectProvider.class);
-        when(provider.getIfAvailable()).thenReturn(failedLifecycle);
-
+        // 生产解析走 StreamMQBeanResolution#uniqueOrNull（orderedStream + getIfUnique），
+        // 只 stub getIfAvailable 会让解析恒为 null，健康检查便永远 UP；
+        // 且一次 health() 会多次调用 orderedStream()（判定 + 明细），必须每次返回全新流
+        when(provider.orderedStream())
+                .thenAnswer(invocation -> java.util.stream.Stream.of(failedLifecycle));
         StreamMQHealthAutoConfiguration.StreamMQHealthIndicator indicator =
                 new StreamMQHealthAutoConfiguration.StreamMQHealthIndicator(
                         redisson, null, provider);
@@ -154,14 +157,15 @@ class StreamMQSchedulerLifecycleTest {
         StreamMQSchedulerLifecycle healthyLifecycle =
                 new StreamMQSchedulerLifecycle(List.of(new SchedulerA()));
         healthyLifecycle.start();
-        when(provider.getIfAvailable()).thenReturn(healthyLifecycle);
+        when(provider.orderedStream())
+                .thenAnswer(invocation -> java.util.stream.Stream.of(healthyLifecycle));
         var upHealth = indicator.health();
         assertThat(upHealth.getStatus().getCode()).isEqualTo("UP");
         assertThat((Map<String, String>) upHealth.getDetails().get("scheduler.statuses"))
                 .containsEntry("SchedulerA", "RUNNING");
 
         // 未装配调度器生命周期时不影响健康状态
-        when(provider.getIfAvailable()).thenReturn(null);
+        when(provider.orderedStream()).thenAnswer(invocation -> java.util.stream.Stream.empty());
         var noLifecycleHealth = indicator.health();
         assertThat(noLifecycleHealth.getStatus().getCode()).isEqualTo("UP");
     }

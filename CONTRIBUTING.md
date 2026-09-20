@@ -231,7 +231,8 @@ StreamMQ has a layered testing approach:
    - `streammq-core`: LINE ≥ 0.48, BRANCH ≥ 0.44 (unit tests only — core has no IT)
    - `streammq-redisson`: LINE ≥ 0.60, BRANCH ≥ 0.50 (measured **with the real-Redis ITs** running; without Redis the gate is not meaningful)
    - `streammq-spring-boot-starter`: LINE ≥ 0.55, BRANCH ≥ 0.41 (auto-configuration has many branches by nature)
-   - Modules that do not declare the plugin (e.g. `streammq-test`, `streammq-samples/*`, `streammq-benchmark`) are outside the gate
+   - `streammq-test`: LINE ≥ 0.78, BRANCH ≥ 0.39 (test utilities — the gate **does** apply to this published module)
+   - Modules that do not declare the plugin (e.g. `streammq-samples/*`, `streammq-benchmark`) are outside the gate
 4. **Assertions**: Use AssertJ (`assertThat(...).isEqualTo(...)`)
 5. **Mocks**: Use Mockito with `@ExtendWith(MockitoExtension.class)`
 
@@ -512,8 +513,9 @@ property allows construction — never enable it for shared/multi-tenant Redis.
   下个 minor/major 版本再移除；不要在同一次发布里既弃用又移除；
 - **japicmp 门禁从第二个 Central 发布版本起生效**：0.1.2 是首个 Central 发布版本（Central 上无历史基线），
   门禁按设计自动跳过；此后任何公开 API 的移除、签名变更、可见性收窄都会阻断发布；
-- **`io.github.streammq.internal.*` 排除项目前尚未被任何代码使用**（仓库中不存在该包）；POM 已配置该前缀的
-  japicmp 排除，作为**未来内部实现包**的既定机制——仅供内部使用、不承担兼容承诺的实现届时放入该包即可自动免检。
+- **当前没有任何内建的 japicmp 排除**：`io.github.streammq.internal.*` 这个包在仓库中并不存在（0 处 package
+  声明），历史上为它配置的排除项已作为**死配置**删除。若未来需要"仅供内部使用、不承担兼容承诺"的实现包，
+  必须先在根 `pom.xml` 的 japicmp 配置中显式新增对应排除规则——不要以为该前缀已被自动免检。
 ## Pull Request Process
 
 1. **Ensure the PR description clearly describes the problem and solution.** Include the relevant issue number if applicable.
@@ -538,16 +540,19 @@ property allows construction — never enable it for shared/multi-tenant Redis.
 
 StreamMQ 通过 Maven Central Portal (`org.sonatype.central:central-publishing-maven-plugin`) 发布。发布流程如下：
 
-1. **更新版本号** — 升级根 `pom.xml` 与 `streammq-bom/pom.xml` 中的 `<version>` 与 `<streammq.version>`，保持一致（CI `guard` job 会校验）。
+1. **更新版本号** — 升级根 `pom.xml` 与 `streammq-bom/pom.xml` 中的 `<version>` 与 `<streammq.version>`，保持一致（CI 与发布通道的 `guard` job 会校验）。
 2. **更新 CHANGELOG** — 将 `[Unreleased]` 段合并入新版本，附日期。
 3. **本地 dry-run（复现发布门禁）** — `mvn clean verify -Djacoco.check.skip=false`；集成测试需要本地 Redis（`localhost:6379`，无 Redis 时 IT 会被整体跳过、门禁形同虚设）。
-   依赖 CVE 门禁（CI 的 `sbom-scan` job，无需密钥）本地复现：`mvn -DskipTests -Dcyclonedx.skip=false -Dcyclonedx.skipNotDeployed=false org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom` 生成聚合 SBOM，再从 4 个发布构件裁剪出依赖闭包后用 `osv-scanner scan source -L <bom.cdx.json>` 扫描（High/Critical 阻断；实现与阈值口径以 `.github/workflows/ci.yml` 的 `sbom-scan` 为准）。
+   依赖 CVE 门禁（CI 与发布通道共用的 `sbom-scan` job，无需密钥）本地复现：`mvn -DskipTests -Dcyclonedx.skip=false -Dcyclonedx.skipNotDeployed=false org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom` 生成聚合 SBOM，再从 4 个发布构件裁剪出依赖闭包后用 `osv-scanner scan source -L <bom.cdx.json>` 扫描（High/Critical 阻断；实现与阈值口径以 `.github/workflows/ci.yml` 的 `sbom-scan` 为准，`release.yml` 以相同命令自带同一门禁）。
    如需 OWASP/NVD 深扫（每周 CI 增强项），追加 `-Dowasp.skip=false`，并建议设置 `NVD_API_KEY` 环境变量（否则匿名访问 NVD 限流、扫描可能偶发失败）。
-4. **打 tag** — `git tag -s v0.x.y -m "Release v0.x.y"`（签名 tag 满足 GPG 要求）。
-5. **触发 `release.yml`** — `workflow_dispatch` 或推送 tag；`test` job 会运行 `mvn clean verify` 兜底，`publish` job 会上传至 Central Portal。
-6. **人工确认发布** — `pom.xml`（根 POM）中 `<autoPublish>false</autoPublish>`，首个版本需在 [Central Portal](https://central.sonatype.com/) 人工点击 "Publish"。
-7. **首次发布后** — 将 `<autoPublish>` 翻转为 `true`，提交 PR 并在本节追加 changelog 行；后续发布由 CI 自动完成。
-8. **创建 GitHub Release** — `release.yml` 会基于 tag 自动创建 Release，附带 Central 可解析的发布构件（`streammq-bom` / `core` / `redisson` / `starter` / `test` 的 jar + sources + javadoc）。`excludeArtifacts` 中不发布到 Central 的模块（samples/benchmark/kubernetes/tracing/diagnostics/binder）**不列入** Release 资产，避免使用方误以为可从 Central 解析。
+4. **打 tag 并推送** — `git tag -s v0.x.y -m "Release v0.x.y" && git push origin v0.x.y`（签名 tag 满足 GPG 要求）。
+   **tag 必须在触发发布之前就存在且指向要发布的提交**：tag 事件路径由 `release.yml` 的 `Verify tag points at the checked-out commit` 校验；`workflow_dispatch` 路径会在构建前执行 `git fetch --tags --force`，断言 `v<版本>` 已存在且 `git rev-list -n1` == `git rev-parse HEAD` —— 两条路径都拒绝"发布时现场补 tag"与"tag 指向旧提交"（否则上传 Central 的字节不绑定任何已校验 tag）。
+5. **触发 `release.yml`** — 推送 tag，或在 Actions 里 `workflow_dispatch` 并填 `inputs.version`（如 `0.1.2` / `v0.1.2`）。两条路径都会先跑 `guard`（parent↔BOM 属性同步 + 发布集一致性）、`sbom-scan`（CycloneDX SBOM + `osv-scanner` 的 keyless CVE 硬门禁）与 `test`（`mvn clean verify`），三者全绿后 `publish` job 才会上传至 Central Portal。
+6. **人工确认发布** — `pom.xml`（根 POM）与 `streammq-bom/pom.xml` 中均为 `<autoPublish>false</autoPublish>`，首个版本需在 [Central Portal](https://central.sonatype.com/) 人工点击 "Publish"（GitHub Release 正文会自动附带"staging 部署处于 validated、需人工 Publish"的提示）。
+7. **首次发布后** — 将两处 `<autoPublish>` 翻转为 `true`，提交 PR 并在本节追加 changelog 行；后续发布由 CI 自动完成。
+8. **创建 GitHub Release** — `release.yml` 把 Release 挂到已存在的 `v<版本>` tag 上（不再现场创建 tag），附带 Central 可解析的发布构件资产（`streammq-bom` 的源 POM + `core` / `redisson` / `starter` / `test` 的 jar + sources + javadoc）。
+   Central 上可解析的构件共 **6 个**：`streammq-parent`（parent POM，供下游以 `<parent>` 继承；packaging=pom，无 jar/sources/javadoc 产物，故不作为资产文件列出）/ `streammq-bom` / `streammq-core` / `streammq-redisson` / `streammq-spring-boot-starter` / `streammq-test`。
+   `excludeArtifacts` 中不发布到 Central 的模块（samples/benchmark/kubernetes/tracing/diagnostics/binder）**不列入** Release 资产，避免使用方误以为可从 Central 解析。
 
 ### 发布前置条件
 
@@ -557,7 +562,7 @@ StreamMQ 通过 Maven Central Portal (`org.sonatype.central:central-publishing-m
 
 ### 发布门禁
 
-发布 job (`release.yml#publish`) 依赖 `test` job（`mvn clean verify`）通过——任何单测/集成测试/Spotless/JaCoCo 失败都会阻塞发布。 `verify` job 的集成测试 tripwire 采用「分模块下限 + 全局下限 + 跳过率上限」三层校验（见 `.github/workflows/ci.yml`）：实际执行的 IT 按模块 `streammq-redisson ≥ 100` / `streammq-spring-boot-starter ≥ 30` / `streammq-test ≥ 40` / `streammq-samples/* ≥ 16`，全局 `≥ 230`，且跳过率 `≤ 20%`——防止 Redis 静默失效导致"假绿色"。
+发布 job (`release.yml#publish`) 依赖 `test` / `guard` / `sbom-scan` 三个 job **全部**通过——任何单测/集成测试/Spotless/JaCoCo 失败、发布集不一致（parent↔BOM 属性漂移，或 `modules` ↔ `excludeArtifacts` ↔ BOM 三方清单漂移）、或发布构件依赖闭包中存在 CVSS ≥ 7.0 的公告，都会阻塞发布。`guard` 与 `sbom-scan` 的检查命令、插件/工具版本与 SHA-256 校验与 `.github/workflows/ci.yml` **完全一致**（发布通道自包含，不假设同 commit 的 CI 已通过，也不依赖 `secrets.NVD_API_KEY`——NVD 深扫仍只是增强项）。 `verify` job 的集成测试 tripwire 采用「分模块下限 + 全局下限 + 跳过率上限」三层校验（见 `.github/workflows/ci.yml`）：实际执行的 IT 按模块 `streammq-redisson ≥ 100` / `streammq-spring-boot-starter ≥ 30` / `streammq-test ≥ 40` / `streammq-samples/* ≥ 16`，全局 `≥ 230`，且跳过率 `≤ 20%`——防止 Redis 静默失效导致"假绿色"。 此外发布 job 内部还有：`workflow_dispatch` 的 tag↔HEAD 断言（见上文步骤 4）、版本改写后对 BOM `<version>` 与 `streammq.version` 属性的双断言、以及 staging smoke 的「解析到的 `io.github.streammq:*` 版本必须等于本次构建版本」断言。
 
 ### 凭据配置
 

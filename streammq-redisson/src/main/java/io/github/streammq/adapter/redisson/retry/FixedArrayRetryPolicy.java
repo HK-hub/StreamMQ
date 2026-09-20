@@ -5,6 +5,7 @@
  */
 package io.github.streammq.adapter.redisson.retry;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.policy.RetryPolicy;
 import java.time.Duration;
@@ -19,7 +20,14 @@ import java.util.Objects;
  * [10s, 30s, 1m, 2m, 3m, 4m, 5m, 6m, 7m, 8m, 9m, 10m, 20m, 30m, 1h, 2h]
  * </pre>
  *
- * <p>当 {@code reconsumeTimes >= 16} 时，{@link #shouldStopRetry} 返回 true，消息将进入 DLQ。
+ * <p><b>预算与退避序列的解耦（0.1.2 定稿）：</b>重试预算<b>唯一</b>由 {@code max-reconsume-times}（构造参数 {@code
+ * maxReconsumeTimes}，由消费者的 maxReconsumeTimes / 全局配置决定）提供；延时数组只提供<b>退避序列</b>，
+ * <b>不再</b>隐式充当预算上限（历史行为：{@code new FixedArrayRetryPolicy(delayArray)} 把 {@code maxReconsumeTimes =
+ * delayArray.length}，导致 {@code delay-array} 长度静默截断重试次数）。 数组耗尽后使用<b>最后一档</b>延期（保持非 null），停止条件交给预算或
+ * {@link #shouldStopRetry(int, Message)}。
+ *
+ * <p>当 {@code reconsumeTimes >= maxReconsumeTimes} 时，{@link #shouldStopRetry} 返回 true， {@link
+ * #nextRetryDelay} 返回 null，消息将进入 DLQ。
  *
  * <p>对应架构设计文档决策 D7（RetryPolicy SPI）：默认重试实现。
  *
@@ -48,15 +56,23 @@ public class FixedArrayRetryPolicy implements RetryPolicy {
         7_200_000L // 2h
     };
 
-    /** 最大重试次数（与数组长度一致） */
+    /** 默认延时数组长度（= 默认重试预算，仅作为默认值来源；自定义数组长度不影响预算） */
     public static final int MAX_RECONSUME_TIMES = DELAY_MILLIS.length;
+
+    /**
+     * "预算完全交给消费者配置"的哨兵值：仅自定义延时数组时使用。
+     *
+     * <p>预算的唯一真源是消费者的 {@code max-reconsume-times}（框架在 handler / RetryScheduler 两层执行）， 策略实例（可能是全局单例
+     * Bean，无法感知 per-consumer 预算）不得再叠加一个内部预算。 取值 {@code Integer.MAX_VALUE} 表示"策略自身不停止"，数组耗尽后恒用最后一档。
+     */
+    static final int BUDGET_DELEGATED_TO_CONSUMER = Integer.MAX_VALUE;
 
     private final long[] delayMillis;
     private final int maxReconsumeTimes;
 
-    /** 使用默认最大重试次数（16）。 */
+    /** 使用默认最大重试次数（16，与 {@code max-reconsume-times} 默认值一致）。 */
     public FixedArrayRetryPolicy() {
-        this(DELAY_MILLIS, DELAY_MILLIS.length);
+        this(DELAY_MILLIS, StreamMQConstants.DEFAULT_MAX_RECONSUME_TIMES);
     }
 
     /**
@@ -71,10 +87,14 @@ public class FixedArrayRetryPolicy implements RetryPolicy {
     /**
      * 自定义延时数组（对应 {@code streammq.retry.delay-array} 配置，逗号分隔毫秒值）。
      *
+     * <p><b>重试预算不取数组长度，也不由策略自设：</b>预算的唯一真源是消费者的 {@code max-reconsume-times} （框架在 handler 与
+     * RetryScheduler 两层执行）。本构造器把策略内部预算委托给该配置（数组耗尽后恒用最后一档）， 因此 {@code delay-array}
+     * 的长度只影响退避节奏，绝不会静默截断重试次数。 需要策略实例自带预算时使用 {@link #FixedArrayRetryPolicy(long[], int)}。
+     *
      * @param delayMillis 延时数组（毫秒），非空
      */
     public FixedArrayRetryPolicy(long[] delayMillis) {
-        this(delayMillis, delayMillis == null ? 0 : delayMillis.length);
+        this(delayMillis, delayMillis == null ? 0 : BUDGET_DELEGATED_TO_CONSUMER);
     }
 
     /**
@@ -102,8 +122,11 @@ public class FixedArrayRetryPolicy implements RetryPolicy {
             reconsumeTimes = 0;
         }
         if (reconsumeTimes >= maxReconsumeTimes) {
+            // 预算耗尽：null 为停止信号（与 shouldStopRetry=true 语义一致）
             return null;
         }
+        // 退避序列耗尽后保持在最后一档（保持非 null），而非提前停止——
+        // 停止只由 maxReconsumeTimes 预算或 shouldStopRetry 决定（0.1.2 定稿）。
         int index = Math.min(reconsumeTimes, delayMillis.length - 1);
         return Duration.ofMillis(delayMillis[index]);
     }

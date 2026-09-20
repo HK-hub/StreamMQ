@@ -18,10 +18,13 @@ import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.SendResult;
 import io.github.streammq.core.policy.RetryPolicy;
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -52,6 +55,8 @@ import org.springframework.test.context.TestPropertySource;
  *   <li>{@code normalMessageDelivery} 正常消息投递 → 测试消费者接收并验证消息内容
  *   <li>{@code failedMessageTriggersDlq} 消息消费失败超过重试次数 → 进入死信队列
  *   <li>{@code dlqConsumerReceivesDeadLetter} 死信消费者从 DLQ Stream 接收到死信消息
+ *   <li>{@code assertNamespaceConsistencyThenCleanupNamespace} 示例 DLQ 消费者与生产端同命名空间， 且运行后示例默认命名空间
+ *       {@code streammq:dlq:*} 不新增键（注解继承全局命名空间，收发不分家）
  * </ul>
  *
  * @author StreamMQ Contributors
@@ -81,7 +86,10 @@ class DlqSampleIT {
     /** 每次运行的唯一后缀：命名空间与载荷均带此后缀，避免跨运行残留数据污染断言 */
     private static final String RUN_ID = UUID.randomUUID().toString().substring(0, 8);
 
-    /** 本次运行的专属命名空间（覆写 streammq.namespace），配合 {@link #cleanupNamespace()} 实现跨运行隔离 */
+    /**
+     * 本次运行的专属命名空间（覆写 streammq.namespace），配合 {@link
+     * #assertNamespaceConsistencyThenCleanupNamespace()} 实现跨运行隔离
+     */
     private static final String IT_NAMESPACE = "dlq-it-" + RUN_ID;
 
     /** 覆写全局命名空间，避免与历史运行/其它示例共享 streammq:dlq:* 键 */
@@ -90,22 +98,91 @@ class DlqSampleIT {
         registry.add("streammq.namespace", () -> IT_NAMESPACE);
     }
 
+    /** 示例 application.yml 中配置的默认命名空间（streammq.namespace: dlq） */
+    private static final String SAMPLE_DEFAULT_NAMESPACE = "dlq";
+
+    /** IT 开始前示例默认命名空间下已存在的键快照：用于断言本次运行没有在该命名空间留下任何新键 */
+    private static Set<String> sampleDefaultNamespaceKeysBeforeIt;
+
     /**
-     * 清理本次运行命名空间下的全部键。
+     * 在任何 Spring 上下文创建之前，快照示例默认命名空间（{@code streammq:dlq:*}）下的键。
+     *
+     * <p>上下文创建发生在测试实例注入阶段（晚于本回调），因此快照能覆盖「消费者注册时建组」这一时刻。
+     */
+    @BeforeAll
+    static void snapshotSampleDefaultNamespaceKeys() {
+        sampleDefaultNamespaceKeysBeforeIt = keysOfSampleDefaultNamespace();
+    }
+
+    /** 读取示例默认命名空间下的键（自建客户端，不依赖上下文生命周期）。 */
+    private static Set<String> keysOfSampleDefaultNamespace() {
+        RedissonClient client = Redisson.create(newCleanupConfig());
+        try {
+            return listKeys(client, "streammq:" + SAMPLE_DEFAULT_NAMESPACE + ":*");
+        } finally {
+            client.shutdown();
+        }
+    }
+
+    /** 按 pattern 读取键集合。 */
+    private static Set<String> listKeys(RedissonClient client, String pattern) {
+        Set<String> keys = new LinkedHashSet<>();
+        for (String key : client.getKeys().getKeysByPattern(pattern, 100)) {
+            keys.add(key);
+        }
+        return keys;
+    }
+
+    /** 清理用 Redisson 配置：直连本地 Redis，字符串编解码。 */
+    private static Config newCleanupConfig() {
+        Config config = new Config();
+        config.useSingleServer().setAddress("redis://127.0.0.1:6379").setDatabase(0);
+        config.setCodec(StringCodec.INSTANCE);
+        return config;
+    }
+
+    /**
+     * 断言「消费端与生产端命名空间一致」且没有跨命名空间残留，然后清理本次运行命名空间下的全部键。
+     *
+     * <p><b>为什么断言这两点：</b>IT 通过 {@link #overrideNamespace} 把全局命名空间覆写为 {@link
+     * #IT_NAMESPACE}，示例中的注解（{@code @StreamMQConsumer} / {@code @StreamMQDlqConsumer}）统一继承该全局值。
+     * 若某个注解把 namespace 硬编码为编译期常量（历史上 {@code OrderDlqConsumer} 就是这样），会同时出现两个症状：
+     *
+     * <ul>
+     *   <li>示例内置 DLQ 消费者的 DLQ Stream 建在错误命名空间（{@code streammq:dlq:*}）而非生产端写入死信的 {@code
+     *       streammq:{IT_NAMESPACE}:dlq:*}——永远收不到死信；
+     *   <li>每次门禁都在示例默认命名空间残留空 DLQ 流与心跳键。
+     * </ul>
      *
      * <p>使用独立客户端：{@code @DirtiesContext(AFTER_EACH_TEST_METHOD)} 在每个方法后关闭上下文， 注入的 RedissonClient 在
      * {@code @AfterAll} 阶段已被 shutdown，无法复用于清理。
      */
     @AfterAll
-    static void cleanupNamespace() {
-        Config config = new Config();
-        config.useSingleServer().setAddress("redis://127.0.0.1:6379").setDatabase(0);
-        config.setCodec(StringCodec.INSTANCE);
-        RedissonClient cleanupClient = Redisson.create(config);
+    static void assertNamespaceConsistencyThenCleanupNamespace() {
+        RedissonClient client = Redisson.create(newCleanupConfig());
         try {
-            cleanupClient.getKeys().deleteByPattern("streammq:" + IT_NAMESPACE + ":*");
+            // ① 示例内置 DLQ 消费者跟随全局命名空间：其 DLQ Stream 必须建在 IT 专属命名空间下
+            String sampleDlqStreamKey =
+                    "streammq:" + IT_NAMESPACE + ":dlq:" + SampleConstants.CONSUMER_GROUP;
+            assertThat(client.getKeys().countExists(sampleDlqStreamKey))
+                    .as("示例 DLQ 消费者必须继承全局命名空间（与生产端一致），应存在 %s", sampleDlqStreamKey)
+                    .isEqualTo(1L);
+
+            // ② 示例默认命名空间不得新增键：硬编码 namespace 的残留检测
+            Set<String> newKeysInDefaultNamespace =
+                    listKeys(client, "streammq:" + SAMPLE_DEFAULT_NAMESPACE + ":*");
+            newKeysInDefaultNamespace.removeAll(sampleDefaultNamespaceKeysBeforeIt);
+            assertThat(newKeysInDefaultNamespace)
+                    .as(
+                            "示例默认命名空间 streammq:%s:* 在 IT 期间不得新增键"
+                                    + "（新增说明注解把 namespace 硬编码，DLQ 收发命名空间分离）",
+                            SAMPLE_DEFAULT_NAMESPACE)
+                    .isEmpty();
+
+            // ③ 清理本次运行的专属命名空间
+            client.getKeys().deleteByPattern("streammq:" + IT_NAMESPACE + ":*");
         } finally {
-            cleanupClient.shutdown();
+            client.shutdown();
         }
     }
 

@@ -20,6 +20,12 @@ import java.util.Map;
  *
  * <p>不负责 body 的序列化（由 {@link io.github.streammq.core.serializer.MessageSerializer} 处理），仅做字段映射。
  *
+ * <p><b>异常契约（0.1.2 定稿，发布即冻结）：</b>还原方向（{@code fromStreamFields}）的实现必须把解码路径上的底层异常—— 含非法 topic/tag
+ * 等字段校验触发的 {@link IllegalArgumentException}（{@link Message} 构造期校验）、字段缺失、 反序列化失败——统一<b>包装为 {@link
+ * io.github.streammq.core.exception.SerializationException}</b>后抛出； 消费路径不得看到裸 {@code
+ * IllegalArgumentException} / {@code NullPointerException}。序列化方向（{@code toStreamFields}）的调用方校验失败仍为
+ * {@link IllegalArgumentException}（发送前失败，由调用方直接感知）。
+ *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
@@ -43,7 +49,8 @@ public interface MessageConverter {
      * @param targetType body 目标类型（用于反序列化）
      * @param <T> body 类型
      * @return Message 实例
-     * @throws io.github.streammq.core.exception.SerializationException 反序列化失败或 Topic 缺失
+     * @throws io.github.streammq.core.exception.SerializationException 反序列化失败、Topic 缺失，或字段值非法 （如
+     *     topic 违反命名校验——实现必须把底层的 {@link IllegalArgumentException} 包装为本异常）
      */
     default <T> Message<T> fromStreamFields(Map<String, String> fields, Class<T> targetType) {
         return fromStreamFields(fields, targetType, null);
@@ -65,7 +72,9 @@ public interface MessageConverter {
      * @param <T> body 类型
      * @return 完整的不可变 Message 实例
      * @throws UnsupportedOperationException 默认实现总是抛出，实现方必须覆盖本方法
-     * @throws io.github.streammq.core.exception.SerializationException 反序列化失败或 Topic 缺失
+     * @throws io.github.streammq.core.exception.SerializationException 反序列化失败、Topic 缺失，或字段值非法 （如
+     *     topic 违反命名校验——实现必须把底层的 {@link IllegalArgumentException} / {@link NullPointerException}
+     *     等运行时异常包装为本异常，消费路径不得看到裸异常）
      */
     default <T> Message<T> fromStreamFields(
             Map<String, String> fields, Class<T> targetType, String fallbackTopic) {

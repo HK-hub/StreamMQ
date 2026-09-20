@@ -28,7 +28,13 @@ public final class StreamMQConstants {
      */
     public static final int ANNOTATION_UNSET_INT = -1;
 
-    /** {@code @StreamMQConsumer} 数值属性的"未设置"哨兵（long 型），语义同 {@link #ANNOTATION_UNSET_INT}。 */
+    /**
+     * {@code @StreamMQConsumer} 数值属性的"未设置"哨兵（long 型），语义同 {@link #ANNOTATION_UNSET_INT}。
+     *
+     * <p><b>超时类属性的统一三态口径（0.1.2 定稿，发布即冻结）：</b> {@code consumeTimeout} / {@code
+     * orderlyConsumeTimeout} 等超时属性使用 {@code -1}（本哨兵）= 未声明（跟随全局配置）、{@code 0} = 显式关闭超时保护、 {@code > 0}
+     * = 超时毫秒数。{@code -1} 与 {@code 0} 语义相反，不可混用。
+     */
     public static final long ANNOTATION_UNSET_LONG = -1L;
 
     // ==================== 默认值常量 ====================
@@ -123,14 +129,20 @@ public final class StreamMQConstants {
     /**
      * PEL 认领空闲阈值默认值（毫秒）：60 秒。
      *
-     * <p><b>下界约束（安全不变量）：</b>必须显著大于「消费超时（默认 30s）+ 消费超时取消宽限期（默认 2s）」，
-     * 否则调度器会把<b>仍在正常处理中</b>的消息判定为"孤儿"并复制重投，造成重复消费与顺序破坏。 配置校验见 {@code
-     * StreamMQProperties#validate}：低于 {@link #MIN_PEL_CLAIM_MIN_IDLE_MS} 时启动失败。
+     * <p><b>下界约束（安全不变量）：</b>必须显著大于「消费超时最坏情形（历史默认 30s）+ 消费超时取消宽限期（默认 2s）」，
+     * 否则调度器会把<b>仍在正常处理中</b>的消息判定为"孤儿"并复制重投，造成重复消费与顺序破坏。 注意：{@link #DEFAULT_CONSUME_TIMEOUT_MS} 自
+     * 0.1.2 起为 {@code 0}（默认不启用超时保护），但超时能力仍存在且用户可显式开启至任意正值， 因此下界按历史默认 30s 的保守口径标定（见 {@link
+     * #MIN_PEL_CLAIM_MIN_IDLE_MS}）。 配置校验见 {@code StreamMQProperties#validate}：低于 {@link
+     * #MIN_PEL_CLAIM_MIN_IDLE_MS} 时启动失败。
      */
     public static final long DEFAULT_PEL_CLAIM_MIN_IDLE_MS = 60_000L;
 
     /**
-     * PEL 认领空闲阈值的硬性下界（毫秒）：{@code 消费超时默认 30s + 取消宽限期默认 2s + 3s 安全余量 = 35s}。
+     * PEL 认领空闲阈值的硬性下界（毫秒）：{@code 历史消费超时默认 30s + 取消宽限期默认 2s + 3s 安全余量 = 35s}。
+     *
+     * <p>该值以<b>历史最坏情形（含 {@code consumeTimeout = 30s}）</b>标定的保守下界，与 {@link
+     * #DEFAULT_CONSUME_TIMEOUT_MS} 自 0.1.2 起改为 {@code 0}（默认不启用）无关：默认不启用不代表可以放宽下界，
+     * 因为用户随时可显式开启超时保护，而下界是启动期静态约束。
      *
      * <p>低于该值意味着"消息可能还在处理就被认领重投"，是数据正确性风险而非性能取舍， 因此不允许通过配置突破。
      */

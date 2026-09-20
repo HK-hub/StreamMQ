@@ -58,6 +58,30 @@ public class DefaultConsumeLoopSupervisor implements ConsumeLoopSupervisor {
         }
     }
 
+    /**
+     * 以新注册替换旧循环（红队审查 R1-7）：先取消该注册键下的全部读循环与 inflight 泵，再提交新注册的循环。
+     *
+     * <p><b>背景：</b>同一 {@code (topic, group)} 运行期重复注册时，{@link #submitLoops} 的幂等守卫会因旧循环
+     * 仍在运行而直接返回（无日志）——旧 consumer 继续消费、新 consumer 永不生效。容器在检测到"该注册键已 接线"时必须改走本方法。
+     *
+     * <p>取消是同步的（从登记表移除后 {@code cancel(true)}）；被取消的旧循环会在中断点退出，其未 ACK 消息 留在
+     * PEL，由新循环/认领机制兜底（at-least-once 不变）。
+     *
+     * <p><b>注意：</b>{@link ConsumeLoopSupervisor} 接口尚未声明本方法（接口文件不在本轮允许修改清单内）， 容器按实现类类型持有监督者；如需把该 API
+     * 提升到接口，请补 {@code void replaceLoops(ListenerRegistration<?> reg);}。
+     *
+     * @param reg 新注册项
+     */
+    public void replaceLoops(ListenerRegistration<?> reg) {
+        Objects.requireNonNull(reg, "reg");
+        cancelForRegistration(reg.key());
+        LOG.info(
+                "Replacing consume loops for re-registered listener: topic={}, group={}",
+                reg.getTopic(),
+                reg.getGroup());
+        submitLoops(reg);
+    }
+
     /** 该注册的任一读循环（基础 / retry / 并发扩展）是否仍在运行。 */
     private boolean hasActiveLoops(String baseKey) {
         for (Map.Entry<String, Future<?>> entry : futures.entrySet()) {

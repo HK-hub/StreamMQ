@@ -1,8 +1,11 @@
 # StreamMQ 发布前红队审查报告
 
-> **本文件包含两轮报告**：
-> - **最新：第五轮（R5）** —— 见文末 [第五轮发布前红队审查报告（R5）](#第五轮发布前红队审查报告r5)。
->   本轮门禁命令首跑即红，推翻上一轮"门禁可绿"的隐含前提；修复后复验 20/20 SUCCESS、1249 用例全绿。
+> **本文件包含三轮报告**：
+> - **最新：第六轮（R6）** —— 见文末 [第六轮发布前红队审查报告（R6）](#第六轮发布前红队审查报告r6)。
+>   未发现 P0；新修 5 个 P1（静默不投递 / 唯一副本丢失 / 状态覆盖 / 广播语义退化）、45 个 P2 与全部可执行 P3/P4；
+>   第五轮 §13 的六项未闭环项闭环五项（真实 Central 发布以无签名 dry-run 演练替代）。
+>   终局门禁 20/20 SUCCESS、1481 用例 0 失败/0 跳过（05:52），裁决 **GO 90/100**（§17）。
+> - 第五轮（R5）—— 门禁命令首跑即红，修复后复验 20/20 SUCCESS、1249 用例全绿。
 > - 第四轮（下文）—— 历史记录，保留以供追溯。
 
 # 第四轮报告（历史记录）
@@ -644,3 +647,477 @@ Open P3/P4:             0 items（§13 的未闭环项均为外部环境依赖�
 （R5-01，确定性失败而非 flaky）。本轮实际是从"门禁红"开始，把阻断项与随后发现的 2 个 P1、14 个 P2
 全部按根因修复，最终以门禁命令全绿 + CI 同口径 tripwire 达标作为裁决依据。这再次印证
 `fullReview.md` 的核心原则：**不因"上一轮已通过"而默认当前仍然成立**。
+
+---
+
+# 第六轮发布前红队审查报告（R6）
+
+> 审查依据：`docs/fullReview.md` 全文协议（31 节）。
+> 审查方式：红队式「先证明它不该发布」——静态审计（分域并行审计员 + 主审逐项代码级取证）+
+> **真实 3 主 Redis Cluster 实测** + **JMH 全量重跑** + 与发布通道**完全相同**的门禁命令实测。
+> 基线：`b5e6486`（第五轮闭环的提交）。
+
+**结论摘要：本轮未发现 P0。新发现并修复 5 个 P1、45 个 P2（含发布通道门禁 11 项）与全部可执行 P3/P4；
+第五轮 §13 的六项未闭环项闭环五项（JMH 重跑 / Redis Cluster 实测 / kubernetes 深度审计 / 孤儿清理 N+1 /
+顺序锁租约语义），仅"真实 Maven Central 发布"因无私钥口令以**无签名 dry-run 演练**替代。
+门禁命令终局全绿（详见 §15）。**
+
+---
+
+## 1. Executive Summary
+
+第五轮的审查重心是"自证门禁可绿"与 AUTO_ACK 数据面。本轮换一个起点：**假设第五轮修复过的每一类缺陷，
+都在其它路径上存在同构副本**；并把第五轮未触及的三个域（Redis Cluster 语义、kubernetes 模块、
+基准方法学）与发布通道本身纳入取证范围。事实证明这个假设成立——本轮最重的发现都不是"新功能没做"，
+而是同一类缺陷的孪生副本：
+
+- R5-02 修复了 AUTO_ACK 的失败重投（旧实现把消息写进**无人消费**的重试 Stream），但**顺序消费（ORDERLY）
+  的失败路径**仍有三条分支只"留在 PEL 等认领"——而 PEL 认领会跳过心跳新鲜的属主实例，属主存活期间
+  消息**永不重投**（R1-1，静默黑洞）。
+- R5 修复了 DLQ 路由遇不可变 Map 的 `UnsupportedOperationException`，但**重试/DLQ 流自身**仍被
+  `MAXLEN` 有损裁剪——而转投进这两类流的条目是消息的**唯一副本**（原条目已 XACK、payload 已在同一
+  原子批删除），裁剪即静默丢失（R2-6）。
+- 事务回查在 R5 修好了批量窗口，但"判定卡死 → 写终态"之间**没有状态 CAS**：并发实例可能已完成转投，
+  无条件 `HSET` 会覆盖已提交状态（R2-1）。
+- 广播身份在 R5 修好了"按容器唯一"，但**复用本地身份文件前不做占用校验**：同机重启 / 双实例共用
+  消费者名时静默复用身份，广播消费退化为集群消费（R6-B1）。
+
+三个此前未审计的域各有一批结构性发现：**Redis Cluster** 的多 key 原子路径在 Cluster 客户端下**静默失效**
+（按节点拆分提交、无异常）——本轮把"不支持"从文档声明升级为**运行期前置拒绝 + 真实 3 主集群实测**；
+**kubernetes** 模块的状态回写会**自触发无限调和**、副本计数是实例级共享值（串值）、HPA 指标不反映真实积压；
+**基准方法学**的消费口径被补货端封顶（真实吞吐被低估至 0.66–0.78×），且 `@Fork(3)` + 长迭代结构性需要
+≈100 分钟、远超 CI 预算。
+
+发布通道侧，本轮补齐了 11 项门禁（F 族）：release 通道此前**完全依赖可选的 NVD 深扫**（无密钥即
+`exit 0`），等于"无密钥时发布通道没有任何 CVE 门禁"；`workflow_dispatch` 发布路径**完全不校验 tag**，
+所发布字节绑定不到任何已校验的 commit；BOM 的 `streammq.version` 属性漏改会让 BOM 静默指向上一版；
+staging smoke 会因"回退 Central 解析旧构件"而**假绿**。
+
+**门禁复验**：终局门禁命令 `mvn clean verify -Djacoco.check.skip=false` 全绿（20/20 模块 SUCCESS，
+0 失败 0 跳过）。过程记录如实保留：本轮修复引入的 tracing javadoc 折行超限（spotless 违规）曾使
+**门禁首跑即红**——这不是产品缺陷，但同样等价于"不可发布"，修正后复验全绿（详见 §15.2）。
+
+---
+
+## 2. Project Understanding
+
+| 维度 | 事实（以代码/物料为准） |
+|---|---|
+| 目标 | 把已有 Redis（Stream）变成消息总线，提供 RocketMQ 风格编程模型，避免另建 MQ 集群 |
+| 用户 | 中小规模（< 1 亿/天）、已有 Redis、Spring Boot 3、Java 21 的团队 |
+| 核心能力 | 注解消费、Template/Service 双发送 API、事务半消息、延时、顺序、批量、DLQ（含二级）、Tag/SQL92 过滤、压缩、背压、可观测、管理 REST |
+| 架构 | `core`（抽象/SPI，零 Spring）→ `redisson`（适配实现）→ `spring-boot-starter`（装配/端点）；另有 tracing / diagnostics / binder / kubernetes / test / samples / benchmark |
+| 发布面 | 6 个 Central 构件（parent/bom/core/redisson/starter/test）；其余为 source-only，`excludeArtifacts` 明确排除 |
+| 技术路线 | Redis Stream + Redisson；JDK 21（虚拟线程消费循环）；安全默认（Fury 类注册可配置、默认宽松） |
+
+**目标一致性：PASS。** 本轮未发现目标漂移。与 R5 相比的两处**语义收敛**（均在 0.1.2 未发布前，
+不构成兼容性负担）：事务发送状态定稿为"仅 `COMMIT_MESSAGE` 为 `SEND_OK`"（R3-2）；
+`RetryPolicy.shouldStopRetry` 接线为"返回 `true` → 直接进 DLQ"（R3-4）。两者都写回 javadoc 与
+`docs/configuration-reference.md`，文档与实现同源。
+
+---
+
+## 3. Architecture Review
+
+- **依赖方向：PASS。** `core` 不依赖 Spring，`redisson` 依赖 `core`，`starter` 依赖二者；enforcer
+  `dependencyConvergence` + `banDuplicatePomDependencyVersions` 全绿。
+- **SPI 缝：PASS（本轮补强）。** 18 个扩展点均有真实默认实现与解析路径。本轮修好两处"缝在但语义漏"的
+  缺陷：`MessageConverter` 返回值契约（R5-06 的不可变 Map 已修，本轮确认三处拷贝口径一致）、
+  `RetryPolicy.shouldStopRetry` 此前**从未被接线**（R3-4）。
+- **生命周期：PASS。** 容器 / 调度器 / 监听器工厂的 start/stop/close 幂等；本轮补上"重复注册 = 替换"
+  与"运行期配置即时生效"（R1-6 / R1-7）。
+- **扩展机制：PASS。** 本轮新增的 `OrderlyDeferredRetryQueue` 由 primary 读循环驱动，**不新增线程**，
+  容量满时显式拒绝并 ERROR 留痕（消息仍在 PEL），不使用无界队列。
+
+**结构性观察（非缺陷）**：`DefaultStreamMQListenerContainer` 继续作为编排类存在（≈1500 行），
+但其新增职责（延迟重投队列、运行期配置读取、重复注册替换）均以协作对象或单一方法落点实现，
+未把逻辑回灌进主循环。
+
+---
+
+## 4. Release Blockers（本轮发现，全部已闭环）
+
+> 编号沿用分域审计清单（R1 = 消费数据面，R2 = 调度器/事务，R3 = 重试/DLQ/序列化，S = 管理与安全，
+> K = kubernetes，B = 基准，F = 发布通道）。个别编号在同一处改动中被合并处置，故不单独列行。
+
+### P1（发布前必修，全部闭环）
+
+| 编号 | 问题 | 证据 | 处置 |
+|---|---|---|---|
+| R1-1（含 R1-2） | **顺序消费失败路径的本地重投缺失**：分片锁竞争、ORDERLY `defer`、DLQ 转投失败三条分支只"留在 PEL 等认领"，而 PEL 认领会跳过心跳新鲜的属主实例——属主存活期间消息**永不重投**（静默黑洞） | `DefaultMessageProcessor` 三条分支的返回值路径；`PelClaimScheduler` 的存活实例跳过规则 | 新增 `OrderlyDeferredRetryQueue` + 重投执行器（primary 读循环驱动、不新增线程）：三条路径登记后按延迟重投；队列满显式 ERROR 拒绝（消息留 PEL）；容器停止时清空（未 ACK 仍由认领兜底）。`OrderlyDeferredRetryQueueTest` / `OrderlyMessageIT` |
+| R1-3 | **DLQ 模式毒丸被裸 ACK**：目标流与当前消费流相同时（写回会自复制成无限循环）旧实现直接 ACK，原始字段永久丢失 | `DefaultMessageProcessor` 的"同名流"分支 | 改为**先隔离落盘再 ACK**：原始字段写入隔离 Hash + ZSet 登记（TTL 与 PEL 认领补偿落盘一致，7 天可恢复），再 ACK。`PoisonEntryHandlingIT` |
+| R2-1 | **事务强制终结缺状态 CAS**：判定"卡死"与写终态之间，并发实例可能已完成转投，无条件 `HSET` 会覆盖**已提交**状态 | `TransactionScanner` 强制终结路径 | 脚本首步要求状态仍为 `COMMITTING` 才允许转投，否则**不投递、不改写**（幂等让位）。`Round6SchedulerRedTeamIT` |
+| R2-6 | **重试/DLQ 流被 `MAXLEN` 有损裁剪**：转投进这两类流的条目是消息的**唯一副本**（原 topic 条目已 XACK、payload 已在同一原子批删除），裁剪即静默丢失 | 流创建/写入处的 `MAXLEN` 参数 | 对重试流与 DLQ 流**不施加有损裁剪**；无界增长风险改由告警与保留期清理承担（用户可配 `streammq.dlq.stream-max-len` 显式启用）。`Round6SchedulerRedTeamIT` |
+| R6-B1 | **广播身份本地文件复用前不校验占用**：同机重启 / 双实例共用消费者名时，命中本地文件即静默复用身份，广播消费退化为集群消费（对端实例收不到消息） | `BroadcastInstanceIdResolver` 的本地文件读取分支 | 命中后仅做 **1 次 claim 校验**并区分三种结局：**确认**可复用；**明确拒绝**（被其它主机活实例占用）绝不复用、转注册中心重分配；**不可达**则信任本地文件（Redis 停机期间身份不漂移、PEL 与位点保留）。`BroadcastInstanceIdResolverTest` 断言更新为新契约 |
+
+### P2（应修，全部闭环）
+
+| 域 | 项数 | 明细 |
+|---|---:|---|
+| 消费数据面 | 3 | R1-5 暂停期心跳按 `pausedSleepMillis`（默认 100ms）节流——暂停是"降载"语义，不应把心跳提升到 100ms 一次；R1-6 消费循环构造时**快照**配置，运行期 `setter` 对已运行循环无效；R1-7 同一 `(topic, group)` 重复注册变成"新增"而非"替换"（旧循环继续消费、新注册从不生效） |
+| 调度器与事务 | 3 | R2-2 保留期清理节奏固定（128/10 轮），数万事务/天下 `txstate` Hash 无界增长；R2-3 慢 checker 使同一 `txId` 每轮重复启动孤儿回查线程；R2-4 调度时间基准（延时写入、到期判定、退避 score）混用**本机时钟**，跨主机 NTP 偏差平移延时时长与重试节奏 |
+| 重试 / DLQ / 序列化 | 7 | R3-1 空串 body 往返退化为 `null`；R3-2 事务发送状态语义未定稿；R3-3 延迟超 payload TTL 时载荷先过期（长延迟重试到期读不到 payload）；R3-4 `RetryPolicy.shouldStopRetry` 从未被接线；R3-5 DLQ 策略读到全局配置而非"按消费者合并后"的生效配置；R3-6 `secondary-dlq-enabled=false` 时仍写二级 DLQ；R3-7 哨兵 topic 与业务 topic 冲突 |
+| Redis Cluster | 1 | 无前置拒绝：多 key 原子路径在 Cluster 客户端下**静默失去原子性**（按节点拆分提交、无异常、无日志） |
+| 管理与安全面 | 9 | S1 启动安全提醒组件是死代码（`@Component` 不在用户扫描范围）；S2 管理端点门控挂在 `health.enabled` 上；S3 多候选 Bean 使 `getIfAvailable()` 抛 `NoUniqueBeanDefinitionException`；S4 Fury 宽松模式门禁提示误导；S5 列表接口无结果上界（`?count=2000000000` 可整条流载入内存）；S6 `virtual-nodes<=0` 静默回退默认值；S7 `batch-size` 超上限由"静默夹取"演进为生效值回显 + 交叉校验；S8 顺序锁租约属性只到文档未接线；S9 运行期配置变更"假生效"（端点不区分 `immediate` / `requires-restart`） |
+| 可观测性 | 3 | O1 诊断健康概览无缓存（`/health` 轮询每次 2N 次 Redis 往返）；O2 拓扑查询无结果上界（一次请求可把窗口内全部追踪记录聚合进堆内存）；O3 OTel `Scope#close()` 可在非创建线程关闭，静默破坏该线程的 current context |
+| Kubernetes | 5 | K2 优雅关闭无条件睡满预算；K4 状态回写自触发无限调和；K5 `readyReplicas` 为实例级共享计数器（多 CR 串值）；K6 HPA lag 指标不反映真实积压；K7 整对象 `replace` 覆盖用户并发修改的 spec |
+| 基准方法学 | 3 | B1 消费口径被补货端封顶（实测仅其 0.66–0.78×）；B2 `@Fork(3)` + 长迭代 + 双模式结构性需要 ≈100 分钟，远超 CI 预算；B4 `main()` 用 `OptionsBuilder` 覆盖注解参数（"注解一套、main() 又一套"的双真源） |
+| 发布通道 | 11 | F-1 … F-11：见 §14 |
+
+### P3/P4（本轮一并闭环）
+
+- **R1-8 `drainPendingOnce` 契约**：监听器未实现该能力（返回 `null`）时 WARN 一次并跳过，不 NPE、不中断消费。
+- **R1-10 超时包装路径丢失 MDC**：业务回调运行在执行器线程，现把读循环线程的 MDC 上下文显式传递
+  （普通与 ORDERLY 超时包装两条路径）。
+- **R2-5 孤儿清理 N+1 往返**：逐条 `isExists` 改为服务端单条 Lua 批量判定（一次往返，语义不变）——
+  第五轮 §13 遗留的"性能优化项"由此闭环。
+- **R3-8 畸形 topic 的异常契约**：Entry 字段中的 topic 违反命名校验时，`IllegalArgumentException`
+  被包装为消费侧可辨识异常而非裸崩。
+- **K1 / K3 / K8 / K9 / K10**：`CustomResource` 构造器的 `@Group/@Version` 契约断言；informer
+  `inNamespace(ns)` 收敛 watch 范围；fabric8 Mock Server 回归覆盖状态回写与幂等；扫描范围与 watch 语义
+  对齐并清理已消失 CR 的每-CR 状态（map 不再只增不减）；ConfigMap 版本键用**实际**注入的 ns/name。
+- **发布物料一致性**：`docs/benchmarks/serialization-2026-09-17.md` 的 JDK 结论更正（见 §13）、
+  CHANGELOG 中"fork 提升至 3"与最终 `@Fork(1)` 的自相矛盾说明、双语 README 与基准报告同步为实测数字。
+
+---
+
+## 5. Top Problems（按严重度，前 10）
+
+1. **R1-1 顺序消费失败路径永不重投**（P1）——属主存活即静默黑洞，三条分支同源。
+2. **R2-6 重试/DLQ 流被有损裁剪**（P1）——流内条目是唯一副本，裁剪即永久丢失。
+3. **R2-1 事务强制终结覆盖已提交状态**（P1）——并发下状态被降级，可能触发重复投递。
+4. **R6-B1 广播身份静默复用**（P1）——广播语义静默退化为集群，对端收不到消息。
+5. **R1-3 DLQ 毒丸裸 ACK**（P1）——原始字段永久丢失（现改为先隔离落盘）。
+6. **Cluster 多 key 原子路径静默失效**（P2）——无异常、无日志，用户以为有原子性。
+7. **B1 消费基准被补货端封顶**（P2）——对外公布的数字系统性低估。
+8. **K4 状态回写自触发无限调和**（P2）——Operator 空转、API Server 压力。
+9. **F-2 发布通道无密钥时没有任何 CVE 门禁**（P2）——供应链门禁形同虚设。
+10. **O2 拓扑查询无上界**（P2）——可被外部请求触发 OOM。
+
+---
+
+## 6. 消费数据面（R1 族）
+
+除 §4 列出的 R1-1 / R1-3 / R1-5 / R1-6 / R1-7 / R1-8 / R1-10 外：
+
+- **R1-9（§13 闭环项）顺序分片锁的租约语义**：旧实现只有"看门狗续期"一种模式——持有者卡死时锁永不过期，
+  该分片永久停摆。现新增 `streammq.consumer.orderly-shard-lock-lease-millis`：`0`（默认）= 看门狗续期 +
+  严格有序；`> 0` = 有限租约，持有者卡死时到期让位，代价是极端情况下的瞬时乱序。负值启动失败、
+  `0 < v < 5000` 启动 WARN（正常慢 handler 可能被判为卡死）。**这是显式权衡而非缺陷修复**，权衡说明写在
+  `StreamMQProperties` javadoc 与 `docs/configuration-reference.md`。`RedissonOrderlyShardLockManagerLeaseTest`。
+- **in-flight 计数**：`InflightSink` 的计数在异常路径下与真实在途数偏离，`InFlightCountTrackingTest` 锁定修正。
+- **失败即红守卫**：`DefaultMessageProcessorShardBusyTest`、`OrderlyDeferredRetryQueueTest`、
+  `PoisonEntryHandlingIT`、`OrderlyMessageIT`（真实 Redis 端到端）。
+
+---
+
+## 7. 调度器与事务状态机（R2 族）
+
+- **R2-2 保留期清理吞吐**：HSCAN 分页游标化 + 单轮上限提升一个数量级 + 终态 `.done` 标记补齐
+  （终态脚本执行后、收尾前崩溃的字段才可能被回收）。
+- **R2-3 孤儿回查线程**：登记"存活租约"，线程结束自摘；诊断可见存活数，不再为同一 `txId` 重复起线程。
+- **R2-4 统一时间源**：延时写入、到期判定、退避 score 全部改用 **Redis 服务器时钟**（与调度扫描侧同源）；
+  读取失败回退本机时钟并**限频 WARN**。`RedissonStreamProducerDelayClockTest` / `DelayMessageSchedulerTest` /
+  `RetrySchedulerOrphanAndClockTest`。
+- **R2-5 N+1**：见 §4 P3/P4。
+- **失败即红守卫**：`Round6SchedulerRedTeamIT`（真实 Redis 上覆盖事务状态机、保留期清理、重试流不裁剪）。
+
+---
+
+## 8. 重试 / DLQ 与序列化契约（R3 族）
+
+- **R3-1 空串 body**：`send(topic, "")` 端到端还原为空串（`null ↔ null`、空串 ↔ 空串；序列化 / 转换 /
+  解码三处协同）。`EmptyBodyRoundTripTest`。
+- **R3-2 事务发送状态**：事务路径**仅** `COMMIT_MESSAGE` 为 `SEND_OK`；`ROLLBACK` / `UNKNOWN` 一律
+  `SEND_FAILED` 并携带事务状态；失败路径消息 ID 使用可辨识占位 `MessageId.pending()`。`TransactionSendStatusTest`。
+- **R3-3 payload TTL**：TTL 改为 `max(基础 TTL, 延迟 + 宽限)`（宽限 1 小时），覆盖"延迟 + 宽限"不变式，
+  避免长延迟重试到期时读不到 payload 只能进隔离区。
+- **R3-4 `shouldStopRetry` 接线**：策略说"停"而框架继续重试的静默不生效已修复；返回 `true` 直接进 DLQ
+  （`reason=MAX_RETRY`），与 `nextRetryDelay` 返回 `null` 的既有停止信号并存。
+- **R3-5 生效配置**：生效 `DlqConfig` 随决策上下文传递，策略判定与容器实际行为一致。
+  `DlqFailureStrategyEffectiveConfigTest`。
+- **R3-6 二级 DLQ 门控**：`secondary-dlq-enabled=false` 成为权威门控——关闭时按 drop 处理（ACK），
+  限频 WARN + DEBUG 留痕。
+- **R3-7 哨兵 topic 防御**：DLQ 重试转投改为"哨兵 topic + `retryScope=dlq`"双重判定；调度器入口
+  拒绝以保留前缀 `__` 开头的业务 target（纵深防御，注册可能来自第三方直接调用）。
+  `RetrySchedulerSentinelDefenseTest`。
+
+---
+
+## 9. 广播身份（R6-B1）
+
+除 §4 的 P1 修复外，本轮把三种结局写进 javadoc 与测试，并明确"Redis 停机期间身份不漂移"是有意选择
+（可用性优先于一致性，代价是停机期间同机新实例可能读到旧身份——由 claim 校验在 Redis 恢复后纠正）。
+
+---
+
+## 10. 管理与安全面（S 族）
+
+- **S1 死代码**：`AdminEndpointExposureStartupWarner` / `AuthenticatorStartupLogger` 不再依赖组件扫描，
+  改为自动装配内**显式注册的 Bean**（否则 `SECURITY ALERT` 永不输出）。`StreamMQAdminAutoConfigurationTest`。
+- **S2 门控解耦**：拆出独立的 `StreamMQAdminAutoConfiguration`——`streammq.health.enabled` 只门控健康指示器，
+  关闭它不再连带关闭管理端点。
+- **S3 Bean 解析**：`StreamMQBeanResolution` 收敛解析语义；多 `CompressionCodec` Bean 支持按名称
+  写入 / 解压。`StreamMQCompressionCodecAutoConfigurationTest`。
+- **S4 提示诚实**：Fury 宽松模式的门禁提示改为按**真实原因**给出可操作说明。
+- **S5 上界**：DLQ 列表等请求值统一夹取到上界，杜绝"一次请求把整条流载入内存"。
+- **S6 / S7 配置校验**：`rebalance.virtual-nodes <= 0` 显式校验 / 告警；`batch-size` 启动日志打印**生效值**
+  （含被夹取后的值）并交叉校验 `batch-size` 与 `max-batch-size-limit`。`StreamMQPropertiesValidateTest`。
+- **S8 属性接线**：顺序锁租约属性从 starter 属性接到容器（此前只存在于文档）。
+  `StreamMQListenerContainerWiringTest`。
+- **S9 诚实回显**：`updateGroupConfig` 响应体包含 `effects`（key → `immediate` / `requires-restart`），
+  按组分发（绝不调用容器级 `pause()` 连带暂停其它消费者组）。`StreamMQAdminEndpointTest`。
+
+---
+
+## 11. Kubernetes（K1~K10）
+
+模块**不发布**（source-only），但已深度审计并修复：K2 `GracefulShutdownHandler` 改 `SmartLifecycle` 接线
+且不再无条件睡满 `graceful-shutdown-timeout-ms`；K4 状态回写**先比较再写**（消除自触发无限调和）；
+K5 `readyReplicas` 按 CR 显式传入（消除实例级共享计数器串值）；K6 HPA 以真实积压探针
+（`BacklogProbe` 的 XLEN / XPENDING）刷新 lag 指标，缺失探针时跳过决策必伴随限频 WARN；K7 status 回写改
+in-place patch 而非整对象 replace。新增 6 个测试类（HPA 扫描与副本持久化、ConfigMap watch 范围、Cluster 模型
+与调和、属性装配）。**口径修正**：该模块不存在 `*IT`——健康注册用例在第四轮已由
+`KubernetesHealthRegistrationIT` 改名为 `KubernetesHealthRegistrationTest`（纯 `WebApplicationContextRunner`
+上下文测试）并由 surefire 执行；此前为该 `*IT` 声明的 failsafe 此后一直执行 0 个用例，本轮随本次修正移除
+（模块内无 IT 即不声明 failsafe；全仓 14 个声明 failsafe 的模块与 14 个含 `*IT` 的模块一一对应）。
+
+---
+
+## 12. Redis Cluster：从文档声明到运行期事实
+
+- **前置守卫** `RedisClusterCompatibility`：生产者 / 消费者启动探测一次，命中 Cluster 输出一次性
+  可操作 WARN；依赖跨 key 原子性的路径（延时入队 / 转投、重试与 DLQ 的调度 / 转投、事务 prepare / commit、
+  跨流 PEL 认领）在客户端被显式配置为 Cluster 时**显式拒绝**（可操作 `StreamMQException`）。
+  调用点共 8 处（producer / delay / retry / pel-claim / transaction ×2 / handler ×2）。
+- **真实 3 主 Cluster 实测**（`RedisClusterCompatibilityIT`，16384 slots 全覆盖 + 服务端 `CLUSTER SLOTS`
+  权威映射）：
+  - 单 key 路径（XADD / XREADGROUP / XACK）**可用**；
+  - 多 key Lua 被服务端以 `CROSSSLOT` 拒绝且**零副作用**（fail-safe）；
+  - 多 key `REDIS_WRITE_ATOMIC` 批：同节点 = MULTI/EXEC 拒绝；跨节点 = **按节点拆分提交（静默失去原子性，
+    无异常）**——两种失败形态均由用例锁定。
+- **架构级静态守卫**（`CrossKeyAtomicityGuardTest`）：扫描源码，任何原子批调用点缺少配套
+  `requireCrossKeyAtomicity` 前置拒绝即红（已用"删守卫 → 测试必红 → 原样恢复"验证守卫有效）。
+- 两个 README 的部署声明同步为**实测口径**（不再依赖推断的 CROSSSLOT 结论）。
+
+---
+
+## 13. 基准方法学与全量重跑（B 族）
+
+- **B1 消费口径**：旧 harness"每条一次同步 XADD 持续补货"使消费数字被补货端封顶（实测仅其 0.66–0.78×）。
+  现改为**预灌积压 + 低水位批量补货**；测量期间出现空读即判 `INVALID` 并非零退出。
+  同一基准 2,383 / 2,018 → **12,572 / 7,521 ops/s（5.3× / 3.7×）**，`supplyTight=false` 为机器可读证据。
+- **B2 时间预算**：注解收敛为 `@Fork(1)` + 短迭代（全量 ≈17–21 分钟），`BenchmarkBudgetTest` 按
+  "注解 × 参数组合 × 模式 × fork"静态校验 45 分钟上限（超预算即红）。
+- **B4 参数真源**：`main()` 不再用 `OptionsBuilder` 覆盖 fork / 预热 / 测量，临时覆盖只走 JMH 命令行参数。
+- **全量重跑并回填**（2026-09-20）：序列化 6 实现 × 双模式、发送 3 模式 × 3 负载、消费 2 负载全部为实测值；
+  报告记录运行参数（独立 Redis 6380、`backlog=50000`、`feederThreads=2`）、硬件与实测时长（三组 14 分 25 秒），
+  以及有效性证据（两档均 `avgBatchSize=100.0`、`starvedReads=0`、`valid=true`）。
+  双语 README 与 `streammq-benchmark/BENCHMARK_REPORT.md` 同步为同一组数字。
+- **更正过期结论**：`docs/benchmarks/serialization-2026-09-17.md` 称"JDK 反序列化未被测量——过滤器拒绝
+  基准载荷"，与当前 `JdkSerializer.installFilter`（目标类型随调用加入本次放行集）不符；已更正并指向
+  2026-09-20 实测（`jdkDeserialize` 116,017 ops/s、`jdkRoundTrip` 86,815 ops/s）。
+
+---
+
+## 14. 发布通道与物料（F 族，11 项）
+
+| 编号 | 问题 | 处置（`.github/workflows/release.yml`） |
+|---|---|---|
+| F-1 | `workflow_dispatch` 发布路径**完全没有 tag 校验**：tag 由"Create GitHub Release"现场创建，上传到 Central 的字节绑定不到任何已校验的 commit | 构建前硬断言：`git fetch --tags --force` 后 `v<version>` 必须已存在且 `rev-list -n1` == `HEAD`；test job 中重复一份用于 fail-fast（避免 45 分钟全量 verify 后才失败） |
+| F-2 | release 通道此前**完全依赖可选的 NVD 深扫**（无密钥即 `exit 0`），等于无 CVE 门禁 | 自带 `guard` + `sbom-scan` 两个 job（命令 / 版本 / SHA 与 ci.yml 完全一致，与 test 并行），`publish.needs` 由 `[test]` 改为 `[test, guard, sbom-scan]` |
+| F-3 | BOM 的 `streammq.version` 属性漏改 → BOM 静默指向上一版二进制（旧版本在 Central 存在，smoke 也照样绿） | `versions:set-property` 之后硬断言：按 BOM 自身求值该属性必须 == 目标版本 |
+| F-4 | staging smoke 隔离不彻底（compile 未离线、无版本断言）→ 从第二次发布起，BOM 漂移致依赖回退 Central 旧物也"解析成功"，**假绿** | 列出实际解析到的 `io.github.streammq:*`，硬断言版本全部 == 本次构建版本（比 `-o` 离线更直接命中回归语义） |
+| F-5 | `publish` job 超时预算 45 分钟，但该 job 要跑**两次**全量 reactor 构建 | 提升到 90 分钟（并保留 F-11 的显式预算） |
+| F-6 | 聚合 SBOM 可能是"空壳"（根工程不参与 deploy，`skipNotDeployed` 默认跳过 → SBOM 根本不生成），使 CVE 门禁静默失效 | 显式 `skipNotDeployed=false` + SBOM 内容 sanity check（4 个发布构件必须在场、第三方依赖必须存在、组件总数下限兜底） |
+| F-7 | `autoPublish=false` 期间 `mvn deploy` 只推进到 Central Portal 的 **validated** 状态，Release 页面若宣称"可用"会误导用户 | Release 正文注入醒目提示（"awaiting manual Publish"）+ 人工 Publish 步骤说明 |
+| F-8 | osv-scanner 二进制是"是否阻断发布"的判定执行体，下载后未校验即执行属供应链投毒面 | 下载后 `sha256sum -c` 校验（digest 取自官方 Release 资产元数据），并做可执行冒烟；校验失败立即中断 |
+| F-9 | SBOM 扫描范围过宽（含 samples 的 Web 容器等无关依赖），门禁口径与"交付给使用方的依赖闭包"不一致 | 从 4 个发布构件出发 BFS 过滤出**发布闭包**（跳过其它 streammq 模块与 optional/excluded 组件），只扫该闭包 |
+| F-10 | `guard` job 的 parent↔BOM 一致性此前未在发布通道内执行 | 发布前强制核对：双方共同声明的依赖版本一致、BOM 的 streammq 版本 == 根 `<version>`，且三方清单（`<modules>` ↔ `excludeArtifacts` ↔ BOM 管理集合）严格等价 |
+| F-11 | CI / benchmark 的多个 job 缺 `timeout-minutes`（runner 卡死即无限等待） | 全部 job 显式预算（ci 的 guard/build/formatting/test/verify/coverage/smoke、benchmark 三段 JMH 分别 20/12/10 分钟）；release 的 test / publish 同步补齐 |
+
+**其它发布物料**：第三方 action 全部固定到 commit SHA；`dist` 资产清单与 Central 发布集（6 构件）
+一致；`versions:set -DprocessAllModules=true` 且 BOM 单独断言（R5-16 延续）。
+
+---
+
+## 15. Verification Evidence
+
+### 15.1 门禁命令与结果（与发布通道完全一致）
+
+```text
+mvn -B clean verify -Djacoco.check.skip=false      # = .github/workflows/release.yml 的 test job 口径
+```
+
+| 项 | 结果 |
+|---|---|
+| 命令 | `mvn -B clean verify -Djacoco.check.skip=false` |
+| 模块 | **20 / 20 SUCCESS**（parent / bom / core / redisson / test / starter / tracing / diagnostics / binder / kubernetes / samples×8 / benchmark） |
+| 用时 | **05:52 min**，Finished at `2026-09-20T16:33:07+08:00` |
+| 用例 | **1481**（surefire 1185 / failsafe 296），Failures 0 / Errors 0 / **Skipped 0** |
+| 覆盖率门禁 | `jacoco:0.8.12:check` 实跑（`-Djacoco.check.skip=false`，未跳过） |
+| 格式/规约 | `spotless:2.43.0:check` 全模块通过；enforcer `RequireJavaVersion` / `RequireMavenVersion` / `dependencyConvergence` 通过 |
+
+逐模块用例（取自各模块 surefire / failsafe 报告实数）：
+
+| 模块 | surefire | failsafe | 合计 |
+|---|---:|---:|---:|
+| streammq-core | 283 | 0 | 283 |
+| streammq-redisson | 596 | 141 | 737 |
+| streammq-test | 50 | 44 | 94 |
+| streammq-spring-boot-starter | 83 | 36 | 119 |
+| streammq-tracing-opentelemetry | 33 | 17 | 50 |
+| streammq-diagnostics | 53 | 21 | 74 |
+| streammq-spring-cloud-stream-binder | 13 | 12 | 25 |
+| streammq-kubernetes | 61 | **0** | 61 |
+| 8 个 samples | 0 | 25 | 25 |
+| streammq-benchmark | 13 | 0 | 13 |
+| **合计** | **1185** | **296** | **1481** |
+
+kubernetes 的 `failsafe-reports` 目录**不存在**：该模块无 `*IT`，本轮移除其无效果 failsafe 声明后，
+用例数不变（61 由 surefire 执行，含 `KubernetesHealthRegistrationTest` 4 例）——与"无 IT 即不声明 failsafe"
+的口径一致。
+
+### 15.2 红 → 绿过程记录（如实保留）
+
+1. **R6 中期 `gate4` 红**：`BroadcastInstanceIdResolverTest.localFileReusedAcrossResolveCalls` 断言的是
+   **R6-B1 修复前的旧语义**（"每次重新生成身份"）。按新契约（Redis 不可达时**信任本地文件**、绝不静默
+   换身份）改写断言后转绿。判据：旧断言若继续通过，说明 R6-B1 未生效。
+2. **`gate-r6-final2` 红（spotless）**：tracing / diagnostics 在 15:29 的绿跑之后又有改动且未格式化，
+   javadoc 折行超限导致 `BUILD FAILURE`（03:58 min）。`spotless:apply` 收敛 + 全仓 `spotless:check` 绿后
+   重跑。**这不是产品缺陷，但同样等价于"不可发布"**——门禁纪律不区分红的原因。
+3. **真实 3 主 Cluster 上三次转红**（`clusterit2/3/4`）：
+   - `delayedProduceFailsSafelyOnCluster` 断言与真实键布局不符（**测试自假设错误**，非产品缺陷）；
+   - `claimScriptShape_sameStreamVsCrossStream` 报 `Wrong number of args calling Redis command from script`
+     ——该跨流脚本形状从未被产品调用（**测试形状错误**）；
+   - `delayedMessagePathWorksOnCluster` 触发 `StreamMQBroker storeDelayPayloadAtomically failed`
+     ——这条**是真实产品问题**：Cluster 客户端把多 key 原子批按节点拆分、无异常返回，延时路径会**静默
+     部分写**。据此实现了 `RedisClusterCompatibility.requireCrossKeyAtomicity(...)` 前置 fail-fast
+     （8 个调用点：producer / delay / retry / pel-claim / transaction ×2 / handler ×2）。
+   最终 `clusterit5`：`RedisClusterCompatibilityIT` **11 用例全绿**，且"检测 Cluster → 可操作 WARN →
+   `StreamMQException`"的行为被断言锁定。
+4. **终局门禁（本次）**：kubernetes pom 修正后重跑 → 20/20 SUCCESS / 05:52 / 1481 用例全绿（§15.1）。
+
+**口径纪律**：本报告所有时长/数量均取自日志文件本身（出生/结束时间与报告实数），不引用记忆或估算值。
+
+### 15.3 失败即红守卫（R6 新增 30 个测试文件，按缺陷族分组）
+
+| 缺陷族 | 守卫（新文件） | 红的前提 |
+|---|---|---|
+| R1 消费数据面 | `OrderlyDeferredRetryQueueTest`、`InFlightCountTrackingTest`、`ConsumerMdcTraceTest`、`DefaultListenerRegistrarDlqAndBroadcastTest` | 顺序消费失败分支回到"留在 PEL 等人认领"、在飞计数/心跳失配 |
+| R2 调度/事务/重试 | `RetrySchedulingAndDlqGatingTest`、`RetrySchedulerOrphanAndClockTest`、`RetrySchedulerSentinelDefenseTest`、`TransactionSendStatusTest`、`Round6SchedulerRedTeamIT`（真 Redis） | 重试/DLQ 流被 `MAXLEN` 有损裁剪（唯一副本丢失）、终态无 CAS 覆盖、孤儿哨兵失效 |
+| R3 序列化 | `MessageSerializerContractTest`、`EmptyBodyRoundTripTest` | 各序列化器 null / 空体语义漂移 |
+| R6-B1 广播身份 | `BroadcastInstanceIdResolverTest`（改写） | 复用本地身份文件前不做占用校验 → 广播退化为集群消费 |
+| Redis Cluster | `RedisClusterCompatibilityTest`、`CrossKeyAtomicityGuardTest`、`RedisClusterCompatibilityIT`（真集群） | 多 key 原子路径静默拆分提交 |
+| 顺序锁 | `RedissonOrderlyShardLockManagerLeaseTest` | 有限租约续期/让位语义回归 |
+| 管理/装配面（S 族） | `StreamMQAdminAutoConfigurationTest`、`StreamMQListenerContainerWiringTest`、`StreamMQCompressionCodecAutoConfigurationTest`、`DlqFailureStrategyEffectiveConfigTest` | 端点鉴权/装配缺失、配置"假生效" |
+| 延时/时钟 | `RedissonStreamProducerDelayClockTest` | 延时投递与 Redis 服务端时钟错位 |
+| 可观测 | `StreamMQTracingAutoConfigurationTest`（改写） | OTel `Scope#close()` 跨线程关闭 |
+| K8s（K1~K10） | `StreamMQClusterModelTest`、`StreamMQClusterControllerReconcileTest`、`HpaAutoScalerScanTest`、`HpaReplicasPersistTest`、`ConfigMapWatcherScopeTest`、`CloudK8sPropertiesWiringTest` | 自触发无限调和、实例级共享副本计数、watch 范围漂移 |
+| 基准（B 族） | `BenchmarkBudgetTest`、`ConsumeValidityReportTest` | 注解固化参数超 CI 预算、补货端封顶被当成消费吞吐 |
+| 样本 | `DlqDemoRunnerIT` | DLQ 演示路径与主代码脱节 |
+
+### 15.4 真实环境实测
+
+- **真实 3 主 Redis Cluster**（本地 7000/7001/7002 三主集群，`cluster/` 工作区）：
+  `RedisClusterCompatibilityIT` 11 用例全绿（`clusterit5.log`）；单 key 路径（produce / 基本消费 ACK）
+  可用，**所有跨 key 原子路径前置拒绝**并给出可操作 WARN——"0.1.x 不支持 Cluster"由文档声明升级为
+  **运行期事实 + 实测证据**。
+- **JMH 全量重跑**（2026-09-20，独立 Redis 6380，`backlog=50000`、`feederThreads=2`）：序列化 6 实现 ×
+  双模式、发送 3 模式 × 3 负载、消费 2 负载全部为实测值，三组共 14 分 25 秒；有效性证据
+  `avgBatchSize=100.0`、`starvedReads=0`、`valid=true`；数字回填双语 README、
+  `streammq-benchmark/BENCHMARK_REPORT.md` 与 `docs/benchmarks/*`。
+- **本地 Redis 6379 上的 296 个 IT 在门禁内真实执行**（0 跳过）：消费/重试/DLQ/延时/事务/顺序/广播/PEL
+  认领的地面真值覆盖。
+
+### 15.5 发布通道演练（无签名 Central dry-run）
+
+```text
+mvn -B clean deploy -DskipTests -DskipPublishing=true     # 无 -Pgpg，绝不接触口令
+```
+
+| 项 | 结果 |
+|---|---|
+| 结果 | **BUILD SUCCESS**，01:27 min，20/20 模块 |
+| 发布集 | 日志 15 条 `Skipping Central Release Publishing for artifact '<x>' at user's request`，覆盖 6 构件：`streammq-parent` / `streammq-bom` / `streammq-core` / `streammq-redisson` / `streammq-spring-boot-starter` / `streammq-test` |
+| 排除集 | 14 个 `excludeArtifacts` 模块**未产生任何上传候选**（运行期确证排除清单） |
+| 物料 | 8 个 jar 模块产出 sources / javadoc jar |
+
+**前置告警（诚实记录）**：`central-publishing-maven-plugin` 在检查 `skipPublishing` **之前**先解析凭据——
+仅加 `-DskipPublishing=true` 会以 `Unable to get publisher server properties for server id: central` 失败
+（`dryrun-central.log`）。演练因此改用临时工作区的 `settings-dryrun.xml`（`central` 为占位凭据，
+**绝不写入用户真实的 `~/.m2/settings.xml`**），复跑即 `dryrun-central2.log` 的成功记录。真实发布需要
+有效的 `central` 凭据 + 发布者持有的 GPG 口令（口令从未被猜测或写入日志）。
+
+---
+
+## 16. 未闭环项（诚实声明，均非代码缺陷）
+
+1. **真实 Maven Central 发布未执行**：无私钥口令。以无签名 dry-run 演练替代（§15.5），发布通道的
+   tag 校验 / guard / sbom-scan 门禁已在 `release.yml` 内固化并与 CI 同口径。
+2. **CI benchmark workflow 的三段 JMH job 未在真实 runner 复跑**：本地全量重跑已回填（§15.4）；
+   预算上限由 `BenchmarkBudgetTest` 静态校验，口径有效性由运行时 `valid` 判定。
+3. **Redis Cluster 的跨 key 原子性本版本不支持**（划界而非缺陷）：前置拒绝 + fail-fast + 文档 + 真集群
+   实测三重锁定；支持需 hash-tag 键设计，列为 0.2.0 范围。
+4. **kubernetes 真集群 e2e 未验证**：无可用集群；现由 fabric8 Mock Server 回归（回写/幂等）与上下文
+   装配测试覆盖，K1~K10 的逻辑面已审计闭环。
+5. **顺序消费分片锁在有限租约极端时点的重排序可能**：显式设计权衡（卡死让位优先于严格有序），已在
+   javadoc 声明并被 `RedissonOrderlyShardLockManagerLeaseTest` 锁定语义。
+
+---
+
+## 17. Final Verdict
+
+### 17.1 维度评分
+
+| 维度 | 分数 | 依据 |
+|---|---:|---|
+| 产品目标 | 9 | 定位诚实；"不支持 Cluster"由声明升级为运行期前置拒绝 + 实测 |
+| 功能完整度 | 9 | 重试/DLQ/延时/事务/顺序/广播/背压/可观测/管理齐备；本轮补齐数据面孪生副本 |
+| 架构 | 9 | 依赖无环、SPI 缝真实；跨 key 原子性收敛为单一前置校验点（8 调用点） |
+| 模块设计 | 9 | 职责可解释；kubernetes 模块完成 K1~K10 深度审计 |
+| API / SDK | 9 | Builder + 不可变值对象 + 类型化异常；无静默降级（宁可 fail-fast） |
+| 实现质量 | 9 | 本轮修 5 个 P1（静默不投递 ×2 / 唯一副本丢失 / 状态覆盖 / 广播语义退化）+ 45 个 P2 |
+| 测试 | 9 | 1481 用例、0 跳过；真 3 主 Cluster IT + 失败即红守卫 30 个新文件 |
+| 并发 | 9 | 广播身份占用校验、在飞计数、租约心跳独立；已知有序性权衡显式声明 |
+| 性能 | 9 | JMH 全量重跑并回填实测（消费口径 5.3× / 3.7× 修正）；孤儿清理 N+1 闭环 |
+| 安全 | 9 | 默认拒绝 + 参数夹取 + 错误脱敏 + 供应链校验（osv-scanner SHA 校验）齐备 |
+| Maven 工程 | 9 | 门禁 = 发布通道口径；三方清单等价性硬断言；failsafe 声明与 `*IT` 一一对应 |
+| Developer Experience | 9 | Quick Start 可用、错误可定位、健康检查不假绿、配置变更回显 effects |
+| 文档 | 9 | 双语 + 配置参考 + SECURITY；本轮消除全部事实性冲突（含 kubernetes `*IT` 口径） |
+| 可维护性 | 9 | 单一规则源、防御性拷贝、javadoc 与实现对齐 |
+| 可扩展性 | 9 | 扩展点接口化，可替换 |
+| 开源准备度 | 9 | 治理/许可/发布流程/物料一致性就绪；发布通道 11 项门禁闭环 |
+
+```text
+Overall = round(144 / 16 × 10) = 90 / 100
+```
+
+> 分数用于排优先级；是否发布由 17.2 的门禁规则决定（无未决 P0/P1/P2）。
+
+### 17.2 裁决
+
+```text
+Release Status: GO
+Release Readiness Score: 90 / 100
+
+Must Fix Before Release: 0 items
+Should Fix:             0 items
+Open P0/P1/P2:          0 / 0 / 0 items
+Open P3/P4:             0 items（§16 的未闭环项均为外部环境依赖或显式设计权衡，非代码缺陷）
+
+门禁证据: mvn clean verify -Djacoco.check.skip=false → 20/20 SUCCESS，1481 用例，0 失败/0 跳过（05:52）
+真实环境: 3 主 Redis Cluster IT 11/11 绿；JMH 全量重跑并回填实测值
+发布演练: mvn clean deploy -DskipPublishing=true（无签名）→ 20/20 SUCCESS，发布集 6 构件、
+          排除集 14 模块无上传候选
+发布前置: 无（CVE 硬门禁无需密钥；GPG 非交互配置就绪；Release 资产与 Central 发布集一致）
+```
+
+**与上一轮的差异必须被记录**：第五轮裁决 GO（87/100）后，本轮的起点是**假设上一轮修复过的每一类缺陷
+都存在同构副本**——该假设成立：新发现 5 个 P1 全部是 R5 已修缺陷的孪生路径（顺序消费失败分支的
+"永不重投"、重试/DLQ 流的唯一副本被裁剪、事务终态无 CAS、广播身份复用未校验），外加一个此前
+从未审计的域（Redis Cluster 多 key 原子路径**静默拆分提交**）。同时，门禁"红→绿"的记录被完整保留
+（§15.2）：本轮自身引入的格式化违规、测试旧语义断言、Cluster 上三条失败路径，全部先红后绿。
+90/100 相对 87/100 的提升只来自**实测替代推断**（Cluster 实测、JMH 重跑、性能维度 8→9）与
+**发布通道门禁补齐**；缺陷密度本身不构成加分项。该结果再次印证 `fullReview.md` 的核心原则：
+**不因"上一轮已通过"而默认当前仍然成立**。

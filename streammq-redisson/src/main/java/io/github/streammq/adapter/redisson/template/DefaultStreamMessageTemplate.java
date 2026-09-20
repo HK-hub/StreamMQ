@@ -218,7 +218,7 @@ public class DefaultStreamMessageTemplate
             Message<T> intercepted = interceptorChain.beforeSend(message);
             if (Objects.isNull(intercepted)) {
                 return new SendResult(
-                        MessageId.sentinel(),
+                        MessageId.pending(),
                         abortTopic,
                         abortTag,
                         SendStatus.SEND_FAILED,
@@ -233,7 +233,7 @@ public class DefaultStreamMessageTemplate
                 // 被过滤器拒绝
                 SendResult filtered =
                         new SendResult(
-                                MessageId.sentinel(),
+                                MessageId.pending(),
                                 message.getTopic(),
                                 message.getTag(),
                                 SendStatus.SEND_FAILED,
@@ -264,7 +264,13 @@ public class DefaultStreamMessageTemplate
                         recordSendMetrics(message.getTopic(), false, sendStart);
                         throw ex;
                     }
-                    interceptorChain.notifyException(message, ex, InvokeTiming.EXECUTING);
+                    // 可重试的中间失败：只记日志，**不**通知拦截器链、也不计失败指标。
+                    // R6：此前每次尝试都 notifyException + recordSendMetrics(false)，导致
+                    //  · 追踪侧把"第 1 次失败、第 2 次成功"的生产者 Span 提前以 ERROR 结束（后续成功
+                    //    再也找不到配对条目），导出的链路永远是失败状态；
+                    //  · 指标把一次逻辑发送记成 N 次失败。
+                    // afterSend / onException 是终态回调：成功走 afterSend(success)，不可重试失败走
+                    // notifyException，重试耗尽走 afterSend(failedResult)——恰好一次。
                     LOG.warn(
                             "syncSend attempt {}/{} failed for topic {}: {}",
                             attempt + 1,
@@ -515,11 +521,8 @@ public class DefaultStreamMessageTemplate
                     ex);
         }
 
-        // 2. 构造半消息发送结果（真实半消息 Entry ID）
+        // 2. 构造半消息 ID（真实半消息 Entry ID，尚非目标 Stream 的 Entry ID）
         MessageId msgId = MessageId.fromStreamMessageId(halfId);
-        SendResult halfResult =
-                new SendResult(
-                        msgId, message.getTopic(), message.getTag(), message.getBornTimestamp());
 
         // 3. 执行本地事务
         TransactionContext ctx =
@@ -577,7 +580,15 @@ public class DefaultStreamMessageTemplate
                             transactionGroup,
                             ex);
                 }
-                return halfResult;
+                return new SendResult(
+                        msgId,
+                        message.getTopic(),
+                        message.getTag(),
+                        SendStatus.SEND_OK,
+                        message.getBornTimestamp(),
+                        null,
+                        null,
+                        LocalTransactionState.COMMIT_MESSAGE);
             case ROLLBACK_MESSAGE:
                 String rollbackFailure = null;
                 try {
@@ -606,14 +617,27 @@ public class DefaultStreamMessageTemplate
                         null,
                         Objects.nonNull(rollbackFailure)
                                 ? "Rollback failed (scanner will reconcile): " + rollbackFailure
-                                : "Transaction rolled back");
+                                : "Transaction rolled back",
+                        LocalTransactionState.ROLLBACK_MESSAGE);
             case LocalTransactionState.UNKNOWN:
-                // 保留半消息，等待 TransactionScanner 周期回查
+                // 保留半消息，等待 TransactionScanner 周期回查。
+                // 0.1.2 状态语义：UNKNOWN 是非提交状态 → SEND_FAILED（结果未知，可能最终提交），
+                // 调用方通过 SendResult.isTransactionUnknown() / getTransactionState() 区分
+                // "等待回查"与硬失败，不得把 UNKNOWN 当作 SEND_OK 处理。
                 LOG.info(
                         "Transaction state UNKNOWN, waiting for check-back: txId={}, txGroup={}",
                         transactionId,
                         transactionGroup);
-                return halfResult;
+                return new SendResult(
+                        msgId,
+                        message.getTopic(),
+                        message.getTag(),
+                        SendStatus.SEND_FAILED,
+                        message.getBornTimestamp(),
+                        null,
+                        "Transaction state UNKNOWN (half message retained, waiting for"
+                                + " check-back)",
+                        LocalTransactionState.UNKNOWN);
             default:
                 try {
                     scanner.markRollback(transactionId, transactionGroup);

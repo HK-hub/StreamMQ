@@ -74,6 +74,7 @@ streammq:
 | `fury-require-class-registration` | `true` | 仅 `FurySerializer`（底层库 Apache Fory）生效：是否强制类注册白名单（默认开启；关闭即宽松模式，扩大反序列化 RCE 面） |
 | `fury-registered-classes` | `[]`（空） | 仅 `FurySerializer`（底层库 Apache Fory）白名单模式生效：预注册的业务消息体类型（全限定类名列表，逗号分隔），如 `com.acme.Order,com.acme.Payment`；未注册类型反序列化将被拒绝 |
 | `compress-threshold` | `0` | 压缩阈值（字节），`0`=禁用 |
+| `compression-codec` | `""`（自动解析） | 默认压缩 Codec 名称。仅当注册了**多个** `CompressionCodec` Bean 时才需要显式指定（解析顺序：本键精确匹配 → `@Primary` → 唯一候选）。取值可为候选 Bean 的 `name()`（如 `zstd`）或内置名称 `gzip` / `lz4`（classpath 存在 lz4-java 时）；多候选且无法消歧时：`compress-threshold > 0` 启动失败并列出候选，`= 0` 记 WARN 并保持"无默认 Codec"。**写成不存在的名称会启动失败**（并列出全部可选名称） |
 | `max-message-size` | `536870912`（512MB） | 单条消息最大字节，发送时校验（推荐 ≤1MB） |
 
 > **序列化器统一 null 契约（0.1.2 起）**：6 个内置实现（Jackson/JDK/Fury/Protostuff/FlatBuffers/SBE）一致——`serialize(null)` 返回 `null`；`deserialize(null | 空数组)` 返回 `null`（不抛异常）。消息体为 null 时不会写入 `body` 字段。
@@ -95,6 +96,7 @@ streammq:
 | `inflight-capacity` | `0` | **背压队列容量**：`>0` 启用拉取/处理解耦（队列满时拉取阻塞），`0` 禁用（默认关闭） |
 | `timeout-cancel-grace-millis` | `2000` | 消费超时取消后的宽限期（毫秒），用于缩小与重试副本的重叠窗口 |
 | `orderly-consume-timeout-millis` | `0` | 全局顺序消费超时（毫秒），`0`=不启用。**该全局键仅对「注解 `orderlyConsumeTimeout` 显式写 `0`」的消费者生效**：注解 `>0` 覆盖全局、注解 `=0` 继承本键、注解 `<0`（**默认值 -1**）显式关闭该消费者的超时保护。未显式声明注解时该保护是关闭的——卡死 handler 会持有分片锁阻塞消费循环直到进程重启 |
+| `orderly-shard-lock-lease-millis` | `0` | 顺序消费分片锁**有限租约**（毫秒）：`0`=看门狗续期 + 严格有序（默认）；`>0`=持有者卡死时到期让位（代价是极端情况下的瞬时乱序）。负值启动失败；`0 < v < 5000` 启动 WARN（正常慢 handler 可能被判为卡死）。属"逃生舱"参数，仅在存在不可中断的卡死 handler 且业务可接受重叠/乱序时开启 |
 | `consume-timeout-millis` | `0` | 全局并发消费超时（毫秒），`0`=不启用（默认关闭，避免每条消息走 `Future.get` 的固定成本；卡死由 PEL 认领兜底） |
 | `consume-from-where` | `CONSUME_FROM_LAST` | 新消费者组起始位点：`CONSUME_FROM_LAST` / `CONSUME_FROM_FIRST`（仅首次建组生效） |
 | `broadcast-instance-id` | `""` | 广播消费实例身份（K8s StatefulSet 可绑定 Pod 名获得确定性组名） |
@@ -246,9 +248,14 @@ streammq:
 | `dlq-max-retry-count` | `3` | DLQ 最大重试次数阈值（`DEFAULT_DLQ_MAX_RETRY_ATTEMPTS`） |
 | `max-profile-query-size` | `1000` | 单次画像查询最大消息数（防止大范围查询 OOM） |
 
-> 同理，**`streammq.tracing.otel.*`**（`enabled` 默认 `false`、`otlp-endpoint`、`service-name`、`exporter-interval-ms`）
+> 同理，**`streammq.tracing.otel.*`**（`enabled` 默认 `false`、`otlp-endpoint`、`service-name`、`exporter-interval-ms`、
+> `max-trace-query-size` 默认 `500`——单次链路查询返回上界，超出按聚合顺序截断并计数 WARN）
 > 由 `streammq-tracing-opentelemetry` 模块的 `StreamMQTracingProperties` 绑定；**未引入该模块时这些键被静默忽略**。
 > 该模块另有独立开关 `streammq.tracing.enabled`（TraceCollector SPI，由 starter 绑定，见上文追踪章节）。
+>
+> **`streammq.cloud.k8s.*`**（`enabled` 默认 `false`，另含 CRD/HPA/健康探针/ConfigMap 热更新等子键）由
+> `streammq-kubernetes` 模块的 `CloudK8sProperties` 绑定。该模块 0.1.x **仅以源码提供（不发布到 Central）**，
+> 故此处不逐键枚举；引入源码或后续版本发布后，键名以 `CloudK8sProperties` 为准。
 
 ---
 

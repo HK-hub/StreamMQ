@@ -81,7 +81,9 @@ public @interface StreamMQConsumer {
     ConsumeMode consumeMode() default ConsumeMode.CLUSTERING;
 
     /**
-     * 新消费者组的起始消费位点，默认 {@link ConsumeFromWhere#CONSUME_FROM_LAST}（从 Stream 末尾开始）。
+     * 新消费者组的起始消费位点，<b>默认不声明</b>（{@link ConsumeFromWhere#ANNOTATION_DEFAULT}），即跟随全局配置 {@code
+     * streammq.consumer.consume-from-where}（其默认值 {@link ConsumeFromWhere#DEFAULT} = {@link
+     * ConsumeFromWhere#CONSUME_FROM_LAST}）。
      *
      * <p><b>仅在该消费者组首次创建时生效</b>——已存在的组不会因为本配置改变位点。
      *
@@ -177,7 +179,8 @@ public @interface StreamMQConsumer {
     int maxReconsumeTimes() default StreamMQConstants.ANNOTATION_UNSET_INT;
 
     /**
-     * 单条消息消费超时（毫秒）。
+     * 单条消息消费超时（毫秒）。<b>统一哨兵语义（0.1.2 定稿，发布即冻结）：{@code -1} = 未声明（默认，跟随全局配置）， {@code 0} =
+     * 显式关闭超时保护，{@code >0} = 超时毫秒数。</b>
      *
      * <p>超时后框架会取消当前消费并调度重试投递。由于消费线程可能仍在执行业务逻辑， 重试消费与原消费可能并发执行，因此业务层必须实现幂等性。
      *
@@ -188,16 +191,16 @@ public @interface StreamMQConsumer {
      * StreamMQConstants#DEFAULT_CONSUME_TIMEOUT_MS}（{@code 0} = 不启用）； 关闭时卡死消息由 {@code
      * PelClaimScheduler} 在空闲阈值（默认 60s）后认领重投，at-least-once 语义不变。
      *
-     * <p><b>优先级：</b>本属性 {@code >= 0} 时以注解为准（{@code 0} = 不设超时）； 为 {@link
-     * StreamMQConstants#ANNOTATION_UNSET_LONG}（默认 -1）时回落全局配置 {@code
-     * streammq.consumer.consume-timeout-millis}。
+     * <p><b>注意默认即"未声明"：</b>默认值 {@link StreamMQConstants#ANNOTATION_UNSET_LONG}（{@code -1}）不是"关闭"，
+     * 而是跟随全局配置；仅当全局也关闭（其默认 {@code 0}）时才等效于不启用。要<b>显式关闭</b>请写 {@code 0} （覆盖非 0 的全局配置），要启用请写正毫秒值。
      *
-     * @return 超时毫秒数；0 表示不超时；-1 表示使用全局配置
+     * @return 超时毫秒数；{@code >0} 以注解为准；{@code 0} 显式关闭；{@code -1}（默认）跟随全局配置
      */
     long consumeTimeout() default StreamMQConstants.ANNOTATION_UNSET_LONG;
 
     /**
-     * 顺序消费单条消息消费超时（毫秒）。
+     * 顺序消费单条消息消费超时（毫秒）。<b>统一哨兵语义（0.1.2 定稿，发布即冻结）：{@code -1} = 未声明（默认，跟随全局配置）， {@code 0} =
+     * 显式关闭超时保护，{@code >0} = 超时毫秒数。</b>
      *
      * <p>仅对顺序消费（{@link MessageModel#ORDERLY}）生效。顺序消费默认不设超时——卡死的 handler 会持有分片锁
      * 并阻塞消费循环，直到进程重启。设置本属性后：
@@ -210,20 +213,19 @@ public @interface StreamMQConsumer {
      *
      * <p>注意：顺序消费的重试是严格串行的（同分片不越过失败消息），设置过小的超时可能将慢消息快速送入 DLQ， 建议按业务最慢耗时的 2 倍以上配置。
      *
-     * <p><b>优先级（注解始终可覆盖全局，含"单独关闭"）：</b>
+     * <p><b>与全局配置的关系（0.1.2 统一哨兵语义）：</b>
      *
      * <ul>
      *   <li>本属性 {@code > 0}：以注解为准，覆盖全局配置
-     *   <li>本属性 = {@code 0}：<b>继承全局配置</b> {@code streammq.consumer.orderly-consume-timeout-millis}
-     *   <li>本属性 {@code < 0}（含默认值 {@link StreamMQConstants#ANNOTATION_UNSET_LONG} = -1）：
-     *       <b>显式关闭</b>该消费者的顺序消费超时保护，即使全局已开启也不生效
-     *   <li>全局配置默认值 = {@code 0}（不启用）
+     *   <li>本属性 {@code = 0}：<b>显式关闭</b>该消费者的顺序消费超时保护，即使全局已开启也不生效
+     *   <li>本属性 {@code < 0}（含默认值 {@link StreamMQConstants#ANNOTATION_UNSET_LONG} = -1）：<b>未声明</b>，
+     *       跟随全局配置 {@code streammq.consumer.orderly-consume-timeout-millis}（其默认 {@code 0} = 不启用）
      * </ul>
      *
-     * <p><b>注意默认即关闭：</b>注解默认值为 {@code -1}，因此<b>未显式声明时该保护是关闭的</b>—— 卡死的 handler 会持有分片锁并阻塞消费循环直到进程重启。
-     * 需要保护时请显式声明一个正毫秒值，或在全局配置开启后把本属性显式写为 {@code 0} 来继承。
+     * <p><b>注意默认即"未声明"：</b>注解默认值为 {@code -1}，未显式声明时该保护由全局配置决定（全局默认关闭）； 需要<b>显式关闭</b>（在全局开启时）请写
+     * {@code 0}，需要启用请写正毫秒值。
      *
-     * @return 超时毫秒数；{@code >0} 覆盖全局；{@code 0} 继承全局；{@code <0} 显式关闭（默认）
+     * @return 超时毫秒数；{@code >0} 覆盖全局；{@code 0} 显式关闭；{@code -1}（默认）跟随全局配置
      */
     long orderlyConsumeTimeout() default StreamMQConstants.ANNOTATION_UNSET_LONG;
 

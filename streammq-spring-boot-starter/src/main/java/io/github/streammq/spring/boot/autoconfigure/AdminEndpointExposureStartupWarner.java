@@ -11,7 +11,6 @@ import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.core.env.Environment;
-import org.springframework.stereotype.Component;
 
 /**
  * Startup 安全提醒：管理端点暴露面检查。
@@ -33,12 +32,16 @@ import org.springframework.stereotype.Component;
  * <p>另请注意：{@code streammq-diagnostics} 的 {@code /streammq/diagnostics/**} 是普通 MVC Controller（挂主端口、
  * <b>不</b>受 Actuator 治理），若引入该模块，请通过网络层（安全组 / Ingress）单独限制其访问。
  *
- * <p>此组件零行为影响——仅日志输出。可在测试环境通过 {@code -Dstreammq.admin.startup-warn=false} 关闭提醒。
+ * <p>此组件零行为影响——仅日志输出，由 {@link StreamMQAdminAutoConfiguration} 以 {@code @Bean} 条件注册 （{@code
+ * streammq.admin.enabled=true} 且 {@code streammq.admin.startup-warn} 未关闭）。可在测试环境通过 {@code
+ * -Dstreammq.admin.startup-warn=false} 关闭提醒。
+ *
+ * <p><b>注意（R6-S1）：</b>本类<b>不能</b>再标注 {@code @Component}——它位于自动装配包，不在用户组件扫描范围， 此前正是因此成为死代码（SECURITY
+ * ALERT 从未输出）。注册点见 {@link StreamMQAdminAutoConfiguration}。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-@Component
 public class AdminEndpointExposureStartupWarner {
 
     private static final Logger LOG =
@@ -65,7 +68,8 @@ public class AdminEndpointExposureStartupWarner {
                 environment.getProperty("streammq.admin.startup-warn", Boolean.class))) {
             return;
         }
-        StreamMQActuatorEndpoint endpoint = endpointProvider.getIfAvailable();
+        StreamMQActuatorEndpoint endpoint =
+                StreamMQBeanResolution.uniqueOrNull(endpointProvider, "StreamMQActuatorEndpoint");
         if (endpoint == null) {
             return;
         }

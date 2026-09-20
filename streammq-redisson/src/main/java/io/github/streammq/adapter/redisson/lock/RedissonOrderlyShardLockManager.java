@@ -30,6 +30,11 @@ import org.slf4j.LoggerFactory;
  * <p>负责为顺序消费 Consumer 创建 shard 级分布式锁，并在消费时按 shardingKey 路由到对应 shard 加锁执行， 保证同一 shardingKey
  * 的消息串行消费，不同 shard 之间可并行。
  *
+ * <p><b>锁租约两种模式（R1-9）：</b>默认（{@link #setLeaseMillis(long) lease == 0}）使用 Redisson
+ * 看门狗自动续期：进程存活期间锁不释放，严格有序，但卡死 handler（持锁且不响应中断）只能靠重启进程让位。 配置有限租约（{@code lease > 0}，来自 {@code
+ * streammq.consumer.orderly-shard-lock-lease-millis}）后 改用不续期的 {@code tryLock(wait, lease,
+ * unit)}：租约到期其它实例可接管，<b>语义降级为"至多一次重叠执行、 可能乱序"</b>——这是"宁可乱序不可永久停摆"的逃生舱，需在业务侧确认可接受重叠执行（幂等）。
+ *
  * <p>设计模式：策略模式，将顺序消费的锁逻辑从容器中分离。
  *
  * @author StreamMQ Contributors
@@ -69,6 +74,18 @@ public class RedissonOrderlyShardLockManager implements OrderlyShardLockManager 
 
     /** 分片锁竞争的轮间等待间隔（毫秒） */
     private volatile long lockWaitIntervalMs = DEFAULT_LOCK_WAIT_INTERVAL_MS;
+
+    /**
+     * 分片锁的有限租约（毫秒，R1-9 逃生舱；{@code 0} = 默认看门狗续期）。
+     *
+     * <p>{@code 0}：{@code tryLock(wait, unit)} + Redisson watchdog 自动续期——进程存活期间锁不释放， 严格有序；代价是卡死
+     * handler（持锁且不响应中断）需要重启进程才能让位。
+     *
+     * <p>{@code > 0}：{@code tryLock(wait, lease, unit)} 且<b>不续期</b>——租约到期后其它实例可接管该
+     * 分片。语义降级：<b>可能发生至多一次重叠执行（同一分片两条消息并发处理），顺序性不再严格保证</b>； 适用于"允许慢 handler 让位、宁可乱序不可停摆"的场景。建议值 >=
+     * 5000ms（低于它会让正常慢 handler 被判为卡死，频繁重叠/乱序）。
+     */
+    private volatile long leaseMillis;
 
     /**
      * 全参构造：Redisson 客户端 + 分片锁竞争的等待轮数与轮间间隔。
@@ -118,6 +135,25 @@ public class RedissonOrderlyShardLockManager implements OrderlyShardLockManager 
         if (millis >= 0) {
             this.lockWaitIntervalMs = millis;
         }
+    }
+
+    /**
+     * 设置分片锁的有限租约（毫秒，R1-9）。
+     *
+     * <p>{@code 0}（默认）或负数 = 看门狗续期 + 严格有序；{@code > 0} = 有限租约且不续期（语义降级为 "至多一次重叠执行、可能乱序"，见 {@link
+     * #leaseMillis}）。
+     *
+     * @param millis 租约毫秒数，{@code >= 0} 才生效
+     */
+    public void setLeaseMillis(long millis) {
+        if (millis >= 0) {
+            this.leaseMillis = millis;
+        }
+    }
+
+    /** 当前分片锁租约（0 = 看门狗续期）。 */
+    public long getLeaseMillis() {
+        return leaseMillis;
     }
 
     /**
@@ -221,10 +257,17 @@ public class RedissonOrderlyShardLockManager implements OrderlyShardLockManager 
      */
     private boolean tryLockWithRounds(RLock lock, int shardIndex, ListenerRegistration reg) {
         int rounds = Math.max(1, lockWaitRounds);
+        long lease = leaseMillis;
         for (int round = 1; round <= rounds; round++) {
             try {
-                // 有界等待 + 看门狗租约：获得锁后由 watchdog 自动续期保证顺序性。
-                if (lock.tryLock(acquireTimeoutMs, TimeUnit.MILLISECONDS)) {
+                if (lease > 0) {
+                    // R1-9：有限租约 + 不续期——卡死 handler 超时后其它实例可接管，
+                    // 语义降级为"至多一次重叠执行、可能乱序"（逃生舱，见 leaseMillis javadoc）
+                    if (lock.tryLock(acquireTimeoutMs, lease, TimeUnit.MILLISECONDS)) {
+                        return true;
+                    }
+                } else if (lock.tryLock(acquireTimeoutMs, TimeUnit.MILLISECONDS)) {
+                    // 默认：有界等待 + 看门狗租约：获得锁后由 watchdog 自动续期保证严格顺序性
                     return true;
                 }
             } catch (InterruptedException ex) {

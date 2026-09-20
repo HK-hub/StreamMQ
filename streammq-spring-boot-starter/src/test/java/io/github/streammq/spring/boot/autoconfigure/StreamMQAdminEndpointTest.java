@@ -16,6 +16,7 @@ import static org.mockito.Mockito.when;
 import io.github.streammq.adapter.redisson.container.DefaultStreamMQListenerContainer;
 import io.github.streammq.adapter.redisson.metrics.RuntimeStatsRegistry;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
+import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -27,6 +28,7 @@ import org.redisson.api.RMap;
 import org.redisson.api.RSet;
 import org.redisson.api.RStream;
 import org.redisson.api.RedissonClient;
+import org.redisson.api.StreamMessageId;
 import org.redisson.client.codec.StringCodec;
 
 /**
@@ -173,14 +175,75 @@ class StreamMQAdminEndpointTest {
     // ===================== P1-4: 组配置运行时应用 =====================
 
     @Test
-    @DisplayName("updateGroupConfig paused=true 真实暂停容器")
-    void updateGroupConfig_paused_truePausesContainer() {
+    @DisplayName("updateGroupConfig paused=true 按组暂停（不再误伤其它组），并诚实回显生效状态")
+    void updateGroupConfig_paused_pausesGroupOnly() {
+        when(container.isGroupPaused("g1")).thenReturn(true);
+
         Map<String, Object> result =
                 newEndpoint().updateGroupConfig("g1", Map.of("paused", "true"));
 
-        verify(container).pause();
+        // R6-S9：按组分发，绝不调用容器级 pause()（那会连带暂停其它消费者组）
+        verify(container).pauseGroup("g1");
+        verify(container, never()).pause();
         assertThat(result.get("success")).isEqualTo(true);
         assertThat(((Map<?, ?>) result.get("applied")).get("paused")).isEqualTo(Boolean.TRUE);
+        assertThat(result.get("groupPaused")).isEqualTo(true);
+        assertThat(castEffects(result)).containsEntry("paused", "immediate");
+    }
+
+    @Test
+    @DisplayName("updateGroupConfig paused=false 按组恢复")
+    void updateGroupConfig_paused_falseResumesGroup() {
+        Map<String, Object> result =
+                newEndpoint().updateGroupConfig("g1", Map.of("paused", "false"));
+
+        verify(container).resumeGroup("g1");
+        verify(container, never()).resume();
+        assertThat(((Map<?, ?>) result.get("applied")).get("paused")).isEqualTo(Boolean.FALSE);
+    }
+
+    @Test
+    @DisplayName("updateGroupConfig paused 对非 Default 容器实现显式拒绝（不做脆弱强转、不假装生效）")
+    void updateGroupConfig_paused_genericContainerRejected() {
+        io.github.streammq.core.listener.StreamMQListenerContainer generic =
+                org.mockito.Mockito.mock(
+                        io.github.streammq.core.listener.StreamMQListenerContainer.class);
+        StreamMQAdminEndpoint endpoint = new StreamMQAdminEndpoint(redisson, generic, NS, 0L, null);
+
+        Map<String, Object> result = endpoint.updateGroupConfig("g1", Map.of("paused", "true"));
+
+        assertThat(result.get("success")).isEqualTo(false);
+        Map<String, String> rejected = castRejected(result);
+        assertThat(rejected.get("paused")).contains("per-group pause requires");
+        verify(generic, never()).pause();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, String> castRejected(Map<String, Object> result) {
+        return (Map<String, String>) result.get("rejected");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, String> castEffects(Map<String, Object> result) {
+        return (Map<String, String>) result.get("effects");
+    }
+
+    @Test
+    @DisplayName("updateGroupConfig inflightCapacity 按运行中的循环如实标注即时/下次循环生效")
+    void updateGroupConfig_inflightCapacity_reportsHonestEffect() {
+        when(container.isInflightCapacityAppliedForGroup("g1")).thenReturn(false);
+        Map<String, Object> deferred =
+                newEndpoint().updateGroupConfig("g1", Map.of("inflightCapacity", "32"));
+        assertThat(castEffects(deferred))
+                .containsEntry(
+                        "inflightCapacity", StreamMQAdminEndpoint.EFFECT_NEXT_CONSUME_LOOP_START);
+        verify(container).setInflightCapacity(32);
+
+        when(container.isInflightCapacityAppliedForGroup("g2")).thenReturn(true);
+        Map<String, Object> immediate =
+                newEndpoint().updateGroupConfig("g2", Map.of("inflightCapacity", "32"));
+        assertThat(castEffects(immediate))
+                .containsEntry("inflightCapacity", StreamMQAdminEndpoint.EFFECT_IMMEDIATE);
     }
 
     @Test
@@ -201,6 +264,9 @@ class StreamMQAdminEndpointTest {
                 .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
                 .containsEntry("inflightCapacity", 32L)
                 .containsEntry("pausedSleepMillis", 150L);
+        // 每轮读取的 key 可宣称即时生效
+        assertThat(castEffects(result))
+                .containsEntry("pausedSleepMillis", StreamMQAdminEndpoint.EFFECT_IMMEDIATE);
     }
 
     @SuppressWarnings("unchecked")
@@ -221,8 +287,54 @@ class StreamMQAdminEndpointTest {
         assertThat(result.get("applied"))
                 .asInstanceOf(org.assertj.core.api.InstanceOfAssertFactories.MAP)
                 .isEmpty();
-        verify(container, never()).pause();
-        verify(container, never()).resume();
+        verify(container, never()).pauseGroup(anyString());
+        verify(container, never()).resumeGroup(anyString());
+    }
+
+    // ===================== R6-S5: 列表条数上界夹取 =====================
+
+    @Test
+    @DisplayName("listDlq 的 count 被夹取到 maxPendingQuerySize（此前直传无上界）")
+    void listDlq_clampsCountToMaxPendingQuerySize() {
+        when(redisson.<String, String>getStream(
+                        eq(StreamMQKeys.dlqStream(NS, "g1")), any(StringCodec.class)))
+                .thenReturn(stream);
+
+        newEndpoint().listDlq("g1", Integer.MAX_VALUE);
+
+        verify(stream).range(1000, StreamMessageId.MIN, StreamMessageId.MAX);
+    }
+
+    @Test
+    @DisplayName("listPending 的 count 同样夹取（且小于 1 时按 1 处理）")
+    void listPending_clampsCount() {
+        when(redisson.<String, String>getStream(
+                        eq(StreamMQKeys.topicStream(NS, "t1")), any(StringCodec.class)))
+                .thenReturn(stream);
+
+        newEndpoint().listPending("g1", "t1", 5_000_000);
+        newEndpoint().listPending("g1", "t1", 0);
+
+        verify(stream).listPending("g1", StreamMessageId.MIN, StreamMessageId.MAX, 1000);
+        verify(stream).listPending("g1", StreamMessageId.MIN, StreamMessageId.MAX, 1);
+    }
+
+    @Test
+    @DisplayName("setMaxPendingQuerySize 超过硬上限时按上限生效（10000）")
+    void setMaxPendingQuerySize_clampsToHardLimit() {
+        when(redisson.<String, String>getStream(
+                        eq(StreamMQKeys.dlqStream(NS, "g1")), any(StringCodec.class)))
+                .thenReturn(stream);
+
+        StreamMQAdminEndpoint endpoint = newEndpoint();
+        endpoint.setMaxPendingQuerySize(Integer.MAX_VALUE);
+        endpoint.listDlq("g1", Integer.MAX_VALUE);
+
+        verify(stream)
+                .range(
+                        StreamMQSpringConstants.MAX_ADMIN_LIST_LIMIT,
+                        StreamMessageId.MIN,
+                        StreamMessageId.MAX);
     }
 
     private static io.github.streammq.core.listener.StreamMQListenerContainer.ConsumerMetadata

@@ -21,6 +21,365 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # F-2：发布通道必须自带 CI 的两道硬门禁 —— 此前 guard（发布集一致性）与 sbom-scan
+  #（CycloneDX SBOM + osv-scanner keyless CVE 硬门禁）只在 ci.yml 中，release.yml 完全没有；
+  # 指向"从未过 CI"的 commit 打 tag 时，High/Critical CVE 与发布集漂移可直接进入 Central（构件不可变）。
+  # 两个 job 的命令/SHA/版本与 ci.yml 完全一致（保持单一口径），并与 test job 并行（不拉长关键路径）。
+  # 自包含优于"断言同 commit 的 CI 成功"：后者依赖 CI 的存在与状态可查询，且 --no-verify 之外的
+  # 路径（如直接推送 tag）无法覆盖。
+  guard:
+    name: Guards (parent↔BOM sync + publish set consistency)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # 最小权限：本 job 只读仓库内容（workflow 级为 contents: write，仅 Create GitHub Release 需要）
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Verify parent pom.xml and streammq-bom/pom.xml dependency versions are in sync
+        run: |
+          set -euo pipefail
+          extract() {
+            grep -oP '^\s*<([a-zA-Z0-9.-]+)\.version>[^<]+</\1\.version>\s*$' "$1" \
+              | sed -E 's/^\s*<([a-zA-Z0-9.-]+)\.version>([^<]+)<\/\1\.version>\s*$/\1=\2/' \
+              | sort
+          }
+          extract pom.xml > /tmp/parent.props
+          extract streammq-bom/pom.xml > /tmp/bom.props
+          fail=0
+          # 1) 双方共同声明的依赖版本必须一致（BOM 特意不管理父 POM 的插件/测试工具版本，忽略仅单侧存在的键）
+          while IFS='=' read -r k v; do
+            # ${...} 引用型属性（如 streammq=${project.version}）由下方规则 2 单独核对
+            case "$v" in '${'*) continue ;; esac
+            bv=$(grep -P "^${k}=" /tmp/bom.props | head -1 | cut -d= -f2- || true)
+            if [ -n "$bv" ] && [ "$bv" != "$v" ]; then
+              echo "::error::版本属性漂移：$k parent=$v bom=$bv"
+              fail=1
+            fi
+          done < /tmp/parent.props
+          # 2) BOM 的 streammq 版本必须等于根 <version>（parent 侧为 ${project.version} 引用，单独核对）
+          root_ver=$(grep -m1 -oP '(?<=<version>)[^<]+' pom.xml)
+          bom_streammq=$(grep -P '^streammq=' /tmp/bom.props | cut -d= -f2-)
+          if [ "$bom_streammq" != "$root_ver" ]; then
+            echo "::error::BOM 管理的 streammq 版本($bom_streammq) 与根 <version>($root_ver) 不一致"
+            fail=1
+          fi
+          [ "$fail" -eq 0 ] || exit 1
+          echo "parent ↔ BOM version properties are in sync"
+
+      # E-06：发布集一致性守卫 —— 三个清单（根 POM <modules>、central-publishing 的
+      # <excludeArtifacts>、streammq-bom 管理的 io.github.streammq:* 构件）必须严格等价，
+      # 否则会出现「BOM 里管理了永不发布的构件」或「发布了但 BOM 里没有」的静默漂移。
+      # 断言：({全部模块} ∪ {streammq-parent}) − {excludeArtifacts} == {BOM 管理集合} ∪ {streammq-parent, streammq-bom}
+      - name: Publish-set consistency guard (modules ↔ excludeArtifacts ↔ BOM)
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          def local(tag):
+              return tag.split('}')[-1]
+
+          def child_text(el, name):
+              for c in el:
+                  if local(c.tag) == name:
+                      return (c.text or '').strip()
+              return None
+
+          def collect_modules(pom_path):
+              """递归收集 pom_path（含嵌套 <modules>）中所有项目的 artifactId。"""
+              root = ET.parse(pom_path).getroot()
+              artifacts = set()
+              own = child_text(root, 'artifactId')
+              if own:
+                  artifacts.add(own)
+              base = pom_path.rsplit('/', 1)[0] if '/' in pom_path else ''
+              for el in root:
+                  if local(el.tag) != 'modules':
+                      continue
+                  for m in el:
+                      if local(m.tag) != 'module' or not (m.text or '').strip():
+                          continue
+                      sub = m.text.strip().replace('\\', '/')
+                      sub_pom = f"{base}/{sub}/pom.xml" if base else f"{sub}/pom.xml"
+                      artifacts |= collect_modules(sub_pom)
+              return artifacts
+
+          def exclude_artifacts(pom_path):
+              root = ET.parse(pom_path).getroot()
+              excluded = set()
+              for plugin in root.iter():
+                  if local(plugin.tag) != 'plugin':
+                      continue
+                  if child_text(plugin, 'artifactId') != 'central-publishing-maven-plugin':
+                      continue
+                  for cfg in plugin:
+                      if local(cfg.tag) != 'configuration':
+                          continue
+                      for el in cfg:
+                          if local(el.tag) == 'excludeArtifacts' and (el.text or '').strip():
+                              excluded |= {x.strip() for x in el.text.split(',') if x.strip()}
+              return excluded
+
+          def bom_managed(pom_path):
+              root = ET.parse(pom_path).getroot()
+              managed = set()
+              for dm in root.iter():
+                  if local(dm.tag) != 'dependencyManagement':
+                      continue
+                  for deps in dm:
+                      if local(deps.tag) != 'dependencies':
+                          continue
+                      for dep in deps:
+                          if local(dep.tag) != 'dependency':
+                              continue
+                          if child_text(dep, 'groupId') == 'io.github.streammq':
+                              art = child_text(dep, 'artifactId')
+                              if art:
+                                  managed.add(art)
+              return managed
+
+          all_modules = collect_modules('pom.xml')
+          excluded = exclude_artifacts('pom.xml')
+          if not excluded:
+              print("::error::cannot read <excludeArtifacts> from central-publishing-maven-plugin in pom.xml")
+              sys.exit(1)
+
+          published = all_modules - excluded          # 含 streammq-parent / streammq-bom
+          expected = bom_managed('streammq-bom/pom.xml') | {'streammq-parent', 'streammq-bom'}
+
+          print(f"modules ({len(all_modules)}): {sorted(all_modules)}")
+          print(f"excludeArtifacts ({len(excluded)}): {sorted(excluded)}")
+          print(f"published = modules - excludeArtifacts ({len(published)}): {sorted(published)}")
+          print(f"expected = BOM-managed ∪ {{streammq-parent, streammq-bom}} ({len(expected)}): {sorted(expected)}")
+
+          only_published = published - expected
+          only_bom = expected - published
+          if only_published or only_bom:
+              print(f"::error::publish-set drift — published-only (must be added to the BOM): {sorted(only_published)}")
+              print(f"::error::publish-set drift — BOM-only (must be published or removed from the BOM): {sorted(only_bom)}")
+              sys.exit(1)
+          print("Publish set is consistent: published == BOM-managed ∪ {streammq-parent, streammq-bom}")
+          PY
+
+  # F-2：release 通道的 keyless CVE 硬门禁（与 ci.yml 的 sbom-scan 同命令、同版本、同 SHA256）。
+  # 发布前必须先过此门禁：release.yml 此前完全依赖可选的 NVD 深扫（无密钥即 exit 0），
+  # 等于"无密钥时发布通道没有任何 CVE 门禁"。
+  sbom-scan:
+    name: CVE gate (CycloneDX SBOM + osv-scanner)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+
+      - name: Generate aggregate CycloneDX SBOM (target/bom.json)
+        # 根 POM pluginManagement 已 pin cyclonedx-maven-plugin 2.9.1 并默认 skip=true
+        #（避免影响本地构建），此处显式开启；makeAggregateBom 为 aggregator goal，
+        # 聚合产物落在 reactor 根目录 target/bom.json（outputFormat 默认 all，同时产出 bom.xml）。
+        #
+        # skipNotDeployed=false 是必需的：该 goal 默认跳过「不参与 deploy 的项目」，
+        # 而根工程（pom 打包）不参与 deploy → 不加该参数时 SBOM 根本不会生成（R4-CVE 实测踩坑）。
+        run: |
+          set -euo pipefail
+          mvn -B -q -DskipTests -Dspotless.check.skip=true -Dcyclonedx.skip=false \
+            -Dcyclonedx.skipNotDeployed=false \
+            org.cyclonedx:cyclonedx-maven-plugin:makeAggregateBom
+          test -s target/bom.json || { echo "::error::target/bom.json was not generated"; exit 1; }
+
+      - name: Sanity-check the SBOM (published artifacts + dependency graph must be present)
+        # 防止「SBOM 生成成功但内容为空/退化为空壳」导致 CVE 门禁静默失效：
+        # 1) 4 个发布构件必须在 SBOM 中；2) 解析出的第三方依赖必须存在（缺失说明依赖图构建失败）；
+        # 3) 组件总数下限兜底。
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import sys
+
+          with open('target/bom.json', encoding='utf-8') as fh:
+              bom = json.load(fh)
+          components = bom.get('components') or []
+          names = {(c.get('group'), c.get('name')) for c in components}
+          required = {('io.github.streammq', a) for a in (
+              'streammq-core', 'streammq-redisson', 'streammq-spring-boot-starter', 'streammq-test')}
+          missing = sorted(required - names)
+          print(f"SBOM components: {len(components)}")
+          if missing:
+              print(f"::error::SBOM is missing published artifacts: {missing}")
+              sys.exit(1)
+
+          expected_deps = {('org.slf4j', 'slf4j-api'), ('org.redisson', 'redisson'),
+                           ('com.fasterxml.jackson.core', 'jackson-databind'),
+                           ('org.springframework.boot', 'spring-boot-starter')}
+          found_deps = expected_deps & names
+          print(f"Expected third-party dependencies found in the SBOM: {sorted(found_deps)}")
+          if len(found_deps) < 3:
+              print(f"::error::SBOM lists fewer expected third-party dependencies than expected "
+                    f"(found {len(found_deps)} of {len(expected_deps)}) — dependency resolution likely failed")
+              sys.exit(1)
+
+          if len(components) < 20:
+              print(f"::error::SBOM looks too small ({len(components)} components) — dependency resolution likely failed")
+              sys.exit(1)
+          print("SBOM sanity check OK: published artifacts and dependency components are present")
+          PY
+
+      - name: Filter the SBOM to the shipped dependency closure
+        # 门禁范围 = 「发布构件实际带给使用方的依赖闭包」（R4-CVE）：
+        # 聚合 SBOM 覆盖全部 reactor 项目（含 samples / 未发布模块），整份扫描会把示例应用的
+        # Web 容器等无关依赖计入门禁。这里从 4 个发布构件出发做 BFS：
+        #   · 跳过其它 streammq 模块（samples/diagnostics/kubernetes/bom 不对外发布）
+        #   · 跳过 optional/excluded 组件（provided/optional 依赖由使用方自带，不属于本库的交付面）
+        # 结果写入 target/bom-shipped.cdx.json 供 osv-scanner 扫描，并打印保留/剔除统计。
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import sys
+
+          with open('target/bom.json', encoding='utf-8') as fh:
+              bom = json.load(fh)
+          components = bom.get('components') or []
+          by_ref = {c['bom-ref']: c for c in components}
+          deps = {e['ref']: (e.get('dependsOn') or []) for e in (bom.get('dependencies') or [])}
+          published = {'streammq-core', 'streammq-redisson',
+                       'streammq-spring-boot-starter', 'streammq-test'}
+          roots = [r for r, c in by_ref.items()
+                   if c.get('group') == 'io.github.streammq' and c.get('name') in published]
+          if len(roots) != 4:
+              print(f"::error::expected 4 published roots in the SBOM, found {len(roots)}: {roots}")
+              sys.exit(1)
+
+          kept = set()
+          stack = list(roots)
+          while stack:
+              ref = stack.pop()
+              if ref in kept:
+                  continue
+              component = by_ref.get(ref)
+              if component is None:
+                  continue
+              if (component.get('group') == 'io.github.streammq'
+                      and component.get('name') not in published
+                      and ref not in roots):
+                  continue
+              if component.get('scope', 'required') in ('optional', 'excluded'):
+                  continue
+              kept.add(ref)
+              stack.extend(deps.get(ref, []))
+
+          shipped = dict(bom)
+          shipped['components'] = [c for c in components if c['bom-ref'] in kept]
+          shipped['dependencies'] = [e for e in (bom.get('dependencies') or [])
+                                     if e['ref'] in kept]
+          with open('target/bom-shipped.cdx.json', 'w', encoding='utf-8') as fh:
+              json.dump(shipped, fh, ensure_ascii=False)
+
+          names = sorted(f"{by_ref[r].get('name')}:{by_ref[r].get('version')}" for r in kept)
+          print(f"Shipped closure: {len(kept)} components (aggregate SBOM has {len(components)})")
+          print("Shipped components:")
+          for name in names:
+              print(f"  - {name}")
+          PY
+
+      - name: Download osv-scanner (pinned version)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_linux_amd64"
+          # 供应链校验（必须）：该二进制是 CVE 硬门禁的判定执行体，未校验即等于把"是否阻断发布"
+          # 交给一个可被替换的下载产物。SHA256 取自 GitHub Release 资产元数据的官方 digest
+          # （v2.6.0 / osv-scanner_linux_amd64），校验失败立即中断。
+          echo "ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108  osv-scanner" \
+            | sha256sum -c -
+          chmod +x osv-scanner
+          # 冒烟：确保下载的二进制可执行且 CLI 可用（v2 是 cobra CLI，版本开关在不同小版本间
+          # 可能是 `--version` 或 `version` 子命令，故按顺序容错，最后以 `--help` 兜底）。
+          ./osv-scanner --version 2>/dev/null || ./osv-scanner version 2>/dev/null || ./osv-scanner --help > /dev/null
+
+      - name: Scan the shipped SBOM with osv-scanner (hard gate)
+        # 门禁口径（R4-CVE，与 OWASP 时代的 failBuildOnCVSS=7 对齐）：
+        #   · 扫描对象是「发布构件实际带给使用方的依赖闭包」（上一步生成的 bom-shipped.cdx.json）
+        #   · 任意 ≥7.0（High/Critical）的公告 → 门禁失败；<7.0 的公告打印但不阻断（观测面）
+        #   · 完整 JSON 报告上传为构建产物，便于 triage
+        # 说明：不使用 osv-scanner 的退出码直接判定——退出码 1 表示"发现任意级别公告"，
+        # 会把 Medium/Low 也当作阻断，门禁会长期变红而失去可操作性。
+        run: |
+          set -euo pipefail
+          rc=0
+          ./osv-scanner scan source -L target/bom-shipped.cdx.json \
+            --format json --output target/osv-report.json > /dev/null 2>&1 || rc=$?
+          case "${rc}" in
+            0|1)
+              : # 0=未发现；1=发现（按严重度在下一步裁决）
+              ;;
+            128)
+              echo "::error::osv-scanner found no packages in target/bom-shipped.cdx.json — the SBOM is empty or broken"
+              exit 1
+              ;;
+            *)
+              echo "::error::osv-scanner failed with exit code ${rc}"
+              exit 1
+              ;;
+          esac
+          python3 - <<'PY'
+          import json
+          import sys
+
+          THRESHOLD = 7.0
+          with open('target/osv-report.json', encoding='utf-8') as fh:
+              report = json.load(fh)
+
+          blocking = []
+          informational = []
+          for result in report.get('results', []):
+              for pkg in result.get('packages', []):
+                  name = pkg['package']['name']
+                  version = pkg['package']['version']
+                  for group in pkg.get('groups', []):
+                      severity = float(group.get('max_severity') or 0)
+                      ids = ', '.join(group.get('ids', []))
+                      line = f"{severity:4.1f}  {name}:{version}  {ids}"
+                      (blocking if severity >= THRESHOLD else informational).append(line)
+
+          print(f"Shipped-closure vulnerability findings: {len(blocking) + len(informational)}"
+                f" (blocking >= {THRESHOLD}: {len(blocking)})")
+          for line in sorted(informational, reverse=True):
+              print(f"  [info] {line}")
+          for line in sorted(blocking, reverse=True):
+              print(f"  [BLOCK] {line}")
+
+          if blocking:
+              print("::error::CVE gate failed: High/Critical advisories in the shipped dependency"
+                    " closure — upgrade or document an explicit exception in SECURITY.md")
+              sys.exit(1)
+          print("CVE gate OK: no High/Critical advisories in the shipped dependency closure")
+          PY
+
+      - name: Upload SBOM + vulnerability report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-sbom-and-vulnerability-report
+          path: |
+            target/bom.json
+            target/bom-shipped.cdx.json
+            target/osv-report.json
+          if-no-files-found: warn
+
   test:
     name: Test (gate before publish)
     runs-on: ubuntu-latest
@@ -60,6 +419,34 @@ jobs:
             echo "Invalid release version '$RELEASE_REF'. Expected MAJOR.MINOR.PATCH (SNAPSHOT is not allowed)." >&2
             exit 1
           fi
+
+      # F-1（前置断言）：workflow_dispatch 路径必须在**任何构建开始之前**就存在指向本次提交的 tag。
+      # 与 publish job 中的同一断言重复一次，原因只是 fail-fast：test job 要跑 45 分钟全量 verify，
+      # 缺 tag 时不应等到 publish 才失败。两处断言的命令与提示完全一致。
+      - name: Assert release tag exists and points at HEAD (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION#v}"
+          git fetch --tags --force
+          if ! tag_commit="$(git rev-list -n 1 "${tag}" 2>/dev/null)"; then
+            echo "::error::Tag ${tag} does not exist on the remote (or is not resolvable)."
+            echo "::error::workflow_dispatch releases require the signed tag to exist BEFORE the run:"
+            echo "::error::  git tag -s ${tag} -m \"Release ${tag}\" && git push origin ${tag}"
+            echo "::error::请先创建并推送签名 tag，再重新触发本工作流。"
+            exit 1
+          fi
+          head_commit="$(git rev-parse HEAD)"
+          echo "tag=${tag} tag_commit=${tag_commit} head_commit=${head_commit}"
+          if [[ "${tag_commit}" != "${head_commit}" ]]; then
+            echo "::error::Tag ${tag} points at ${tag_commit}, but the workflow checked out ${head_commit}."
+            echo "::error::请先创建并推送指向该提交的签名 tag；不要依赖工作流在发布时现场补 tag。"
+            exit 1
+          fi
+          echo "Tag ${tag} exists and matches HEAD"
 
       # 发布门禁：单测 + 集成测试 + Spotless/JaCoCo 全部通过才允许进入 deploy job。
       # 此前发布通道直接 deploy -DskipTests，完全绕过质量门禁，属高危流程缺陷。
@@ -267,9 +654,48 @@ jobs:
           mvn -q -f /tmp/streammq-smoke/pom.xml clean compile \
             -Dmaven.repo.local="${REPO}"
 
+          # F-4：隔离不彻底的两处缺口——① 上面的 compile 未离线，② 没有任何版本断言。
+          # 于是从第二次发布起，若 BOM/属性漂移把依赖指回**上一版**，Maven 会从 Central（或隔离仓库里
+          # 已 install 的旧物）解析成功、构建照样变绿（假绿），而字节其实来自旧版本。
+          # 现按"使用方视角"列出实际解析到的 io.github.streammq:*，硬断言其版本全部 == 本次构建版本 VER。
+          # 选择版本断言而非 `-o` 离线解析：隔离仓库是全新目录，`-o` 会连带要求所有插件/父 POM 都已在
+          # 本地（失败信息与"版本漂移"混淆），而版本断言直接命中回归语义，且对 Central 回退同样有效。
+          mvn -f /tmp/streammq-smoke/pom.xml dependency:list \
+            -Dmaven.repo.local="${REPO}" -DincludeGroupIds=io.github.streammq -B \
+            2>&1 | tee "${RUNNER_TEMP}/streammq-smoke-deps.log"
+          python3 - "${RUNNER_TEMP}/streammq-smoke-deps.log" "${VER}" <<'PY'
+          import re
+          import sys
+
+          log_path, expected = sys.argv[1], sys.argv[2]
+          rows = []
+          with open(log_path, encoding='utf-8', errors='replace') as fh:
+              for line in fh:
+                  for coord in re.findall(r'io\.github\.streammq:[^\s,]+', line):
+                      parts = coord.split(':')
+                      if len(parts) >= 4:
+                          rows.append((parts[1], parts[3]))
+          rows = sorted(set(rows))
+          print(f"staging smoke resolved streammq artifacts: {rows}")
+          if not rows:
+              print("::error::staging smoke resolved NO io.github.streammq artifacts — the consumer resolve is broken")
+              sys.exit(1)
+          wrong = [(a, v) for a, v in rows if v != expected]
+          if wrong:
+              print(f"::error::staging smoke resolved streammq artifacts at the WRONG version"
+                    f" (expected {expected}): {wrong}")
+              print("::error::a stale version resolvable from Maven Central means the release would silently mix old binaries")
+              sys.exit(1)
+          missing = {'streammq-core', 'streammq-spring-boot-starter'} - {a for a, _ in rows}
+          if missing:
+              print(f"::error::staging smoke did not resolve expected artifacts: {sorted(missing)}")
+              sys.exit(1)
+          print(f"staging smoke version assertion OK: every io.github.streammq artifact is at {expected}")
+          PY
+
       # 反向断言（与 ci.yml 的 staging-smoke 对齐）：excludeArtifacts 中的构件必须解析失败，
       # 防止 BOM / 发布清单再次漂移，让使用方依赖到"中央仓库永远不会存在"的构件。
-      # 清单直接读自根 pom 的 maven-deploy-plugin <excludeArtifacts>，避免两处清单不一致。
+      # 清单直接读自根 pom 的 central-publishing-maven-plugin <excludeArtifacts>，避免两处清单不一致。
       - name: Assert unpublished modules are NOT resolvable
         shell: bash
         run: |
@@ -302,8 +728,9 @@ jobs:
           restore-keys: |
             dependency-check-data-${{ runner.os }}-
 
-      # 发布前置（E-03）：默认 CVE 硬门禁在 CI 的 sbom-scan job（CycloneDX SBOM + osv-scanner，
-      # 不需要任何 secrets）；本步骤的 OWASP/NVD 深扫为**增强**：仅当 secrets.NVD_API_KEY 存在时执行，
+      # 发布前置（E-03/F-2）：默认 CVE 硬门禁已作为本工作流的 sbom-scan job 执行（CycloneDX SBOM +
+      # osv-scanner，与 ci.yml 同命令/同版本，不需要任何 secrets，且 publish 依赖它）；
+      # 本步骤的 OWASP/NVD 深扫为**增强**：仅当 secrets.NVD_API_KEY 存在时执行，
       # 否则显式跳过（workflow 的 secrets 不能用于 job-level if，只能在 step 内判断环境变量并 skip）。
       # 不再留下「未配置密钥 → NVD 408/429 → 永久红」的矛盾说明。
       # E-02：必须显式传 nvdApiKeyEnvironmentVariable/nvdValidForHours/dataDirectory ——
@@ -317,7 +744,7 @@ jobs:
           set -euo pipefail
           if [ -z "${NVD_API_KEY:-}" ]; then
             echo "::notice::NVD_API_KEY is not configured — skipping the OWASP/NVD deep scan (release is not blocked)."
-            echo "::notice::The default CVE hard gate is CI's sbom-scan job (CycloneDX + osv-scanner), which needs no secrets."
+            echo "::notice::The default CVE hard gate is this workflow's sbom-scan job (CycloneDX + osv-scanner), which needs no secrets."
             exit 0
           fi
           DATA_DIR="${HOME}/.cache/dependency-check"
@@ -338,10 +765,15 @@ jobs:
 
   publish:
     name: Publish to Maven Central
-    needs: test
+    # F-2：发布前必须同时通过 test（质量门禁）、guard（发布集一致性）与 sbom-scan（keyless CVE 硬门禁）。
+    needs: [test, guard, sbom-scan]
     runs-on: ubuntu-latest
-    # F-11：显式超时预算
-    timeout-minutes: 45
+    # F-11/F-5：显式超时预算。本 job 要跑**两次**全量 reactor 构建
+    #（`mvn clean verify` 含真实 Redis 集成测试 + javadoc/sources，随后 `mvn clean deploy` 再全量跑
+    #  packaging + GPG 签名 + Portal 上传），45 分钟是单次构建级的预算、容易在慢 runner 上被截断；
+    # 提到 90 分钟。真正的优化（deploy 复用 verify 产物需要放开 staging 上传语义）留给后续，
+    # 这里不改变「被测试的 = 被发布的」口径。
+    timeout-minutes: 90
     # E-01：publish job 也必须提供 Redis —— 下方 `mvn clean verify -Djacoco.check.skip=false`
     # 会跑发布集的覆盖率门禁，而 redisson 的阈值（LINE 0.60 / BRANCH 0.50）是含 IT 标定的：
     # 没有 Redis 时 IT 全部跳过 → 覆盖率跌破阈值 → BUILD FAILURE → deploy 永不执行。
@@ -409,6 +841,37 @@ jobs:
           fi
           echo "Tag ${RELEASE_TAG} matches HEAD"
 
+      # F-1：`workflow_dispatch` 路径此前**完全没有** tag 校验 —— 上方断言按 `github.ref` 过滤，
+      # 只在 tag 事件生效；dispatch 时 tag 由 Create GitHub Release 现场创建（见文件末尾），
+      # 于是「上传到 Central 的字节」绑定不到任何已校验的 tag / commit。
+      # 现要求在构建前就存在一个指向本次检出提交的 tag：先 --force 拉取远端 tag（checkout 默认不取 tag），
+      # 再断言 `v${VERSION}` 可解析且其 commit == HEAD。本地/远端不一致时这里硬失败，
+      # 提示维护者先创建并推送签名 tag，而不是发布时由流水线补 tag。
+      - name: Assert release tag exists and points at HEAD (workflow_dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v${VERSION}"
+          git fetch --tags --force
+          if ! tag_commit="$(git rev-list -n 1 "${tag}" 2>/dev/null)"; then
+            echo "::error::Tag ${tag} does not exist on the remote (or is not resolvable)."
+            echo "::error::workflow_dispatch releases require the signed tag to exist BEFORE the run:"
+            echo "::error::  git tag -s ${tag} -m \"Release ${tag}\" && git push origin ${tag}"
+            echo "::error::请先创建并推送签名 tag，再重新触发本工作流。"
+            exit 1
+          fi
+          head_commit="$(git rev-parse HEAD)"
+          echo "tag=${tag} tag_commit=${tag_commit} head_commit=${head_commit}"
+          if [[ "${tag_commit}" != "${head_commit}" ]]; then
+            echo "::error::Tag ${tag} points at ${tag_commit}, but the workflow checked out ${head_commit}."
+            echo "::error::请先创建并推送指向该提交的签名 tag；不要依赖工作流在发布时现场补 tag。"
+            exit 1
+          fi
+          echo "Tag ${tag} exists and matches HEAD"
+
       - name: Set project version
         run: mvn versions:set -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false -DprocessAllModules=true
 
@@ -432,6 +895,25 @@ jobs:
       - name: Sync BOM version property
         run: mvn versions:set-property -Dproperty=streammq.version -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false
 
+      # F-3：BOM 的 <version> 已被改写（见上方断言），但其 dependencyManagement 的四条
+      # io.github.streammq 依赖版本全部来自 <streammq.version> 属性（streammq-bom/pom.xml L58 定义，
+      # L71/76/81/91 引用）。`versions:set` 不动属性，若 set-property 漏改/改错，BOM 会把
+      # core/redisson/starter/test 指向**上一版**；而旧版本在 Central 存在 → 使用方 import 新 BOM 后
+      # 静默混用旧二进制（staging smoke 的"能解析"也照样成立，不会变红）。
+      # 本断言必须放在 set-property 之后（放在 versions:set 之后会恒失败），按 BOM 自身求值该属性并硬比对。
+      - name: Assert BOM streammq.version property was rewritten
+        shell: bash
+        run: |
+          set -euo pipefail
+          bom_property="$(mvn -N -f streammq-bom/pom.xml help:evaluate \
+            -Dexpression=streammq.version -q -DforceStdout | tail -n1)"
+          if [ "${bom_property}" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::streammq-bom property streammq.version is ${bom_property}, expected ${{ steps.version.outputs.version }}"
+            echo "::error::the BOM would point consumers at the previous release's binaries (silently mixed versions)."
+            exit 1
+          fi
+          echo "streammq-bom streammq.version OK: ${bom_property}"
+
       # 发布门禁（R-39）：versions:set 改写了全部 pom，此前 test job 验证的是"旧版本号"的产物。
       # 必须对"即将发布的这份产物"重新跑一次完整 verify，保证“被测试的 = 被发布的”。
       # E-01：本 job 已提供 Redis service，集成测试与覆盖率门禁（-Djacoco.check.skip=false）口径与 test job 一致。
@@ -453,9 +935,12 @@ jobs:
       # E-13：资产清单只包含真实产出的文件 —— BOM 为 pom 打包，不产出 target/*.pom，
       # 直接挂各模块 target/ 下的产物；fail_on_unmatched_files: true 让清单与实际产物不一致时
       # 立即失败（此前缺失资产会被静默忽略）。
-      # 发布资产 == Central 可解析的构件集合（parent/bom/core/redisson/starter/test）。
-      # tracing/diagnostics/spring-cloud-stream-binder 被 excludeArtifacts 排除、Central 不可解析，
-      # 若挂到 Release 资产会让使用方误以为它们可从 Central 解析，故**不列入**（与上方注释一致）。
+      # 发布清单 == Central 可解析的构件集合，共 **6 个**：parent / bom / core / redisson / starter / test。
+      # `streammq-parent`（packaging=pom）随 deploy 发布到 Central、供下游以 <parent> 继承
+      #（无 jar/sources/javadoc 产物，故不列入 Release 资产文件）；`streammq-bom` 为 pom 打包，
+      # 其资产就是源 POM 文件本身。
+      # tracing/diagnostics/spring-cloud-stream-binder/kubernetes 被 excludeArtifacts 排除、
+      # Central 不可解析，若挂到 Release 资产会让使用方误以为它们可从 Central 解析，故**不列入**。
       - name: Create GitHub Release
         # 供应链加固：第三方 action 固定到 v2 对应的完整 commit SHA（renovate/dependabot 可识别 # v2）
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -463,6 +948,26 @@ jobs:
           name: StreamMQ ${{ steps.version.outputs.version }}
           tag_name: v${{ steps.version.outputs.version }}
           generate_release_notes: true
+          # F-7：根 POM / BOM 均为 <autoPublish>false</autoPublish> + <waitUntil>validated</waitUntil>——
+          # `mvn deploy` 只把 staging 部署推进到 Central Portal 的 **validated** 状态，构件要等维护者
+          # 在 Portal 点 "Publish" 后才真正进入 Central。若 Release 页面此时宣称"可用"，用户会解析失败。
+          # 选择仅注入醒目提示（不做 Portal 状态软校验）：Portal 的部署状态查询需要额外的 API 凭据/令牌，
+          # 现有 secrets 未提供，且状态轮询会引入新的外部依赖与不稳定面；提示 + 人工 Publish 步骤的
+          # 成本更低、语义明确（生成说明会追加在 body 之后）。
+          body: |
+            > [!IMPORTANT]
+            > **构件尚未在 Maven Central 可解析（awaiting manual Publish）**
+            >
+            > `streammq-parent` / `streammq-bom` / `streammq-core` / `streammq-redisson` /
+            > `streammq-spring-boot-starter` / `streammq-test` 已上传到
+            > [Central Portal](https://central.sonatype.com/) 的 staging 部署，当前状态为
+            > **validated（已校验、待发布）**。需维护者人工点击 **Publish** 之后，用户才能从
+            > Maven Central 解析本版本（本仓库 `<autoPublish>false</autoPublish>`）。
+            > 在此之前请勿在 README / 文档 / 下游 POM 中引用该版本坐标。
+            >
+            > The artifacts are **not yet resolvable from Maven Central**: the staging deployment is
+            > **validated** and requires a maintainer to click **Publish** in the Central Portal.
+            > Do not reference this version's coordinates until the deployment is published.
           fail_on_unmatched_files: true
           files: |
             streammq-bom/pom.xml

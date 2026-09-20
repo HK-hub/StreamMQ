@@ -20,6 +20,8 @@ import io.github.streammq.spring.boot.StreamMQSpringConstants;
 import java.time.Duration;
 import lombok.Getter;
 import lombok.Setter;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
@@ -73,6 +75,16 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 @Getter
 @Setter
 public class StreamMQProperties {
+
+    private static final Logger LOG = LoggerFactory.getLogger(StreamMQProperties.class);
+
+    /**
+     * 顺序消费分片锁租约的建议下限（毫秒）：低于该值会在启动时 WARN。
+     *
+     * <p>正常慢 handler 的耗时量级之上才不会被误判为卡死；与 {@code
+     * io.github.streammq.adapter.redisson.container.DefaultConsumerTuning} 的推荐值保持一致。
+     */
+    public static final long MIN_ORDERLY_SHARD_LOCK_LEASE_MILLIS = 5_000L;
 
     /** 是否启用 StreamMQ 自动装配，默认 true */
     private boolean enabled = true;
@@ -199,8 +211,25 @@ public class StreamMQProperties {
          */
         private java.util.List<Class<?>> furyRegisteredClasses = java.util.List.of();
 
-        /** 消息体压缩阈值（字节），body 超过此值时触发压缩，0 = 禁用（默认禁用） */
+        /**
+         * 消息体压缩阈值（字节），body 超过此值时触发压缩，0 = 禁用（默认禁用）。
+         *
+         * <p>与 {@link #compressionCodec} 配合：{@code > 0} 时必须能确定唯一的默认压缩 Codec（见下）。
+         */
         private int compressThreshold = StreamMQConstants.DEFAULT_COMPRESS_THRESHOLD_BYTES;
+
+        /**
+         * 默认压缩 Codec 名称（可选，默认空 = 自动解析）。
+         *
+         * <p>仅当注册了<b>多个</b> {@link io.github.streammq.core.compression.CompressionCodec} Bean 时才有必要
+         * 显式指定；解析顺序为：本键精确匹配（显式配置优先）→ {@code @Primary} → 唯一候选。多候选且无法消歧时： {@code compress-threshold >
+         * 0}（压缩已启用）会启动失败并列出候选（不静默取任意一个）；{@code compress-threshold = 0} 则记录 WARN 并保持"无默认
+         * Codec"（按名解压仍由注册表负责）。
+         *
+         * <p>取值可以是任意候选 Bean 的 {@code name()}（如 {@code zstd}），也可以是注册表内置名称 {@code gzip} / classpath
+         * 存在 lz4-java 时的 {@code lz4}。写成不存在的名称会导致启动失败（并列出全部可选名称）。
+         */
+        private String compressionCodec = "";
 
         /** 单条消息最大大小（字节），发送时校验。 默认 512MB（Redis Stream 上限），推荐不超过 1MB。 */
         private long maxMessageSize = StreamMQConstants.MAX_MESSAGE_SIZE_BYTES;
@@ -257,6 +286,25 @@ public class StreamMQProperties {
          * 需要保护分片可用性时在此一次性全局开启，或在具体消费者注解上开启。
          */
         private long orderlyConsumeTimeoutMillis = 0L;
+
+        /**
+         * 顺序消费分片锁的租约（毫秒），默认 {@code 0}。
+         *
+         * <p><b>语义与权衡（§13 顺序锁闭环项，R6-S8）：</b>
+         *
+         * <ul>
+         *   <li>{@code 0}（默认）：Redisson 看门狗持续续期 + <b>严格有序</b>。持有分片锁的实例即使 handler
+         *       卡死（不响应中断）也一直持有锁，其它实例无法接管——顺序性最强，但卡死会阻塞该分片直到进程重启；
+         *   <li>{@code > 0}：有限租约、不续期。持有者超过租约未完成会<b>被其它实例接管</b>，卡死不再永久阻塞分片，
+         *       代价是语义降级为"至多一次重叠执行、可能乱序"（同一分片的消息可能被两个实例短暂并行消费）。
+         * </ul>
+         *
+         * <p><b>取值建议：</b>不小于 5000（正常慢 handler 的完成时间量级之上）；{@code 0 < v < 5000} 会在启动时 记录 WARN（正常慢
+         * handler 可能被判为卡死并让位）。负值配置非法，启动失败。
+         *
+         * <p>本键为"逃生舱"参数：只有在确实存在不可中断的卡死 handler、且业务能接受重叠/乱序时才应开启。
+         */
+        private long orderlyShardLockLeaseMillis = 0L;
 
         /**
          * 广播消费实例身份（可选）：显式指定后，广播消费者组名跨重启恒定。
@@ -473,7 +521,11 @@ public class StreamMQProperties {
         /** 重平衡策略实现类，默认 {@link ConsistentHashRebalanceStrategy} */
         private Class<? extends RebalanceStrategy> strategy = ConsistentHashRebalanceStrategy.class;
 
-        /** 虚拟节点数（仅一致性哈希策略生效） */
+        /**
+         * 虚拟节点数（仅一致性哈希策略生效），必须 {@code > 0}，默认 {@link StreamMQConstants#DEFAULT_VIRTUAL_NODES}。
+         *
+         * <p>{@code <= 0} 属于非法值：容器会把非法值静默回退到默认值 160，用户看不出配置未生效。此处改为启动即拒绝。
+         */
         private int virtualNodes = StreamMQConstants.DEFAULT_VIRTUAL_NODES;
     }
 
@@ -513,10 +565,16 @@ public class StreamMQProperties {
         /** 管理端点开关：与 streammq.health.enabled 解耦，false 时仅关闭管理/运维 REST 端点（健康检查不受影响） */
         private boolean enabled = true;
 
-        /** 管理端点列表默认页大小 */
+        /**
+         * 管理端点列表默认页大小，签发范围 {@code [1, 10000]}（上界见 {@link
+         * StreamMQSpringConstants#MAX_ADMIN_LIST_LIMIT}）。
+         */
         private int listPageSize = StreamMQSpringConstants.DEFAULT_LIST_PAGE_SIZE;
 
-        /** pending 列表单次最大拉取条数 */
+        /**
+         * pending 列表单次最大拉取条数，签发范围 {@code [1, 10000]}（上界见 {@link
+         * StreamMQSpringConstants#MAX_ADMIN_LIST_LIMIT}）。
+         */
         private int maxPendingQuerySize = StreamMQSpringConstants.MAX_PENDING_QUERY_SIZE;
 
         /** 写操作（重投/删除/ACK/重平衡/建删 Topic/改配置）失败后的重试冷却期（毫秒），0 表示禁用 */
@@ -594,6 +652,18 @@ public class StreamMQProperties {
                     "streammq.consumer.max-batch-size-limit must be > 0, got: "
                             + consumer.maxBatchSizeLimit);
         }
+        if (consumer.batchSize > consumer.maxBatchSizeLimit) {
+            // R6-S7：容器内部会把批量夹取到 max-batch-size-limit。此前只夹取 + 静默，用户配 5000 却实际 1000
+            // 完全无感知。这里改为启动即失败（可操作：把 batch-size 调小或把 max-batch-size-limit 调大）。
+            throw new StreamMQClientException(
+                    "streammq.consumer.batch-size ("
+                            + consumer.batchSize
+                            + ") must be <= streammq.consumer.max-batch-size-limit ("
+                            + consumer.maxBatchSizeLimit
+                            + "), otherwise the effective pull batch would be silently clamped."
+                            + " Lower batch-size, or raise max-batch-size-limit up to"
+                            + " streammq.consumer.max-batch-size-limit's own ceiling.");
+        }
         if (transaction.maxCheckTimes <= 0) {
             throw new StreamMQClientException(
                     "streammq.transaction.max-check-times must be > 0, got: "
@@ -668,6 +738,22 @@ public class StreamMQProperties {
                     "streammq.admin.max-pending-query-size must be > 0, got: "
                             + admin.maxPendingQuerySize);
         }
+        if (admin.listPageSize > StreamMQSpringConstants.MAX_ADMIN_LIST_LIMIT) {
+            throw new StreamMQClientException(
+                    "streammq.admin.list-page-size must be <= "
+                            + StreamMQSpringConstants.MAX_ADMIN_LIST_LIMIT
+                            + " (upper bound protects the admin surface from unbounded responses),"
+                            + " got: "
+                            + admin.listPageSize);
+        }
+        if (admin.maxPendingQuerySize > StreamMQSpringConstants.MAX_ADMIN_LIST_LIMIT) {
+            throw new StreamMQClientException(
+                    "streammq.admin.max-pending-query-size must be <= "
+                            + StreamMQSpringConstants.MAX_ADMIN_LIST_LIMIT
+                            + " (upper bound protects the admin surface from unbounded responses),"
+                            + " got: "
+                            + admin.maxPendingQuerySize);
+        }
         if (admin.failureRetryCooldownMillis < 0) {
             throw new StreamMQClientException(
                     "streammq.admin.failure-retry-cooldown-millis must be >= 0, got: "
@@ -698,6 +784,24 @@ public class StreamMQProperties {
                     "streammq.consumer.orderly-consume-timeout-millis must be >= 0, got: "
                             + consumer.orderlyConsumeTimeoutMillis);
         }
+        if (consumer.orderlyShardLockLeaseMillis < 0) {
+            throw new StreamMQClientException(
+                    "streammq.consumer.orderly-shard-lock-lease-millis must be >= 0 (0 = watchdog"
+                            + " lease with strict ordering), got: "
+                            + consumer.orderlyShardLockLeaseMillis);
+        }
+        if (consumer.orderlyShardLockLeaseMillis > 0
+                && consumer.orderlyShardLockLeaseMillis < MIN_ORDERLY_SHARD_LOCK_LEASE_MILLIS) {
+            LOG.warn(
+                    "streammq.consumer.orderly-shard-lock-lease-millis={} is below the recommended"
+                        + " minimum {}ms: slow handlers may be treated as stuck and another"
+                        + " instance may take over the shard, allowing overlapping execution and"
+                        + " out-of-order consumption. Set 0 for watchdog + strict ordering, or"
+                        + " configure >= {}ms.",
+                    consumer.orderlyShardLockLeaseMillis,
+                    MIN_ORDERLY_SHARD_LOCK_LEASE_MILLIS,
+                    MIN_ORDERLY_SHARD_LOCK_LEASE_MILLIS);
+        }
         if (consumer.consumeTimeoutMillis < 0) {
             throw new StreamMQClientException(
                     "streammq.consumer.consume-timeout-millis must be >= 0, got: "
@@ -706,6 +810,15 @@ public class StreamMQProperties {
         if (consumer.consumeFromWhere == null) {
             throw new StreamMQClientException(
                     "streammq.consumer.consume-from-where must not be null");
+        }
+        if (rebalance.virtualNodes <= 0) {
+            // R6-S6：<=0 此前被容器静默回退到默认 160，用户无从发现配置未生效
+            throw new StreamMQClientException(
+                    "streammq.rebalance.virtual-nodes must be > 0 (consistent-hash virtual node"
+                            + " count; the container silently falls back to "
+                            + StreamMQConstants.DEFAULT_VIRTUAL_NODES
+                            + " when <= 0), got: "
+                            + rebalance.virtualNodes);
         }
         if (dlq.streamMaxLen < 0) {
             throw new StreamMQClientException(

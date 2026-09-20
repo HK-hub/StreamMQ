@@ -59,7 +59,8 @@ public class DefaultSchedulerTargetBinder implements SchedulerTargetBinder {
                 case RETRY -> retryCount++;
                 case DLQ -> dlqCount++;
                 case NONE -> {
-                    // 广播模式各实例独立组、无共享 retry 流：不注册任何目标
+                    // ORDERLY 无 retry Stream，故不产生任何认领目标；
+                    // 广播 AUTO_ACK 注册 RETRY 目标（共享 retry 流），会进入 RETRY 分支而非此处
                 }
             }
         }
@@ -153,13 +154,23 @@ public class DefaultSchedulerTargetBinder implements SchedulerTargetBinder {
                     shardingFieldOf(reg));
             return PelClaimTargetKind.TOPIC;
         }
-        if (reg.getType() == ListenerType.AUTO_ACK
-                && reg.getConsumeMode() != ConsumeMode.BROADCASTING) {
-            scheduler.registerTarget(
-                    reg.getNamespace(), reg.getTopic(), reg.getGroup(), reg.getMaxReconsumeTimes());
-            // 并发集群消费的 retry Stream 同样存在 PEL（消费者名含容器随机 token，
-            // 重启后自身排空读不到遗留条目），注册 RETRY 目标补齐跨重启恢复；
-            // 广播模式各实例独立组、无共享 retry 流，不注册
+        if (reg.getType() == ListenerType.AUTO_ACK) {
+            if (reg.getConsumeMode() != ConsumeMode.BROADCASTING) {
+                scheduler.registerTarget(
+                        reg.getNamespace(),
+                        reg.getTopic(),
+                        reg.getGroup(),
+                        reg.getMaxReconsumeTimes());
+            }
+            // 并发消费的 retry Stream 在集群与广播两种模式下**都是共享的**：
+            // 消费侧 retry 循环固定复用基组名（RedissonStreamListener#getEffectiveGroup 对
+            // retryMode 直接返回 base group），RetryScheduler 也按 (namespace, topic, base group)
+            // 写同一把 retry Stream Key。因此广播实例失败 → 重试 ZSet → 共享 retry 流 →
+            // 实例读取后崩溃，条目会留在该共享组的 PEL 里而属主消费者名永久消失；
+            // 若此处不注册 RETRY 目标，这些条目（唯一副本）将永久滞留。故广播同样注册。
+            // 但 TOPIC 目标仍只对集群注册：广播的 topic 流是"每实例一个生效组"
+            // （{group}:{group}-{id}），基组名在该流上不存在，注册只会让认领循环每轮
+            // 对不存在的组 listPending 报错刷日志且无法恢复任何 PEL。
             scheduler.registerRetryStreamTarget(
                     reg.getNamespace(), reg.getTopic(), reg.getGroup(), reg.getMaxReconsumeTimes());
             return PelClaimTargetKind.RETRY;

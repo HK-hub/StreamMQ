@@ -91,6 +91,9 @@ class TransactionSampleIT {
 
     @Autowired private TestMessageCollector testCollector;
 
+    /** 示例自带的消费端：验证示例默认运行（mvn spring-boot:run）时的完整闭环不是空转 */
+    @Autowired private OrderTransactionConsumer orderTransactionConsumer;
+
     @BeforeEach
     void clearReceivedMessages() {
         testCollector.receivedMessages.clear();
@@ -114,6 +117,15 @@ class TransactionSampleIT {
                             assertThat(received).isNotNull();
                             assertThat(received.getBody()).isEqualTo(content);
                             assertThat(received.getTag()).isEqualTo("transaction");
+                        });
+
+        // 示例内置的 OrderTransactionConsumer 也必须收到该已提交消息（示例自洽，闭环可演示）
+        await().atMost(10, TimeUnit.SECONDS)
+                .untilAsserted(
+                        () -> {
+                            assertThat(orderTransactionConsumer.getReceivedCount())
+                                    .isGreaterThanOrEqualTo(1);
+                            assertThat(orderTransactionConsumer.getLastBody()).isEqualTo(content);
                         });
     }
 

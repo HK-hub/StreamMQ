@@ -28,7 +28,8 @@ import java.time.Duration;
  * <p>顺序消费：{@code SUCCESS} 时由容器调用本处理器 ACK；失败时容器在当前线程内重试 （{@code maxReconsumeTimes} 次），耗尽后调用 {@link
  * #routeToDlq} 直接进入 DLQ 并 ACK， 保证分片内严格有序。
  *
- * <p>重试超时路由：当 {@link RetryPolicy#nextRetryDelay} 返回 null（不再重试）时， 路由到 DLQ Stream。
+ * <p>重试停止路由（0.1.2 定稿）：每次重试调度前先调用 {@link RetryPolicy#shouldStopRetry}，返回 true 立即路由到 DLQ Stream （原因
+ * {@code MAX_RETRY}）；随后 {@link RetryPolicy#nextRetryDelay} 返回 null（不再重试）时同样路由到 DLQ Stream。
  *
  * <p>设计模式：策略模式，将 ACK/重试/DLQ 路由逻辑从容器中分离。 默认实现位于 {@code streammq-redisson} 模块，可通过容器构造器注入自定义实现。
  *
@@ -76,7 +77,8 @@ public interface RetryAndDlqHandler {
      *
      * <ol>
      *   <li>将 {@link Message} 转换回 Stream Entry 字段
-     *   <li>调用 {@link RetryPolicy#nextRetryDelay} 计算下一次重试延迟
+     *   <li>调用 {@link RetryPolicy#shouldStopRetry} 判定停止条件；true 时直接路由到 DLQ Stream
+     *   <li>否则调用 {@link RetryPolicy#nextRetryDelay} 计算下一次重试延迟
      *   <li>若延迟为 null（不再重试），路由到 DLQ Stream
      *   <li>否则写入 payload Hash + retry ZSet，ACK 原消息
      * </ol>
@@ -96,7 +98,8 @@ public interface RetryAndDlqHandler {
      * 处理 defer：将消息写入 retry ZSet + payload Hash（使用指定延迟），并 ACK 原消息。
      *
      * <p>流程类似 {@link #handleReconsumeLater}，但用指定的 delay 而非 {@link RetryPolicy#nextRetryDelay}
-     * 计算的延迟。当重试次数达到 {@link ListenerRegistration#getMaxReconsumeTimes()} 时路由到 DLQ Stream。
+     * 计算的延迟；仍先经 {@link RetryPolicy#shouldStopRetry} 判定停止条件， 并在重试次数达到 {@link
+     * ListenerRegistration#getMaxReconsumeTimes()} 时路由到 DLQ Stream。
      *
      * @param message 消息
      * @param reg Listener 注册信息

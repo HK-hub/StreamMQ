@@ -44,13 +44,16 @@ final class RetrySafetyPolicy {
     /**
      * 构造失败结果。
      *
+     * <p>失败路径使用可辨识的占位 ID {@link MessageId#pending()}（{@code 0-0}，真实 Entry ID 恒大于该值， {@link
+     * MessageId#isPending()} 可判定），不再用旧名 {@code sentinel()}——后者值域与真实 ID 不可区分且已废弃。
+     *
      * @param message 消息
      * @param error 异常
      * @return 失败 SendResult
      */
     static SendResult buildFailedResult(Message<?> message, StreamMQException error) {
         return new SendResult(
-                MessageId.sentinel(),
+                MessageId.pending(),
                 message.getTopic(),
                 message.getTag(),
                 SendStatus.SEND_FAILED,
