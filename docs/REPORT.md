@@ -1079,8 +1079,12 @@ mvn -B clean deploy -DskipTests -DskipPublishing=true     # 无 -Pgpg，绝不�
   等到 PEL 清空——异步流水线断裂/许可泄漏即红（这条守卫在修复前不存在）。
 
 **复验**：`ConsumerIT` 连续 3 次独立运行 15/15 绿（4.4s / 4.4s / 4.4s，含新增用例）；全量门禁
-20/20 SUCCESS / 06:17 / 1482 用例 0 失败（§15.1）。该修复随 R6 一并推送，新 CI run 结果记录在
-`docs/REPORT.md` 的发布记录（见 `CHANGELOG` 的 R6 节）。
+20/20 SUCCESS / 06:17 / 1482 用例 0 失败（§15.1）。
+
+**推送后 CI 复核（真实 runner，run 35501791198，commit `271734c`）：全绿** ——
+Guards 5s / CVE gate 42s / Formatting 25s / Build 40s / Test 2m23s / **Verify (Integration) 5m50s**
+（即 R5 推送时红的那个 job）/ Staging smoke 2m0s / Coverage report 55s 全 success；
+OWASP 深扫按设计在无 NVD key 时跳过。
 
 ---
 

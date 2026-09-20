@@ -13,7 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > 各轮结论与逐项处置见 [docs/REPORT.md](docs/REPORT.md)。R5 推送的真实 CI（run 35480290570）在
 > `Verify (Integration)` 红：`ConsumerIT.ack_messagePelEmpty` 断言了异步 ack **未承诺**的同步语义——
 > 已在 R6 按契约修复并新增流水线落地守卫（见下方"新增回归守卫"与 `docs/REPORT.md` §15.6）。R6 终局门禁
-> `mvn clean verify -Djacoco.check.skip=false` 实测 20/20 SUCCESS、1482 用例 0 失败/0 跳过，裁决 GO 90/100。
+> `mvn clean verify -Djacoco.check.skip=false` 实测 20/20 SUCCESS、1482 用例 0 失败/0 跳过，裁决 GO 90/100；
+> 推送后真实 CI（run 35501791198，commit `271734c`）**全绿**：Guards / CVE gate / Formatting / Build /
+> Test / Verify (Integration) / Staging smoke / Coverage report 全 success（OWASP 深扫无 NVD key 时按设计跳过）。
 
 ### Added
 
