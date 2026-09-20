@@ -10,8 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **0.1.2 是 StreamMQ 第一个发布到 Maven Central 的版本**（0.1.0 / 0.1.1 均为内部迭代，从未对外发布，见下文。
 > 版本号与 `pom.xml` / `streammq-bom` / 各模块一致，均为 `0.1.2`）。
 > 本节同时包含发布前红队审查（第一轮 ~ 第六轮）的全部根因修复；审查依据 `docs/fullReview.md` 协议执行，
-> 各轮结论与逐项处置见 [docs/REPORT.md](docs/REPORT.md)。R6 终局门禁
-> `mvn clean verify -Djacoco.check.skip=false` 实测 20/20 SUCCESS、1481 用例 0 失败/0 跳过，裁决 GO 90/100。
+> 各轮结论与逐项处置见 [docs/REPORT.md](docs/REPORT.md)。R5 推送的真实 CI（run 35480290570）在
+> `Verify (Integration)` 红：`ConsumerIT.ack_messagePelEmpty` 断言了异步 ack **未承诺**的同步语义——
+> 已在 R6 按契约修复并新增流水线落地守卫（见下方"新增回归守卫"与 `docs/REPORT.md` §15.6）。R6 终局门禁
+> `mvn clean verify -Djacoco.check.skip=false` 实测 20/20 SUCCESS、1482 用例 0 失败/0 跳过，裁决 GO 90/100。
 
 ### Added
 
@@ -566,6 +568,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `StreamMQListenerContainerWiringTest`：配置校验与装配接线（S3/S6/S7/S8）。
 - `CloudK8sPropertiesWiringTest` + `autoscaler/`、`config/`、`operator/` 测试：K1~K10。
 - `BenchmarkBudgetTest` / `ConsumeValidityReportTest`：B1/B2 基准方法学门禁。
+- `ConsumerIT`（ack 契约，CI 实测驱动）：`ack_messagePelEmpty` 改为断言**停机排空**语义（`ack()` →
+  `close()` → PEL 为空，与 `StreamMQListener#ack` 的"有界异步流水线"契约一致）；新增
+  `ack_asyncPipelineLandsWithoutClose`——`ack()` 后不停机也必须在有界时间内把 XACK 落到 Redis
+  （流水线断裂/许可泄漏即红）。
 
 **基准与文档回填（2026-09-20 重跑产物）**
 

@@ -8,6 +8,7 @@ package io.github.streammq.adapter.redisson.it;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.awaitility.Awaitility.await;
 
 import io.github.streammq.adapter.redisson.listener.RedissonStreamListener;
 import io.github.streammq.adapter.redisson.producer.RedissonStreamProducer;
@@ -120,11 +121,40 @@ class ConsumerIT extends AbstractRedisIT {
         assertThat(messages).hasSize(1);
 
         consumer.ack(messages.get(0).getMessageId());
+        // ack 是"有界异步流水线"（见 StreamMQListener#ack 契约：返回不代表 XACK 已在 Redis 端完成，
+        // 需要"返回即已确认"语义时应使用 ackBatch 同步版）。这里用 close() 的有界排空语义断言
+        // ack 真实生效——直接把"ack 后立即 listPending"写成断言会与流水线竞态（CI 实测曾因此失败）。
+        consumer.close();
 
         RStream<String, String> stream =
                 redisson.getStream(StreamMQKeys.topicStream(namespace, TOPIC));
         assertThat(stream.listPending(GROUP, StreamMessageId.MIN, StreamMessageId.MAX, 100))
+                .as("停机排空在途 ACK 后，PEL 必须为空")
                 .isEmpty();
+    }
+
+    @Test
+    @DisplayName("ack 异步流水线无需停机也会在有界时间内把 XACK 落到 Redis")
+    void ack_asyncPipelineLandsWithoutClose() {
+        producer.syncSend(MessageBuilder.<String>withTopic(TOPIC).body("ack-async-body").build());
+        List<Message<?>> messages = consumer.pull(1);
+        assertThat(messages).hasSize(1);
+
+        consumer.ack(messages.get(0).getMessageId());
+
+        RStream<String, String> stream =
+                redisson.getStream(StreamMQKeys.topicStream(namespace, TOPIC));
+        await().atMost(Duration.ofSeconds(5))
+                .untilAsserted(
+                        () ->
+                                assertThat(
+                                                stream.listPending(
+                                                        GROUP,
+                                                        StreamMessageId.MIN,
+                                                        StreamMessageId.MAX,
+                                                        100))
+                                        .as("异步 ACK 流水线必须在有界时间内落地（流水线断裂/许可泄漏即红）")
+                                        .isEmpty());
     }
 
     @Test

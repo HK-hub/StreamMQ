@@ -4,7 +4,8 @@
 > - **最新：第六轮（R6）** —— 见文末 [第六轮发布前红队审查报告（R6）](#第六轮发布前红队审查报告r6)。
 >   未发现 P0；新修 5 个 P1（静默不投递 / 唯一副本丢失 / 状态覆盖 / 广播语义退化）、45 个 P2 与全部可执行 P3/P4；
 >   第五轮 §13 的六项未闭环项闭环五项（真实 Central 发布以无签名 dry-run 演练替代）。
->   终局门禁 20/20 SUCCESS、1481 用例 0 失败/0 跳过（05:52），裁决 **GO 90/100**（§17）。
+>   终局门禁 20/20 SUCCESS、1482 用例 0 失败/0 跳过（06:17），裁决 **GO 90/100**（§17）；并记录一次
+>   **CI 真实 runner 复核**（R5 推送的 CI 红 → 根因是用例断言了异步 ack 未承诺的同步语义，见 §15.6）。
 > - 第五轮（R5）—— 门禁命令首跑即红，修复后复验 20/20 SUCCESS、1249 用例全绿。
 > - 第四轮（下文）—— 历史记录，保留以供追溯。
 
@@ -953,8 +954,8 @@ mvn -B clean verify -Djacoco.check.skip=false      # = .github/workflows/release
 |---|---|
 | 命令 | `mvn -B clean verify -Djacoco.check.skip=false` |
 | 模块 | **20 / 20 SUCCESS**（parent / bom / core / redisson / test / starter / tracing / diagnostics / binder / kubernetes / samples×8 / benchmark） |
-| 用时 | **05:52 min**，Finished at `2026-09-20T16:33:07+08:00` |
-| 用例 | **1481**（surefire 1185 / failsafe 296），Failures 0 / Errors 0 / **Skipped 0** |
+| 用时 | **06:17 min**，Finished at `2026-09-20T17:12:07+08:00` |
+| 用例 | **1482**（surefire 1185 / failsafe 297），Failures 0 / Errors 0 / **Skipped 0** |
 | 覆盖率门禁 | `jacoco:0.8.12:check` 实跑（`-Djacoco.check.skip=false`，未跳过） |
 | 格式/规约 | `spotless:2.43.0:check` 全模块通过；enforcer `RequireJavaVersion` / `RequireMavenVersion` / `dependencyConvergence` 通过 |
 
@@ -963,7 +964,7 @@ mvn -B clean verify -Djacoco.check.skip=false      # = .github/workflows/release
 | 模块 | surefire | failsafe | 合计 |
 |---|---:|---:|---:|
 | streammq-core | 283 | 0 | 283 |
-| streammq-redisson | 596 | 141 | 737 |
+| streammq-redisson | 596 | 142 | 738 |
 | streammq-test | 50 | 44 | 94 |
 | streammq-spring-boot-starter | 83 | 36 | 119 |
 | streammq-tracing-opentelemetry | 33 | 17 | 50 |
@@ -972,7 +973,7 @@ mvn -B clean verify -Djacoco.check.skip=false      # = .github/workflows/release
 | streammq-kubernetes | 61 | **0** | 61 |
 | 8 个 samples | 0 | 25 | 25 |
 | streammq-benchmark | 13 | 0 | 13 |
-| **合计** | **1185** | **296** | **1481** |
+| **合计** | **1185** | **297** | **1482** |
 
 kubernetes 的 `failsafe-reports` 目录**不存在**：该模块无 `*IT`，本轮移除其无效果 failsafe 声明后，
 用例数不变（61 由 surefire 执行，含 `KubernetesHealthRegistrationTest` 4 例）——与"无 IT 即不声明 failsafe"
@@ -996,7 +997,10 @@ kubernetes 的 `failsafe-reports` 目录**不存在**：该模块无 `*IT`，本
      （8 个调用点：producer / delay / retry / pel-claim / transaction ×2 / handler ×2）。
    最终 `clusterit5`：`RedisClusterCompatibilityIT` **11 用例全绿**，且"检测 Cluster → 可操作 WARN →
    `StreamMQException`"的行为被断言锁定。
-4. **终局门禁（本次）**：kubernetes pom 修正后重跑 → 20/20 SUCCESS / 05:52 / 1481 用例全绿（§15.1）。
+4. **kubernetes pom 修正后重跑**：20/20 SUCCESS / 05:52 / 1481 用例全绿（§15.1 的上一版证据）。
+5. **CI 真实 runner 复核**（详见 §15.6）：R5 推送的 CI 在 `Verify (Integration)` 红
+   （`ConsumerIT.ack_messagePelEmpty` 断言了异步 ack **未承诺**的同步语义）→ 按契约修正用例并新增
+   "流水线真实落地"守卫 → 当前树门禁 20/20 SUCCESS / 06:17 / **1482** 用例全绿（§15.1）。
 
 **口径纪律**：本报告所有时长/数量均取自日志文件本身（出生/结束时间与报告实数），不引用记忆或估算值。
 
@@ -1049,6 +1053,35 @@ mvn -B clean deploy -DskipTests -DskipPublishing=true     # 无 -Pgpg，绝不�
 **绝不写入用户真实的 `~/.m2/settings.xml`**），复跑即 `dryrun-central2.log` 的成功记录。真实发布需要
 有效的 `central` 凭据 + 发布者持有的 GPG 口令（口令从未被猜测或写入日志）。
 
+### 15.6 CI 真实 runner 复核（R5 推送的 CI 红 → 根因 → 修复）
+
+**事实**：R5 推送（`b5e6486`）触发的 CI run **35480290570** 在 `Verify (Integration)` job 红，
+其余 job（Guards / CVE gate / Build / Formatting / Test / Staging smoke）全绿：
+
+```text
+[ERROR] Tests run: 14, Failures: 1, Errors: 0, Skipped: 0 -- in io.github.streammq.adapter.redisson.it.ConsumerIT
+[ERROR] io.github.streammq.adapter.redisson.it.ConsumerIT.ack_messagePelEmpty -- <<< FAILURE!
+        Expecting empty but was: [PendingEntry{id=1789866312693-0, consumerName='consumer-1',
+        idleTime=1, lastTimeDelivered=1}]
+```
+
+**根因（不是 flaky，是契约不一致）**：`StreamMQListener#ack` 的公开契约**明文**写着"有界异步流水线：
+方法返回**不代表** XACK 已在 Redis 端完成；需要'返回即已确认'语义时用 `ackBatch(List)` 同步版"。
+而 `ack_messagePelEmpty` 用例在 `ack()` 返回后**立即**断言 `listPending` 为空——断言了接口从未承诺的
+语义；本地跑通常赢下这个竞态，CI runner 上输掉。**同类扫描**：全仓仅此一处该形态（`RedisClusterCompatibilityIT`
+用原生同步 `stream.ack`，`ackedMessage_notRedelivered` 走 `neverDelivered` 读语义不受影响）。
+
+**修复（按契约，而非放宽断言）**：
+
+- `ack_messagePelEmpty` 改为断言**文档化的停机排空语义**：`ack()` → `close()`（有界排空在途 ACK）→
+  断言 PEL 为空。
+- 新增 `ack_asyncPipelineLandsWithoutClose`（失败即红）：`ack()` 后**不停机**，用 Awaitility 在 5 秒内
+  等到 PEL 清空——异步流水线断裂/许可泄漏即红（这条守卫在修复前不存在）。
+
+**复验**：`ConsumerIT` 连续 3 次独立运行 15/15 绿（4.4s / 4.4s / 4.4s，含新增用例）；全量门禁
+20/20 SUCCESS / 06:17 / 1482 用例 0 失败（§15.1）。该修复随 R6 一并推送，新 CI run 结果记录在
+`docs/REPORT.md` 的发布记录（见 `CHANGELOG` 的 R6 节）。
+
 ---
 
 ## 16. 未闭环项（诚实声明，均非代码缺陷）
@@ -1078,7 +1111,7 @@ mvn -B clean deploy -DskipTests -DskipPublishing=true     # 无 -Pgpg，绝不�
 | 模块设计 | 9 | 职责可解释；kubernetes 模块完成 K1~K10 深度审计 |
 | API / SDK | 9 | Builder + 不可变值对象 + 类型化异常；无静默降级（宁可 fail-fast） |
 | 实现质量 | 9 | 本轮修 5 个 P1（静默不投递 ×2 / 唯一副本丢失 / 状态覆盖 / 广播语义退化）+ 45 个 P2 |
-| 测试 | 9 | 1481 用例、0 跳过；真 3 主 Cluster IT + 失败即红守卫 30 个新文件 |
+| 测试 | 9 | 1482 用例、0 跳过；真 3 主 Cluster IT + 失败即红守卫 30 个新文件；ack 流水线契约守卫（CI 实测驱动） |
 | 并发 | 9 | 广播身份占用校验、在飞计数、租约心跳独立；已知有序性权衡显式声明 |
 | 性能 | 9 | JMH 全量重跑并回填实测（消费口径 5.3× / 3.7× 修正）；孤儿清理 N+1 闭环 |
 | 安全 | 9 | 默认拒绝 + 参数夹取 + 错误脱敏 + 供应链校验（osv-scanner SHA 校验）齐备 |
@@ -1106,7 +1139,9 @@ Should Fix:             0 items
 Open P0/P1/P2:          0 / 0 / 0 items
 Open P3/P4:             0 items（§16 的未闭环项均为外部环境依赖或显式设计权衡，非代码缺陷）
 
-门禁证据: mvn clean verify -Djacoco.check.skip=false → 20/20 SUCCESS，1481 用例，0 失败/0 跳过（05:52）
+门禁证据: mvn clean verify -Djacoco.check.skip=false → 20/20 SUCCESS，1482 用例，0 失败/0 跳过（06:17）
+CI 复核: R5 推送的 CI 红（ConsumerIT 断言了异步 ack 未承诺的同步语义）已按契约修复，
+         并新增"流水线落地"守卫随本轮推送复跑（§15.6）
 真实环境: 3 主 Redis Cluster IT 11/11 绿；JMH 全量重跑并回填实测值
 发布演练: mvn clean deploy -DskipPublishing=true（无签名）→ 20/20 SUCCESS，发布集 6 构件、
           排除集 14 模块无上传候选
