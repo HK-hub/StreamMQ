@@ -5,6 +5,7 @@
  */
 package io.github.streammq.adapter.redisson.manager;
 
+import io.github.streammq.adapter.redisson.support.RedisServerClock;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.policy.ConsumerGroupManager;
@@ -182,20 +183,12 @@ public class RedissonConsumerGroupManager implements ConsumerGroupManager {
      * 20s）的判定——快钟实例被误判 存活，慢钟实例被误踢出组触发无谓 rebalance。Redis TIME 为 O(1) 命令，开销可接受； 调用失败时降级为本地时钟（与旧行为一致）。
      */
     private long redisNowMs() {
-        try {
-            java.util.List<Long> time =
-                    redisson.getScript(StringCodec.INSTANCE)
-                            .eval(
-                                    org.redisson.api.RScript.Mode.READ_ONLY,
-                                    "local t = redis.call('TIME');return tonumber(t[1]) * 1000 +"
-                                            + " math.floor(tonumber(t[2]) / 1000);",
-                                    org.redisson.api.RScript.ReturnType.MULTI,
-                                    java.util.Collections.emptyList());
-            return time.get(0);
-        } catch (RuntimeException ex) {
-            LOG.debug("Redis TIME failed, falling back to local clock: {}", ex.getMessage());
+        long serverNow = RedisServerClock.nowMillis(redisson);
+        if (serverNow == RedisServerClock.UNKNOWN) {
+            LOG.debug("Redis TIME failed, falling back to local clock");
             return System.currentTimeMillis();
         }
+        return serverNow;
     }
 
     /**

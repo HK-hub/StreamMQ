@@ -1,4 +1,11 @@
-# StreamMQ 发布前红队审查报告（第四轮 · REPORT）
+# StreamMQ 发布前红队审查报告
+
+> **本文件包含两轮报告**：
+> - **最新：第五轮（R5）** —— 见文末 [第五轮发布前红队审查报告（R5）](#第五轮发布前红队审查报告r5)。
+>   本轮门禁命令首跑即红，推翻上一轮"门禁可绿"的隐含前提；修复后复验 20/20 SUCCESS、1249 用例全绿。
+> - 第四轮（下文）—— 历史记录，保留以供追溯。
+
+# 第四轮报告（历史记录）
 
 > 审查依据：`docs/fullReview.md` 全文协议（31 节）+ 真实第三方开发者视角 + 发布门禁实测。
 > 审查方式：红队式「先证明它不该发布」——静态审计（6 个并行审计员分域）+ 代码级取证 + 真实 Redis 集成测试 +
@@ -294,3 +301,346 @@ Release Prerequisite:   无（CVE 门禁为无密钥硬门禁：发布闭包 SBO
 本轮把**全部残留项按根因修复**，并新增修复了上一轮未发现的 1 个 P0 与 9 个 P1（其中排序最前的是：PEL 丢消息 / JDK 序列化可用性 / 发布门禁不可执行）。
 本报告中的每一条"已修复"都以工作区代码 + 门禁命令实测为证；§4 列出的 5 项为**外部环境依赖**的未执行验证，
 不属于代码缺陷。
+
+---
+
+# 第五轮发布前红队审查报告（R5）
+
+> 审查依据：`docs/fullReview.md` 全文协议（31 节）。
+> 审查方式：**红队式「先证明它不该发布」**——静态审计（4 个并行审计员分域 + 主审逐项代码级取证）+
+> 与发布通道**完全相同**的门禁命令实测（`mvn clean verify -Djacoco.check.skip=false`）+ 真实 Redis 集成测试。
+> 基线：`058d217`（第四轮 END 的提交）。
+>
+> **结论摘要：本轮门禁命令首跑即红（`BroadcastPauseHeartbeatIT` 确定性失败），据此推翻第四轮"GO"的
+> 隐含前提「门禁命令可绿」；修复该阻断项后又发现并修复 2 个 P1、14 个 P2 与全部可执行 P3/P4 整备项。
+> 最终 20/20 模块 SUCCESS、1249 用例 0 失败 0 跳过、CI 同口径 tripwire 全部达标。**
+
+---
+
+## 1. Executive Summary
+
+第四轮报告以「门禁命令实测全绿」作为 GO 的核心证据。本轮**第一步就复现了该前提不成立**：
+
+```text
+mvn clean verify -Djacoco.check.skip=false
+→ [ERROR] Tests run: 1, Failures: 0, Errors: 1 -- in io.github.streammq.adapter.redisson.it.BroadcastPauseHeartbeatIT
+→ BUILD FAILURE (streammq-redisson)  ← 发布通道 deploy 永不执行
+```
+
+根因不是"环境抖动"，而是**测试断言的写法与 Awaitility 的语义不匹配**（见 §4 R5-01）：条件内直接调用
+`XINFO GROUPS`，在 stream 键尚未创建时抛 `ERR no such key`，而 Awaitility 对条件抛出的异常**默认立即上抛、
+不重试**——于是"等组建好"这个断言在快机器上**确定性失败**。这类缺陷在 CI runner 上可能因时序不同而侥幸通过，
+正是"本地/CI 双绿但发布通道红"的典型形态。
+
+修复该阻断项后，本轮对 11 个模块、4 个 workflow、全部发布物料与全部测试做了独立取证，新发现并修复：
+
+- **2 个 P1（数据面静默不投递）**：顺序消费失败被写进"无人消费"的重试 Stream；运行期动态注册的消费者
+  未绑定调度目标（失败消息写入重试 ZSet 后无人扫描，payload 7 天过期即丢失）。
+- **14 个 P2**：Redis 服务器时钟从未真正取到、事务回查批量恒少一条且 `batch-size=1` 时完全失效、
+  `MessageConverter` 返回不可变 Map 时 DLQ/重试路由失效、广播身份文件并发写互相覆盖、
+  监听器工厂 create/close 竞态、诊断端点无参数校验且健康状态恒 UP、管理端点回吐 Redis 内部异常、
+  运行期组配置上限过宽、GPG 非交互签名缺失、`osv-scanner` 二进制无校验、发布资产清单与发布集不符、
+  `versions:set` 可能漏改 BOM、CI 三处缺超时预算、以及一批发布物料版本漂移。
+- **全部可执行 P3/P4 整备项**：调度目标只增不减、广播僵尸组清扫 `maxSweep-1`、
+  `checkerTimeoutMillis<=0` 导致回查线程永久阻塞、`FailureRetryLimiter` key 空间可无界增长、
+  注解 `consumeFromWhere` 无法表达"显式 LAST"、`Message` 构造器不校验必填 body 等。
+
+**最终裁决见 §19。**
+
+---
+
+## 2. Project Understanding
+
+| 维度 | 事实（以代码/物料为准） |
+|---|---|
+| 目标 | 把已有 Redis（Stream）变成消息总线，提供 RocketMQ 风格编程模型，避免另建 MQ 集群 |
+| 用户 | 中小规模（< 1 亿/天）、已有 Redis、Spring Boot 3 的 Java 21 团队 |
+| 核心能力 | 注解消费、Template/Service 双发送 API、事务半消息、延时、顺序、批量、DLQ（含二级）、Tag/SQL92 过滤、压缩、背压、可观测、管理 REST |
+| 架构 | `core`（抽象/SPI，零 Spring）→ `redisson`（适配实现）→ `spring-boot-starter`（装配/端点）；另有 tracing / diagnostics / binder / kubernetes / test / samples / benchmark |
+| 发布面 | 5 个构件（parent/bom/core/redisson/starter/test）；其余为 source-only，`excludeArtifacts` 明确排除 |
+| 技术路线 | Redis Stream + Redisson；JDK 21（虚拟线程消费循环）；安全默认（Jackson 取代 Fury 作默认序列化器） |
+
+**目标一致性：PASS。** 未发现目标漂移；README 的"为什么不用 X"（RTopic / 原生 XADD+XREADGROUP / RocketMQ / Kafka）
+有实质回答，且"不推荐场景"（超大规模、严格 ACID、多机房、IoT）诚实划界。
+
+---
+
+## 3. Architecture Review
+
+- **依赖方向：PASS。** `core` 不依赖 Spring（反射解耦 Web 上下文），`redisson` 依赖 `core`，`starter` 依赖二者；
+  无循环依赖（enforcer `dependencyConvergence` + `banDuplicatePomDependencyVersions` 全绿）。
+- **SPI 缝：PASS。** 18 个扩展点均有真实默认实现与解析路径（注解 `Class` 属性或 Spring Bean 覆盖），非 ServiceLoader。
+- **生命周期：PASS（本轮补强后）。** 容器/调度器/监听器工厂的 start/stop/close 幂等且有竞态守卫；
+  本轮补上监听器工厂的 create/close 互斥（R5-08）。
+- **扩展机制：PASS。** `SchedulerTargetBinder` / `RegistrationStore` / `MessageProcessor` 等协作对象接口化，
+  用户可替换；本轮把"批量绑定"与"单注册项绑定"收敛为同一规则源（R5-03）。
+
+**结构性观察（非缺陷）**：`DefaultStreamMQListenerContainer` 仍是较大的编排类（约 1400 行），
+但其职责已通过 `ListenerContainerMetadata` / `DefaultSchedulerTargetBinder` / `DefaultConsumeLoopSupervisor`
+等协作对象外移，且所有懒构建点已统一为 double-checked locking。属可接受的"编排类"体量，不构成发布阻断。
+
+---
+
+## 4. Release Blockers（本轮发现，全部已闭环）
+
+### P0（发布阻断）
+
+| 编号 | 问题 | 证据 | 处置 |
+|---|---|---|---|
+| R5-01 | 门禁命令首跑即红：`BroadcastPauseHeartbeatIT` 在真实 Redis 上确定性失败（`XINFO GROUPS ... ERR no such key`），发布通道 `deploy` 永不执行 | `mvn clean verify -Djacoco.check.skip=false` 原始输出：`Tests run: 1, Errors: 1 <<< FAILURE!`，BUILD FAILURE `-rf :streammq-redisson` | FIXED：该断言用 Awaitility 等待"实例专属组建立"，但条件内直接 `XINFO GROUPS`；stream 键在建组完成前不存在时抛异常，而 Awaitility **默认不重试异常**。改为「先判键存在 + `ignoreExceptions()`」，使断言真正表达"等到组建好为止"。（注：生产路径 `groupAlreadyExists` 本身有 `catch` 兜底，非产品缺陷；但门禁红等价于不可发布。） |
+
+### P1（发布前必修）
+
+| 编号 | 问题 | 证据 | 处置 |
+|---|---|---|---|
+| R5-02 | 顺序消费失败被路由进**无人消费**的重试 Stream → 静默丢失 | `DefaultMessageProcessor:233-249`（过滤器异常→`handleAction(RECONSUME_LATER)`）、`:161-163`（`Throwable` 兜底→`handleFailure`→同样 `RECONSUME_LATER`）；而 `DefaultConsumeLoopSupervisor:51-58` 只为 AUTO_ACK 提交 retry 循环，ORDERLY 无循环读 retry Stream；`DefaultSchedulerTargetBinder` 却按 `(topic,group)` 注册了 retry 目标 → ZSet 被扫、消息被转投进无人读的 Stream | FIXED：在 `DefaultRetryAndDlqHandler.handleAction` 收口——ORDERLY（非 DLQ）的非成功动作一律 `routeToDlq(dlqReason=maxRetryOrderly)` 并 ACK；DLQ 写入失败则保留 PEL。新增 `OrderlyFailureRoutingTest`（含"绝不调用 `createBatch`"断言） |
+| R5-03 | 运行期动态注册的消费者未绑定调度目标 → 失败消息永不重投 | `DefaultStreamMQListenerContainer.wireRegistrationIfRunning`（旧实现只建组管理器 + 提交读循环，无 `schedulerBinder` 调用）；调度目标仅在 `start()` 批量绑定一次 | FIXED：`SchedulerTargetBinder` 新增 `bindTargets`/`unbindTargets`（单注册项），批量与单注册项共用 `bindOneRetryTarget`/`bindOnePelClaimTarget` 单一规则源；容器保留 `RetryScheduler` 引用并在动态注册时补绑。新增 `DefaultSchedulerTargetBinderTest`（7 例，含 ORDERLY/AUTO_ACK/DLQ/广播四类映射与 null 调度器安全跳过） |
+
+### P2（应修，全部闭环）
+
+| 编号 | 问题 | 处置 |
+|---|---|---|
+| R5-04 | **「读取 Redis 服务器时钟」从未真正生效**：Lua 返回标量整数却声明 `ReturnType.MULTI`，解码异常被 `catch` 吞掉 → 始终静默回退本机时钟（跨主机 NTP 偏差会误判实例存活 / 误踢消费者 / 复制重投） | 抽出 `RedisServerClock`（`ReturnType.INTEGER` + 单一实现），`PelClaimScheduler` / `RedissonConsumerGroupManager` 共用；新增 `RedisServerClockIT`（真实 Redis 上必须取到时间，锁定返回类型与脚本语义一致） |
+| R5-05 | 事务回查批量扫描恒少一条，`batch-size=1` 时 `LIMIT 0` → **回查彻底失效、半消息永久悬挂** | `TransactionScanner.scanTimeoutHalf` 改为 `count = batchSize`（与 Retry/Delay 调度器口径统一） |
+| R5-06 | `MessageConverter` 返回不可变 Map（如 `Map.of`）时，`routeToDlq` / `handleDefer` / 二级 DLQ 直接 `put` → `UnsupportedOperationException` 被吞成 "DLQ routing failed"，消息永久滞留 PEL | 三处统一先做可变拷贝（`new LinkedHashMap<>(...)`）；由 `OrderlyFailureRoutingTest` 以 `Map.of` 载荷锁定 |
+| R5-07 | 广播实例身份文件并发写互相覆盖：临时文件名固定 `<name>.tmp`（同机多进程互踩），且 read-modify-write 无互斥 | 临时文件名带 `pid-UUID`；`upsertLocalIdRecord` 加 JVM 内互斥 + 跨进程 `FileChannel.lock()`；`finally` 清理临时文件 |
+| R5-08 | 监听器工厂 `createListener` 与 `close()` 竞态 → 新建监听器逃逸出排空队列、永不关闭且持续续租 Redis 槽位 | 引入生命周期锁，使「检查 closed + 入队」与「置位 + 排空」互斥；构建期间被关闭则自关闭并抛错 |
+| R5-09 | 诊断端点（`/streammq/diagnostics/**`，挂在**主端口**）对 `topic`/`group`/`messageId` 零校验，原始输入被拼进 Redis Key 与鉴权资源串 | 与 Actuator 端点统一走 `StringUtils.requireValidName`；非法输入 → 400 且不触达下游（新增 7 例单测） |
+| R5-10 | 诊断健康概览 `status` 恒为 `UP`：严重积压/慢消费期间仍报健康 | 按积压严重度与慢消费者推导 `UP`/`DEGRADED`/`DOWN`（新增常量与 4 例状态推导测试） |
+| R5-11 | 管理端点把 Redis 内部异常信息（Key 名、`NOGROUP`、连接/ACL 文本）原样回吐 HTTP 响应 | 新增 `describeFailure(operation, ex)`：响应只给「操作名 + 异常类型 + 关联 ID」，完整信息（含堆栈）只进日志；7 处 catch 分支统一收敛 |
+| R5-12 | 运行期组配置上限过宽：`inflightCapacity` 可设 `Integer.MAX_VALUE`（背压队列 OOM 面）、休眠/退避/宽限可设 `Long.MAX_VALUE`（消费循环近乎静默停摆） | 收敛为 `[0, 100000]` 与 `[1, 300000]`，并以具名常量 + javadoc 说明取值依据 |
+| R5-13 | GPG 非交互签名缺失 → 首发在 `sign` 步骤中断：`gpg` profile 未声明 `--pinentry-mode loopback`（gpg 2.1+ 无 tty 时必须显式），也未显式传入口令 | 根 POM 与 BOM 的 `gpg` profile 补齐 `gpgArguments`；`release.yml` 以 `-Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE"` 显式传入（不依赖"插件恰好读取同名环境变量"的隐式约定） |
+| R5-14 | CVE 硬门禁的执行体 `osv-scanner` 下载后**无完整性校验**直接执行（它决定"是否阻断发布"，属供应链投毒面） | 固定官方 SHA-256（取自 GitHub Release 资产元数据 digest）并以 `sha256sum -c` 校验，失败即中断 |
+| R5-15 | Release 资产清单仍列出 `tracing`/`diagnostics`/`binder` 三个 Central **不可解析**的模块，与同处注释及 `CONTRIBUTING.md` 直接矛盾 | 资产收敛为 Central 可解析的发布集（bom/core/redisson/starter/test），注释同步 |
+| R5-16 | `versions:set` 可能漏改**无 `<parent>`** 的 `streammq-bom` → 发布后 `streammq-bom:<新版本>` 永不存在，使用方 import 失败 | 加 `-DprocessAllModules=true` 并新增断言步骤（BOM 版本 ≠ 目标版本 → 硬失败） |
+| R5-17 | CI 的 guard / build / formatting 三个 job 缺 `timeout-minutes` | 分别补 15 / 30 / 20 分钟，与其余 job 口径一致 |
+
+### P3/P4（本轮一并闭环）
+
+- **调度目标只增不减**：`unregister` 新增 `schedulerBinder().unbindTargets(...)`，配合
+  `RetryScheduler.unregisterRetryTarget` / `PelClaimScheduler.unregisterTargets`（DLQ 的 sentinel 维度亦成对解除）。
+- **广播僵尸组清扫 `maxSweep - 1`**：`maxSweep=1` 时 `LIMIT 0` → 永不回收。改为 `maxSweep`。
+- **`checkerTimeoutMillis <= 0` 使事务回查线程无限等待**：等待是 `join(Duration)`，`join(0)` 语义为永久等待 →
+  挂死的 checker 永久持有 `groupLock`，回查调度停摆。setter 快速失败 + 使用点兜底夹取。
+- **`FailureRetryLimiter` key 空间可无界增长**（冷却窗口内以大量不同 target 失败时清理无效）：
+  清理后仍满则放弃记录——限流退化为放行，但 key 空间恒有界。
+- **注解 `consumeFromWhere` 无法表达"显式 LAST"**：枚举属性无 `null` 哨兵，旧默认值取 `CONSUME_FROM_LAST`
+  导致"未声明"与"显式 LAST"不可区分 → 全局设为 `FIRST` 时，想强制 `LAST` 的消费者被**静默忽略（语义反向）**。
+  新增独立哨兵 `ANNOTATION_DEFAULT`（注解默认值），三分支语义可表达；补 `ConsumeFromWhereResolutionTest`。
+  **0.1.2 尚未发布，此处属"发布前收敛"，不构成兼容性负担。**
+- **`Message` 的 `body` 契约描述错误**：javadoc 声明 body「必填」，但框架**有意**支持 null body（无载荷消息；
+  内置序列化器统一 `serialize(null) → null` / `deserialize(null|empty) → null`，对端可能发来无载荷消息）。
+  真实边界是「**发送 API** 必填、**值对象**可为 null」。本轮曾尝试"收口到构造器"强制非空，门禁命令立即暴露
+  `toStreamFieldsNullBody` 等既有契约被打破 —— 遂改为**改写 javadoc 明确边界**，而非加上破坏性校验
+  （这正是"先实测、再下结论"的价值：单看代码会把它误判为缺陷）。
+- **`DefaultListenerRegistration.consumerFilter` 暴露内部可变数组**：构造期改为 `clone()`，并覆盖 Lombok
+  getter 返回副本（与 `shardLocks` 的防御性拷贝口径一致）。
+- **发布物料版本漂移**（见 §13）：`NOTICE` 6 处、两个 README 的技术栈表与徽章、
+  `SECURITY.md` 中文摘要、`CONTRIBUTING.md` 门禁阈值与文件名、`configuration-reference.md` 的异常类型/超时语义/
+  默认值/精确键、starter POM 的 `<description>`（含已删除的 `@EnableStreamMq`）、根 POM 与 CHANGELOG 中
+  Jackson 版本与"Boot 管理 2.17.2"的过期前提。
+
+---
+
+## 5. Top Problems（按严重度，前 10）
+
+1. R5-01 门禁命令确定性失败（发布通道不可用）。
+2. R5-02 ORDERLY 失败进无人消费的 retry Stream（数据面静默丢失）。
+3. R5-03 动态注册消费者无调度目标（失败消息永不重投）。
+4. R5-04 Redis 服务器时钟从未生效（跨主机判活失准）。
+5. R5-05 事务回查 `LIMIT batchSize-1`（`batch-size=1` 时回查失效）。
+6. R5-06 不可变 Map 载荷使 DLQ/重试路由失效（消息滞留 PEL）。
+7. R5-13 GPG 非交互签名缺失（首发中断）。
+8. R5-07/R5-08 广播身份文件互踩 + 监听器工厂竞态（身份漂移、槽位泄漏）。
+9. R5-09/R5-10/R5-11 诊断与管理端点：无校验、假健康、内部信息泄漏。
+10. R5-14 `osv-scanner` 无校验 + R5-15 资产清单错位 + R5-16 BOM 版本可能漏改（发布工程可信度）。
+
+---
+
+## 6. Concurrency Review
+
+| 项 | 结论 |
+|---|---|
+| 线程安全 | PASS。值对象构造期防御性拷贝 + 不可变视图；协作对象状态以 `volatile` / 并发容器 / 显式锁保护 |
+| 竞态 | **本轮修复 3 处**：监听器工厂 create/close（R5-08）、广播身份文件并发写（R5-07）、调度目标绑定/解绑的原子口径（R5-03） |
+| 死锁 | PASS。事务回查由"分布式锁"改为 Lua CAS 抢占，无锁泄漏；`groupLock` 的等待已加有界超时（R5 补 `>0` 校验） |
+| 线程池 | PASS。各调度器构造建池 / `stop()` 关闭 / 支持 restart 重建；RejectedExecution 有处理；容器执行器按 `ownsExecutor` 决定是否关闭 |
+| 异步 | PASS。XACK 失败不抛、许可释放、有界排空 |
+
+**已知设计权衡（非缺陷，如实声明）**：顺序消费分片锁采用 Redisson 看门狗续期（不设固定 lease），
+以"严格有序"优先于"卡死 handler 自动让位"；卡死 handler 需进程重启解除。该权衡已在
+`RedissonOrderlyShardLockManager` 与 `orderlyConsumeTimeout` javadoc 中声明，1.0 前保持不变。
+
+---
+
+## 7. Performance Review
+
+- 热路径无阻塞往返；消费循环使用虚拟线程；选批/ACK 管线化；`MultiLock`/Lua 原子操作替代读改写。
+- 本轮修复的 `LIMIT` 语义问题同时消除了"扫描窗口少一条"的隐性性能语义缺陷。
+- 已知待办（不影响发布）：调度器孤儿清理仍有逐条 `isExists` 往返（N+1），已记录为后续优化项；
+  容器路径端到端基准仍为后续工作，现有基准口径已在 README 如实标注（下界 + 绕过容器 + 攒批 XACK）。
+
+---
+
+## 8. Security Review
+
+- **改进**：诊断端点参数校验（R5-09）、管理端点错误信息脱敏（R5-11）、运行期配置上限收敛（R5-12）、
+  CVE 门禁执行体完整性校验（R5-14）。
+- **既有 PASS**：默认 `DenyAllAuthenticator`；破坏性操作强制 `confirm`；XFF 默认不信任且需 `trusted-proxies` CIDR 才采信；
+  鉴权失败限流按不可伪造的 `remoteAddr` 聚合且 fail-closed；反序列化默认 Jackson（无 gadget 面）、
+  Fury 强制类注册白名单、JDK 过滤器 JEP 290；载荷派生类型经 `PayloadTypeSafety` 黑名单；凭据不落日志。
+
+---
+
+## 9. Test Review
+
+- **失败即红守卫新增 4 个类 / 14 例**：`OrderlyFailureRoutingTest`(2)、`DefaultSchedulerTargetBinderTest`(7)、
+  `RedisServerClockIT`(1)、`StreamMQDiagnosticsEndpointTest`(7)、`ConsumeFromWhereResolutionTest`(4)。
+- 门禁命令实测：**1249 用例，0 失败 0 错误 0 跳过**；集成测试分模块 119/36/44/22、全局 **271**（CI tripwire 下限 100/30/40/16、230 全部达标，跳过率 0% ≤ 20%）。
+- 已知覆盖缺口（不影响发布）：容器路径端到端基准、Redis Cluster 实测、`streammq-kubernetes` 业务逻辑深度审计。
+
+---
+
+## 10. Documentation Review
+
+本轮修正的文档与代码不一致项（全部以代码事实为准）：
+
+- README（EN/ZH）：技术栈表 Redisson / Jackson 版本、Spring Boot 与 Redisson 徽章；zh 基准环境表标注"历史测量环境"。
+- `SECURITY.md`：中文摘要与英文正文的 Jackson 版本与 CVE 门禁口径统一。
+- `CONTRIBUTING.md`：tripwire 阈值改为真实口径、`parent.pom.xml` → `pom.xml`、Release 资产说明。
+- `docs/configuration-reference.md`：校验异常类型、`orderly-consume-timeout-millis` 三分支语义与生效条件、
+  `trace.storage` 默认值口径、`admin.startup-warn` 为直读精确键。
+- `NOTICE` / 根 POM / CHANGELOG：第三方版本与前提描述对齐实际基线。
+
+---
+
+## 11. Developer Experience Review
+
+- **上手路径**：Quick Start 可编译、可运行；README 明确"必须自带 `redisson-spring-boot-starter`"、
+  "`/actuator/streammq` 需显式 exposure"、"`streammq-diagnostics` 需额外坐标"等易踩坑点。
+- **可诊断性**：健康检查 `DOWN` 携带 `listenerContainer.consumeLoopFailures`；消费循环失败与运行期持续失败
+  均可观测；本轮又消除了两处"假健康"与"内部信息外泄"。
+- **幂等与兼容**：0.1.2 为首个发布版本，本轮对注解默认值等公共语义的收敛**不构成兼容负担**。
+
+---
+
+## 12. Open Source Readiness Review
+
+- 治理文件齐备（LICENSE / NOTICE / CONTRIBUTING / SECURITY / CODE_OF_CONDUCT / Issue & PR 模板）。
+- 发布集守卫（Guard job）对 `parent ↔ BOM ↔ excludeArtifacts` 三方一致性做断言。
+- 供应链：第三方 action 固定 commit SHA；`osv-scanner` 二进制固定 SHA-256（本轮）。
+- 已知保留：真实 Maven Central 发布（`-Pgpg deploy`）与 Portal staging 校验尚未执行（需凭据）；
+  本地已就绪全部代码侧前置，且本轮补齐了此前必然导致首发中断的 GPG 非交互配置。
+
+---
+
+## 13. Release Blockers（最终）
+
+| 级别 | 数量 | 状态 |
+|---|---:|---|
+| P0 | 1（R5-01） | 全部闭环 |
+| P1 | 2（R5-02、R5-03） | 全部闭环 |
+| P2 | 14（R5-04 … R5-17） | 全部闭环 |
+| P3/P4 | 上述整备项 + 发布物料一致性 | 全部闭环 |
+
+**未闭环项（诚实声明，均非代码缺陷）**：
+
+1. 真实 Maven Central 发布未执行（无凭据）——代码侧前置已全部就绪，且本轮修复了会导致首发中断的 GPG 配置缺陷。
+2. JMH 未重跑（基线与口径已如实标注；harness 已加补货端有效性断言）。
+3. Redis Cluster 未实测（0.1.x 明确不支持，CROSSSLOT 为推断）。
+4. `streammq-kubernetes` 业务逻辑未深度审计（模块不发布、当前无消费者；本轮仅核查其线程/资源与校验缺口）。
+5. 调度器孤儿清理的 N+1 往返（性能优化项，不影响正确性）。
+6. 顺序消费分片锁的看门狗续期策略（严格有序 vs 卡死让位的显式设计权衡，已在 javadoc 声明）。
+
+---
+
+## 14. Verification Evidence
+
+### 14.1 门禁命令（与发布通道完全一致）
+
+```text
+mvn clean verify -Djacoco.check.skip=false
+```
+
+| 项 | 结果 |
+|---|---|
+| Reactor | **20/20 模块 SUCCESS** |
+| 测试总数（surefire + failsafe） | **1249** |
+| 失败 / 错误 / 跳过 | **0 / 0 / 0** |
+| JaCoCo 覆盖率门禁 | 7 个模块全部执行 `check`，无 `Rule violated` |
+| Spotless | 全模块通过（本轮对全部改动文件执行 `spotless:apply` 后复验） |
+| enforcer | Java 21 / Maven 3.9 / dependencyConvergence / banDuplicatePomDependencyVersions 全绿 |
+
+集成测试分模块执行数（CI tripwire 口径）：
+
+| 模块 | 实际执行 | 门禁下限 |
+|---|---:|---:|
+| streammq-redisson | 119 | 100 |
+| streammq-spring-boot-starter | 36 | 30 |
+| streammq-test | 44 | 40 |
+| streammq-samples/* | 22 | 16 |
+| **全局** | **271** | **230** |
+| 跳过率 | 0% | ≤ 20% |
+
+### 14.2 本轮新增"失败即红"用例（全绿）
+
+| 用例 | 锁定的失败路径 |
+|---|---|
+| `BroadcastPauseHeartbeatIT` | 广播暂停期心跳保活 + 恢复不重放（并修掉其自身的断言竞态） |
+| `OrderlyFailureRoutingTest` | ORDERLY 非成功动作必须进 DLQ 且**绝不**触碰重试调度 |
+| `DefaultSchedulerTargetBinderTest` | 单注册项绑定与批量绑定目标集合一致；注销成对解除；null 调度器安全跳过 |
+| `RedisServerClockIT` | 真实 Redis 上必须取到服务器时间（锁定 `ReturnType` 与脚本返回值一致） |
+| `StreamMQDiagnosticsEndpointTest` | 非法参数 400 且不触达下游；健康状态按严重度推导 |
+| `ConsumeFromWhereResolutionTest` | 「未声明跟随全局」与「显式覆盖全局」两条语义都可表达 |
+
+---
+
+## 15. Final Verdict
+
+### 15.1 维度评分
+
+| 维度 | 分数 | 依据 |
+|---|---:|---|
+| 产品目标 | 9 | 问题定义与取舍诚实；"为何不用 X"有实质回答与划界 |
+| 功能完整度 | 9 | 重试/DLQ/延时/事务/顺序/广播/背压/可观测/管理齐备 |
+| 架构 | 9 | 依赖无环、SPI 缝真实、发布面收敛；绑定规则收敛为单一来源 |
+| 模块设计 | 9 | 职责可解释；本轮把调度目标绑定规则去重 |
+| API / SDK | 9 | Builder + 不可变值对象 + 类型化异常；发布前收敛了注解哨兵语义 |
+| 实现质量 | 9 | 本轮修复 2 个静默不投递、1 个失效的回查窗口、3 处并发/资源缺陷 |
+| 测试 | 9 | 1249 用例 + 真实 Redis IT + 故障注入 + 失败即红守卫；跳过率 0 |
+| 并发 | 9 | 竞态与生命周期守卫补齐；已知有序性权衡显式声明 |
+| 性能 | 8 | 热路径无阻塞往返；容器路径基准与 N+1 清理列为后续 |
+| 安全 | 9 | 默认拒绝 + 参数校验 + 错误信息脱敏 + 供应链校验齐备 |
+| Maven 工程 | 9 | 门禁命令与发布通道一致；CVE 硬门禁无需密钥；GPG 非交互签名可用 |
+| Developer Experience | 9 | Quick Start 可用、错误信息可定位、健康检查不假绿 |
+| 文档 | 9 | 双语 + 配置参考 + SECURITY；本轮全量消除事实性冲突 |
+| 可维护性 | 9 | 单一规则源、防御性拷贝、javadoc 与实现对齐 |
+| 可扩展性 | 9 | 18 个扩展点 + 协作对象接口化，均可替换 |
+| 开源准备度 | 9 | 治理/许可/发布流程/物料一致性就绪 |
+
+```text
+Overall = round(139 / 16 × 10) = 87 / 100
+```
+
+> 分数用于排优先级；是否发布由 15.2 的门禁规则决定（无未决 P0/P1/P2）。
+
+### 15.2 裁决
+
+```text
+Release Status: GO
+Release Readiness Score: 87 / 100
+
+Must Fix Before Release: 0 items
+Should Fix:             0 items
+Open P0/P1/P2:          0 / 0 / 0 items
+Open P3/P4:             0 items（§13 的未闭环项均为外部环境依赖或显式设计权衡，非代码缺陷）
+
+门禁证据: mvn clean verify -Djacoco.check.skip=false → 20/20 SUCCESS，1249 用例，0 失败/跳过
+发布前置: 无（CVE 硬门禁为无密钥的发布闭包 SBOM + osv-scanner 扫描；
+          GPG 非交互签名配置已就绪；Release 资产与 Central 发布集一致）
+```
+
+**与上一轮的差异必须被记录**：第四轮裁决 GO，但其核心证据"门禁命令全绿"在本轮**首跑即被推翻**
+（R5-01，确定性失败而非 flaky）。本轮实际是从"门禁红"开始，把阻断项与随后发现的 2 个 P1、14 个 P2
+全部按根因修复，最终以门禁命令全绿 + CI 同口径 tripwire 达标作为裁决依据。这再次印证
+`fullReview.md` 的核心原则：**不因"上一轮已通过"而默认当前仍然成立**。

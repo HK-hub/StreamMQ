@@ -41,7 +41,20 @@ public enum ConsumeFromWhere {
     CONSUME_FROM_LAST,
 
     /** 从 Stream 第一条消息开始消费：重放全部历史消息。 */
-    CONSUME_FROM_FIRST;
+    CONSUME_FROM_FIRST,
+
+    /**
+     * 「注解未声明」哨兵：仅用作 {@code @StreamMQConsumer#consumeFromWhere()} 的默认值。
+     *
+     * <p><b>为什么需要独立常量（发布前红队审查 R5）：</b>该注解属性是枚举，无法用 {@code null} 表达"未声明"。旧实现把默认值设为 {@link
+     * #CONSUME_FROM_LAST}，导致「未声明」与「显式声明 CONSUME_FROM_LAST」在字节码层面完全不可区分——当全局配置为 {@code
+     * CONSUME_FROM_FIRST} 时， 想单独强制回 `LAST` 的消费者会被静默忽略（语义反向）。引入独立哨兵后， 「未声明 → 跟随全局」与「显式 LAST →
+     * 覆盖全局」两条语义都可表达。
+     *
+     * <p><b>它不是有效策略值</b>：解析后不会流入运行时；若被误用作 {@code streammq.consumer.consume-from-where} 的取值，行为等同
+     * {@link #CONSUME_FROM_LAST}。
+     */
+    ANNOTATION_DEFAULT;
 
     /**
      * 全局默认策略：{@link #CONSUME_FROM_LAST}。

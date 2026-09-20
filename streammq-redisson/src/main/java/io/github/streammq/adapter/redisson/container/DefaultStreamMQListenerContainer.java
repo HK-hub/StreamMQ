@@ -485,6 +485,14 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     /** 顺序消费 PEL 认领调度器（可选，注入后容器启动时注册目标） */
     private volatile PelClaimScheduler pelClaimScheduler;
 
+    /**
+     * 重试调度器（可选，经 {@link #registerRetryTargets(RetryScheduler)} 注入后保留引用）。
+     *
+     * <p>保留引用的唯一目的：运行期动态注册的消费者必须能<b>单独</b>补绑其重试目标——否则该消费者 失败消息写进重试 ZSet 后无人扫描，仅在进程重启时才被补绑（期间
+     * payload 过期即静默丢失）。
+     */
+    private volatile RetryScheduler retryScheduler;
+
     /** 拉取运行参数（Parameter Object） */
     private final DefaultConsumerTuning tuning = new DefaultConsumerTuning();
 
@@ -912,6 +920,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
     }
 
     public void registerRetryTargets(RetryScheduler scheduler) {
+        // 保留引用供运行期动态注册补绑（见 retryScheduler 字段说明），再执行启动期批量绑定。
+        this.retryScheduler = Objects.requireNonNull(scheduler, "scheduler");
         ensureMetadata().registerRetryTargets(scheduler);
     }
 
@@ -1135,6 +1145,8 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             }
             removed = true;
             loopSupervisor.cancelForRegistration(key);
+            // 解除调度目标：否则调度器会一直扫描已注销的 (topic, group)，开销随注册变更单调增长
+            schedulerBinder().unbindTargets(retryScheduler, pelClaimScheduler, reg);
             store.removeFilters(key);
             store.removeHandler(key);
             store.removeAndUnregisterGroupManager(key);
@@ -1277,6 +1289,10 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
             }
         }
         loopSupervisor.submitLoops(reg);
+        // 调度目标必须同步补绑：动态注册的消费者若缺重试目标，其失败消息写入重试 ZSet 后
+        // 永远无人扫描（payload 7 天后过期 → 隔离/丢失）；缺 PEL 认领目标则崩溃遗留的 pending
+        // 无人恢复。两条都属于"能消费但部分消息静默不重投"，极难排查。
+        schedulerBinder().bindTargets(retryScheduler, pelClaimScheduler, reg);
         LOG.info(
                 "Dynamically wired registration while container running: topic={}, group={}",
                 reg.getTopic(),

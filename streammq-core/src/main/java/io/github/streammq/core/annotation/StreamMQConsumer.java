@@ -85,23 +85,26 @@ public @interface StreamMQConsumer {
      *
      * <p><b>仅在该消费者组首次创建时生效</b>——已存在的组不会因为本配置改变位点。
      *
-     * <p>可选值：
+     * <p>取值语义（三分支，{@link ConsumeFromWhere}）：
      *
      * <ul>
-     *   <li>{@link ConsumeFromWhere#CONSUME_FROM_LAST}（默认）：只消费组创建之后写入的消息。安全默认， 向长期运行的 Topic
-     *       追加消费者组不会触发历史重放。
-     *   <li>{@link ConsumeFromWhere#CONSUME_FROM_FIRST}：重放该 Topic 的全部历史消息。
+     *   <li><b>不声明</b>（默认 {@link ConsumeFromWhere#ANNOTATION_DEFAULT}）：跟随全局配置 {@code
+     *       streammq.consumer.consume-from-where}（其默认 {@code CONSUME_FROM_LAST}）
+     *   <li>{@link ConsumeFromWhere#CONSUME_FROM_LAST}：<b>显式覆盖</b>全局配置，只消费组创建之后写入的消息。
+     *       安全默认语义——向长期运行的 Topic 追加消费者组不会触发历史重放
+     *   <li>{@link ConsumeFromWhere#CONSUME_FROM_FIRST}：<b>显式覆盖</b>全局配置，重放该 Topic 的全部历史消息
      * </ul>
+     *
+     * <p><b>为什么默认值不是 {@code CONSUME_FROM_LAST}：</b>枚举属性无法用 {@code null} 表达"未声明"， 旧实现把默认值错设为 {@code
+     * CONSUME_FROM_LAST}，于是"未声明"与"显式 LAST"不可区分—— 全局设为 {@code CONSUME_FROM_FIRST} 时，想单独强制回 {@code
+     * LAST} 的消费者会被静默忽略（语义反向）。 独立哨兵使两条语义都可表达。
      *
      * <p><b>与广播消费的关系：</b>广播模式下每个实例使用独立组名，若 {@code instanceToken} 不稳定（UUID 回退）， 每次重启都会新建组，此时 {@code
      * CONSUME_FROM_FIRST} 会导致<b>每次重启重放全量历史</b>。 广播模式请先配置稳定的 {@code streammq.instanceId}。
      *
-     * <p><b>回落到全局配置：</b>本注解不提供"未设置"哨兵（枚举默认即全局默认）， 需要按 Topic 差异化时显式声明本属性； 否则一律使用全局配置 {@code
-     * streammq.consumer.consume-from-where}（默认 {@code CONSUME_FROM_LAST}）。
-     *
-     * @return 起始消费位点策略
+     * @return 起始消费位点策略；未声明时为 {@link ConsumeFromWhere#ANNOTATION_DEFAULT}
      */
-    ConsumeFromWhere consumeFromWhere() default ConsumeFromWhere.CONSUME_FROM_LAST;
+    ConsumeFromWhere consumeFromWhere() default ConsumeFromWhere.ANNOTATION_DEFAULT;
 
     /**
      * 消息模型，默认 {@link MessageModel#CONCURRENT}。

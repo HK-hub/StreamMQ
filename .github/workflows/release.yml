@@ -410,7 +410,22 @@ jobs:
           echo "Tag ${RELEASE_TAG} matches HEAD"
 
       - name: Set project version
-        run: mvn versions:set -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false
+        run: mvn versions:set -DnewVersion=${{ steps.version.outputs.version }} -DgenerateBackupPoms=false -DprocessAllModules=true
+
+      # 反向断言：streammq-bom 无 <parent>（独立 POM），一旦 versions:set 未覆盖到它，
+      # 升版后仍会以旧版本发布 —— 使用方 import streammq-bom:<新版本> 永远解析失败。
+      # 该断言把"静默漂移"变成发布通道上的硬失败。
+      - name: Assert BOM version was rewritten
+        shell: bash
+        run: |
+          set -euo pipefail
+          bom_version="$(mvn -N -f streammq-bom/pom.xml help:evaluate \
+            -Dexpression=project.version -q -DforceStdout | tail -n1)"
+          if [ "${bom_version}" != "${{ steps.version.outputs.version }}" ]; then
+            echo "::error::streammq-bom version is ${bom_version}, expected ${{ steps.version.outputs.version }}"
+            exit 1
+          fi
+          echo "streammq-bom version OK: ${bom_version}"
 
       # streammq-bom 独立于 parent、内部以属性硬编码 streammq.version；
       # versions:set 不会更新该属性，需单独 set-property，否则 BOM 会指向不存在的旧版本。
@@ -424,8 +439,12 @@ jobs:
         run: mvn clean verify -B -Djacoco.check.skip=false
 
       # 测试已在上一步通过，此处跳过测试仅执行打包与 deploy（同一份版本号产物）
+      # GPG 非交互签名：pom 的 gpg profile 已声明 `--pinentry-mode loopback`（gpg 2.1+ 在无 tty 的
+      # runner 上必须显式 loopback 才接受口令，否则签名步骤直接失败、发布中断）。此处显式把
+      # setup-java 导出的 MAVEN_GPG_PASSPHRASE 以 Maven 属性传入（插件参数名为 gpg.passphrase），
+      # 避免依赖"插件是否恰好读取同名环境变量"的隐式约定。
       - name: Build and deploy to Maven Central
-        run: mvn clean deploy -DskipTests -Pgpg
+        run: mvn clean deploy -DskipTests -Pgpg -Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE"
         env:
           MAVEN_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           MAVEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN }}
@@ -434,8 +453,9 @@ jobs:
       # E-13：资产清单只包含真实产出的文件 —— BOM 为 pom 打包，不产出 target/*.pom，
       # 直接挂各模块 target/ 下的产物；fail_on_unmatched_files: true 让清单与实际产物不一致时
       # 立即失败（此前缺失资产会被静默忽略）。
-      # 注：tracing/diagnostics/spring-cloud-stream-binder 三个模块被 excludeArtifacts 排除、
-      # 不会发布到 Central，其 target 产物（若存在）也不属于发布资产，故不再列入。
+      # 发布资产 == Central 可解析的构件集合（parent/bom/core/redisson/starter/test）。
+      # tracing/diagnostics/spring-cloud-stream-binder 被 excludeArtifacts 排除、Central 不可解析，
+      # 若挂到 Release 资产会让使用方误以为它们可从 Central 解析，故**不列入**（与上方注释一致）。
       - name: Create GitHub Release
         # 供应链加固：第三方 action 固定到 v2 对应的完整 commit SHA（renovate/dependabot 可识别 # v2）
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
@@ -455,15 +475,6 @@ jobs:
             streammq-spring-boot-starter/target/streammq-spring-boot-starter-${{ steps.version.outputs.version }}.jar
             streammq-spring-boot-starter/target/streammq-spring-boot-starter-${{ steps.version.outputs.version }}-sources.jar
             streammq-spring-boot-starter/target/streammq-spring-boot-starter-${{ steps.version.outputs.version }}-javadoc.jar
-            streammq-tracing-opentelemetry/target/streammq-tracing-opentelemetry-${{ steps.version.outputs.version }}.jar
-            streammq-tracing-opentelemetry/target/streammq-tracing-opentelemetry-${{ steps.version.outputs.version }}-sources.jar
-            streammq-tracing-opentelemetry/target/streammq-tracing-opentelemetry-${{ steps.version.outputs.version }}-javadoc.jar
-            streammq-diagnostics/target/streammq-diagnostics-${{ steps.version.outputs.version }}.jar
-            streammq-diagnostics/target/streammq-diagnostics-${{ steps.version.outputs.version }}-sources.jar
-            streammq-diagnostics/target/streammq-diagnostics-${{ steps.version.outputs.version }}-javadoc.jar
-            streammq-spring-cloud-stream-binder/target/streammq-spring-cloud-stream-binder-${{ steps.version.outputs.version }}.jar
-            streammq-spring-cloud-stream-binder/target/streammq-spring-cloud-stream-binder-${{ steps.version.outputs.version }}-sources.jar
-            streammq-spring-cloud-stream-binder/target/streammq-spring-cloud-stream-binder-${{ steps.version.outputs.version }}-javadoc.jar
             streammq-test/target/streammq-test-${{ steps.version.outputs.version }}.jar
             streammq-test/target/streammq-test-${{ steps.version.outputs.version }}-sources.jar
             streammq-test/target/streammq-test-${{ steps.version.outputs.version }}-javadoc.jar

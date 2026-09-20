@@ -375,22 +375,24 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
     /**
      * 解析新消费者组起始消费位点。
      *
-     * <p><b>为何仅 {@code CONSUME_FROM_FIRST} 视为显式覆盖：</b>注解枚举属性无法使用 {@code null} 哨兵，其默认值只能是某个枚举常量（这里取
-     * {@code CONSUME_FROM_LAST}，与全局默认相同）， 因此「未声明」与「显式
-     * CONSUME_FROM_LAST」在字节码层面无法区分。为保证「全局配置定义默认行为、用户可显式覆盖」的单一口径：
+     * <p><b>三分支语义（发布前红队审查 R5 修正）：</b>注解枚举属性无法使用 {@code null} 哨兵， 因此引入独立常量 {@link
+     * ConsumeFromWhere#ANNOTATION_DEFAULT} 表示「未声明」：
      *
      * <ul>
-     *   <li>注解显式声明 {@code CONSUME_FROM_FIRST} → 用户意图明确，采用之（最高优先级）
-     *   <li>其余（注解未声明 / 显式 CONSUME_FROM_LAST，二者不可区分）→ 一律采用全局配置 {@link
-     *       #defaultConsumeFromWhere}（其默认同为 CONSUME_FROM_LAST）
+     *   <li>注解值 == {@code ANNOTATION_DEFAULT}（未声明）→ 采用全局配置 {@code defaultConsumeFromWhere}
+     *   <li>注解值 == {@code CONSUME_FROM_LAST} → <b>显式覆盖</b>全局（旧实现会在此静默回落到全局， 当全局为 {@code FIRST}
+     *       时语义反向）
+     *   <li>注解值 == {@code CONSUME_FROM_FIRST} → <b>显式覆盖</b>全局
      * </ul>
-     *
-     * <p>该策略下：仅当用户<a href="...">显式</a>把全局设为 {@code CONSUME_FROM_FIRST} 时，未声明注解的消费者即重放历史； 若个别消费者想强制
-     * {@code CONSUME_FROM_LAST}，显式声明注解值（效果等同全局默认，无副作用）。
      */
+    static ConsumeFromWhere resolveConsumeFromWhere(
+            ConsumeFromWhere annotationValue, ConsumeFromWhere globalDefault) {
+        return annotationValue == ConsumeFromWhere.ANNOTATION_DEFAULT
+                ? globalDefault
+                : annotationValue;
+    }
+
     private ConsumeFromWhere resolveConsumeFromWhere(ConsumeFromWhere annotationValue) {
-        return annotationValue == ConsumeFromWhere.CONSUME_FROM_FIRST
-                ? ConsumeFromWhere.CONSUME_FROM_FIRST
-                : defaultConsumeFromWhere;
+        return resolveConsumeFromWhere(annotationValue, defaultConsumeFromWhere);
     }
 }

@@ -144,8 +144,10 @@ public class RedissonBroadcastGroupRegistry implements BroadcastGroupRegistry {
                     redisson.<String>getScoredSortedSet(
                             StreamMQKeys.broadcastRegistry(namespace), StringCodec.INSTANCE);
             long cutoff = System.currentTimeMillis() - staleTtlMillis;
+            // 限界语义为 (offset, count)：count 必须是 maxSweep（此前为 maxSweep - 1，
+            // 配置 maxSweep=1 时 count=0 使清扫永不回收任何僵尸组）。
             Collection<String> staleMembers =
-                    registry.valueRange(0, true, cutoff, true, 0, maxSweep - 1);
+                    registry.valueRange(0, true, cutoff, true, 0, maxSweep);
             int removed = 0;
             // 按 group 聚合，单次拉取每个 group 的实例租约快照，避免对每个僵尸组各做一次 HGETALL
             Set<String> involvedGroups = new HashSet<>();

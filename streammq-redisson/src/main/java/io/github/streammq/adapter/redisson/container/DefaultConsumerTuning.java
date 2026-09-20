@@ -174,7 +174,10 @@ public class DefaultConsumerTuning implements ConsumerTuning {
 
     @Override
     public long effectiveOrderlyConsumeTimeoutMillis(long annotationValue) {
-        // 0（注解未显式声明时的默认值）回落到全局默认；>0 覆盖全局；<0 视为禁用（返回 0）
+        // 三分支语义（注解默认值为 ANNOTATION_UNSET_LONG = -1，即"未显式声明"）：
+        //   >0  覆盖全局；
+        //   ==0 显式声明"继承全局"（回落到 defaultOrderlyConsumeTimeoutMillis）；
+        //   <0  显式关闭该消费者的顺序消费超时保护，**即使全局已开启也不生效**（返回 0）。
         if (annotationValue > 0) {
             return annotationValue;
         }

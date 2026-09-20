@@ -161,7 +161,7 @@ public class StreamMQAdminEndpoint {
                     info.put("instances", instList);
                 }
             } catch (RuntimeException ex) {
-                info.put("instancesError", ex.getMessage());
+                info.put("instancesError", describeFailure("listGroupInstances", ex));
             }
             // 查询 PEL 大小
             try {
@@ -177,11 +177,37 @@ public class StreamMQAdminEndpoint {
                                 ? pendingInfo.getTotal()
                                 : 0L);
             } catch (RuntimeException ex) {
-                info.put("pendingCount", "N/A: " + ex.getMessage());
+                LOG.debug("pendingInfo unavailable: {}", ex.getMessage());
+                info.put("pendingCount", UNAVAILABLE);
             }
             result.add(info);
         }
         return result;
+    }
+
+    /** 值不可用时的统一占位符（不含任何内部实现细节）。 */
+    static final String UNAVAILABLE = "N/A";
+
+    /**
+     * 把内部异常转换为可安全返回给 HTTP 客户端的粗粒度描述。
+     *
+     * <p><b>为什么不能直接回吐 {@code ex.getMessage()}（发布前红队审查 R5）：</b>管理端点的响应体会原样 携带 Redis 内部信息——版本号、完整 Key
+     * 名、{@code NOGROUP}、连接/ACL/认证失败文本等。这既是实现细节 泄漏（便于攻击者测绘拓扑），也不属于使用方需要的信息。完整信息（含堆栈）只写日志，响应体只给 「操作名
+     * + 异常类型 + 关联 ID」，运维凭关联 ID 在日志中定位。
+     *
+     * @param operation 操作名（如 {@code "listPending"}）
+     * @param ex 捕获到的运行时异常
+     * @return 粗粒度错误描述
+     */
+    private String describeFailure(String operation, RuntimeException ex) {
+        String correlationId = Long.toHexString(System.nanoTime());
+        LOG.warn("{} failed (correlationId={}): {}", operation, correlationId, ex.getMessage(), ex);
+        return operation
+                + " failed ("
+                + ex.getClass().getSimpleName()
+                + ", ref="
+                + correlationId
+                + ")";
     }
 
     /** 列出指定 ConsumerGroup 的 pending 消息。 */
@@ -206,7 +232,7 @@ public class StreamMQAdminEndpoint {
             }
         } catch (RuntimeException ex) {
             Map<String, Object> error = new LinkedHashMap<>();
-            error.put("error", ex.getMessage());
+            error.put("error", describeFailure("listPending", ex));
             result.add(error);
         }
         return result;
@@ -229,7 +255,7 @@ public class StreamMQAdminEndpoint {
             }
         } catch (RuntimeException ex) {
             Map<String, Object> error = new LinkedHashMap<>();
-            error.put("error", ex.getMessage());
+            error.put("error", describeFailure("listDlq", ex));
             result.add(error);
         }
         return result;
@@ -324,9 +350,8 @@ public class StreamMQAdminEndpoint {
                     targetTopic);
         } catch (RuntimeException ex) {
             result.put("success", false);
-            result.put("error", ex.getMessage());
+            result.put("error", describeFailure("requeueDlq", ex));
             failureRetryLimiter.recordFailure(limitKey);
-            LOG.warn("DLQ requeue failed: group={}, msgId={}: {}", group, msgId, ex.getMessage());
         }
         return result;
     }
@@ -395,7 +420,7 @@ public class StreamMQAdminEndpoint {
             failureRetryLimiter.recordSuccess(limitKey);
         } catch (RuntimeException ex) {
             result.put("success", false);
-            result.put("error", ex.getMessage());
+            result.put("error", describeFailure("deleteDlq", ex));
             failureRetryLimiter.recordFailure(limitKey);
         }
         return result;
@@ -470,7 +495,7 @@ public class StreamMQAdminEndpoint {
                 stats.put("persisted", persistedValues);
             }
         } catch (RuntimeException ex) {
-            stats.put("persistedError", ex.getMessage());
+            stats.put("persistedError", describeFailure("readPersistedStats", ex));
         }
         // 3) 实时积压：pending 条数（运维最关心的滞后指标）
         try {
@@ -485,7 +510,8 @@ public class StreamMQAdminEndpoint {
                             ? pendingInfo.getTotal()
                             : 0L);
         } catch (RuntimeException ex) {
-            stats.put("pendingCount", "N/A: " + ex.getMessage());
+            LOG.debug("pendingInfo unavailable for stats: {}", ex.getMessage());
+            stats.put("pendingCount", UNAVAILABLE);
         }
         return stats;
     }
@@ -676,10 +702,10 @@ public class StreamMQAdminEndpoint {
      * <table>
      *   <tr><th>key</th><th>取值</th><th>效果</th></tr>
      *   <tr><td>{@code paused}</td><td>true/false</td><td>暂停 / 恢复消费循环</td></tr>
-     *   <tr><td>{@code inflightCapacity}</td><td>整数 &ge; 0</td><td>背压队列容量（0=禁用）</td></tr>
-     *   <tr><td>{@code pausedSleepMillis}</td><td>正整数</td><td>暂停状态下的休眠间隔</td></tr>
-     *   <tr><td>{@code brokerErrorBackoffMillis}</td><td>正整数</td><td>Broker 异常后的退避间隔</td></tr>
-     *   <tr><td>{@code timeoutCancelGraceMillis}</td><td>正整数</td><td>消费超时取消后的宽限期</td></tr>
+     *   <tr><td>{@code inflightCapacity}</td><td>整数 [0, 100000]</td><td>背压队列容量（0=禁用）</td></tr>
+     *   <tr><td>{@code pausedSleepMillis}</td><td>整数 [1, 300000]</td><td>暂停状态下的休眠间隔</td></tr>
+     *   <tr><td>{@code brokerErrorBackoffMillis}</td><td>整数 [1, 300000]</td><td>Broker 异常后的退避间隔</td></tr>
+     *   <tr><td>{@code timeoutCancelGraceMillis}</td><td>整数 [1, 300000]</td><td>消费超时取消后的宽限期</td></tr>
      * </table>
      *
      * <p><b>不支持的 key 会被显式拒绝并在响应中列出</b>，而不是静默写入一个无人读取的 Hash。 无法在运行期安全变更的参数（如 {@code
@@ -728,7 +754,7 @@ public class StreamMQAdminEndpoint {
                                 key,
                                 raw,
                                 0,
-                                Integer.MAX_VALUE,
+                                MAX_INFLIGHT_CAPACITY,
                                 v -> container.setInflightCapacity((int) v),
                                 applied,
                                 rejected);
@@ -737,7 +763,7 @@ public class StreamMQAdminEndpoint {
                                 key,
                                 raw,
                                 1,
-                                Long.MAX_VALUE,
+                                MAX_INTERVAL_MILLIS,
                                 container::setPausedSleepMillis,
                                 applied,
                                 rejected);
@@ -746,7 +772,7 @@ public class StreamMQAdminEndpoint {
                                 key,
                                 raw,
                                 1,
-                                Long.MAX_VALUE,
+                                MAX_INTERVAL_MILLIS,
                                 container::setBrokerErrorBackoffMillis,
                                 applied,
                                 rejected);
@@ -755,7 +781,7 @@ public class StreamMQAdminEndpoint {
                                 key,
                                 raw,
                                 1,
-                                Long.MAX_VALUE,
+                                MAX_INTERVAL_MILLIS,
                                 container::setTimeoutCancelGraceMillis,
                                 applied,
                                 rejected);
@@ -800,6 +826,22 @@ public class StreamMQAdminEndpoint {
                     "pausedSleepMillis",
                     "brokerErrorBackoffMillis",
                     "timeoutCancelGraceMillis");
+
+    /**
+     * 运行期 {@code inflightCapacity} 的硬上限。
+     *
+     * <p><b>为什么不能放开到 {@code Integer.MAX_VALUE}（发布前红队审查 R5）：</b>背压队列按容量预分配/持有 引用，上限即 2^31-1
+     * 相当于把"合法凭据可把进程 OOM"变成一个 API 调用；管理端点属于高危操作面，取值必须 收敛到贴近实际的量级（单消费者组的在途窗口极少超过数万）。
+     */
+    static final long MAX_INFLIGHT_CAPACITY = 100_000L;
+
+    /**
+     * 运行期"休眠/退避/宽限"类间隔的硬上限（5 分钟）。
+     *
+     * <p>取 {@code Long.MAX_VALUE} 会让消费循环进入近乎永久的休眠——表面上配置"成功"，实际是静默停摆， 且没有任何错误信号。合理的运维诉求（临时退避）远在 5
+     * 分钟之内。
+     */
+    static final long MAX_INTERVAL_MILLIS = 300_000L;
 
     /** 解析并应用一个数值型配置项；解析失败或越界时记入 {@code rejected}。 */
     private void applyLong(

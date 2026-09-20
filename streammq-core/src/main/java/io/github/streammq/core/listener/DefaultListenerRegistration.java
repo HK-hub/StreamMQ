@@ -141,7 +141,9 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         this.dlqMode = b.dlqMode;
         this.targetBodyType = b.targetBodyType;
         this.dlqFailureStrategy = b.dlqFailureStrategy;
-        this.consumerFilter = b.consumerFilter;
+        // 防御性拷贝：Builder.consumerFilter(arr) 之后调用方若仍持有 arr，可在注册完成后改写内容，
+        // 违反「容器注册后视为不可变」的契约（同 shardLocks 的处理）。
+        this.consumerFilter = Objects.isNull(b.consumerFilter) ? null : b.consumerFilter.clone();
         this.selectorType = b.selectorType;
         this.namespace = StringUtils.requireValidNamespace(b.namespace);
         this.consumeThreads = resolveConsumeThreads(b);
@@ -174,6 +176,20 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
             resolved = DEFAULT_CONSUME_THREADS;
         }
         return Math.max(1, Math.min(resolved, StreamMQConstants.DEFAULT_CONSUME_THREAD_MAX));
+    }
+
+    /**
+     * 返回 per-consumer 过滤器类数组的副本。
+     *
+     * <p>覆盖 Lombok 生成的同名字段 getter：字段是数组（可变），直接返回引用会让调用方 覆盖内部状态，与「注册完成后视为不可变」的契约冲突。数组元素为 {@code
+     * Class} 常量，拷贝成本可忽略，且仅在 SPI 解析期调用。
+     *
+     * @return 过滤器类数组的防御性副本；未配置时为 {@code null}
+     */
+    @Override
+    @SuppressWarnings("unchecked")
+    public Class<? extends ConsumerFilter>[] getConsumerFilter() {
+        return Objects.isNull(consumerFilter) ? null : consumerFilter.clone();
     }
 
     /**

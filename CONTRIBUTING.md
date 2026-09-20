@@ -545,9 +545,9 @@ StreamMQ 通过 Maven Central Portal (`org.sonatype.central:central-publishing-m
    如需 OWASP/NVD 深扫（每周 CI 增强项），追加 `-Dowasp.skip=false`，并建议设置 `NVD_API_KEY` 环境变量（否则匿名访问 NVD 限流、扫描可能偶发失败）。
 4. **打 tag** — `git tag -s v0.x.y -m "Release v0.x.y"`（签名 tag 满足 GPG 要求）。
 5. **触发 `release.yml`** — `workflow_dispatch` 或推送 tag；`test` job 会运行 `mvn clean verify` 兜底，`publish` job 会上传至 Central Portal。
-6. **人工确认发布** — `parent.pom.xml` 中 `<autoPublish>false</autoPublish>`，首个版本需在 [Central Portal](https://central.sonatype.com/) 人工点击 "Publish"。
+6. **人工确认发布** — `pom.xml`（根 POM）中 `<autoPublish>false</autoPublish>`，首个版本需在 [Central Portal](https://central.sonatype.com/) 人工点击 "Publish"。
 7. **首次发布后** — 将 `<autoPublish>` 翻转为 `true`，提交 PR 并在本节追加 changelog 行；后续发布由 CI 自动完成。
-8. **创建 GitHub Release** — `release.yml` 会基于 tag 自动创建 Release 并附带全部已发布构件（jar + sources + javadoc）。
+8. **创建 GitHub Release** — `release.yml` 会基于 tag 自动创建 Release，附带 Central 可解析的发布构件（`streammq-bom` / `core` / `redisson` / `starter` / `test` 的 jar + sources + javadoc）。`excludeArtifacts` 中不发布到 Central 的模块（samples/benchmark/kubernetes/tracing/diagnostics/binder）**不列入** Release 资产，避免使用方误以为可从 Central 解析。
 
 ### 发布前置条件
 
@@ -557,7 +557,7 @@ StreamMQ 通过 Maven Central Portal (`org.sonatype.central:central-publishing-m
 
 ### 发布门禁
 
-发布 job (`release.yml#publish`) 依赖 `test` job（`mvn clean verify`）通过——任何单测/集成测试/Spotless/JaCoCo 失败都会阻塞发布。 `verify` job 的集成测试 tripwire 要求实际执行 IT ≥ 80 且跳过率 ≤ 50%，防止 Redis 静默失效导致"假绿色"。
+发布 job (`release.yml#publish`) 依赖 `test` job（`mvn clean verify`）通过——任何单测/集成测试/Spotless/JaCoCo 失败都会阻塞发布。 `verify` job 的集成测试 tripwire 采用「分模块下限 + 全局下限 + 跳过率上限」三层校验（见 `.github/workflows/ci.yml`）：实际执行的 IT 按模块 `streammq-redisson ≥ 100` / `streammq-spring-boot-starter ≥ 30` / `streammq-test ≥ 40` / `streammq-samples/* ≥ 16`，全局 `≥ 230`，且跳过率 `≤ 20%`——防止 Redis 静默失效导致"假绿色"。
 
 ### 凭据配置
 

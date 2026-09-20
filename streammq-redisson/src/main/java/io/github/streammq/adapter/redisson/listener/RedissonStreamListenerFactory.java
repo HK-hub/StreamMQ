@@ -74,6 +74,16 @@ public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
     private volatile boolean closed = false;
 
     /**
+     * 创建/关闭的互斥锁（生命周期状态机）。
+     *
+     * <p><b>为什么必须加锁（发布前红队审查 R5）：</b>{@link #createListener} 是"检查 closed → 构建监听器 → 入队"三步复合操作。仅靠
+     * volatile 检查时存在窗口：线程 A 通过检查后、入队前，线程 B 执行完 {@link #close()} 的排空，A
+     * 新构建的监听器便逃逸出队列永不关闭——其租约心跳线程持续续租 Redis 实例槽位，让已停机实例的槽位被视为 active、阻碍回收。加锁后"检查"与"入队"原子，{@link
+     * #close()} 的"置位 + 排空"也原子，二者必有一方先看到对方。
+     */
+    private final Object lifecycleLock = new Object();
+
+    /**
      * 广播实例注册中心（可选）：注入后，由本工厂创建的广播监听器会在心跳时续租其持久化实例身份槽位。
      *
      * <p>不注入时广播消费者组仍可工作，但槽位在注册表中的 {@code lastHeartbeat} 会一直停留在启动时， 运行中的实例会落进"可回收"窗口，同主机上另一个同 group
@@ -144,7 +154,14 @@ public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
                         .maxBatchSizeLimit(tuning.maxBatchSizeLimit())
                         .broadcastInstanceRegistry(broadcastInstanceRegistry)
                         .build();
-        listeners.add(listener);
+        synchronized (lifecycleLock) {
+            if (closed) {
+                // 构建期间工厂被关闭：立即自关闭并报错，绝不逃逸出 close() 的排空范围
+                closeQuietly(listener);
+                throw new IllegalStateException("ListenerFactory is closed");
+            }
+            listeners.add(listener);
+        }
         LOG.debug(
                 "Listener created: topic={}, group={}, consumer={}, dlqMode={}, retryMode={},"
                         + " consumeFromWhere={}",
@@ -159,17 +176,16 @@ public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
 
     @Override
     public void close() {
-        if (closed) {
-            return;
-        }
-        closed = true;
-        int total = listeners.size();
-        RedissonStreamListener listener;
-        while ((listener = listeners.poll()) != null) {
-            try {
-                listener.close();
-            } catch (RuntimeException ex) {
-                LOG.warn("Failed to close listener: {}", ex.getMessage(), ex);
+        int total;
+        synchronized (lifecycleLock) {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            total = listeners.size();
+            RedissonStreamListener listener;
+            while ((listener = listeners.poll()) != null) {
+                closeQuietly(listener);
             }
         }
         LOG.info("RedissonStreamListenerFactory closed, total listeners: {}", total);
@@ -182,7 +198,18 @@ public class RedissonStreamListenerFactory implements StreamMQListenerFactory {
 
     /** 重新打开工厂（容器 restart 场景）：close 之后所有 listener 已关闭，重置内部状态即可继续创建新 listener。 */
     public void reopen() {
-        closed = false;
+        synchronized (lifecycleLock) {
+            closed = false;
+        }
         LOG.info("RedissonStreamListenerFactory reopened");
+    }
+
+    /** 关闭单个监听器，异常只记录不外抛（close 语义为尽力释放）。 */
+    private static void closeQuietly(RedissonStreamListener listener) {
+        try {
+            listener.close();
+        } catch (RuntimeException ex) {
+            LOG.warn("Failed to close listener: {}", ex.getMessage(), ex);
+        }
     }
 }

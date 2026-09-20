@@ -45,6 +45,12 @@ public final class StreamMQDiagnosticsEndpointConstants {
     /** 状态值：正常 */
     public static final String STATUS_UP = "UP";
 
+    /** 状态值：降级（存在 WARNING 级积压或有慢消费者，功能可用但需关注） */
+    public static final String STATUS_DEGRADED = "DEGRADED";
+
+    /** 状态值：异常（存在 CRITICAL 级积压，消费链路已无法跟上生产） */
+    public static final String STATUS_DOWN = "DOWN";
+
     /** 响应 key：慢消费者数量 */
     public static final String KEY_SLOW_CONSUMER_COUNT = "slowConsumerCount";
 

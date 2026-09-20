@@ -7,12 +7,15 @@ package io.github.streammq.core.broadcast;
 
 import java.io.IOException;
 import java.net.InetAddress;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -464,11 +467,17 @@ public final class BroadcastInstanceIdResolver {
      *
      * <p>不删除其它存活进程的记录——它们是那些进程跨重启复用身份的凭据。
      */
-    private static void upsertLocalIdRecord(Path file, String id, long pid, long now) {
+    private static synchronized void upsertLocalIdRecord(Path file, String id, long pid, long now) {
         if (file == null) {
             return;
         }
-        try {
+        // 同机多进程 + 同机多消费者可能写同一个身份文件（显式配置 single-file 时），
+        // read-modify-write 必须串行化：JVM 内用 static synchronized，跨进程用文件锁。
+        Path lockFile = file.resolveSibling(file.getFileName() + ".lock");
+        try (FileChannel channel =
+                        FileChannel.open(
+                                lockFile, StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+                FileLock ignored = channel.lock()) {
             List<LocalIdRecord> records = new ArrayList<>(readLocalIdRecords(file));
             records.removeIf(r -> (pid > 0 && r.pid() == pid) || r.instanceId().equals(id));
             records.removeIf(r -> now - r.timestamp() > LOCAL_RECORD_RETENTION_MS);
@@ -495,13 +504,29 @@ public final class BroadcastInstanceIdResolver {
                     .append(record.timestamp())
                     .append('\n');
         }
-        Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
-        Files.writeString(tmp, content.toString(), StandardCharsets.UTF_8);
+        // 临时文件名必须进程唯一：固定 "<name>.tmp" 时同机多进程并发写会互相覆盖临时文件，
+        // 一方 rename 后另一方 rename 失败/内容错乱 —— 身份记录被踩会导致身份漂移、组名变更、
+        // 位点（PEL）丢失，与"多记录防覆盖"的设计直接相悖。
+        Path tmp =
+                file.resolveSibling(
+                        file.getFileName() + "." + resolvePid() + "-" + UUID.randomUUID() + ".tmp");
         try {
-            Files.move(
-                    tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
-        } catch (AtomicMoveNotSupportedException notAtomic) {
-            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+            Files.writeString(tmp, content.toString(), StandardCharsets.UTF_8);
+            try {
+                Files.move(
+                        tmp,
+                        file,
+                        StandardCopyOption.REPLACE_EXISTING,
+                        StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException notAtomic) {
+                Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+            }
+        } finally {
+            try {
+                Files.deleteIfExists(tmp);
+            } catch (IOException ignored) {
+                // 清理失败无影响：rename 成功后临时文件已不存在
+            }
         }
     }
 

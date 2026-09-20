@@ -20,7 +20,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * <ul>
  *   <li>只在失败后冷却——成功即清除，正常运行无任何额外开销（一次 {@code ConcurrentHashMap} 查询）。
  *   <li>冷却期为 0 时整体禁用（便于测试与需要高频重试的运维场景）。
- *   <li>{@link #recordFailure(String)} 在条目数超限时先清理过期条目，防止 key 空间无限增长 （恶意/异常输入构造大量不同的 key 时）。
+ *   <li>{@link #recordFailure(String)} 在条目数超限时先清理过期条目；仍然满则放弃记录， 保证 key 空间有界（恶意/异常输入构造大量不同的 key
+ *       时不会被放大）。
  * </ul>
  *
  * <p>线程安全：{@link ConcurrentHashMap} + 单调时间比较，所有方法可并发调用。
@@ -87,13 +88,24 @@ public final class FailureRetryLimiter {
         return elapsed >= cooldownMillis ? 0L : cooldownMillis - elapsed;
     }
 
-    /** 记录一次失败，进入冷却期。 */
+    /**
+     * 记录一次失败，进入冷却期。
+     *
+     * <p><b>硬上限（发布前红队审查 R5）：</b>旧实现只做「超限则清理过期条目」，而冷却窗口内持续以<b>不同</b> target 失败（典型场景：Redis
+     * 整体不可用、或攻击者构造大量不同 messageId）时，过期清理回收不到任何条目， Map 仍可无限增长，与类注释承诺的"防止 key
+     * 空间无限增长"相矛盾。现在清理后仍满则<b>放弃记录</b>： 限流器退化为放行（可用性优先），但 key 空间恒有界，不会被外部输入放大成 OOM。
+     *
+     * @param key 操作 + 目标标识
+     */
     public void recordFailure(String key) {
         if (cooldownMillis == 0) {
             return;
         }
         if (lastFailureAt.size() >= MAX_ENTRIES) {
             evictExpired();
+            if (lastFailureAt.size() >= MAX_ENTRIES) {
+                return;
+            }
         }
         lastFailureAt.put(key, System.currentTimeMillis());
     }

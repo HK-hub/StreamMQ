@@ -7,6 +7,7 @@ package io.github.streammq.adapter.redisson.scheduler;
 
 import io.github.streammq.adapter.redisson.converter.DefaultMessageConverter;
 import io.github.streammq.adapter.redisson.support.BroadcastGroupNaming;
+import io.github.streammq.adapter.redisson.support.RedisServerClock;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.enums.DlqReason;
@@ -350,6 +351,28 @@ public class PelClaimScheduler implements StreamMQScheduler {
         return kind.name() + ":" + namespace + ":" + topic + ":" + group;
     }
 
+    /**
+     * 注销某 (namespace, topic, group) 维度上的全部 PEL 认领目标（TOPIC / RETRY / DLQ）。
+     *
+     * <p>此前目标表只增不减：容器 {@code unregister} 不会清理调度目标，反复动态注册/注销后调度器仍持续扫描 已注销目标（每轮多一次 Stream 扫描的 RTT
+     * 与内存开销，随注册变更单调增长）。
+     *
+     * @param namespace 命名空间
+     * @param topic 主题
+     * @param group 消费者组名
+     * @return true 表示至少移除一个目标
+     */
+    public boolean unregisterTargets(String namespace, String topic, String group) {
+        boolean removed = false;
+        for (PelClaimTargetKind kind : PelClaimTargetKind.values()) {
+            removed |= Objects.nonNull(targets.remove(targetKey(kind, namespace, topic, group)));
+        }
+        if (removed) {
+            LOG.info("Unregistered PelClaim targets: topic={}, group={}", topic, group);
+        }
+        return removed;
+    }
+
     @Override
     public synchronized void start() {
         if (!running.compareAndSet(false, true)) {
@@ -427,21 +450,13 @@ public class PelClaimScheduler implements StreamMQScheduler {
      * <p>每轮扫描刷新一次，避免逐条 pending 判定都发一次 TIME。
      */
     private void refreshRedisClock() {
-        try {
-            java.util.List<Long> t =
-                    redisson.getScript(StringCodec.INSTANCE)
-                            .eval(
-                                    org.redisson.api.RScript.Mode.READ_ONLY,
-                                    "local t = redis.call('TIME');"
-                                            + "return tonumber(t[1]) * 1000 +"
-                                            + " math.floor(tonumber(t[2]) / 1000);",
-                                    org.redisson.api.RScript.ReturnType.MULTI,
-                                    java.util.Collections.emptyList());
-            lastRedisNowMs = t.get(0);
-        } catch (RuntimeException ex) {
+        long serverNow = RedisServerClock.nowMillis(redisson);
+        if (serverNow == RedisServerClock.UNKNOWN) {
             lastRedisNowMs = 0L;
-            LOG.debug("Redis TIME unavailable, falling back to local clock: {}", ex.getMessage());
+            LOG.debug("Redis TIME unavailable, falling back to local clock");
+            return;
         }
+        lastRedisNowMs = serverNow;
     }
 
     /**

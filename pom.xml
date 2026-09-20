@@ -80,7 +80,7 @@
         <spring-boot.version>3.5.16</spring-boot.version>
         <spring.version>6.1.14</spring.version>
         <redisson.version>3.52.0</redisson.version>
-        <!-- Jackson：2.18.10 修复 GHSA-r7wm-3cxj-wff9 与 GHSA-72hv-8253-57qq。
+        <!-- Jackson：2.21.4（自 2.17.2 起修复 GHSA-r7wm-3cxj-wff9 与 GHSA-72hv-8253-57qq）。
              注意：spring-boot-dependencies 亦管理 Jackson，因此下方 dependencyManagement
              中 jackson-bom 的 import **必须声明在 Spring Boot BOM 之前**（Maven「先声明者优先」）。 -->
         <jackson.version>2.21.4</jackson.version>
@@ -168,9 +168,9 @@
         <dependencies>
             <!-- C-02：Jackson BOM 必须声明在 **spring-boot-dependencies import 之前**。
                  Maven 对 dependencyManagement 采用「先声明者优先」，Spring Boot BOM 管理的
-                 Jackson 是 2.17.2；若本 import 排在 Boot BOM 之后，逐构件条目会被 Boot 的管理值
-                 覆盖（依赖收敛后实际仍解析到 2.17.2，GHSA-r7wm-3cxj-wff9 / GHSA-72hv-8253-57qq 不修复）。
-                 放在最前可保证 Jackson 全家桶统一为 ${jackson.version}（2.18.10）。
+                 Jackson 也由 Boot BOM 管理；若本 import 排在 Boot BOM 之后，逐构件条目会被 Boot 的
+                 管理值覆盖（依赖收敛后实际仍解析到 Boot 版本，GHSA-r7wm-3cxj-wff9 / GHSA-72hv-8253-57qq 不修复）。
+                 放在最前可保证 Jackson 全家桶统一为 ${jackson.version}（2.21.4）。
                  下方逐构件条目与本 import 版本一致，保留作为显式文档。 -->
             <dependency>
                 <groupId>com.fasterxml.jackson</groupId>
@@ -783,6 +783,17 @@
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-gpg-plugin</artifactId>
                         <version>3.2.7</version>
+                        <configuration>
+                            <!-- 非交互签名（发布通道必需）：gpg 2.1+ 在无 tty 的 CI runner 上
+                                 默认拒绝从 pinentry 取口令，必须显式 loopback，否则 sign 步骤直接失败、
+                                 deploy 永不执行（autoPublish=false 之前就中断）。口令由
+                                 `-Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE"` 在 release.yml 显式传入。
+                                 本地交互式 -Pgpg 仍可由 gpg-agent 正常提示。 -->
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
+                        </configuration>
                         <executions>
                             <execution>
                                 <id>sign-artifacts</id>

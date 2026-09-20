@@ -28,6 +28,8 @@ jobs:
   guard:
     name: Guards (parent↔BOM sync + publish set consistency)
     runs-on: ubuntu-latest
+    # F-11：显式超时预算，避免 runner 卡死时无限等待（与其它 job 口径一致）
+    timeout-minutes: 15
     steps:
       - name: Checkout source
         # E-14/E-25：第三方 action 固定到 v4 对应 commit SHA（renovate/dependabot 可识别 # v4）
@@ -164,6 +166,8 @@ jobs:
     name: Build
     needs: guard
     runs-on: ubuntu-latest
+    # F-11：显式超时预算
+    timeout-minutes: 30
     steps:
       - name: Checkout source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -185,6 +189,8 @@ jobs:
     name: Formatting check (Spotless)
     needs: guard
     runs-on: ubuntu-latest
+    # F-11：显式超时预算
+    timeout-minutes: 20
     steps:
       - name: Checkout source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -693,10 +699,11 @@ jobs:
           set -euo pipefail
           curl -fsSL -o osv-scanner \
             "https://github.com/google/osv-scanner/releases/download/v2.6.0/osv-scanner_linux_amd64"
-          # TODO(release-0.1.2)：首次运行后由维护者回填官方 SHA256 并启用校验（切勿编造哈希）：
-          #   1) 本地/runner 执行： curl -fsSL <上面的 URL> | sha256sum
-          #   2) 把结果填入下面一行并取消注释（校验失败即中断，防止供应链投毒）：
-          #   echo "<SHA256>  osv-scanner" | sha256sum -c -
+          # 供应链校验（必须）：该二进制是 CVE 硬门禁的判定执行体，未校验即等于把"是否阻断发布"
+          # 交给一个可被替换的下载产物。SHA256 取自 GitHub Release 资产元数据的官方 digest
+          # （v2.6.0 / osv-scanner_linux_amd64），校验失败立即中断。
+          echo "ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108  osv-scanner" \
+            | sha256sum -c -
           chmod +x osv-scanner
           # 冒烟：确保下载的二进制可执行且 CLI 可用（v2 是 cobra CLI，版本开关在不同小版本间
           # 可能是 `--version` 或 `version` 子命令，故按顺序容错，最后以 `--help` 兜底）。

@@ -6,8 +6,8 @@ A high-performance message middleware SDK built on **Redis Stream** + **Redisson
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Java](https://img.shields.io/badge/Java-21%2B-orange.svg)](https://openjdk.java.net/)
-[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.x-green.svg)](https://spring.io/projects/spring-boot)
-[![Redisson](https://img.shields.io/badge/Redisson-3.34.x-red.svg)](https://redisson.org/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.x-green.svg)](https://spring.io/projects/spring-boot)
+[![Redisson](https://img.shields.io/badge/Redisson-3.52.x-red.svg)](https://redisson.org/)
 [![Version](https://img.shields.io/badge/version-0.1.2-blue.svg)](https://github.com/HK-hub/StreamMQ)
 [![CI](https://github.com/HK-hub/StreamMQ/actions/workflows/ci.yml/badge.svg)](https://github.com/HK-hub/StreamMQ/actions/workflows/ci.yml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/HK-hub/StreamMQ/pulls)
@@ -812,8 +812,8 @@ git commit -m "feat: add your feature"
 |---|---|---|
 | Java | 21+ | Runtime |
 | Spring Boot | 3.5.16 | Framework |
-| Redisson | 3.34.1 | Redis client |
-| Jackson | 2.18.10 | JSON serialization (default serializer; upgraded from 2.17.2 for GHSA-r7wm-3cxj-wff9 / GHSA-72hv-8253-57qq — the `jackson-bom` import is declared **before** the Spring Boot BOM so Boot's managed 2.17.2 cannot override it) |
+| Redisson | 3.52.0 | Redis client |
+| Jackson | 2.21.4 | JSON serialization (default serializer; upgraded from 2.17.2 for GHSA-r7wm-3cxj-wff9 / GHSA-72hv-8253-57qq — the `jackson-bom` import is declared **before** the Spring Boot BOM so Boot's managed version cannot override it) |
 | Apache Fory (formerly Apache Fury) | 1.7.3 | High-perf serialization (optional; opt-in for throughput; `org.apache.fory:fory-core`, required >= 1.1.0 — CVE-2026-50076) |
 | Protostuff | 1.8.0 | Protobuf serialization (optional alternative) |
 | FlatBuffers | 24.3.25 | FlexBuffers dynamic binary serialization (optional; `com.google.flatbuffers:flatbuffers-java`, for `FlatBuffersSerializer`) |

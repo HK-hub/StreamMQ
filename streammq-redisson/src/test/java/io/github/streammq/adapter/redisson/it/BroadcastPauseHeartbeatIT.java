@@ -95,11 +95,24 @@ class BroadcastPauseHeartbeatIT extends AbstractRedisIT {
             // 必须先等到实例专属组真正建立，再发送 M1——否则 M1 会落在组起始位点之前被永久跳过
             // （本地快机器常侥幸通过，CI runner 上会稳定超时）。
             String topicStreamKey = StreamMQKeys.topicStream(namespace, topic);
+            // ignoreExceptions 不是可选项：键在建组完成前并不存在，XINFO GROUPS 直接抛
+            // RedisException("ERR no such key")；Awaitility 对条件抛出的异常默认**立即上抛、不重试**，
+            // 于是本断言会在快机器上确定性失败（门禁命令直接红）。先判键存在 + 忽略探测异常，
+            // 才真正表达"等到组建好为止"的意图。
             await().atMost(15, TimeUnit.SECONDS)
+                    .ignoreExceptions()
                     .until(
                             () ->
-                                    redisson.getStream(topicStreamKey).listGroups().stream()
-                                            .anyMatch(g -> g.getName().startsWith(group + ":")));
+                                    redisson.getKeys().countExists(topicStreamKey) > 0
+                                            && redisson
+                                                    .getStream(topicStreamKey)
+                                                    .listGroups()
+                                                    .stream()
+                                                    .anyMatch(
+                                                            g ->
+                                                                    g.getName()
+                                                                            .startsWith(
+                                                                                    group + ":")));
             producer.syncSend(MessageBuilder.<String>withTopic(topic).body("M1").build());
             await().atMost(15, TimeUnit.SECONDS).until(() -> receivedBodies.contains("M1"));
 

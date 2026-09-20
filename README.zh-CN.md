@@ -8,8 +8,8 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Java](https://img.shields.io/badge/Java-21%2B-orange.svg)](https://openjdk.java.net/)
-[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.3.x-green.svg)](https://spring.io/projects/spring-boot)
-[![Redisson](https://img.shields.io/badge/Redisson-3.34.x-red.svg)](https://redisson.org/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.5.x-green.svg)](https://spring.io/projects/spring-boot)
+[![Redisson](https://img.shields.io/badge/Redisson-3.52.x-red.svg)](https://redisson.org/)
 [![Version](https://img.shields.io/badge/version-0.1.2-blue.svg)](https://github.com/HK-hub/StreamMQ)
 [![CI](https://github.com/HK-hub/StreamMQ/actions/workflows/ci.yml/badge.svg)](https://github.com/HK-hub/StreamMQ/actions/workflows/ci.yml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-ff69b4.svg)](https://github.com/HK-hub/StreamMQ/pulls)
@@ -195,7 +195,7 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 |------|------|
 | JDK | OpenJDK 21.0.11 (Eclipse Adoptium) |
 | Spring Boot | 3.5.16 |
-| Redisson | 3.34.1 |
+| Redisson | 3.34.1（历史测量环境；当前构建基线为 3.52.0） |
 | Redis | 7.x (本地单机, 无密码) |
 | JMH | 1.37 |
 | 操作系统 | Windows 11 |
@@ -1304,8 +1304,8 @@ git commit -m "feat: add your feature"
 |------|------|------|
 | Java | 21+ | 运行时 |
 | Spring Boot | 3.5.16 | 框架基础 |
-| Redisson | 3.34.1 | Redis 客户端 |
-| Jackson | 2.18.10 | JSON 序列化（默认序列化器；由 2.17.2 升级以修复 GHSA-r7wm-3cxj-wff9 / GHSA-72hv-8253-57qq——`jackson-bom` import 声明在 Spring Boot BOM **之前**，避免被 Boot 管理的 2.17.2 覆盖） |
+| Redisson | 3.52.0 | Redis 客户端 |
+| Jackson | 2.21.4 | JSON 序列化（默认序列化器；由 2.17.2 升级以修复 GHSA-r7wm-3cxj-wff9 / GHSA-72hv-8253-57qq——`jackson-bom` import 声明在 Spring Boot BOM **之前**，避免被 Boot 管理的版本覆盖） |
 | Apache Fory（原 Apache Fury） | 1.7.3 | 高性能序列化（optional 依赖，需显式 opt-in；`org.apache.fory:fory-core`，要求 >= 1.1.0——更早版本受 CVE-2026-50076 影响） |
 | Protostuff | 1.8.0 | Protobuf 序列化（optional 替代实现） |
 | FlatBuffers | 24.3.25 | FlexBuffers 动态二进制序列化（optional 依赖；`com.google.flatbuffers:flatbuffers-java`，供 `FlatBuffersSerializer` 使用） |

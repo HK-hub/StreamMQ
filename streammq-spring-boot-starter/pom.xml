@@ -13,7 +13,7 @@
 
     <artifactId>streammq-spring-boot-starter</artifactId>
     <name>StreamMQ Spring Boot Starter</name>
-    <description>StreamMQ Spring Boot 自动装配：@EnableStreamMq 注解、自动配置类、ConfigurationProperties、Actuator 健康检查。</description>
+    <description>StreamMQ Spring Boot 自动装配：自动配置类、ConfigurationProperties、Actuator 健康检查与管理端点。</description>
 
     <dependencies>
         <!-- 测试工具（RedisAvailability / ContainerizedRedisServer 等） -->

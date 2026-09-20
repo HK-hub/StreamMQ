@@ -238,8 +238,27 @@ public class TransactionScanner implements StreamMQScheduler {
     /** 孤儿半消息保留期（毫秒），超过且无状态引用的 half 条目由维护任务清理 */
     @Setter private volatile long orphanHalfRetentionMs = DEFAULT_ORPHAN_HALF_RETENTION_MS;
 
-    /** 回查器执行超时（毫秒），可通过 setter 覆盖 */
-    @Setter private volatile long checkerTimeoutMillis = DEFAULT_CHECKER_TIMEOUT_MILLIS;
+    /** 回查器执行超时（毫秒）；恒 > 0（见 {@link #setCheckerTimeoutMillis(long)}）。 */
+    private volatile long checkerTimeoutMillis = DEFAULT_CHECKER_TIMEOUT_MILLIS;
+
+    /**
+     * 设置回查器执行超时。
+     *
+     * <p><b>为什么必须拒绝非正值（发布前红队审查 R5）：</b>等待实现为 {@code worker.join(Duration.ofMillis(t))}， 而 {@code
+     * join(0)} 的语义是<b>无限等待</b>——配置为 0 时，一个挂死的 {@code TransactionChecker} 会让扫描 线程永久持有该事务组的 {@code
+     * groupLock}，整个事务回查调度停摆（且无超时日志、无自愈路径）。
+     *
+     * @param millis 超时毫秒数，必须 > 0
+     * @throws IllegalArgumentException 取值 <= 0
+     */
+    public void setCheckerTimeoutMillis(long millis) {
+        if (millis <= 0) {
+            throw new IllegalArgumentException(
+                    "checkerTimeoutMillis must be > 0 (join(0) means wait forever), got: "
+                            + millis);
+        }
+        this.checkerTimeoutMillis = millis;
+    }
 
     /**
      * 构造调度器，使用默认参数。
@@ -812,7 +831,10 @@ public class TransactionScanner implements StreamMQScheduler {
         RScoredSortedSet<String> zset =
                 redisson.getScoredSortedSet(checkZSetKey, StringCodec.INSTANCE);
         long now = System.currentTimeMillis();
-        Collection<String> timeoutTxIds = zset.valueRange(0, true, now, true, 0, batchSize - 1);
+        // 限界语义为 (offset, count)：count 必须是 batchSize，不能是 batchSize - 1。
+        // batchSize == 1 时 count=0 会让 LIMIT 退化为 0，本方法永远扫不到任何超时半消息——
+        // 事务回查彻底失效、半消息永久悬挂（且无任何错误信号，只在配置为 1 时命中）。
+        Collection<String> timeoutTxIds = zset.valueRange(0, true, now, true, 0, batchSize);
         if (timeoutTxIds.isEmpty()) {
             return;
         }
@@ -981,7 +1003,8 @@ public class TransactionScanner implements StreamMQScheduler {
             String txId,
             String txGroup) {
         Object groupLock = groupCheckLocks.computeIfAbsent(txGroup, k -> new Object());
-        long timeoutMillis = checkerTimeoutMillis;
+        // 兜底夹取：即便 setter 被绕过（反射/反序列化），也不允许 join(0) 的无限等待语义
+        long timeoutMillis = Math.max(1L, checkerTimeoutMillis);
         final java.util.concurrent.atomic.AtomicReference<LocalTransactionState> result =
                 new java.util.concurrent.atomic.AtomicReference<>();
         synchronized (groupLock) {

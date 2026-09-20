@@ -197,8 +197,10 @@ and authenticator credentials via environment variables or a secret manager.
   自 0.1.2 起对 JDK 的深度/引用计数检查返回 UNDECIDED，含对象回引用的合法载荷可正常反序列化）。
 - **载荷驱动类型**：统一经过 `PayloadTypeSafety`（形态归一化 + 危险命名空间黑名单），对**所有**序列化器生效；
   它是纵深防御而非完整性边界，生产环境请显式声明消费者泛型。
-- **依赖与 CVE**：Jackson 已升级到 **2.18.10**（修复 GHSA-r7wm-3cxj-wff9 / GHSA-72hv-8253-57qq，且 `jackson-bom`
-  声明在 Boot BOM 之前以免被覆盖）；宿主依赖（Spring/Netty）版本由使用方自管；CI 提供 OWASP Dependency-Check 扫描
-  （`mvn verify -Dowasp.skip=false`）。
+- **依赖与 CVE**：Jackson 已升级到 **2.21.4**（修复 GHSA-r7wm-3cxj-wff9 / GHSA-72hv-8253-57qq，且 `jackson-bom`
+  声明在 Boot BOM 之前以免被覆盖）；构建基线为 Spring Boot 3.5.16 / Redisson 3.52.0，宿主依赖（Spring/Netty）
+  版本由使用方自管。CI 的**默认 CVE 硬门禁**是**无需密钥**的发布构件依赖闭包扫描（CycloneDX SBOM +
+  `osv-scanner`，任意 CVSS ≥ 7.0 即阻断发布）；OWASP Dependency-Check（NVD）为**增强扫描**，仅在配置
+  `secrets.NVD_API_KEY` 时于每周计划任务中执行（`mvn verify -Dowasp.skip=false`），缺失密钥不会使发布通道变红。
 - **其他**：内置序列化器 `serialize(null)→null`、`deserialize(null|空)→null`；SDK 自有 Redis 键显式使用
   `StringCodec`；凭据不落日志（口令在堆上无法擦除，高敏感环境请做网络隔离并优先短周期令牌）。

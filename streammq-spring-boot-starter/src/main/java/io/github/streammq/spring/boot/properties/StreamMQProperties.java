@@ -244,8 +244,11 @@ public class StreamMQProperties {
         /**
          * 全局顺序消费超时（毫秒），默认 0（不启用）。
          *
-         * <p>仅作为 {@code @StreamMQConsumer#orderlyConsumeTimeout()} 未显式声明（为 0）时的回落值； 注解显式声明 {@code >
-         * 0} 时始终优先，per-consumer 可覆盖全局。
+         * <p><b>生效条件（易误判，务必注意）：</b>本键<b>只对「注解 {@code orderlyConsumeTimeout} 显式写 {@code 0}」
+         * 的消费者生效</b>。注解默认值是 {@code StreamMQConstants.ANNOTATION_UNSET_LONG}（{@code -1}），语义为
+         * 「显式关闭该消费者的顺序消费超时保护」——因此<b>只改全局键而不动注解，对所有消费者都不生效</b>。 三分支：注解 {@code >0} 覆盖全局；注解 {@code =0}
+         * 继承本键；注解 {@code <0}（默认）关闭。 需要全局开启时，请同时把目标消费者的注解写成
+         * {@code @StreamMQConsumer(orderlyConsumeTimeout = 0)}。
          *
          * <p><b>为什么默认关闭，而非复用 {@code consumeTimeout}：</b>{@code consumeTimeout} 默认 30000
          * 且作用于并发消费——超时只是单条消息重投，不影响其它消息。顺序消费是「分片锁 + 串行重试」： 超时后原地在当前线程重试，每次失败挂起 {@code

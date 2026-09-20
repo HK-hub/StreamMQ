@@ -17,6 +17,7 @@ import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.enums.DlqReason;
 import io.github.streammq.core.interceptor.ConsumerInterceptorChain;
 import io.github.streammq.core.listener.ListenerRegistration;
+import io.github.streammq.core.listener.ListenerType;
 import io.github.streammq.core.listener.StreamMQListener;
 import io.github.streammq.core.message.Message;
 import io.github.streammq.core.message.MessageId;
@@ -30,6 +31,7 @@ import io.github.streammq.core.policy.RetryPolicy;
 import io.github.streammq.core.util.StringUtils;
 import java.time.Duration;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import lombok.NonNull;
@@ -117,6 +119,10 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                 reg.getTopic(),
                 reg.getGroup(),
                 messageId);
+        if (!action.isSuccess() && !reg.isDlqMode() && reg.getType() == ListenerType.ORDERLY) {
+            handleOrderlyFailure(message, reg, listener, messageId, cause);
+            return;
+        }
         if (action.isSuccess()) {
             try {
                 listener.ack(messageId);
@@ -159,6 +165,57 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
     }
 
     /**
+     * 顺序消费失败的统一收口：直接路由到 DLQ（不写重试调度）。
+     *
+     * <p><b>为什么必须收口在这里（发布前红队审查 R5）：</b>顺序消费者<b>没有</b> retry 消费循环 （{@code
+     * DefaultConsumeLoopSupervisor} 只为 AUTO_ACK 提交 retry 循环），失败重试在分片锁内原地进行、 耗尽后由 {@code
+     * DefaultMessageProcessor#consumeOrderlyWithRetry} 直接转 DLQ。因此任何"未被处理的 ORDERLY 消息"若走到本类的 {@code
+     * handleReconsumeLater}，只会被写入 retry ZSet → 由 {@code RetryScheduler} 转投进 retry
+     * Stream，而<b>没有任何循环读取该 Stream</b>——消息在 retry Stream 中 静默沉没直到被裁剪，属于静默丢失。
+     *
+     * <p>可达路径（修复前均会漏到这个坑）：过滤器求值异常（{@code DefaultMessageProcessor} 的 filterEx 分支）、 {@code
+     * processMessage} 的 {@code Throwable} 兜底（{@code Error}/路由二次故障）。它们在 ORDERLY 语义下的
+     * 正确归宿与"业务异常"完全一致：进 DLQ 并 ACK，由运维介入。
+     *
+     * <p>失败语义：DLQ 写入成功才 ACK；写入失败则保留在 PEL，等 PEL 认领兜底（宁可重复，不可丢失）。
+     */
+    private void handleOrderlyFailure(
+            Message<?> message,
+            ListenerRegistration<?> reg,
+            StreamMQListener listener,
+            MessageId messageId,
+            Throwable cause) {
+        LOG.warn(
+                "Orderly consumer failure routed to DLQ (orderly consumers have no retry loop):"
+                        + " topic={}, group={}, messageId={}, cause={}",
+                reg.getTopic(),
+                reg.getGroup(),
+                messageId,
+                Objects.isNull(cause) ? "null" : cause.toString(),
+                cause);
+        if (routeToDlq(message, reg, messageId, DlqReason.MAX_RETRY_ORDERLY.getCode())) {
+            try {
+                listener.ack(messageId);
+            } catch (RuntimeException ex) {
+                LOG.error(
+                        "ACK failed after orderly DLQ routing (messageId={}): the message stays in"
+                                + " PEL and will be redelivered by PelClaimScheduler — consumers"
+                                + " must be idempotent. cause={}",
+                        messageId,
+                        ex.getMessage(),
+                        ex);
+            }
+        } else {
+            LOG.error(
+                    "Orderly DLQ routing failed, message kept in PEL (topic={}, group={},"
+                            + " messageId={})",
+                    reg.getTopic(),
+                    reg.getGroup(),
+                    messageId);
+        }
+    }
+
+    /**
      * DLQ 消费失败处理（基于策略决策）。
      *
      * <p>流程：
@@ -182,7 +239,10 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
                 messageId,
                 cause != null ? cause.getMessage() : "null");
         try {
-            Map<String, String> fields = messageConverter.toStreamFields(message);
+            // 防御性拷贝：转换器返回的 Map 可能是不可变实现（见 routeToDlq 说明），
+            // 而下游 routeToSecondaryDlq 需要写入 DLQ 元数据字段。
+            Map<String, String> fields =
+                    new LinkedHashMap<>(messageConverter.toStreamFields(message));
             LOG.debug("handleDlqFailureWithStrategy: fields.size={}", fields.size());
             int dlqRetryCount = resolveDlqRetryCount(message, fields);
             String dlqReason =
@@ -487,7 +547,9 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             Duration delay) {
         try {
             int retryCount = message.getReconsumeTimes();
-            Map<String, String> fields = messageConverter.toStreamFields(message);
+            // 防御性拷贝：见 routeToDlq 中关于不可变 Map 的说明。
+            Map<String, String> fields =
+                    new LinkedHashMap<>(messageConverter.toStreamFields(message));
             // 标记 DEFER 调度：RetryScheduler 转投时不递增 retryTimes、不做 MAX_RETRY 判定，
             // 避免"业务合法延迟重试"侵占失败重试预算、被误标为 MAX_RETRY 进入 DLQ。
             // DEFER 不设上限，节奏由业务自行控制（文档已声明）。
@@ -571,7 +633,11 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
     public boolean routeToDlq(
             Message<?> message, ListenerRegistration<?> reg, MessageId messageId, String reason) {
         try {
-            Map<String, String> fields = messageConverter.toStreamFields(message);
+            // 防御性拷贝：MessageConverter 是用户可替换 SPI，返回不可变 Map（如 Map.of）完全合法。
+            // 直接在其返回值上 put 会抛 UnsupportedOperationException 并被下方 catch 吞成
+            // "DLQ routing failed" → 消息永久滞留 PEL，重投/DLQ 全部失效（静默降级）。
+            Map<String, String> fields =
+                    new LinkedHashMap<>(messageConverter.toStreamFields(message));
             fields.put(RetryScheduler.FIELD_DLQ_REASON, reason);
             fields.put(FIELD_ORIGINAL_MESSAGE_ID, messageId.getStreamEntryId());
             String dlqKey = StreamMQKeys.dlqStream(reg.getNamespace(), reg.getGroup());

@@ -54,7 +54,16 @@ public final class Message<T> implements Serializable {
     /** 用户属性（防御性拷贝），用户自定义透传。getter 返回不可修改视图。 */
     private final Map<String, String> userProperties;
 
-    /** 消息体（必填），由序列化器决定如何转 byte[] */
+    /**
+     * 消息体，由序列化器决定如何转 byte[]。
+     *
+     * <p><b>可为 null（有意设计）：</b>{@code null} body 表示"无载荷消息"——序列化器对 {@code null} 返回 {@code
+     * null}（见各内置序列化器的统一空值语义），反序列化侧亦可能得到 null body（对端发了一条无载荷 消息）。框架与消费者<b>必须容忍</b> null
+     * body（如仅用于过滤/控制信号的 Topic）。
+     *
+     * <p>与之相对，<b>发送侧</b>的 {@link MessageBuilder#build()} 要求 body 非 null：普通业务消息缺少载荷
+     * 通常是调用方笔误，应在构造期快速失败。因此"必填"约束属于<b>发送 API</b>，不属于 {@code Message} 值对象本身。
+     */
     private final T body;
 
     /**

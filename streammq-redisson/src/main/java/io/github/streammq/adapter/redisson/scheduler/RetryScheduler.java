@@ -225,6 +225,25 @@ public class RetryScheduler implements StreamMQScheduler {
                 maxReconsumeTimes);
     }
 
+    /**
+     * 注销一个重试目标（配合监听器 unregister / 动态注册回滚）。
+     *
+     * <p>此前目标表只增不减：反复动态注册/注销后，调度器仍会持续扫描已注销目标（内存与 RTT 开销单调增长）。
+     *
+     * @param namespace 命名空间
+     * @param topic 主题
+     * @param group 消费者组名
+     * @return true 表示确有目标被移除
+     */
+    public boolean unregisterRetryTarget(String namespace, String topic, String group) {
+        String key = namespace + ":" + topic + ":" + group;
+        boolean removed = targets.remove(key) != null;
+        if (removed) {
+            LOG.info("Unregistered retry target: topic={}, group={}", topic, group);
+        }
+        return removed;
+    }
+
     /** 启动调度器。 */
     @Override
     public synchronized void start() {

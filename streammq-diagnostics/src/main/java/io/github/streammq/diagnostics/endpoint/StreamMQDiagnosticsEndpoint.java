@@ -6,12 +6,14 @@
 package io.github.streammq.diagnostics.endpoint;
 
 import io.github.streammq.core.policy.ManagementAuthenticator;
+import io.github.streammq.core.util.StringUtils;
 import io.github.streammq.core.util.WebRequestAuthSupport;
 import io.github.streammq.diagnostics.MessageProfileService;
 import io.github.streammq.diagnostics.StreamMQDiagnosticsService;
 import io.github.streammq.diagnostics.model.BacklogReport;
 import io.github.streammq.diagnostics.model.DlqReport;
 import io.github.streammq.diagnostics.model.MessageProfile;
+import io.github.streammq.diagnostics.model.Severity;
 import io.github.streammq.diagnostics.model.SlowConsumeReport;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -113,8 +115,9 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/profile/{messageId}")
     public ResponseEntity<MessageProfile> getProfile(@PathVariable String messageId) {
-        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_PROFILE_PREFIX + messageId);
-        MessageProfile profile = profileService.getProfile(messageId);
+        String validMessageId = requireValid(messageId, "messageId");
+        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_PROFILE_PREFIX + validMessageId);
+        MessageProfile profile = profileService.getProfile(validMessageId);
         if (Objects.isNull(profile)) {
             return ResponseEntity.notFound().build();
         }
@@ -131,8 +134,10 @@ public class StreamMQDiagnosticsEndpoint {
     @GetMapping("/slow-consume")
     public SlowConsumeReport diagnoseSlowConsume(
             @RequestParam String topic, @RequestParam String group) {
-        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_SLOW_CONSUME_PREFIX + topic);
-        return diagnosticsService.diagnoseSlowConsume(topic, group);
+        String validTopic = requireValidTopic(topic);
+        String validGroup = requireValidGroup(group);
+        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_SLOW_CONSUME_PREFIX + validTopic);
+        return diagnosticsService.diagnoseSlowConsume(validTopic, validGroup);
     }
 
     /**
@@ -144,8 +149,10 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/backlog")
     public BacklogReport diagnoseBacklog(@RequestParam String topic, @RequestParam String group) {
-        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_BACKLOG_PREFIX + topic);
-        return diagnosticsService.diagnoseBacklog(topic, group);
+        String validTopic = requireValidTopic(topic);
+        String validGroup = requireValidGroup(group);
+        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_BACKLOG_PREFIX + validTopic);
+        return diagnosticsService.diagnoseBacklog(validTopic, validGroup);
     }
 
     /**
@@ -156,8 +163,9 @@ public class StreamMQDiagnosticsEndpoint {
      */
     @GetMapping("/dlq")
     public DlqReport diagnoseDlq(@RequestParam String group) {
-        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_DLQ_PREFIX + group);
-        return diagnosticsService.diagnoseDlq(group);
+        String validGroup = requireValidGroup(group);
+        checkPermission(StreamMQDiagnosticsEndpointConstants.RES_DLQ_PREFIX + validGroup);
+        return diagnosticsService.diagnoseDlq(validGroup);
     }
 
     /**
@@ -185,6 +193,15 @@ public class StreamMQDiagnosticsEndpoint {
     /**
      * 诊断健康概览，聚合所有诊断数据为单一视图。
      *
+     * <p><b>状态不再是常量（发布前红队审查 R5）：</b>旧实现无论积压多严重、慢消费者多少，{@code status} 恒为 {@code
+     * UP}。运维若以该字段做告警/看板判据，事故期间会持续显示健康——典型的"静默故障"。 现按积压严重度与慢消费者聚合推导：
+     *
+     * <ul>
+     *   <li>任一积压报告为 {@link Severity#CRITICAL} → {@code DOWN}
+     *   <li>否则存在 {@link Severity#WARNING} 积压、或存在慢消费者 → {@code DEGRADED}
+     *   <li>否则 {@code UP}
+     * </ul>
+     *
      * @return 健康概览 Map
      */
     @GetMapping("/health")
@@ -197,7 +214,7 @@ public class StreamMQDiagnosticsEndpoint {
         Map<String, Object> summary = new LinkedHashMap<>();
         summary.put(
                 StreamMQDiagnosticsEndpointConstants.KEY_STATUS,
-                StreamMQDiagnosticsEndpointConstants.STATUS_UP);
+                deriveStatus(backlogs, slowConsumers));
         summary.put(
                 StreamMQDiagnosticsEndpointConstants.KEY_SLOW_CONSUMER_COUNT, slowConsumers.size());
         summary.put(StreamMQDiagnosticsEndpointConstants.KEY_SLOW_CONSUMERS, slowConsumers);
@@ -205,5 +222,46 @@ public class StreamMQDiagnosticsEndpoint {
         summary.put(StreamMQDiagnosticsEndpointConstants.KEY_BACKLOG_REPORTS, backlogs);
         summary.put(StreamMQDiagnosticsEndpointConstants.KEY_TIMESTAMP, System.currentTimeMillis());
         return summary;
+    }
+
+    /** 由积压严重度与慢消费者数量推导整体状态（CRITICAL > WARNING/慢消费者 > UP）。 */
+    private static String deriveStatus(List<BacklogReport> backlogs, List<String> slowConsumers) {
+        boolean degraded = !slowConsumers.isEmpty();
+        for (BacklogReport report : backlogs) {
+            Severity severity = report.severity();
+            if (severity == Severity.CRITICAL) {
+                return StreamMQDiagnosticsEndpointConstants.STATUS_DOWN;
+            }
+            if (severity == Severity.WARNING) {
+                degraded = true;
+            }
+        }
+        return degraded
+                ? StreamMQDiagnosticsEndpointConstants.STATUS_DEGRADED
+                : StreamMQDiagnosticsEndpointConstants.STATUS_UP;
+    }
+
+    /**
+     * 校验并规范化 topic：非法输入返回 400 而不是把原始字符串透传给下游拼 Redis Key。
+     *
+     * <p>与 Actuator 端点（{@code StringUtils.requireValidName}）保持同一口径：禁止
+     * {@code :}、{@code *}、{@code {}、空白等字符，避免 key 结构被越权构造/混淆。
+     */
+    private static String requireValidTopic(String topic) {
+        return requireValid(topic, "topic");
+    }
+
+    /** 校验并规范化消费者组名（口径同 {@link #requireValidTopic(String)}）。 */
+    private static String requireValidGroup(String group) {
+        return requireValid(group, "group");
+    }
+
+    private static String requireValid(String value, String field) {
+        try {
+            return StringUtils.requireValidName(value, field);
+        } catch (IllegalArgumentException | NullPointerException ex) {
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST, "Invalid " + field + ": " + ex.getMessage(), ex);
+        }
     }
 }

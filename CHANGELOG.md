@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > **0.1.2 是 StreamMQ 第一个发布到 Maven Central 的版本**（0.1.0 / 0.1.1 均为内部迭代，从未对外发布，见下文。
 > 版本号与 `pom.xml` / `streammq-bom` / 各模块一致，均为 `0.1.2`）。
-> 本节同时包含发布前红队审查（第一轮 ~ 第四轮）的全部根因修复；第二轮审查依据 `docs/fullReview.md` 协议执行，
+> 本节同时包含发布前红队审查（第一轮 ~ 第五轮）的全部根因修复；审查依据 `docs/fullReview.md` 协议执行，
 > 各轮结论与逐项处置见 [docs/REPORT.md](docs/REPORT.md)。
 
 ### Added
@@ -47,9 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **顺序消费全局超时不生效**（发布前红队审查项）：注解 `orderlyConsumeTimeout = 0`（未显式声明）时，
-  此前被当作"关闭"而非"继承全局默认"，导致全局 `defaultOrderlyConsumeTimeoutMillis` 对未声明者失效、
-  卡死消息不进 DLQ。现语义修正为 **0 = 继承全局默认；>0 = 覆盖；<0 = 显式关闭**。
+- **顺序消费全局超时不生效**（发布前红队审查项）：注解 `orderlyConsumeTimeout` 的取值语义此前不可区分，
+  导致全局 `defaultOrderlyConsumeTimeoutMillis` 的生效条件无法表达。现语义固定为
+  **>0 = 覆盖全局；0 = 继承全局；<0 = 显式关闭**，且注解默认值即 `ANNOTATION_UNSET_LONG = -1`（显式关闭）。
+  注意：因此**只修改全局键而不把注解显式写成 `0`，该全局键不生效**（`docs/configuration-reference.md` 已标注）。
 - 广播组名在实例身份缺失时静默拼出字面量 `"null"`（真实缺陷）：`BroadcastGroupNaming` 的 `consumerName`/
   `effectiveGroup` 在 `instanceId` 为 `null`/空白时会生成 `{group}:{group}-null` 这样的组名，
   使所有未正确命名的广播实例塌缩进同一个 Redis 消费者组——广播语义静默退化为集群消费，且组名无法反解回身份、
@@ -291,8 +292,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Fury 白名单可用性**：新增 `streammq.producer.fury-registered-classes`，白名单模式下可直接声明业务消息体
   类型；未声明时启动日志给出可操作告警。文档 / Javadoc / SECURITY.md 统一为"默认强制类注册白名单；
   `new FurySerializer()` 即白名单，`new FurySerializer(false)` 才是宽松模式（受系统属性门禁保护）"。
-- **Jackson 升级至 2.18.10（原 2.17.2）**：修复 **GHSA-r7wm-3cxj-wff9** 与 **GHSA-72hv-8253-57qq** 两个 High CVE；
-  `jackson-bom` 声明在 Spring Boot BOM 之前，确保不会被 Boot 管理的 2.17.2 静默覆盖。
+- **Jackson 升级（2.17.2 → 2.21.4，经 2.18.10 中转）**：修复 **GHSA-r7wm-3cxj-wff9** 与 **GHSA-72hv-8253-57qq**
+  两个 High CVE；`jackson-bom` 声明在 Spring Boot BOM 之前，确保不会被 Boot 管理的版本静默覆盖。
 - **SBE / FlatBuffers 读取侧长度与深度上限**：FlatBuffers 对单字段声明长度的上限为
   `min(streammq.producer.max-message-size, 64MB)`，嵌套深度上限 64 层；SBE 校验信封头（`templateId`/`schemaId`）、
   截断与声明长度（负数 / 超消息上限 / 超实际可读字节数）。畸形载荷一律抛 `SerializationException`，
@@ -301,6 +302,98 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   xpath / velocity / ignite / activemq / myfaces / struts / tomcat / log4j、fastjson2、Guava collect、mchange、Hikari、
   net.sf.json、ehcache、org.json、quartz、jboss、Javassist、Groovy、Rhino（`org.mozilla.javascript`）、
   `org.python`、logback 等条目（护栏仍是命名空间拒绝式黑名单，属纵深防御）。
+
+### Fixed — 第五轮发布前红队审查（R5，发布候选）
+
+> 依据 `docs/fullReview.md` 协议对全部 11 个模块、4 个 workflow、全部发布物料与全部测试做独立取证；
+> 与发布通道**完全相同**的门禁命令 `mvn clean verify -Djacoco.check.skip=false` 实测。逐项证据见 [docs/REPORT.md](docs/REPORT.md)。
+
+**数据面正确性（可能导致消息静默不投递/丢失）**
+
+- **顺序消费失败被写进「无人消费」的重试 Stream**：ORDERLY 没有 retry 消费循环（重试在分片锁内原地进行），
+  但过滤器求值异常、`processMessage` 的 `Throwable` 兜底、`DEFER` 三条路径仍会走到
+  `handleReconsumeLater` → 重试 ZSet → `RetryScheduler` 转投进 retry Stream，而**没有任何循环读取该 Stream**，
+  消息在流中被裁剪前静默沉没。现于 `DefaultRetryAndDlqHandler.handleAction` 统一收口：ORDERLY 的
+  非成功动作一律 `routeToDlq`（`dlqReason=maxRetryOrderly`）并 ACK，DLQ 写入失败则保留 PEL。
+- **运行期动态注册的消费者未绑定调度目标**（容器 RUNNING 后调用 `registerConsumer`）：只建读循环，
+  未注册 retry / PEL 认领目标 —— 这些消费者的失败消息写入重试 ZSet 后无人扫描（payload 7 天过期即隔离丢失），
+  崩溃遗留 PENDING 也无人恢复。现 `SchedulerTargetBinder` 新增 `bindTargets`/`unbindTargets`（单注册项），
+  与启动期批量绑定共用同一套规则（`bindOneRetryTarget`/`bindOnePelClaimTarget`），运行期注册即时补绑。
+- **调度目标只增不减**：`unregister` 不解除调度目标，反复动态注册/注销后调度器持续扫描已注销目标。
+  现 `RetryScheduler.unregisterRetryTarget` / `PelClaimScheduler.unregisterTargets` 配合 `unbindTargets` 成对解除。
+- **事务回查批量扫描恒少一条且 `batch-size=1` 时完全失效**：`TransactionScanner.scanTimeoutHalf` 使用
+  `valueRange(..., 0, batchSize - 1)`，`batchSize=1` 时 `LIMIT 0` → 永不扫描 → 半消息永久悬挂。
+  现与其他调度器统一为 `count = batchSize`。
+- **「读取 Redis 服务器时钟」从未真正生效**：`PelClaimScheduler` 与 `RedissonConsumerGroupManager` 内联的 Lua
+  脚本返回**标量**整数，却声明为 `ReturnType.MULTI`（期望数组回复），解码异常被 `catch` 吞掉后静默回退本机时钟
+  —— 跨主机 NTP 偏差会误判实例存活、误踢消费者、复制重投。现抽出 `RedisServerClock`（`ReturnType.INTEGER`
+  + 单一实现）并补 IT 守卫。
+- **`MessageConverter` 返回不可变 Map 时重试/DLQ 路由失效**：`routeToDlq` / `handleDefer` / 二级 DLQ 直接在
+  转换器返回值上 `put`，遇到 `Map.of(...)` 之类不可变实现抛 `UnsupportedOperationException` 并被吞成
+  "DLQ routing failed" → 消息永久滞留 PEL。现全部改为先做可变拷贝。
+- **广播实例身份文件并发写互相覆盖**：临时文件名固定为 `<name>.tmp`，同机多进程并发写同一身份文件会互相踩踏；
+  read-modify-write 也无互斥。现临时文件名带 pid+UUID，并对「读-改-写」加 JVM 内互斥 + 跨进程文件锁。
+- **监听器工厂 `createListener`/`close` 竞态导致监听器逃逸**：通过 `closed` 检查后、入队前若 `close()` 完成排空，
+  新监听器永不关闭且其租约心跳持续续租 Redis 槽位。现以生命周期锁使「检查+入队」与「置位+排空」互斥，构建期间
+  被关闭则自关闭并抛错。
+- **广播僵尸组清扫恒少扫一条**：`valueRange(..., 0, maxSweep - 1)`，`maxSweep=1` 时永不回收。改为 `maxSweep`。
+- **`checkerTimeoutMillis <= 0` 使事务回查线程无限等待**：等待实现为 `join(Duration)`，而 `join(0)` 语义是
+  永久等待 —— 挂死的 `TransactionChecker` 会让扫描线程永久持有 `groupLock`，整个回查调度停摆。现 setter
+  快速失败（`> 0`）并在使用点兜底夹取。
+
+**安全与运维面**
+
+- **诊断端点参数无校验**：`/streammq/diagnostics/**` 未对 `topic`/`group`/`messageId` 做名称校验，原始输入会
+  被拼进 Redis Key 与鉴权资源串。现与 Actuator 端点统一走 `StringUtils.requireValidName`，非法输入返回 400。
+- **诊断健康概览恒为 `UP`**：严重积压/慢消费期间仍报健康（典型「静默故障」）。现按积压严重度与慢消费者推导
+  `UP` / `DEGRADED` / `DOWN`。
+- **管理端点回吐 Redis 内部异常信息**：多个 catch 分支把 `ex.getMessage()`（含 Key 名、`NOGROUP`、连接/ACL
+  错误）原样返回 HTTP 响应。现返回「操作名 + 异常类型 + 关联 ID」，细节只进日志。
+- **运行期组配置上限过宽**：`inflightCapacity` 可设到 `Integer.MAX_VALUE`（背压队列 OOM 面），
+  休眠/退避/宽限可设到 `Long.MAX_VALUE`（消费循环近乎静默停摆）。现收敛为 `[0, 100000]` 与 `[1, 300000]`。
+- **`FailureRetryLimiter` key 空间可无界增长**：清理过期条目后在冷却窗口内持续以不同 target 失败时 Map 仍会
+  增长，与其文档承诺相悖。现超限且清理无效时放弃记录（限流降级为放行，key 空间恒有界）。
+
+**发布通道与物料**
+
+- **GPG 非交互签名缺失导致首发被阻断**：`gpg` profile 未声明 `--pinentry-mode loopback`（gpg 2.1+ 在无 tty 的
+  runner 上必须显式 loopback），且未显式传入口令。现两处 POM 补齐 `gpgArguments`，`release.yml` 以
+  `-Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE"` 显式传入。
+- **发布资产清单与发布集不符**：`release.yml` 的 Release 资产仍列出 `tracing`/`diagnostics`/`binder` 三个
+  Central 不可解析的模块，与同处注释及 `CONTRIBUTING.md` 矛盾。现资产收敛为 Central 可解析的发布集。
+- **`versions:set` 可能漏改无父 POM 的 `streammq-bom`**：加 `-DprocessAllModules=true` 并新增断言步骤，
+  把「BOM 版本未随发布升版」从静默漂移变为硬失败。
+- **CVE 硬门禁的 `osv-scanner` 二进制无完整性校验**（下载后直接执行，且它决定「是否阻断发布」）。
+  现固定官方 SHA-256 校验（`sha256sum -c`）。
+- **CI 三个 job 缺 `timeout-minutes`**：guard / build / formatting 补齐，避免 runner 卡死无限等待。
+
+**文档与元数据（发布物料一致性）**
+
+- `NOTICE` 6 处第三方版本与 `pom.xml` 脱钩（Redisson / Jackson / Micrometer / AssertJ /
+  Spring Cloud Stream / Spring Integration），已同步为实际基线。
+- 两个 README：技术栈表 Redisson / Jackson 版本与徽章（Spring Boot / Redisson）修正；zh 基准环境表标注
+  「历史测量环境」以消除与当前基线的表面矛盾。
+- `SECURITY.md` 中文摘要与英文正文自相矛盾（Jackson 版本、CVE 门禁口径），已同步为「无密钥 SBOM+osv 硬门禁 +
+  OWASP 为增强扫描」。
+- `CONTRIBUTING.md`：tripwire 阈值更正为真实口径（分模块下限 + 全局 ≥ 230 + 跳过率 ≤ 20%）、
+  `parent.pom.xml` → `pom.xml`、Release 资产说明与实现对齐。
+- `docs/configuration-reference.md`：配置校验异常更正为 `StreamMQClientException`；补齐
+  `orderly-consume-timeout-millis` 的三分支语义与「全局键只在注解显式写 0 时生效」；`trace.storage` 默认值口径；
+  标注 `admin.startup-warn` 为不走宽松绑定的直读精确键。
+- `streammq-spring-boot-starter/pom.xml` 的 `<description>` 移除 0.1.2 已删除的 `@EnableStreamMq` 注解。
+- `StreamMQProperties` 的 `orderly-consume-timeout-millis` javadoc 与 `DefaultConsumerTuning` 行内注释更正为
+  真实默认值 `-1`（显式关闭）。
+- `Message` 的 `body` javadoc 更正：框架**有意**支持 null body（无载荷消息；内置序列化器统一
+  `serialize(null) → null` / `deserialize(null|empty) → null`，对端可能发来无载荷消息）。真实边界是
+  「**发送 API** 必填、**值对象**可为 null」，原文"必填"表述会误导维护者加上破坏性校验
+  （实测：加校验会直接打破 `toStreamFieldsNullBody` 等既有契约）。
+
+**新增回归守卫（失败即红）**
+
+- `OrderlyFailureRoutingTest`：ORDERLY + `RECONSUME_LATER`/`DEFER` 必须走 DLQ 且**绝不**触碰重试调度。
+- `DefaultSchedulerTargetBinderTest`：单注册项绑定产生的目标集合与批量绑定一致；注销成对解除；null 调度器安全跳过。
+- `RedisServerClockIT`：真实 Redis 上必须取到服务器时间（锁定 `ReturnType` 与脚本返回值的一致性）。
+- `StreamMQDiagnosticsEndpointTest`：非法 topic/group 返回 400 且不触达下游；健康状态按严重度推导。
 
 ## [0.1.1] - 2026-08-29 — 内部迭代版本（未发布到 Maven Central）
 
