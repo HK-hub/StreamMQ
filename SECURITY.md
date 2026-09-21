@@ -147,7 +147,7 @@ written as Base64 text in stream fields. Still, keep Redis reachable only by tru
   Jackson 2.21.4, AssertJ 3.27.7 and commons-compress 1.27.1. Remaining Medium/Low upstream advisories (if any) are
   reported but do not block the gate.
 - **CVE scanning channel**: every PR/push **and every release run** a **keyless hard gate** — a CycloneDX SBOM of
-  the four published artifacts' dependency closure (`bom-shipped.json`) is scanned with `osv-scanner` (OSV database).
+  the four published artifacts' dependency closure (`bom-shipped.cdx.json`) is scanned with `osv-scanner` (OSV database).
   Any advisory with CVSS ≥ 7.0 in that closure fails the build; the full JSON report is uploaded as a build artifact.
   The release channel (`release.yml`) runs the **same** `sbom-scan` job and its `publish` job depends on it (together
   with the `guard` publish-set consistency job), so a High/Critical advisory in the shipped closure blocks the Central

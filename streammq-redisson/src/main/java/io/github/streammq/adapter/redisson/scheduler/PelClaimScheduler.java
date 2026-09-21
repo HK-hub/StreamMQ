@@ -566,7 +566,9 @@ public class PelClaimScheduler implements StreamMQScheduler {
      */
     @SuppressWarnings({"rawtypes", "unchecked"})
     private void scanPel(PelClaimTarget target) {
-        String lockKey = StreamMQKeys.pelClaimLock(target.namespace, target.topic, target.group);
+        String lockKey =
+                StreamMQKeys.pelClaimLock(
+                        target.namespace, target.kind.name(), target.topic, target.group);
         RLock scanLock = redisson.getLock(lockKey);
         // 不等待：其它实例正在扫该目标时直接跳过本轮；lease=-1 启用看门狗续期，持有者崩溃后自动释放
         boolean locked;
@@ -620,6 +622,9 @@ public class PelClaimScheduler implements StreamMQScheduler {
             }
             Map<String, String> heartbeats = loadInstanceHeartbeats(target);
             long nowMs = lastRedisNowMs > 0 ? lastRedisNowMs : System.currentTimeMillis();
+            // 目的键类型自检在一次扫描内不会变化，惰性求值一次并复用：DLQ 洪峰下逐条发 TYPE
+            // 脚本会带来 N 次额外往返（此前实现即为逐条调用）。
+            Boolean dlqDestinationWritable = null;
             for (PendingEntry entry : pending) {
                 try {
                     StreamMessageId id = entry.getId();
@@ -655,11 +660,29 @@ public class PelClaimScheduler implements StreamMQScheduler {
                     Map<String, String> fields =
                             (Map<String, String>) readResult.values().iterator().next();
                     int retryTimes = parseRetryTimes(fields);
+                    // ORDERLY 活消费者保护（必须覆盖全部分支）：消息所属分片的看门狗锁仍被续期 ⇒
+                    // 该消息正被某实例合法处理（顺序消费无超时取消）。判活第一道依赖实例心跳，当心跳
+                    // 线程被 GC / 线程池饱和拖过 instanceTimeout 而业务线程仍持锁处理中时会误判死亡；
+                    // 此时若只保护「未超限重投」分支，已到重试上限的消息会被提前复制进 DLQ 造成
+                    // 重复投递与伪死信。因此该判定必须前移到 retryTimes 分支之前。
+                    if (target.orderly && isShardLockHeld(target, fields)) {
+                        LOG.debug(
+                                "Skip claiming orderly pending, shard lock held by live consumer:"
+                                        + " topic={}, group={}, id={}",
+                                target.topic,
+                                target.group,
+                                id);
+                        continue;
+                    }
                     if (retryTimes >= target.maxReconsumeTimes) {
                         // 目的键自检只作用于**确实要写 DLQ 的这一条分支**：DLQ 键被非 stream 占用时
                         // 跳过本条（消息留在 PEL，绝不丢），但同批次里未超限、只需同流重投的条目
                         // 仍会被正常认领——此前把自检放在扫描入口，会让一条错误键拖停整个目标。
-                        if (!warnIfDestinationUnwritable(target, dlqStreamKey)) {
+                        if (dlqDestinationWritable == null) {
+                            dlqDestinationWritable =
+                                    warnIfDestinationUnwritable(target, dlqStreamKey);
+                        }
+                        if (!dlqDestinationWritable) {
                             continue;
                         }
                         fields.put(
@@ -681,17 +704,6 @@ public class PelClaimScheduler implements StreamMQScheduler {
                                 id,
                                 retryTimes);
                     } else {
-                        // ORDERLY 活消费者保护：消息所属分片的看门狗锁仍在续期 ⇒ 该消息正被
-                        // 某实例合法消费中（顺序消费无超时取消），跳过认领，避免重复副作用与乱序。
-                        if (target.orderly && isShardLockHeld(target, fields)) {
-                            LOG.debug(
-                                    "Skip claiming orderly pending, shard lock held by live"
-                                            + " consumer: topic={}, group={}, id={}",
-                                    target.topic,
-                                    target.group,
-                                    id);
-                            continue;
-                        }
                         // 重新投递：容器消费者使用 XREADGROUP >（neverDelivered）读取，
                         // XAUTOCLAIM 到固定消费者名（pelclaim-consumer）的消息永远不会被读取（永久卡在 PEL）。
                         // 因此改为：XADD 新 entry（递增 retryTimes，保留 originalMessageId）+ ACK 旧 entry，
@@ -751,9 +763,6 @@ public class PelClaimScheduler implements StreamMQScheduler {
         String streamKey = StreamMQKeys.retryStream(target.namespace, target.topic, target.group);
         RStream<String, String> stream = redisson.getStream(streamKey, StringCodec.INSTANCE);
         String dlqStreamKey = StreamMQKeys.dlqStream(target.namespace, target.group);
-        if (!warnIfDestinationUnwritable(target, dlqStreamKey)) {
-            return;
-        }
         try {
             var pending =
                     stream.listPending(
@@ -764,6 +773,9 @@ public class PelClaimScheduler implements StreamMQScheduler {
             }
             Map<String, String> heartbeats = loadInstanceHeartbeats(target);
             long nowMs = lastRedisNowMs > 0 ? lastRedisNowMs : System.currentTimeMillis();
+            // 目的键类型自检惰性求值一次（同 TOPIC 扫描口径）：DLQ 键不可写只影响确实要写
+            // DLQ 的条目，不阻断同流重投；一次扫描内目的键类型不会变化，避免逐条 TYPE 往返。
+            Boolean dlqDestinationWritable = null;
             for (PendingEntry entry : pending) {
                 try {
                     StreamMessageId id = entry.getId();
@@ -800,7 +812,11 @@ public class PelClaimScheduler implements StreamMQScheduler {
                         // 超限 → 原子认领后进 DLQ（先 XACK 旧条目，认领成功才 XADD DLQ）。
                         // 目的键自检同样只作用于这条分支：DLQ 键不可写时跳过本条（留 PEL），
                         // 同批次未超限的重投条目不受影响。
-                        if (!warnIfDestinationUnwritable(target, dlqStreamKey)) {
+                        if (dlqDestinationWritable == null) {
+                            dlqDestinationWritable =
+                                    warnIfDestinationUnwritable(target, dlqStreamKey);
+                        }
+                        if (!dlqDestinationWritable) {
                             continue;
                         }
                         fields.put(RetryScheduler.FIELD_DLQ_REASON, DlqReason.MAX_RETRY.getCode());

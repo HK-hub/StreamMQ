@@ -5,6 +5,7 @@
  */
 package io.github.streammq.core.util;
 
+import io.github.streammq.core.consumer.DlqMessageConsumer;
 import io.github.streammq.core.consumer.StreamMessageConcurrentlyConsumer;
 import io.github.streammq.core.consumer.StreamMessageOrderlyConsumer;
 import java.lang.reflect.ParameterizedType;
@@ -162,9 +163,16 @@ public class BodyTypeResolver {
         return null;
     }
 
-    /** 判断类型是否为 StreamMQ Consumer 接口。 */
+    /**
+     * 判断类型是否为 StreamMQ Consumer 接口（含 DLQ 消费者）。
+     *
+     * <p>{@link DlqMessageConsumer} 直接继承 {@link StreamMessageConsumer}，<b>不</b>经
+     * Concurrently/Orderly 子接口；此前只识别后两者，导致 {@code AbstractDlqMessageConsumer<Order>} 这类层次遍历不到目标类型、
+     * 泛型 body 类型解析为 {@code null}，在 DLQ 条目缺少 {@code bodyType} 字段时回退为 String 而非声明的 {@code Order}。
+     */
     private static boolean isStreamMQConsumer(Class<?> rawType) {
         return rawType == StreamMessageConcurrentlyConsumer.class
-                || rawType == StreamMessageOrderlyConsumer.class;
+                || rawType == StreamMessageOrderlyConsumer.class
+                || rawType == DlqMessageConsumer.class;
     }
 }

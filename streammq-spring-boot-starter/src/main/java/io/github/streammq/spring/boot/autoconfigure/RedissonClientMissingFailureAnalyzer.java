@@ -29,7 +29,12 @@ public class RedissonClientMissingFailureAnalyzer
 
     @Override
     protected FailureAnalysis analyze(Throwable rootFailure, NoSuchBeanDefinitionException cause) {
-        if (!REDISSON_CLIENT_CLASS.equals(cause.getBeanType())) {
+        // 必须比较 Class 的**名字**：NoSuchBeanDefinitionException#getBeanType() 返回 Class<?>，
+        // 而 String.equals(Class) 恒为 false —— 此前这里写成 String.equals(cause.getBeanType())，
+        // 导致 analyze() 永远返回 null，本分析器（以及 spring.factories 里对它的注册）从未生效，
+        // 用户看到的仍是不含任何修复线索的裸 NoSuchBeanDefinitionException。
+        Class<?> beanType = cause.getBeanType();
+        if (beanType == null || !REDISSON_CLIENT_CLASS.equals(beanType.getName())) {
             return null;
         }
         String description =

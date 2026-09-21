@@ -59,7 +59,25 @@ public class RedisBacklogProbe implements BacklogProbe {
                         group,
                         ex.getMessage());
             }
-            return new Result(streamSize, pendingCount);
+            // 活跃消费者数：用于区分"消费者跟不上"（XPENDING 增长）与"消费者进程全挂"
+            // （XPENDING≈0 但 XLEN 持续增长）。组不存在（NOGROUP）时按 0 处理。
+            int consumerCount = 0;
+            try {
+                for (org.redisson.api.StreamGroup g : stream.listGroups()) {
+                    if (g.getName().equals(group)) {
+                        // Redisson 的 StreamGroup#getConsumers() 直接返回消费者数量（int）
+                        consumerCount = g.getConsumers();
+                        break;
+                    }
+                }
+            } catch (RuntimeException ex) {
+                log.debug(
+                        "listGroups failed for topic={}, group={}: {}",
+                        topic,
+                        group,
+                        ex.getMessage());
+            }
+            return new Result(streamSize, pendingCount, consumerCount);
         } catch (RuntimeException ex) {
             log.warn(
                     "Backlog probe failed for topic={}, group={}: {}",

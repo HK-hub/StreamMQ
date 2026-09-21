@@ -141,4 +141,64 @@ public class CloudK8sProperties {
     public void setOperatorWatchNamespaces(java.util.List<String> namespaces) {
         operator.setWatchNamespaces(namespaces);
     }
+
+    /**
+     * 启动期配置校验（fail-fast）。
+     *
+     * <p><b>为什么必须有：</b>本模块此前对全部数值配置零校验，非法值以两种不一致的方式暴露 —— {@code hpa-sync-interval-seconds = 0} 会让
+     * {@code ScheduledThreadPoolExecutor.scheduleAtFixedRate} 在 {@code afterPropertiesSet}
+     * 阶段抛<b>不带任何配置键信息</b>的 {@link IllegalArgumentException} （启动失败但无法定位），而 {@code
+     * reconcile-interval-seconds} 的非法值却被<b>静默忽略</b>回落默认值。 同一模块内两种口径让用户无法预测行为。此处统一为 fail-fast —— 后者的
+     * setter 也已改为 fail-fast。
+     *
+     * @throws IllegalArgumentException 任一取值非法
+     */
+    public void validate() {
+        // gracefulShutdownTimeoutMs 允许负值：其语义是"不做优雅等待"，由 GracefulShutdownHandler
+        // 夹取为 0 处理（不是配置错误）——该契约由 CloudK8sPropertiesWiringTest 锁定。
+        requirePositive("streammq.cloud.k8s.reconcile-interval-seconds", reconcileIntervalSeconds);
+        requirePositive("streammq.cloud.k8s.hpa-sync-interval-seconds", hpaSyncIntervalSeconds);
+        requirePositive("streammq.cloud.k8s.hpa-default-target-lag", hpaDefaultTargetLag);
+        if (hpaScaleUpThreshold <= 0) {
+            throw new IllegalArgumentException(
+                    "streammq.cloud.k8s.hpa-scale-up-threshold must be > 0 (percent), got: "
+                            + hpaScaleUpThreshold);
+        }
+        if (hpaScaleDownThreshold < 0) {
+            throw new IllegalArgumentException(
+                    "streammq.cloud.k8s.hpa-scale-down-threshold must be >= 0 (percent), got: "
+                            + hpaScaleDownThreshold);
+        }
+        if (hpaScaleDownThreshold >= hpaScaleUpThreshold) {
+            // 缩容阈值不低于扩容阈值时，扩缩判定会互相矛盾并形成持续抖动（反复扩容-缩容）
+            throw new IllegalArgumentException(
+                    "streammq.cloud.k8s.hpa-scale-down-threshold ("
+                            + hpaScaleDownThreshold
+                            + ") must be < hpa-scale-up-threshold ("
+                            + hpaScaleUpThreshold
+                            + "), otherwise the autoscaler oscillates between scale-up and"
+                            + " scale-down.");
+        }
+        validateNamespaces("streammq.cloud.k8s.config-watch-namespaces", configWatchNamespaces);
+        validateNamespaces(
+                "streammq.cloud.k8s.operator.watch-namespaces", operator.getWatchNamespaces());
+    }
+
+    private static void requirePositive(String key, long value) {
+        if (value <= 0) {
+            throw new IllegalArgumentException(key + " must be > 0, got: " + value);
+        }
+    }
+
+    private static void validateNamespaces(String key, java.util.List<String> namespaces) {
+        if (namespaces == null) {
+            return;
+        }
+        for (String namespace : namespaces) {
+            if (namespace == null || namespace.isBlank()) {
+                throw new IllegalArgumentException(
+                        key + " must not contain null or blank namespace entries");
+            }
+        }
+    }
 }

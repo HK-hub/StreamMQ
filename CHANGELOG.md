@@ -9,12 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > **0.1.2 是 StreamMQ 第一个发布到 Maven Central 的版本**（0.1.0 / 0.1.1 均为内部迭代，从未对外发布，见下文。
 > 版本号与 `pom.xml` / `streammq-bom` / 各模块一致，均为 `0.1.2`）。
-> 本节同时包含发布前红队审查（第一轮 ~ 第六轮）的全部根因修复；审查依据 `docs/fullReview.md` 协议执行，
+> 本节同时包含发布前红队审查（第一轮 ~ 第七轮）的全部根因修复；审查依据 `docs/fullReview.md` 协议执行，
 > 各轮结论与逐项处置见 [docs/REPORT.md](docs/REPORT.md)。R5 推送的真实 CI（run 35480290570）在
 > `Verify (Integration)` 红：`ConsumerIT.ack_messagePelEmpty` 断言了异步 ack **未承诺**的同步语义——
-> 已在 R6 按契约修复并新增流水线落地守卫（见下方"新增回归守卫"与 `docs/REPORT.md` §15.6）。R6 终局门禁
-> `mvn clean verify -Djacoco.check.skip=false` 实测 20/20 SUCCESS、1482 用例 0 失败/0 跳过，裁决 GO 90/100；
-> 推送后真实 CI（run 35501791198，commit `271734c`）**全绿**：Guards / CVE gate / Formatting / Build /
+> 已在 R6 按契约修复并新增流水线落地守卫（见下方"新增回归守卫"与 `docs/REPORT.md` §15.6）。**R7 终局门禁**
+> `mvn clean verify -Djacoco.check.skip=false` 实测 **20/20 SUCCESS、1509 用例 0 失败/0 错误**
+> （唯一跳过为 11 个 Cluster 用例：无 3 主集群时显式 skip 并打印启动指引），裁决 **GO 90/100**。
+> R6 推送后真实 CI（run 35501791198，commit `271734c`）**全绿**：Guards / CVE gate / Formatting / Build /
 > Test / Verify (Integration) / Staging smoke / Coverage report 全 success（OWASP 深扫无 NVD key 时按设计跳过）。
 
 ### Added
@@ -628,6 +629,161 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `NOTICE` 版本对齐（Spring 6.2.x / Netty 4.1.138.Final）并补 `commons-compress`；演示脚本升级到 Spring Boot
   3.5.16、演示指南补 `mvn install` 前置与正确的管理端点 URL；样例 tracing 改用 `${opentelemetry.version}`；
   workflow 注释归属更正；**18 个文件的 `@since 1.1.0`** 校正为 0.1.2。
+
+### Fixed — 第七轮发布前红队审查（R7，发布候选）
+
+> 依据 `docs/fullReview.md` 协议对 11 个模块主源码、文档物料与门禁口径做独立取证（分域并行审计 + 主审逐项代码级核对）。
+> 本轮以"上一轮已修过的每一类缺陷是否还有孪生副本"为起点，并把**文档承诺 vs 实现事实**作为独立维度系统扫描。
+> 门禁命令 `mvn clean verify -Djacoco.check.skip=false` 实测。逐项证据与裁决见 [docs/REPORT.md](docs/REPORT.md)。
+
+**数据面正确性**
+
+- **顺序消费 PEL 认领的"超限转 DLQ"分支缺少分片锁存活保护（P1）**：同一次扫描中"未超限重投"分支用
+  `isShardLockHeld` 保护了"心跳过期但分片看门狗锁仍被存活 handler 持有"的场景，而"超限转 DLQ"分支没有该保护。
+  判活第一道依赖实例心跳，当心跳线程被 GC/线程池饱和拖过 `instance-timeout` 而业务线程仍持锁处理中时会误判死亡，
+  **正在被合法处理的 ORDERLY 消息被提前复制进 DLQ**（重复投递 + 伪死信污染补偿逻辑）。
+  现将该判定**前移到 `retryTimes` 分支之前**，统一保护两条分支。
+- **重试/DLQ 重试 ZSet 的写侧使用本机时钟（P2）**：写侧（`scheduleRetry` / `scheduleDlqRetry`）用
+  `System.currentTimeMillis()` 生成 score，而读侧（`RetryScheduler` 到期判定）用 **Redis 服务器时钟**比较 ——
+  跨主机 NTP 偏差（可达数十秒）会把整条重试链的触发时刻平移，使退避节奏与业务预期不符。
+  现抽出 `nowMillis()`（Redis 服务器时钟，失败回退本机并限频 WARN），读写两侧同源。
+- **延时孤儿 payload 清理存在"快照-扫描"竞态可误删在线 payload（P2）**：清理侧先在 T0 物化"仍被引用"的
+  msgId 快照，再在 T1 扫描 key 做差集；T0→T1 之间新入队的延时消息（payload 与 ZSet 条目在同一原子批中写入）
+  不在快照里，会被判定为孤儿并删除 —— 到期转投时读不到 payload 只能进隔离区，**业务视角即静默丢失**。
+  现把「是否仍被任一延时 ZSet 引用」的判定与删除下沉为服务端**单条 Lua**（`ZSCORE` 全部 ZSet，任一命中即保留，
+  否则 `DEL`），判定与删除原子执行，与调用方快照时点解耦。
+- **批量发送静默跳过 body 压缩（P2）**：`syncSendBatch` 未调用 `applyCompression`，而单条与异步路径都调用了
+  —— `compress-threshold` 在批量投递时被静默忽略，同一消息的体积随发送方式而变。现已对齐。
+- **DEFER 超长延迟的语义与 TTL 保证在 javadoc 中说明**（`handleDefer`）：DEFER **有意不夹取**到 7 天上限
+  （业务显式表达"何时再处理"，节奏自控），正确性由 `payload TTL = max(基础 TTL, 延迟 + 宽限)` 保证。
+  该口径原仅存在于注释中，现补入方法 javadoc 并保留既有回归用例。
+
+**配置承诺 vs 实现事实（"声明了但从未生效"）**
+
+- **`@StreamMQDlqConsumer` 的 7 个 DLQ 数值属性从未被任何生产代码读取（P2）**：DLQ 调优实际只取全局
+  `streammq.dlq.*`，而 `DlqConfig` 的 javadoc 与官方样例却声明"注解优先级最高" —— 用户按文档设置
+  `maxDlqRetryAttempts` / `secondaryDlqEnabled` 等后**静默无效**（可能导致死信被过早丢弃）。
+  现按真实优先级接线：注解侧改用哨兵（`ANNOTATION_UNSET_*` / `SecondaryDlqMode.INHERIT` / 空串），装配期折算为
+  新的 `DlqConfigOverride`（未声明字段为 `null`），运行期由 `applyTo(base)` 合并到全局配置上 ——
+  「注解 &gt; 全局 &gt; 框架默认」首次成为可执行事实。新增 `DlqConfigOverrideTest`（8 例）。
+- **`DefaultListenerRegistration.Builder.converterInstance(...)` 被静默丢弃（P2）**：公开 Builder 链上该方法只写
+  Builder 字段，唯一构造器从未读取 → `getConverterInstance()` 恒为 `null`。内部路径经
+  `setConverterInstance(...)` 回填，掩盖了该缺陷。现已回填并加注释。
+- **`@StreamMQConsumer.retryStreamMaxLen()` 从未被读取，且与 R2-6 不变式冲突（P2）**：重试流条目是消息的
+  **唯一副本**，施加 `MAXLEN` 有损裁剪即等于静默丢消息（R2-6 已因此禁用该裁剪并输出 WARN）。
+  该注解属性因此**移除**（保留只会是"配了没用"或"配了就丢数据"）；`README.zh-CN.md` 同步并补说明：
+  全局键 `streammq.retry.stream-max-len` 非 0 会在启动期显式 WARN 声明失效。
+- **`RedissonClientMissingFailureAnalyzer` 恒不匹配（P2，死代码）**：实现写成
+  `REDISSON_CLIENT_CLASS.equals(cause.getBeanType())`，而 `getBeanType()` 返回 `Class<?>` ——
+  `String.equals(Class)` **恒为 false**，`analyze()` 永远返回 `null`。"把裸 `NoSuchBeanDefinitionException`
+  换成含依赖声明与配置示例的可操作报告"这一 DX 特性**从未生效**。现按 `Class#getName()` 比较，
+  新增 `RedissonClientMissingFailureAnalyzerTest`（3 例）。
+- **诊断模块三个 analyzer 缺 `@ConditionalOnBean` → 文档承诺的"优雅降级"变成启动失败（P2）**：类级条件只检查
+  **类路径**（`@ConditionalOnClass(StreamMQTraceService.class)` 恒真），而三个 `@Bean` 方法把
+  `StreamMQTraceService` / `StreamMQListenerContainer` 作为**硬依赖**注入 —— 用户只配
+  `streammq.diagnostics.enabled=true` 而未开追踪时，上下文以 `UnsatisfiedDependencyException` 启动失败。
+  现补 `@ConditionalOnBean`，与文档"缺前置即不装配"一致。
+- **诊断模块属性零校验（P2）**：`backlog-warning-threshold > backlog-critical-threshold` 会让
+  `/streammq/diagnostics/health` **常态返回 DOWN**（看板长期误报）；`recent-window-ms = 0` 会让
+  `produceRate/consumeRate` 变成 `Infinity` 并随响应体返回。现新增
+  `StreamMQDiagnosticsProperties#validate()`（由 `InitializingBean` 启动期调用），
+  新增 `StreamMQDiagnosticsPropertiesValidateTest`（8 例）。
+- **`streammq.admin.startup-warn` 非法取值可阻断应用启动（P3）**：两处 `ApplicationReadyEvent` 监听器用
+  `getProperty(key, Boolean.class)` 读取该键，对 YAML 中很自然的 `off` / `no` / `disable` 会抛
+  `IllegalArgumentException` 并穿透 `SpringApplication.run` —— 一个纯日志开关能把启动搞挂。
+  现抽出 `StartupWarnToggle`（容错解析 + 非法值限频 WARN + 按启用处理），新增 `StartupWarnToggleTest`（4 例）。
+- **`StreamMQProperties#validate()` 覆盖缺口（P3）**：补齐 `retry.stream-max-len`（负值）、
+  `dlq.alert-threshold`（&lt; 1）、`dlq.retry-backoff-multiplier`（&lt; 1.0 会使退避延迟坍缩）、
+  `dlq.retry-max-delay-ms`（&le; 0 / 小于基础延迟）、`dlq.secondary-dlq-key-prefix`（会直接拼进 Redis Key）、
+  `producer.group` / `transaction.default-group`（命名校验）、`trace.storage`（白名单 fail-fast +
+  `trace.enabled=true` 但 storage≠redis 时 WARN）。
+- **`ProducerConfig` 数值零校验（P3）**：`send-message-timeout` / `stream-max-len` / `compress-threshold` /
+  `max-message-size` / `retry-times` 此前被静默接受，与消费侧 `ListenerConfig` 的 fail-fast 口径不一致
+  （`maxMessageSize &lt; 0` 会拒绝所有消息、`sendMessageTimeout &lt;= 0` 让每次发送立即超时）。现按同口径校验。
+- **`ListenerConfig` 漏校验 `streamMaxLen`（P3）**：同一"数值参数 fail-fast"策略在派生视图上出现漏点。已补齐。
+
+**可观测性 / 健康面（消除"假健康"）**
+
+- **Kubernetes HPA 只看 XPENDING 做积压判定（P2）**：消费者进程全挂时 `XPENDING ≈ 0`（没人读就没有未确认）
+  而 `XLEN` 持续增长 —— HPA 会判定"无积压"**永不扩容**（恰是最需要扩容的场景）。现 `BacklogProbe.Result`
+  增加 `consumerCount`，HPA 在"无活跃消费者"时以 `streamSize` 作为积压信号，"有活跃消费者"时仍以
+  `pendingCount` 为准（避免未裁剪历史导致常年过度扩容）。新增两例守卫。
+- **Kubernetes `status.message` 不在 CRD schema 中（P2）**：结构化 status schema 会**静默裁剪**未声明字段，
+  因此 Operator 写入的 `message`（镜像缺失、Deployment 创建失败等全部可操作诊断信息）永远不可见。
+  现补入 CRD schema；并把声明却从不写入的 `conditions` 字段从 CRD 与 Java 模型**移除**（宁缺勿假）。
+- **Kubernetes 优雅关闭被 `@ConditionalOnClass(HealthIndicator.class)` 连带门控（P3）**：`actuator` 在本模块是
+  `provided`，未引入 Actuator 的应用**不会**注册优雅关闭处理器（`pause → 等在途 → stop` 整条链路静默失效），
+  K8s 滚动发布/驱逐时在途消息被中断。现拆出独立的 `GracefulShutdownConfiguration`（与健康探针解耦）。
+- **`HpaAutoScaler` 同时是 `@Component` 与 `@Bean`（P3）**：组件扫描路径下会先注册一个**未经属性注入**的实例
+  （全部参数回落硬编码默认值，用户配置静默失效），且不受 `enabled=false` 约束也会启动调度线程。
+  现移除 `@Component`，自动装配成为唯一装配真源。
+- **K8s 健康指标 / 就绪探针只看 `isRunning()`（P3）**：消费循环批量启动失败时仍报 UP / `ready=true`
+  （"假就绪"会把流量导入一个不消费的 Pod）。现纳入消费循环健康并回传失败详情；Binder 健康指示器同修。
+- **`getConsumeLoopFailures()` / `isConsumeLoopsHealthy()` 提升为容器接口的一部分（default 方法）**：
+  此前只存在于 redisson 具体实现上，导致 starter / Binder / Kubernetes 三个健康面各写各的判据（或无法访问）。
+- **`CloudK8sProperties` 零校验（P3）**：`hpa-sync-interval-seconds = 0` 会在
+  `afterPropertiesSet` 抛**不带配置键信息**的异常（启动失败但无法定位），而 `reconcile-interval-seconds`
+  非法值却被静默忽略 —— 同模块两种口径。现统一为 fail-fast（含跨字段
+  `hpa-scale-down-threshold < hpa-scale-up-threshold`），并在 `config-refresh-enabled=true` 而
+  `operator.enabled=false` 时输出可操作 WARN（此前"配了但什么都没发生"）。
+- **健康检查详情泄漏 Redis 异常文本（P3）**：`Health.down(ex)` 与 `ex.getMessage()` 会把 Key 名 /
+  `NOGROUP` / `NOPERM` / 连接串带入健康响应（`show-details=always` 下对外可见）。现详情只给
+  「异常类型 + 关联 ID」，完整信息（含堆栈）只进日志。
+- **管理端点 `createTopic` 仍在回吐 Redis 异常（P2，脱敏残留副本）**：A-1 统一了其余 4 处却漏了这一处。
+- **管理端点 404 响应不再原样回显请求路径（P3）**：改为「段数 + 首段安全字符摘要」，完整路径进日志。
+- **管理端点失败限流文案改为英文（P4）**：与其余全英文的机器可读响应体一致（`retryAfterMs` 已给出可操作值）。
+
+**API 契约与文档一致性**
+
+- **`@StreamMQConsumer#orderlyConsumeTimeout()` 的 javadoc 语义写反（P1）**：文档写"`0` = 显式关闭、
+  `-1` = 跟随全局"，而代码是"`0` = 继承全局、`<0`（默认 `-1`）= 显式关闭"——与 CHANGELOG、
+  `configuration-reference.md`、两份 README **全部相反**，且该 javadoc 随 `sources/javadoc.jar` 发布。
+  现已按代码事实重写（英文 README 无对应表格，英文读者只能看 Javadoc，误配会让超时保护语义反向）。
+- **`ListenerConfig` / `ListenerRegistration` / `DefaultListenerRegistration` 的"夹取"表述与实现相反（P3）**：
+  R6 已把注册模型全部改为 fail-fast，但三处 javadoc 仍写"采取夹取策略"。现统一口径，并显式说明
+  `consumeThreads` 是唯一例外（夹取到 [1, 64]）。
+- **`ConsumerInterceptor` 声称支持"消息预处理（解密/解压）"（P3）**：`beforeConsume` 只返回 `boolean`，
+  `Message` 是不可变值对象 —— 拦截器**没有**把改写后消息交回管线的途径，文档承诺无法实现。
+  现改写为真实能力（追踪/审计/限流/只读判断）并指明正确扩展点（自定义 `MessageConverter`）。
+- **`MessageConverter` 三参默认方法 javadoc 机制描述错误（P3）**：称"两参与三参互为委托，均未覆盖会互相递归
+  → StackOverflowError"，实际是单向委托 + 三参抛 `UnsupportedOperationException`。已改正。
+- **`Message` 系统属性插入顺序被静默丢弃（P3）**：`MessageBuilder` / `MessageMetadataBuilder` 都承诺保序，
+  但 `Message` 构造器对系统属性用 `HashMap` 拷贝（只对用户属性保序），`addProperty` 同样改用 `HashMap`。
+  现统一为 `LinkedHashMap`，新增 `MessagePropertyOrderTest`（4 例）。
+- **`TransactionScanState.ofCode` 大小写敏感（P3）**：与同类"线上协议编码"枚举（`TraceStorageType` /
+  `DlqReason`）的容错口径不一致，`PREPARE` 与 `prepare` 一个命中一个落到 `UNKNOWN`（走"状态缺失"分支）。
+  现统一为 `equalsIgnoreCase`。
+- **`BodyTypeResolver` 不识别 `DlqMessageConsumer`（P3）**：`AbstractDlqMessageConsumer<Order>` 的层次遍历
+  解析不到目标类型，DLQ 条目缺少 `bodyType` 字段时回退为 `String` 而非声明的 `Order`。现补分支。
+- **Binder 消费端 `partitioned=true` 被静默忽略（P3）**：生产端已 fail-fast，消费端不检查 —— 用户按
+  Spring Cloud Stream 文档配 `instance-index` 后每个实例仍消费全量消息（分区语义无声消失）。现与生产端同口径。
+- **`osv-scanner` SBOM 文件名文档漂移（P3）**：`SECURITY.md` 与 `ci.yml` 注释写 `bom-shipped.json`，
+  实际产物是 `bom-shipped.cdx.json`。已统一。
+- **`retryStreamMaxLen` 从 zh README 注解属性表中移除**并补"为什么没有该属性"的说明（见上）。
+
+**构建 / 发布工程**
+
+- **根 POM 的 `spring.version` 是死属性且取值与文档矛盾（P3）**：全仓零引用，却携带与
+  `NOTICE` / `SECURITY.md`（Spring 6.2.x）不符的 `6.1.14`。已删除。
+- **`streammq-test` 把 `streammq-redisson` 声明为 `optional` compile 但主源码零引用（P3）**：已核实
+  `src/main` 无任何适配层引用（仅测试源码有），改为 `test` scope，消除"下游读 POM 误判需要适配层"。
+- **`codeql.yml` 的 analyze job 缺 `timeout-minutes`（P3）**：与其余 workflow"每个 job 显式预算"口径不一致。已补。
+- **`release.yml` 的 `test` job 继承 workflow 级 `contents: write`（P3）**：该 job 只构建/测试，写权限仅
+  `publish` 的 Create Release 需要。已下发最小权限 `contents: read`。
+- **`streammq-tracing-opentelemetry/pom.xml` 依赖块缩进破损（P3）**：已重新格式化。
+- **`CONTRIBUTING` 的 SPI 清单缺 `ExpressionSelectorFilter`**（标题称 18 项却列 17 行）；**zh README
+  文档导航缺 `docs/configuration-reference.md`**；**EN README 模块表缺 Binder 的"分区生产不支持"限定**。均已补齐。
+
+**新增回归守卫（失败即红）**
+
+- `DlqConfigOverrideTest`：注解 DLQ 数值属性的"覆盖 / 跟随全局 / 非法值拒绝"三类语义。
+- `RedissonClientMissingFailureAnalyzerTest`：分析器必须命中 `RedissonClient`、对无关类型沉默、`beanType` 为 null 不崩。
+- `StartupWarnToggleTest`：`off`/`no`/`disable` 等取值不得抛异常（否则阻断启动）。
+- `StreamMQDiagnosticsPropertiesValidateTest`：阈值倒挂 / 零窗口 / 非正查询上限一律 fail-fast。
+- `MessagePropertyOrderTest`：系统属性、用户属性、`addProperty`、`with*` 全部保序。
+- `HpaAutoScalerScanTest`（新增 2 例）：无活跃消费者时以 XLEN 为积压信号；有活跃消费者时以 XPENDING 为准。
+- `DefaultListenerRegistrarDlqAndBroadcastTest`（注解代理桩修正）：DLQ 数值属性返回**注解真实默认值**（哨兵），
+  否则代理退化成非法取值会让覆盖构造期失败。
 
 ## [0.1.1] - 2026-08-29 — 内部迭代版本（未发布到 Maven Central）
 

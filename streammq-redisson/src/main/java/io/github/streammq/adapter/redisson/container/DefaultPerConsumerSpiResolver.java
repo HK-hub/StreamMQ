@@ -184,9 +184,20 @@ public class DefaultPerConsumerSpiResolver implements PerConsumerSpiResolver {
                         globalDlqFailureStrategy);
 
         // 4. per-consumer 路由处理器
+        // 生效 DLQ 配置 = 全局配置 ⊕ per-consumer 覆盖（注解数值属性），实现「注解 > 全局 > 框架默认」。
+        // 此前注解的 7 个 DLQ 数值属性从未被读取，用户按文档设置后静默无效。
+        DlqConfig effectiveDlqConfig =
+                Objects.isNull(reg.getDlqConfigOverride())
+                        ? dlqConfig
+                        : reg.getDlqConfigOverride().applyTo(dlqConfig);
         RetryAndDlqHandler handler =
                 new DefaultRetryAndDlqHandler(
-                        redisson, converter, policy, interceptorChain, dlqStrategy, dlqConfig);
+                        redisson,
+                        converter,
+                        policy,
+                        interceptorChain,
+                        dlqStrategy,
+                        effectiveDlqConfig);
         StreamMQMetrics metrics = metricsSupplier.get();
         if (Objects.nonNull(metrics) && handler instanceof DefaultRetryAndDlqHandler drh) {
             drh.setMetrics(metrics);

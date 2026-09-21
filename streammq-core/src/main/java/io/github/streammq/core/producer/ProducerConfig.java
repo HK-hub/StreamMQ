@@ -89,6 +89,28 @@ public class ProducerConfig {
         this.group = Objects.requireNonNull(group, "group");
         // 与 ListenerConfig 同一校验入口：null/空归一为空串，非法字符快速失败
         this.namespace = io.github.streammq.core.util.StringUtils.requireValidNamespace(namespace);
+        // 与消费侧（ListenerConfig / DefaultListenerRegistration）同口径 fail-fast：非法数值此前会被静默接受，
+        // 直到运行期才以 Redis 错误或"消息全部被拒"暴露（maxMessageSize < 0 会拒绝所有消息，
+        // sendMessageTimeout <= 0 会让每次发送立即超时）。
+        if (sendMessageTimeout <= 0) {
+            throw new IllegalArgumentException(
+                    "sendMessageTimeout must be > 0, got: " + sendMessageTimeout);
+        }
+        if (streamMaxLen < 0) {
+            throw new IllegalArgumentException(
+                    "streamMaxLen must be >= 0 (0 = unlimited), got: " + streamMaxLen);
+        }
+        if (compressThreshold < 0) {
+            throw new IllegalArgumentException(
+                    "compressThreshold must be >= 0 (0 = disabled), got: " + compressThreshold);
+        }
+        if (maxMessageSize <= 0) {
+            throw new IllegalArgumentException(
+                    "maxMessageSize must be > 0, got: " + maxMessageSize);
+        }
+        if (retryTimes < 0) {
+            throw new IllegalArgumentException("retryTimes must be >= 0, got: " + retryTimes);
+        }
         this.sendMessageTimeout = sendMessageTimeout;
         this.streamMaxLen = streamMaxLen;
         this.compressThreshold = compressThreshold;

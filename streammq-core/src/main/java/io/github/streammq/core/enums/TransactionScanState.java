@@ -62,11 +62,17 @@ public enum TransactionScanState {
     /**
      * 根据协议编码解析枚举。
      *
+     * <p>大小写不敏感（与 {@link TraceStorageType#ofCode(String)}、{@link DlqReason#ofCode(String)}
+     * 等同类"线上协议编码"枚举口径一致）：解析失败一律落到 {@link #UNKNOWN}，由上层按"状态缺失"走有界回查， 不会因大小写差异被误判为未知状态。
+     *
      * @param code 协议编码
-     * @return 匹配的枚举；未匹配时返回 {@link #UNKNOWN}
+     * @return 匹配的枚举；未匹配（含 {@code null}）时返回 {@link #UNKNOWN}
      */
     public static TransactionScanState ofCode(String code) {
-        return Arrays.stream(values()).filter(s -> s.code.equals(code)).findFirst().orElse(UNKNOWN);
+        return Arrays.stream(values())
+                .filter(s -> s.code.equalsIgnoreCase(code))
+                .findFirst()
+                .orElse(UNKNOWN);
     }
 
     /**

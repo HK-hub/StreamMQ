@@ -604,13 +604,28 @@ public class StreamMQActuatorEndpoint {
     private WebEndpointResponse<Map<String, Object>> unknownPath(String method, String[] path) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("status", 404);
-        body.put(
-                "error",
-                "Unknown "
-                        + method
-                        + " path: /actuator/streammq/"
-                        + String.join("/", Arrays.asList(path)));
+        // 不原样回显请求路径：路径来自外部输入，原样拼进响应体会把控制字符/超长串带给调用方。
+        // 只回显"已识别的段数 + 首段的首个安全字符"，完整路径进日志（排障仍可定位）。
+        String echo = sanitizePathEcho(path);
+        body.put("error", "Unknown " + method + " path under /actuator/streammq (" + echo + ")");
         return new WebEndpointResponse<>(body, 404);
+    }
+
+    /**
+     * 路径回显的安全摘要：段数 + 首段前 32 个"安全字符"（字母数字、{@code -}、{@code _}、点号）， 其余一律以 {@code ?} 替代。绝不原样回填外部输入。
+     */
+    private static String sanitizePathEcho(String[] path) {
+        int segments = path == null ? 0 : path.length;
+        if (segments == 0) {
+            return "segments=0";
+        }
+        String head = path[0] == null ? "" : path[0];
+        StringBuilder safe = new StringBuilder();
+        for (int i = 0; i < head.length() && safe.length() < 32; i++) {
+            char c = head.charAt(i);
+            safe.append(Character.isLetterOrDigit(c) || c == '-' || c == '_' || c == '.' ? c : '?');
+        }
+        return "segments=" + segments + ", first=" + safe;
     }
 
     /** 构造 HTTP 400 错误响应。 */

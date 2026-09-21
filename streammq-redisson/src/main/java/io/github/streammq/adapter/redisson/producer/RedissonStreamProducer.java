@@ -422,6 +422,9 @@ public class RedissonStreamProducer implements StreamMessageProducer {
                         null,
                         null);
             }
+            // 压缩必须与单条/异步发送一致：此前批量路径漏调用 applyCompression，
+            // 导致 compressThreshold 配置在批量投递时被静默忽略（同一消息体积随发送方式而变）。
+            applyCompression(fields);
             StreamAddArgs<String, String> args = buildAddArgs(fields);
             batch.<String, String>getStream(streamKey, StringCodec.INSTANCE).addAsync(args);
         }

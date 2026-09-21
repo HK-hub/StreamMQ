@@ -11,6 +11,7 @@ import io.github.streammq.adapter.redisson.dlq.LogAndDropDlqFailureStrategy;
 import io.github.streammq.adapter.redisson.dlq.SecondaryDlqFailureStrategy;
 import io.github.streammq.adapter.redisson.scheduler.RetryScheduler;
 import io.github.streammq.adapter.redisson.support.RedisClusterCompatibility;
+import io.github.streammq.adapter.redisson.support.RedisServerClock;
 import io.github.streammq.adapter.redisson.support.StreamMQKeys;
 import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.converter.MessageConverter;
@@ -90,6 +91,13 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
     /** 上次 secondary 开关关闭告警时间（限频 WARN，避免死信风暴刷爆日志） */
     private final java.util.concurrent.atomic.AtomicLong lastSecondaryDisabledWarnAt =
             new java.util.concurrent.atomic.AtomicLong(Long.MIN_VALUE);
+
+    /** 上次"Redis 服务器时钟不可用"告警时间（限频 WARN，避免每轮扫描刷屏） */
+    private final java.util.concurrent.atomic.AtomicLong lastClockFallbackWarnAt =
+            new java.util.concurrent.atomic.AtomicLong(Long.MIN_VALUE);
+
+    /** 时钟回退告警限频窗口（毫秒） */
+    private static final long CLOCK_FALLBACK_WARN_INTERVAL_MS = 60_000L;
 
     @NonNull private final RedissonClient redisson;
     @NonNull private final MessageConverter messageConverter;
@@ -382,7 +390,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         // payload Hash + 调度 ZSet 必须同生同死（Cluster 下原子批退化为按节点拆分），前置拒绝
         RedisClusterCompatibility.requireCrossKeyAtomicity(
                 redisson, "DLQ retry scheduling (payload hash + schedule ZSet)");
-        long nextRetryAt = System.currentTimeMillis() + delay.toMillis();
+        long nextRetryAt = nowMillis() + delay.toMillis();
         String msgIdStr = messageId.getStreamEntryId();
         // DLQ 流按 group 命名（与业务 topic 无关），重试调度条目必须统一挂到 {group}:{group}
         // 维度——此前使用 reg.getTopic()（生产路径下为 group，但自定义注册时可能是业务 topic），
@@ -660,6 +668,33 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         }
     }
 
+    /**
+     * 当前时间（毫秒），统一使用 <b>Redis 服务器时钟</b>（与调度器扫描侧的到期判定同源）。
+     *
+     * <p>为什么必须同源：重试/DLQ 重试 ZSet 的 score 由写侧生成、到期判定由读侧（{@code RetryScheduler}）用 {@link
+     * RedisServerClock} 比较。写侧若用本机时钟，跨主机 NTP 偏差（可达数十秒）会把整条重试链的触发时刻 平移（快钟晚触发、慢钟早触发），使退避节奏与业务预期不符。
+     *
+     * <p>读取失败（脚本被禁用 / ACL 拒绝 / 连接故障）回退本机时钟并限频 WARN——可用性优先，但绝不静默。
+     *
+     * @return 当前毫秒时间戳（恒为正）
+     */
+    private long nowMillis() {
+        long redisNow = RedisServerClock.nowMillis(redisson);
+        if (redisNow != RedisServerClock.UNKNOWN) {
+            return redisNow;
+        }
+        long fallback = System.currentTimeMillis();
+        long last = lastClockFallbackWarnAt.get();
+        if (fallback - last >= CLOCK_FALLBACK_WARN_INTERVAL_MS
+                && lastClockFallbackWarnAt.compareAndSet(last, fallback)) {
+            LOG.warn(
+                    "Redis server clock unavailable; falling back to local clock for retry"
+                            + " scheduling. Cross-host NTP skew may shift retry timing. Check"
+                            + " whether EVAL is allowed for this Redis user/ACL.");
+        }
+        return fallback;
+    }
+
     /** 停止/耗尽重试后统一收口：写 DLQ 成功才 ACK；失败保留 PEL（宁可重复，不可丢失）。 */
     private void routeToDlqThenAck(
             Message<?> message,
@@ -727,6 +762,11 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
             // 避免"业务合法延迟重试"侵占失败重试预算、被误标为 MAX_RETRY 进入 DLQ。
             // DEFER 不设上限，节奏由业务自行控制（文档已声明）。
             fields.put(StreamMQConstants.FIELD_DEFERRED, Boolean.TRUE.toString());
+            // 注意：DEFER 延迟**有意不夹取**到 MAX_DELAY_TIME_MILLIS（7 天）。
+            // 与"失败重试"不同，DEFER 是业务显式表达"何时再处理"的语义，节奏由业务自行控制；
+            // 超长延迟的正确性是靠 payload TTL = max(基础 TTL, 延迟 + 宽限) 保证的（见 payloadTtlFor），
+            // 而不是靠夹取延迟本身。该口径由 RetrySchedulingAndDlqGatingTest 的
+            // deferBeyondSevenDays_keepsDelayButTtlCoversIt 用例锁定。
             scheduleRetry(message, reg, listener, messageId, fields, retryCount, delay);
         } catch (RuntimeException ex) {
             LOG.error(
@@ -751,7 +791,7 @@ public class DefaultRetryAndDlqHandler implements RetryAndDlqHandler {
         RedisClusterCompatibility.requireCrossKeyAtomicity(
                 redisson, "Retry scheduling (payload hash + schedule ZSet)");
         long delayMs = delayToMillisSaturated(delay);
-        long now = System.currentTimeMillis();
+        long now = nowMillis();
         // 饱和加法：非法超大延迟不得回绕成"过去时刻"（否则立即重试形成热循环）
         long nextRetryAt = delayMs > Long.MAX_VALUE - now ? Long.MAX_VALUE : now + delayMs;
         String msgIdStr = messageId.getStreamEntryId();

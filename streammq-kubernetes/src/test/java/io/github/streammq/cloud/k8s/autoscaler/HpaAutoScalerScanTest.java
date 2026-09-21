@@ -100,7 +100,7 @@ class HpaAutoScalerScanTest {
                 fixedProbe(
                         (topic, group) -> {
                             probeCalls.add(topic + ":" + group);
-                            return new BacklogProbe.Result(10_000L, 42L);
+                            return new BacklogProbe.Result(10_000L, 42L, 1);
                         }));
 
         scaler.scanOnce();
@@ -112,12 +112,44 @@ class HpaAutoScalerScanTest {
     }
 
     @Test
+    @DisplayName("K6 - 消费者全部掉线时以 XLEN 作为积压信号（否则 HPA 永不扩容）")
+    void scanOnceUsesStreamSizeWhenNoLiveConsumer() throws Exception {
+        StreamMQCluster cluster = cluster("ns-a", "demo", "orders", "cg-1");
+        expectClusterList(CLUSTER_LIST_PATH, clusterList(cluster));
+        // consumerCount=0 表示消费者进程全挂：此时 XPENDING≈0（没人读就没有未确认），
+        // 但 XLEN 持续增长；若仍以 pendingCount(0) 作为 lag，HPA 会判定"无积压"永不扩容。
+        scaler.setBacklogProbeProvider(
+                fixedProbe((topic, group) -> new BacklogProbe.Result(98_765L, 0L, 0)));
+
+        scaler.scanOnce();
+
+        assertThat(metrics.getConsumerLag("orders", "cg-1"))
+                .as("无活跃消费者时必须退化为以 streamSize（XLEN）作为积压信号")
+                .isEqualTo(98_765L);
+    }
+
+    @Test
+    @DisplayName("K6 - 有活跃消费者时以 XPENDING 作为积压信号（避免未裁剪历史导致常年过度扩容）")
+    void scanOncePrefersPendingCountWhenConsumerAlive() throws Exception {
+        StreamMQCluster cluster = cluster("ns-a", "demo", "orders", "cg-1");
+        expectClusterList(CLUSTER_LIST_PATH, clusterList(cluster));
+        scaler.setBacklogProbeProvider(
+                fixedProbe((topic, group) -> new BacklogProbe.Result(98_765L, 7L, 3)));
+
+        scaler.scanOnce();
+
+        assertThat(metrics.getConsumerLag("orders", "cg-1"))
+                .as("有活跃消费者时 XLEN 含已消费但未裁剪的历史条目，不能作为积压信号")
+                .isEqualTo(7L);
+    }
+
+    @Test
     @DisplayName("K6 - 未声明 autoScale.topic/consumerGroup 时不写指标并输出限频 WARN（fail-closed）")
     void scanOnceWithoutDeclaredTopicWritesNoMetricAndWarns() {
         StreamMQCluster cluster = cluster("ns-a", "demo", null, null);
         expectClusterList(CLUSTER_LIST_PATH, clusterList(cluster));
         scaler.setBacklogProbeProvider(
-                fixedProbe((topic, group) -> new BacklogProbe.Result(10_000L, 42L)));
+                fixedProbe((topic, group) -> new BacklogProbe.Result(10_000L, 42L, 1)));
 
         scaler.scanOnce();
 
@@ -143,7 +175,7 @@ class HpaAutoScalerScanTest {
         expectClusterList(
                 "/apis/streammq.io/v1/namespaces/ns-b/streammqclusters", clusterList(outOfScope));
         scaler.setBacklogProbeProvider(
-                fixedProbe((topic, group) -> new BacklogProbe.Result(5_000L, 42L)));
+                fixedProbe((topic, group) -> new BacklogProbe.Result(5_000L, 42L, 1)));
         scaler.setWatchAllNamespaces(false);
         scaler.setWatchNamespaces(List.of("ns-a"));
 
@@ -165,7 +197,7 @@ class HpaAutoScalerScanTest {
         scaler.setWatchAllNamespaces(false);
         scaler.setWatchNamespaces(List.of());
         scaler.setBacklogProbeProvider(
-                fixedProbe((topic, group) -> new BacklogProbe.Result(1L, 42L)));
+                fixedProbe((topic, group) -> new BacklogProbe.Result(1L, 42L, 1)));
 
         scaler.scanOnce();
 

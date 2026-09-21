@@ -13,7 +13,6 @@ import io.fabric8.kubernetes.client.CustomResource;
 import io.fabric8.kubernetes.model.annotation.Group;
 import io.fabric8.kubernetes.model.annotation.Version;
 import io.github.streammq.core.StreamMQConstants;
-import java.util.List;
 import java.util.Map;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
@@ -716,9 +715,6 @@ public class StreamMQCluster extends CustomResource implements Namespaced {
         /** 附加说明信息（非终态原因等） */
         private String message;
 
-        /** 条件列表 */
-        private List<Condition> conditions;
-
         public String getMessage() {
             return message;
         }
@@ -762,40 +758,12 @@ public class StreamMQCluster extends CustomResource implements Namespaced {
             this.lastUpdateTime = lastUpdateTime;
         }
 
-        public List<Condition> getConditions() {
-            return conditions;
-        }
-
-        public void setConditions(List<Condition> conditions) {
-            this.conditions = conditions;
-        }
-
         public Long getObservedGeneration() {
             return observedGeneration;
         }
 
         public void setObservedGeneration(Long observedGeneration) {
             this.observedGeneration = observedGeneration;
-        }
-
-        @Data
-        @JsonIgnoreProperties(ignoreUnknown = true)
-        @JsonInclude(JsonInclude.Include.NON_NULL)
-        public static class Condition {
-            private String type;
-            private String status;
-            private String reason;
-            private String message;
-
-            public String getMessage() {
-                return message;
-            }
-
-            public void setMessage(String message) {
-                this.message = message;
-            }
-
-            private String lastTransitionTime;
         }
     }
 }

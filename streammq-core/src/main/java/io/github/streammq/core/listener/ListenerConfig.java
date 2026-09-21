@@ -33,8 +33,9 @@ import lombok.Getter;
  *     .build();
  * }</pre>
  *
- * <p><b>与注册模型的校验策略差异（有意保留）：</b>本类在构造器内对非法值直接抛 {@link IllegalArgumentException}（配置错误尽早暴露）； {@link
- * io.github.streammq.core.listener.DefaultListenerRegistration} 对同类参数采取「夹取（clamp）」策略以保证注册期弹性。
+ * <p><b>与注册模型的校验策略一致（0.1.2 起）：</b>本类与 {@link
+ * io.github.streammq.core.listener.DefaultListenerRegistration} 对非法数值一律 <b>fail-fast</b>（抛 {@link
+ * IllegalArgumentException}），不再存在「夹取」路径——静默把非法值改成合法值会让配置错误一路带到线上。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0
@@ -258,6 +259,10 @@ public class ListenerConfig {
             throw new IllegalArgumentException(
                     "suspendCurrentQueueTimeMillis must be >= 0, got: "
                             + suspendCurrentQueueTimeMillis);
+        }
+        if (streamMaxLen < 0) {
+            throw new IllegalArgumentException(
+                    "streamMaxLen must be >= 0 (0 = unlimited), got: " + streamMaxLen);
         }
 
         this.consumerName = consumerName;

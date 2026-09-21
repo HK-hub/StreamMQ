@@ -41,7 +41,7 @@ import org.springframework.beans.factory.annotation.Autowired;
  *       SharedIndexInformer}
  *   <li>Reconcile desired state (Spec) with actual state using level-based reconciliation
  *   <li>Manage replica count, resource limits, config hot-reload, auto-scaling policy
- *   <li>Maintain cluster Status: phase, replicas, readyReplicas, conditions
+ *   <li>Maintain cluster Status: phase, replicas, readyReplicas, message
  *   <li>Create and manage child Deployment resources with OwnerReference
  * </ul>
  *
@@ -109,9 +109,13 @@ public class StreamMQClusterController
      * @param seconds 间隔秒数，必须 &gt; 0
      */
     public void setReconcileIntervalSeconds(long seconds) {
-        if (seconds > 0) {
-            this.reconcileIntervalSeconds = seconds;
+        // 此前非法值被静默忽略、回落默认值（与同模块 HpaAutoScaler 对非法间隔"抛异常"的口径矛盾）；
+        // 统一为 fail-fast，让配置错误可定位而不是"看着生效其实没生效"。
+        if (seconds <= 0) {
+            throw new IllegalArgumentException(
+                    "reconcileIntervalSeconds must be > 0, got: " + seconds);
         }
+        this.reconcileIntervalSeconds = seconds;
     }
 
     /**

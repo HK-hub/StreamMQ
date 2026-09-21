@@ -84,7 +84,16 @@ public class StreamMQHealthController {
             body.put(StreamMQHealthControllerConstants.KEY_CONSUMER_COUNT, 0);
             return ResponseEntity.ok(body);
         }
-        body.put(StreamMQHealthControllerConstants.KEY_READY, container.isRunning());
+        // 就绪判定必须包含消费循环健康：容器在跑但循环启动失败时，"就绪"会把流量导入一个不消费的 Pod
+        // （与 starter/binder 指示器口径不一致的假就绪）。失败详情一并回传，便于排障。
+        boolean consumeLoopsHealthy = container.isConsumeLoopsHealthy();
+        body.put(
+                StreamMQHealthControllerConstants.KEY_READY,
+                container.isRunning() && consumeLoopsHealthy);
+        body.put("consumeLoopsHealthy", consumeLoopsHealthy);
+        if (!consumeLoopsHealthy) {
+            body.put("consumeLoopFailures", container.getConsumeLoopFailures());
+        }
         body.put(
                 StreamMQHealthControllerConstants.KEY_CONSUMER_COUNT,
                 container.getConsumers().size());

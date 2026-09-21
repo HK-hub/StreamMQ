@@ -18,9 +18,13 @@ import io.github.streammq.core.message.Message;
  * <ul>
  *   <li>追踪埋点
  *   <li>消费审计日志
- *   <li>消息预处理（解密、解压）
- *   <li>限流（beforeConsume 返回 false 中止本次消费，视为 RECONSUME_LATER）
+ *   <li>限流（{@code beforeConsume} 返回 false 中止本次消费，视为 RECONSUME_LATER）
+ *   <li>基于已解码消息做告警、脱敏审计等只读判断
  * </ul>
+ *
+ * <p><b>不支持"消息预处理（解密/解压/改写）"：</b>{@code beforeConsume} 只返回 {@code boolean}，且 {@link Message}
+ * 是不可变值对象，拦截器没有把改写后的消息交回消费管线的途径。需要在消费前改变消息内容时，请实现自定义 {@link
+ * io.github.streammq.core.converter.MessageConverter}（在字段 → 对象的解码阶段完成），而不是消费拦截器。
  *
  * @author StreamMQ Contributors
  * @since 0.1.0

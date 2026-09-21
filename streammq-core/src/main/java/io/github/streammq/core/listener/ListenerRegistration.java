@@ -11,6 +11,8 @@ import io.github.streammq.core.converter.MessageConverter;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.filter.ConsumerFilter;
+import io.github.streammq.core.policy.DlqConfig;
+import io.github.streammq.core.policy.DlqConfigOverride;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
@@ -95,6 +97,20 @@ public interface ListenerRegistration<T> {
 
     Class<? extends DlqFailureStrategy> getDlqFailureStrategy();
 
+    /**
+     * per-consumer 的 DLQ 配置覆盖（{@code @StreamMQDlqConsumer} 的数值属性）；{@code null} 表示全部跟随全局配置。
+     *
+     * <p>未声明的属性在注解侧以哨兵表示，装配期折算为 {@code null} 字段，运行期由 {@link
+     * io.github.streammq.core.policy.DlqConfigOverride#applyTo(DlqConfig)} 合并到全局配置上—— 这是「注解 &gt;
+     * 全局配置 &gt; 框架默认」优先级真正的实现点。
+     *
+     * @return 覆盖对象；{@code null} 表示无覆盖
+     * @since 0.1.2
+     */
+    default DlqConfigOverride getDlqConfigOverride() {
+        return null;
+    }
+
     Class<? extends ConsumerFilter>[] getConsumerFilter();
 
     SelectorType getSelectorType();
@@ -143,8 +159,8 @@ public interface ListenerRegistration<T> {
     /**
      * 并发消费循环数上限（已废弃，<b>不再影响并发数</b>，固定返回默认上限）。
      *
-     * <p>注意：与 {@link ListenerConfig} 的校验策略不同——注册模型对非法值「夹取」以保证运行期弹性， ListenerConfig 构造器则直接抛出
-     * IllegalArgumentException。
+     * <p>注意：本方法固定返回默认上限，不再读取任何用户输入；注册模型的其余数值参数与 {@link ListenerConfig} 一致为 fail-fast（非法值抛 {@code
+     * IllegalArgumentException}）。
      *
      * @return 默认并发上限常量
      * @deprecated 并发度只由 {@link #getConsumeThreads()} 决定；本方法将于 0.2.0 移除

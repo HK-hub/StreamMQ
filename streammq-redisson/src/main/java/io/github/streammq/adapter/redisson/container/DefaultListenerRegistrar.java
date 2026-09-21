@@ -19,6 +19,8 @@ import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.listener.DefaultListenerRegistration;
 import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.listener.ListenerType;
+import io.github.streammq.core.policy.DlqConfig;
+import io.github.streammq.core.policy.DlqConfigOverride;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
@@ -406,10 +408,64 @@ public class DefaultListenerRegistrar implements ListenerRegistrar {
                 .enableMsgTrace(false)
                 .dlqMode(true)
                 .dlqFailureStrategy(ann.failureStrategy())
+                .dlqConfigOverride(toDlqConfigOverride(ann))
                 .consumerFilter(new Class[0])
                 .selectorType(SelectorType.TAG)
                 .namespace(ann.namespace())
                 .consumerName(effectiveGroup + "-" + instanceToken);
+    }
+
+    /**
+     * 把 {@code @StreamMQDlqConsumer} 的 DLQ 数值属性折算为 per-consumer 覆盖（哨兵 → {@code null} = 跟随全局）。
+     *
+     * <p>此前这 7 个注解属性<b>从未被任何生产代码读取</b>：DLQ 调优实际只取全局 {@code streammq.dlq.*}， 而 {@link DlqConfig} 的
+     * javadoc 与官方样例却声明注解优先级最高——用户按文档设置后静默无效。 现按「注解 &gt; 全局 &gt; 框架默认」的真实优先级接线（合并发生在运行时 SPI 解析阶段）。
+     *
+     * @param ann DLQ 注解
+     * @return 覆盖对象；全部未声明时返回 {@code null}
+     */
+    private static DlqConfigOverride toDlqConfigOverride(StreamMQDlqConsumer ann) {
+        Integer retryAttempts =
+                ann.maxDlqRetryAttempts() == StreamMQConstants.ANNOTATION_UNSET_INT
+                        ? null
+                        : ann.maxDlqRetryAttempts();
+        Long retryDelayMs =
+                ann.dlqRetryDelayMs() == StreamMQConstants.ANNOTATION_UNSET_LONG
+                        ? null
+                        : ann.dlqRetryDelayMs();
+        Boolean secondaryEnabled =
+                switch (ann.secondaryDlqMode()) {
+                    case INHERIT -> null;
+                    case ENABLED -> Boolean.TRUE;
+                    case DISABLED -> Boolean.FALSE;
+                };
+        String keyPrefix =
+                StringUtils.isEmpty(ann.secondaryDlqKeyPrefix())
+                        ? null
+                        : StringUtils.requireValidName(
+                                ann.secondaryDlqKeyPrefix(), "secondaryDlqKeyPrefix");
+        Integer alertThreshold =
+                ann.dlqAlertThreshold() == StreamMQConstants.ANNOTATION_UNSET_INT
+                        ? null
+                        : ann.dlqAlertThreshold();
+        Double backoffMultiplier =
+                ann.dlqRetryBackoffMultiplier() == StreamMQConstants.ANNOTATION_UNSET_DOUBLE
+                        ? null
+                        : ann.dlqRetryBackoffMultiplier();
+        Long retryMaxDelayMs =
+                ann.dlqRetryMaxDelayMs() == StreamMQConstants.ANNOTATION_UNSET_LONG
+                        ? null
+                        : ann.dlqRetryMaxDelayMs();
+        DlqConfigOverride override =
+                new DlqConfigOverride(
+                        retryAttempts,
+                        retryDelayMs,
+                        secondaryEnabled,
+                        keyPrefix,
+                        alertThreshold,
+                        backoffMultiplier,
+                        retryMaxDelayMs);
+        return override.isEmpty() ? null : override;
     }
 
     // ===================== Template Method：统一收尾 =====================

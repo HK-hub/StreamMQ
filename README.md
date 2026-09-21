@@ -76,8 +76,10 @@ Serializers, converters, filters, interceptors, retry policies, rebalance strate
 
 ### Production-ready
 
-- **1,482 tests** measured on a full local gate run (`mvn clean verify -Djacoco.check.skip=false`), split into
-  **1,185 unit** (surefire) + **297 integration** (failsafe) tests, with **0 failures / 0 errors / 0 skipped**
+- **1,509 tests** measured on a full local gate run (`mvn clean verify -Djacoco.check.skip=false`), split into
+  **1,212 unit** (surefire) + **297 integration** (failsafe) tests, with **0 failures / 0 errors**. The only skips
+  are the 11 Cluster ITs, which **skip loudly** (printing cluster startup instructions) when no 3-master cluster
+  is reachable — they are never silently green
 - CI enforces the integration side as a tripwire rather than a total: per module `streammq-redisson ≥ 100`,
   `streammq-spring-boot-starter ≥ 30`, `streammq-test ≥ 40`, `streammq-samples/* ≥ 16`, global `≥ 230`, and a
   skip rate `≤ 20%` — so "Redis silently unavailable" cannot pass as green. Integration tests need a local Redis
@@ -610,7 +612,7 @@ A consumer that "registers successfully but never consumes" is the symptom most 
 | **streammq-tracing-opentelemetry** | OpenTelemetry tracing integration — *source-only in 0.1.x* |
 | **streammq-diagnostics** | Message profiling, slow-consume, backlog, DLQ diagnostics — *source-only in 0.1.x* |
 | **streammq-kubernetes** | K8s health checks, HPA, graceful shutdown, CRD operator (experimental, default off) — *source-only in 0.1.x* |
-| **streammq-spring-cloud-stream-binder** | Spring Cloud Stream Binder implementation — *source-only in 0.1.x* |
+| **streammq-spring-cloud-stream-binder** | Spring Cloud Stream Binder implementation (partitioned **production** is not supported and fails fast at startup) — *source-only in 0.1.x* |
 | **streammq-benchmark** | JMH benchmarks — *source-only in 0.1.x* |
 | **streammq-test** | Test utilities: containerized Redis (Testcontainers, **requires a Docker daemon**), Redis availability probe, assertions, mocks. Import with `test` scope |
 | **streammq-samples** | Sample projects covering all features — *source-only in 0.1.x* |

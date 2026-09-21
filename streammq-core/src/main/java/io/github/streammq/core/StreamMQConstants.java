@@ -37,6 +37,21 @@ public final class StreamMQConstants {
      */
     public static final long ANNOTATION_UNSET_LONG = -1L;
 
+    /**
+     * {@code @StreamMQDlqConsumer} 数值属性的"未设置"哨兵（double 型）。
+     *
+     * <p>用于那些<b>合法值域不含 -1</b> 的 double 属性（如退避倍数必须 {@code >= 1.0}）， 使框架能够区分"用户显式写了
+     * 1.0"与"使用注解默认值"，从而正确实现 「注解 &gt; 全局配置 &gt; 框架默认」的优先级。
+     */
+    public static final double ANNOTATION_UNSET_DOUBLE = -1.0d;
+
+    /**
+     * 字符串类型注解属性的"未设置"哨兵（空串），语义同 {@link #ANNOTATION_UNSET_INT}。
+     *
+     * <p>与 {@code @StreamMQDlqConsumer#secondaryDlqKeyPrefix()} 等属性配合：空串表示"未声明，跟随全局配置"。
+     */
+    public static final String ANNOTATION_UNSET_STRING = "";
+
     // ==================== 默认值常量 ====================
     /** 默认发送超时（毫秒） */
     public static final long DEFAULT_SEND_TIMEOUT_MS = 3000L;

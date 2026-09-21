@@ -1035,6 +1035,9 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
                         lifecycle.current());
                 return;
             }
+            // 把运行时统计传播到全部已创建的 handler（含注册期创建的 per-consumer handler，
+            // 它们晚于构造期的 propagateRuntimeStats 调用）。幂等、O(handlers)。
+            propagateRuntimeStats();
             for (ListenerRegistration<?> reg : store.registrations()) {
                 // DLQ 注册同样要建组管理器（B-10）：PelClaimScheduler 的 DLQ 目标按
                 // consumerGroupInstances(ns, group) 判断 pending 属主是否存活，而该实例心跳行只能
@@ -1462,6 +1465,10 @@ public class DefaultStreamMQListenerContainer implements StreamMQListenerContain
         // 永远无人扫描（payload 7 天后过期 → 隔离/丢失）；缺 PEL 认领目标则崩溃遗留的 pending
         // 无人恢复。两条都属于"能消费但部分消息静默不重投"，极难排查。
         schedulerBinder().bindTargets(retryScheduler, pelClaimScheduler, reg);
+        // 运行期新注册的 per-consumer handler 是注册之后才创建的，构造期的 propagateRuntimeStats()
+        // 看不到它 —— 其重试/死信计数会漏报（/actuator/streammq/stats 不反映这部分流量）。
+        // 这里幂等补传播一次（O(handlers)，注册不是热路径）。
+        propagateRuntimeStats();
         LOG.info(
                 "Dynamically {} registration while container running: topic={}, group={}",
                 reRegistered ? "replaced" : "wired",

@@ -28,7 +28,6 @@ import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
 
 /**
  * HPA auto-scaling controller.
@@ -51,7 +50,6 @@ import org.springframework.stereotype.Component;
  * @since 0.1.0
  */
 @Slf4j
-@Component
 public class HpaAutoScaler implements InitializingBean, DisposableBean {
 
     /** 扩缩方向：无操作 */
@@ -287,7 +285,15 @@ public class HpaAutoScaler implements InitializingBean, DisposableBean {
             try {
                 var result = probe.probe(topic, group);
                 if (result != null) {
-                    metricsProvider.recordLag(topic, group, result.pendingCount());
+                    // 两类积压用不同信号表达，只看 XPENDING 会漏判关键场景：
+                    //  · 消费者跟不上（读/处理慢）→ XPENDING 增长
+                    //  · 消费者进程全挂 → XPENDING≈0（没人读就没有未确认）而 XLEN 持续增长
+                    // 后者若不区分，HPA 在最需要扩容时判定"无积压"永不扩容。
+                    long effectiveLag =
+                            result.consumerCount() == 0
+                                    ? result.streamSize()
+                                    : result.pendingCount();
+                    metricsProvider.recordLag(topic, group, effectiveLag);
                 }
             } catch (Exception e) {
                 log.warn(

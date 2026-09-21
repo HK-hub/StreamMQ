@@ -46,8 +46,8 @@ public class AuthenticatorStartupLogger {
 
     @EventListener(ApplicationReadyEvent.class)
     public void logAuthenticator() {
-        if (Boolean.FALSE.equals(
-                environment.getProperty("streammq.admin.startup-warn", Boolean.class))) {
+        // 容错解析：非法取值不得让 ApplicationReadyEvent 抛异常阻断应用启动（见 StartupWarnToggle）
+        if (StartupWarnToggle.isDisabled(environment)) {
             return;
         }
         ManagementAuthenticator authenticator =

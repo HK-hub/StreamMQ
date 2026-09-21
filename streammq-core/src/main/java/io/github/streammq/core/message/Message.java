@@ -10,7 +10,6 @@ import io.github.streammq.core.enums.DelayLevel;
 import io.github.streammq.core.util.StringUtils;
 import java.io.Serializable;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
@@ -176,8 +175,8 @@ public final class Message<T> implements Serializable {
         this.tag = tag;
         this.keys = keys;
         this.shardingKey = shardingKey;
-        this.properties = copyProperties(properties, false, "property");
-        this.userProperties = copyProperties(userProperties, true, "userProperty");
+        this.properties = copyProperties(properties, "property");
+        this.userProperties = copyProperties(userProperties, "userProperty");
         this.body = body;
         this.delayLevel = delayLevel;
         this.delayTimeMillis = requireValidDelayTimeMillis(delayTimeMillis);
@@ -194,14 +193,15 @@ public final class Message<T> implements Serializable {
      * 同口径， 不把非法值推迟到属性快照/序列化时才暴露）。
      *
      * @param source 源 Map，可为 null
-     * @param linked true 保留插入顺序（userProperties），false 使用普通 HashMap（properties）
      * @param field 字段前缀（用于异常信息）
-     * @return 防御性拷贝（可修改副本；对外由 getter 返回不可修改视图）
+     * @return 防御性拷贝（可修改副本；对外由 getter 返回不可修改视图），<b>保留插入顺序</b>
      * @throws NullPointerException 如果任一 key 或 value 为 null
      */
-    private static Map<String, String> copyProperties(
-            Map<String, String> source, boolean linked, String field) {
-        Map<String, String> copy = linked ? new LinkedHashMap<>() : new HashMap<>();
+    private static Map<String, String> copyProperties(Map<String, String> source, String field) {
+        // 保留插入顺序：MessageBuilder 与 MessageMetadataBuilder 都用 LinkedHashMap 构造并承诺保序，
+        // 此前 properties 用 HashMap 拷贝会在 Message 构造时静默丢弃该顺序（与自身文档不一致）。
+        // 属性条目通常为个位数，LinkedHashMap 的额外开销可忽略。
+        Map<String, String> copy = new LinkedHashMap<>();
         if (Objects.isNull(source)) {
             return copy;
         }
@@ -567,7 +567,7 @@ public final class Message<T> implements Serializable {
                 tag,
                 keys,
                 shardingKey,
-                copyProperties(properties, true, "property"),
+                copyProperties(properties, "property"),
                 userProperties,
                 body);
     }
@@ -583,7 +583,8 @@ public final class Message<T> implements Serializable {
     public Message<T> addProperty(String key, String value) {
         Objects.requireNonNull(key, "property key");
         Objects.requireNonNull(value, "property value");
-        Map<String, String> copied = new HashMap<>(this.properties);
+        // LinkedHashMap：与 addUserProperty / 构造器拷贝口径一致，保持既有属性顺序
+        Map<String, String> copied = new LinkedHashMap<>(this.properties);
         copied.put(key, value);
         return derive(tag, keys, shardingKey, copied, userProperties, body);
     }
@@ -605,7 +606,7 @@ public final class Message<T> implements Serializable {
                 keys,
                 shardingKey,
                 properties,
-                copyProperties(userProperties, true, "userProperty"),
+                copyProperties(userProperties, "userProperty"),
                 body);
     }
 

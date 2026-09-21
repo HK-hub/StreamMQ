@@ -350,12 +350,28 @@ public class DefaultStreamMessageTemplate
             }
             message = interceptedOneway;
             StreamMessageProducer producer = resolveProducer(message.getTopic());
+            long sendStart = System.nanoTime();
             try {
                 producer.sendOneway(message);
             } catch (RuntimeException ex) {
                 interceptorChain.notifyException(message, ex, InvokeTiming.EXECUTING);
+                recordSendMetrics(message.getTopic(), false, sendStart);
                 throw ex;
             }
+            // oneway 是 fire-and-forget，模板层拿不到 Redis entry id，用可辨识的占位 ID 构造"已提交"终态结果，
+            // 使生产者拦截器与指标得到与 sync/async 一致的**恰好一次**终态回调。
+            // 此前 oneway 只有 beforeSend、没有 afterSend/指标，追踪链路与成功率统计在 oneway 路径上缺失。
+            interceptorChain.afterSend(
+                    message,
+                    new SendResult(
+                            MessageId.pending(),
+                            message.getTopic(),
+                            message.getTag(),
+                            SendStatus.SEND_OK,
+                            message.getBornTimestamp(),
+                            null,
+                            null));
+            recordSendMetrics(message.getTopic(), true, sendStart);
         } finally {
             // 清理 MDC 结构化日志上下文
             interceptorChain.clearMdc();

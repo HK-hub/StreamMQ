@@ -26,7 +26,7 @@ import java.util.concurrent.TimeoutException;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public interface StreamMessageProducer {
+public interface StreamMessageProducer extends AutoCloseable {
 
     /**
      * 同步发送单条消息。
@@ -176,6 +176,12 @@ public interface StreamMessageProducer {
         return results;
     }
 
-    /** 关闭生产者，释放资源。 */
+    /**
+     * 关闭生产者，释放内部持有的执行器与连接资源（外部注入的执行器由提供方负责）。
+     *
+     * <p>实现必须<b>幂等</b>；关闭后发送操作必须快速失败而不是静默丢弃消息。该签名把 {@link AutoCloseable#close()} 的 {@code throws
+     * Exception} 收窄为不抛出，因此支持 try-with-resources。
+     */
+    @Override
     void close();
 }

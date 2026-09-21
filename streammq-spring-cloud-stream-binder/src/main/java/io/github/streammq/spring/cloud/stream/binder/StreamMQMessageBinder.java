@@ -165,6 +165,19 @@ public class StreamMQMessageBinder
             String group,
             ExtendedConsumerProperties<StreamMQConsumerProperties> consumerProperties)
             throws Exception {
+        // 与生产端同一口径：分区消费未实现时静默忽略会让用户以为"按 instance-index 隔离"，实际每个实例
+        // 仍消费全量消息（分区语义无声消失）。宁可启动即失败。
+        if (consumerProperties.isPartitioned()) {
+            throw new IllegalStateException(
+                    "StreamMQ binder does not support partitioned consumers"
+                            + " (destination="
+                            + destination.getName()
+                            + ", group="
+                            + group
+                            + "). Remove 'consumer.partitioned=true' / 'instance-index' and use"
+                            + " the consumer-group semantics (or the shardCount extension for"
+                            + " ordered consumption) instead.");
+        }
         StreamMQConsumerProperties extension = consumerProperties.getExtension();
         log.info(
                 "创建 StreamMQ 消费者: destination={}, group={}, selectorExpression={}, shardCount={}",

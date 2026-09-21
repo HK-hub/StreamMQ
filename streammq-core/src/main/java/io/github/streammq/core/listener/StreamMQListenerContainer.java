@@ -107,6 +107,32 @@ public interface StreamMQListenerContainer {
      */
     boolean isRunning();
 
+    /**
+     * 是否存在消费循环启动失败（{@code loopKey → 原因} 的非空集合）。
+     *
+     * <p><b>为什么必须在接口上：</b>"容器在跑但某些消费循环启动失败"是典型静默故障——这些消费者在注册表里 可见、容器 {@link #isRunning()} 为
+     * true，却永不消费。只看 {@code isRunning()} 的健康检查 / K8s 就绪探针 会给出<b>假健康 / 假就绪</b>，把流量导入一个不消费的
+     * Pod。把该能力纳入容器契约后， starter、Binder、Kubernetes 三个健康面可用同一判据，而无需向下强转具体实现类。
+     *
+     * <p>默认实现返回空 map（第三方容器实现不受影响），具体实现覆盖为真实登记表快照。
+     *
+     * @return 不可修改的失败快照（{@code loopKey → 原因}），空表示全部正常
+     * @since 0.1.2
+     */
+    default java.util.Map<String, String> getConsumeLoopFailures() {
+        return java.util.Map.of();
+    }
+
+    /**
+     * 是否全部消费循环健康（等价于 {@link #getConsumeLoopFailures()} 为空）。
+     *
+     * @return true 表示不存在启动失败的消费循环
+     * @since 0.1.2
+     */
+    default boolean isConsumeLoopsHealthy() {
+        return getConsumeLoopFailures().isEmpty();
+    }
+
     // ===================== 运行时管理（可选，默认空实现） =====================
 
     /**

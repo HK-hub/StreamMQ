@@ -130,6 +130,25 @@ streammq:
 | `min-retry-delay-ms` | `1000` | 重试延迟下限（毫秒），必须 > 0 |
 | `stream-max-len` | `0` | DLQ Stream 最大长度，`0`=不限制 |
 
+### per-consumer 覆盖（`@StreamMQDlqConsumer`）
+
+上表的数值参数可被 **`@StreamMQDlqConsumer` 的注解属性按消费者覆盖**，优先级为
+**注解 &gt; 全局配置 &gt; 框架默认**。未声明的注解属性<b>跟随全局配置</b>（注解默认值是哨兵，不是"框架默认值"），
+因此只配置全局键即可统一生效，个别消费者需要特例时再用注解覆盖：
+
+| 注解属性 | 对应全局键（未声明时跟随） |
+|---|---|
+| `maxDlqRetryAttempts` | `streammq.dlq.max-dlq-retry-attempts` |
+| `dlqRetryDelayMs` | `streammq.dlq.dlq-retry-delay-ms` |
+| `secondaryDlqMode`（三态 `INHERIT`/`ENABLED`/`DISABLED`） | `streammq.dlq.secondary-dlq-enabled` |
+| `secondaryDlqKeyPrefix` | `streammq.dlq.secondary-dlq-key-prefix` |
+| `dlqAlertThreshold` | `streammq.dlq.alert-threshold` |
+| `dlqRetryBackoffMultiplier` | `streammq.dlq.retry-backoff-multiplier` |
+| `dlqRetryMaxDelayMs` | `streammq.dlq.retry-max-delay-ms` |
+
+> 全部 8 个 `streammq.*` 全局键的取值合法性在启动期校验（`StreamMQProperties#validate()`）；
+> 注解侧同样在装配期校验（非法取值直接失败，不会静默回落）。
+
 ---
 
 ## `streammq.retry.*` 重试
@@ -146,6 +165,12 @@ streammq:
 | `pel-claim-scan-interval` | `5s` | PEL 认领扫描间隔（顺序消费），必须 > 0 |
 | `pel-claim-min-idle-ms` | `60000` | PEL 认领空闲阈值（顺序消费）。必须 ≥ max(`MIN_PEL_CLAIM_MIN_IDLE_MS`=35000ms, 3 × `group.heartbeat-interval-ms`)——判活窗口小于心跳间隔时活跃慢消费者会被误判为死亡并复制重投，重试耗尽后已成功处理的消息会进 DLQ |
 | `failure-requeue-backoff-ms` | `5000` | 转移失败后的回写退避间隔（毫秒，必须 > 0），避免 Redis 故障时热循环 |
+
+> ⚠️ **`stream-max-len` 在 0.1.2 起不生效（配置非 0 会输出启动期 WARN）**：重试流中的条目是消息的
+> **唯一副本**（原 topic 条目已 XACK、payload Hash 已在同一原子批中删除），头部被 `MAXLEN` 裁剪即等于
+> **静默丢消息**。因此重试流不做有损裁剪；限制长度的能力若要做，只能是"安全裁剪"（PEL 为空且无未读条目时
+> 按已投递位点 `XTRIM MINID`），该能力默认关闭，不在 0.1.2 范围内。
+> 注解侧**不提供**对应的按消费者覆盖属性（`@StreamMQConsumer.retryStreamMaxLen` 已在 0.1.2 移除）。
 
 ---
 

@@ -11,12 +11,14 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import io.github.streammq.core.StreamMQConstants;
 import io.github.streammq.core.annotation.StreamMQConsumer;
 import io.github.streammq.core.annotation.StreamMQDlqConsumer;
 import io.github.streammq.core.enums.ConsumeAction;
 import io.github.streammq.core.enums.ConsumeFromWhere;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.MessageModel;
+import io.github.streammq.core.enums.SecondaryDlqMode;
 import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.listener.ListenerRegistration;
 import io.github.streammq.core.listener.ListenerType;
@@ -202,6 +204,22 @@ class DefaultListenerRegistrarDlqAndBroadcastTest {
                                     case "consumerGroup" -> group;
                                     case "namespace" -> "";
                                     case "failureStrategy" -> DlqFailureStrategy.class;
+                                    // DLQ 数值属性必须返回**注解的真实默认值**（哨兵），
+                                    // 否则代理会退化成 0/false/null —— 那不是合法注解取值，
+                                    // 会让 toDlqConfigOverride 产出非法覆盖（如 alertThreshold=0）。
+                                    case "maxDlqRetryAttempts" ->
+                                            StreamMQConstants.ANNOTATION_UNSET_INT;
+                                    case "dlqRetryDelayMs" ->
+                                            StreamMQConstants.ANNOTATION_UNSET_LONG;
+                                    case "secondaryDlqMode" -> SecondaryDlqMode.INHERIT;
+                                    case "secondaryDlqKeyPrefix" ->
+                                            StreamMQConstants.ANNOTATION_UNSET_STRING;
+                                    case "dlqAlertThreshold" ->
+                                            StreamMQConstants.ANNOTATION_UNSET_INT;
+                                    case "dlqRetryBackoffMultiplier" ->
+                                            StreamMQConstants.ANNOTATION_UNSET_DOUBLE;
+                                    case "dlqRetryMaxDelayMs" ->
+                                            StreamMQConstants.ANNOTATION_UNSET_LONG;
                                     case "annotationType" -> StreamMQDlqConsumer.class;
                                     case "hashCode" -> group.hashCode();
                                     case "equals" ->
@@ -225,6 +243,9 @@ class DefaultListenerRegistrarDlqAndBroadcastTest {
         }
         if (returnType == boolean.class) {
             return false;
+        }
+        if (returnType == double.class) {
+            return 0.0d;
         }
         if (returnType == Class.class) {
             return null;

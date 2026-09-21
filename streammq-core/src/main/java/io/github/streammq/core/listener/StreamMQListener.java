@@ -30,7 +30,7 @@ import java.util.List;
  * @author StreamMQ Contributors
  * @since 0.1.0
  */
-public interface StreamMQListener {
+public interface StreamMQListener extends AutoCloseable {
 
     /**
      * 非阻塞拉取消息。
@@ -92,6 +92,12 @@ public interface StreamMQListener {
      */
     void ackBatch(List<MessageId> messageIds);
 
-    /** 关闭监听器，释放资源。 */
+    /**
+     * 关闭监听器，释放在途 ACK 与底层资源。
+     *
+     * <p><b>契约：</b>实现必须<b>幂等</b>（重复调用为无操作）；关闭后再次调用 {@link #pull(int)} 等操作应快速失败而非静默返回空。 该签名把 {@link
+     * AutoCloseable#close()} 的 {@code throws Exception} 收窄为不抛出，因此支持 try-with-resources。
+     */
+    @Override
     void close();
 }

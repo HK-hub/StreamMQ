@@ -95,8 +95,9 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 ### 质量与发布姿态
 
-本地全量门禁（`mvn clean verify -Djacoco.check.skip=false`）实测 **1482 个用例**：单元 1185（surefire）+ 集成 297（failsafe），
-**0 失败 / 0 错误 / 0 跳过**；surefire/failsafe 报告可逐文件复现。覆盖核心消息能力、事务流程、延时投递、顺序消费、
+本地全量门禁（`mvn clean verify -Djacoco.check.skip=false`）实测 **1509 个用例**：单元 1212（surefire）+ 集成 297（failsafe），
+**0 失败 / 0 错误**；唯一的跳过是 11 个 Cluster 用例——在无 3 主集群可达时**显式 skip 并打印集群启动指引**，
+绝不静默变绿。surefire/failsafe 报告可逐文件复现。覆盖核心消息能力、事务流程、延时投递、顺序消费、
 DLQ 处理、PEL 认领、广播消费、Redis Cluster 兼容性等场景。
 CI 对集成测试采用 **tripwire 下限**（按模块：`streammq-redisson ≥ 100`、`streammq-spring-boot-starter ≥ 30`、
 `streammq-test ≥ 40`、`streammq-samples/* ≥ 16`、全局 `≥ 230`，且跳过率 `≤ 20%`），避免"Redis 静默不可用却全绿"。
@@ -1026,13 +1027,17 @@ streammq:
 | `dlqMode` | boolean | false | 是否 DLQ 消费者 |
 | `pullInterval` | long | -1（=回落全局 `streammq.consumer.pull-interval`，默认 0=不间隔） | 拉取间隔（毫秒）；-1 取全局，>=0 注解优先 |
 | `streamMaxLen` | int | 0 | Stream 最大长度（0=不限制） |
-| `retryStreamMaxLen` | int | 0 | 重试 Stream 最大长度 |
 | `enableMsgTrace` | boolean | false | 是否启用消息追踪 |
 | `serializer` | Class | MessageSerializer.class | 序列化器（默认全局） |
 | `messageConverter` | Class | MessageConverter.class | 消息转换器（默认全局） |
 | `retryPolicy` | Class | RetryPolicy.class | 重试策略（默认全局） |
 | `rebalanceStrategy` | Class | RebalanceStrategy.class | 重平衡策略（默认全局） |
 | `consumerFilter` | Class[] | {} | 消费者专属过滤器 |
+
+> **为什么没有"重试 Stream 最大长度"注解属性**：重试流 / 死信流中的条目是消息的**唯一副本**（原 topic 条目已 XACK、
+> payload Hash 已在同一原子批中删除），对该类流施加 `MAXLEN` 有损裁剪即等于**静默丢消息**。因此 0.1.2 起
+> 不提供按消费者配置重试流上限的注解属性；全局键 `streammq.retry.stream-max-len` 若被设为非 0，会在启动期
+> 输出显式 WARN 声明其失效（而不是静默裁剪）。
 
 > 完整配置参考请查看本文件「[配置参考](#配置参考)」章节与 [架构设计文档](docs/archived-historical/02-architecture.md)（V1.0 起草稿，仅供考古）。
 
@@ -1264,6 +1269,7 @@ template.syncSend(message);  // traceId 自动透传到消费者
 | 文档 | 说明 |
 |------|------|
 | [本 README](README.zh-CN.md) | 权威使用手册（功能 / 快速开始 / 配置 / SPI / 运维） |
+| [配置参考](docs/configuration-reference.md) | 每个 `streammq.*` 键及其真实默认值 |
 | Javadoc | 随 Maven Central 发布的构件附带 sources/javadoc jar |
 | [CHANGELOG](CHANGELOG.md) | 版本变更记录 |
 | [CONTRIBUTING](CONTRIBUTING.md) | 贡献流程与开发规范 |

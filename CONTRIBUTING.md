@@ -385,6 +385,7 @@ StreamMQ ships **18 extension points** in total — user-facing SPI interfaces p
 | `MessageConverter` | core | Convert between message body and domain objects |
 | `ProducerFilter` | core | Filter messages before sending |
 | `ConsumerFilter` | core | Filter messages before consumption |
+| `ExpressionSelectorFilter` | core | Shared contract for SQL92/TAG expression selectors (custom selector extension point) |
 | `ProducerInterceptor` | core | Intercept send operations |
 | `ConsumerInterceptor` | core | Intercept consume operations |
 | `RetryPolicy` | core | Control retry behavior |

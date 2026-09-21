@@ -63,15 +63,15 @@
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-sdk</artifactId>
-        
-            <scope>provided</scope></dependency>
+            <scope>provided</scope>
+        </dependency>
 
         <!-- OpenTelemetry SDK Trace -->
         <dependency>
             <groupId>io.opentelemetry</groupId>
             <artifactId>opentelemetry-sdk-trace</artifactId>
-        
-            <scope>provided</scope></dependency>
+            <scope>provided</scope>
+        </dependency>
 
 
         <!-- OTLP gRPC 导出器（optional：仅配置 otlp-endpoint 的用户需要） -->

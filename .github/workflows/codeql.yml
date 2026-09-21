@@ -24,6 +24,8 @@ jobs:
   analyze:
     name: Analyze Java
     runs-on: ubuntu-latest
+    # 与其余 workflow 一致：每个 job 显式超时预算，避免 runner 卡死时无限等待（默认上限 360 分钟）
+    timeout-minutes: 30
     permissions:
       security-events: write
       actions: read

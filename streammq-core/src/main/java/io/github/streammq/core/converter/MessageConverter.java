@@ -59,9 +59,10 @@ public interface MessageConverter {
     /**
      * 将 Stream Entry 字段 Map 还原为 Message，并指定回填 Topic。
      *
-     * <p><b>这是实现方唯一必须覆盖的方法</b>：两参形式与三参形式的默认实现互为委托， 若两者均未覆盖将互相递归导致 {@code
-     * StackOverflowError}。因此本方法的默认实现直接抛出 {@link UnsupportedOperationException} 以便在首次调用时快速失败，
-     * 引导实现方覆盖本方法（或同时覆盖两参形式）。 内置实现（如 redisson 适配层的 {@code AbstractMessageConverter}）均已覆盖三参形式。
+     * <p><b>这是实现方唯一必须覆盖的方法</b>：两参形式的默认实现单向委托到本方法；本方法的默认实现直接抛出 {@link UnsupportedOperationException}
+     * 以便在首次调用时快速失败，引导实现方覆盖本方法。因此<b>覆盖两参形式而不覆盖三参形式</b> 会让经由两参入口的调用拿到 {@code
+     * UnsupportedOperationException}（而不是静默错误结果）。 内置实现（如 redisson 适配层的 {@code
+     * AbstractMessageConverter}）均已覆盖三参形式。
      *
      * <p>{@link Message} 为不可变对象；当 Entry 字段中不携带 Topic（跨平台生产者场景）时， 使用调用方已知的 {@code fallbackTopic}
      * 补全。两个字段来源均缺失 Topic 时抛出异常。

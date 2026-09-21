@@ -573,14 +573,15 @@ public class DelayMessageScheduler implements StreamMQScheduler {
         String pattern = StreamMQKeys.delayPayloadHash(namespace, "*");
         java.util.List<org.redisson.api.RScoredSortedSet<String>> delayZsets =
                 new java.util.ArrayList<>();
+        List<String> delayZsetKeys = new java.util.ArrayList<>();
         for (DelayLevel level : DelayLevel.values()) {
-            delayZsets.add(
-                    redisson.getScoredSortedSet(
-                            StreamMQKeys.delayZSet(namespace, level.name()), StringCodec.INSTANCE));
+            String levelKey = StreamMQKeys.delayZSet(namespace, level.name());
+            delayZsetKeys.add(levelKey);
+            delayZsets.add(redisson.getScoredSortedSet(levelKey, StringCodec.INSTANCE));
         }
-        delayZsets.add(
-                redisson.getScoredSortedSet(
-                        StreamMQKeys.delayCustomZSet(namespace), StringCodec.INSTANCE));
+        String customKey = StreamMQKeys.delayCustomZSet(namespace);
+        delayZsetKeys.add(customKey);
+        delayZsets.add(redisson.getScoredSortedSet(customKey, StringCodec.INSTANCE));
 
         // 容量探测（O(1)/ZSet）：引用集过大时跳过本轮兜底清扫，避免把堆积量级的数据一次性物化进内存
         long referencedCount = 0;
@@ -611,11 +612,28 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                 continue;
             }
             String msgId = key.substring(idx + StreamMQKeys.SEP.length());
+            // 快照预筛（便宜）：快照里已有的候选直接跳过，避免对绝大多数 key 发脚本
             if (referencedMsgIds.contains(msgId)) {
                 continue;
             }
             try {
-                if (redisson.getMap(key, StringCodec.INSTANCE).delete()) {
+                // 权威复核 + 删除下沉为服务端**单条 Lua**：
+                // 快照（T0）与 key 扫描（T1）之间存在窗口，期间新入队的延时消息不在快照里，
+                // 若按快照直接删除就会误删「仍被 ZSet 引用」的 payload —— 到期转投时读不到 payload
+                // 只能进隔离区（业务视角即静默丢失，需人工重放）。
+                // Lua 内先对全部延时 ZSet 做 ZSCORE 判定，任一命中即保留，否则才 DEL，两者原子执行。
+                List<Object> scriptKeys = new java.util.ArrayList<>(delayZsetKeys.size() + 1);
+                scriptKeys.add(key);
+                scriptKeys.addAll(delayZsetKeys);
+                Object deleted =
+                        redisson.getScript(StringCodec.INSTANCE)
+                                .eval(
+                                        RScript.Mode.READ_WRITE,
+                                        LUA_DELETE_ORPHAN_PAYLOAD,
+                                        RScript.ReturnType.INTEGER,
+                                        scriptKeys,
+                                        List.of(msgId));
+                if (deleted instanceof Number n && n.longValue() > 0) {
                     cleaned++;
                 }
             } catch (RuntimeException ex) {
@@ -715,4 +733,19 @@ public class DelayMessageScheduler implements StreamMQScheduler {
                     + "  end;"
                     + "end;"
                     + "return { #ids, removed };";
+
+    /**
+     * Lua：权威判定并删除孤儿延时 payload（修复「快照-扫描」竞态导致的误删）。
+     *
+     * <p>KEYS[1] = payload Hash key；KEYS[2..N] = 全部延时 ZSet key；ARGV[1] = 待判定 msgId。 任一 ZSet
+     * 仍持有该成员（{@code ZSCORE} 非 nil）即返回 0 且不删除；否则 {@code DEL} 并返回 1。
+     *
+     * <p>判定与删除在服务端原子完成，因此不受调用方快照时点影响——新入队的延时消息（payload 与 ZSet 条目在同一原子批中写入）不会被误删。
+     */
+    static final String LUA_DELETE_ORPHAN_PAYLOAD =
+            "local id = ARGV[1];"
+                    + "for i = 2, #KEYS do"
+                    + "  if redis.call('ZSCORE', KEYS[i], id) then return 0; end;"
+                    + "end;"
+                    + "return redis.call('DEL', KEYS[1]);";
 }

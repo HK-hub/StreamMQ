@@ -126,10 +126,23 @@ public class StreamMQHealthAutoConfiguration {
                 buildSchedulerDetails(builder);
                 return builder.build();
             } catch (RuntimeException ex) {
-                return Health.down(ex)
+                // 脱敏：健康详情在 management.endpoint.health.show-details=always（监控/看板常用）下对外可见，
+                // 而 Redis 异常文本会带出 Key 名、NOGROUP/NOPERM/ACL、连接串等信息（与管理端点同一泄漏面）。
+                // 详情只给「异常类型 + 关联 ID」，完整信息（含堆栈）只进日志。
+                String correlationId = Long.toHexString(System.nanoTime());
+                LOG.error(
+                        "StreamMQ health check failed (correlationId={}): {}",
+                        correlationId,
+                        ex.getMessage(),
+                        ex);
+                return Health.down()
                         .withDetail(
                                 StreamMQSpringConstants.HEALTH_DETAIL_ERROR,
-                                "Redis ping failed: " + ex.getMessage())
+                                "Redis ping failed (type="
+                                        + ex.getClass().getSimpleName()
+                                        + ", correlationId="
+                                        + correlationId
+                                        + "; see application logs for details)")
                         .build();
             }
         }

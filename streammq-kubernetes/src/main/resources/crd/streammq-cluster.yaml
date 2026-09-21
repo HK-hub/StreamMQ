@@ -242,22 +242,13 @@ spec:
                 format: date-time
               observedGeneration:
                 type: integer
-              conditions:
-                type: array
-                items:
-                  type: object
-                  properties:
-                    type:
-                      type: string
-                    status:
-                      type: string
-                    reason:
-                      type: string
-                    message:
-                      type: string
-                    lastTransitionTime:
-                      type: string
-                      format: date-time
+              message:
+                type: string
+                description: >-
+                  Human-readable status detail (for example the reason reconciliation failed).
+                  Declared in the schema on purpose: a structured status schema silently prunes
+                  undeclared fields, so omitting this key would make every operator-written
+                  diagnostic message invisible on the cluster object.
     subresources:
       status: {}
     additionalPrinterColumns:

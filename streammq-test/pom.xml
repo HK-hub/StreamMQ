@@ -48,12 +48,13 @@
             <artifactId>redisson</artifactId>
         </dependency>
 
-        <!-- StreamMQ Redisson Adapter：仅测试工具内部使用；optional 防止把适配层实现
-             强制传递给所有使用方——不使用 Redisson 适配器的项目不应被引入该实现。 -->
+        <!-- StreamMQ Redisson Adapter：**仅本模块的测试源码**使用（src/main 零引用，已核实），
+             因此声明为 test scope —— 既保证本模块 IT 可编译，又不会把适配层写进已发布 POM 的
+             编译期依赖面（此前 optional+compile 会让下游读 POM 时误判"需要适配层"）。 -->
         <dependency>
             <groupId>io.github.streammq</groupId>
             <artifactId>streammq-redisson</artifactId>
-            <optional>true</optional>
+            <scope>test</scope>
         </dependency>
 
         <!-- 以下依赖在本模块为 compile scope，因为 src/main/java 中的测试工具类（断言/ Mock / 容器化 Redis）需要使用；

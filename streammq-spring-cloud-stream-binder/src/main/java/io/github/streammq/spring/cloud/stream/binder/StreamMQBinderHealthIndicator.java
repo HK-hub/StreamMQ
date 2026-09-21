@@ -44,13 +44,20 @@ public class StreamMQBinderHealthIndicator extends AbstractHealthIndicator {
             return;
         }
         boolean running = listenerContainer.isRunning();
+        // 只判 isRunning() 会漏掉"容器在跑但消费循环启动失败"——那些人消费者在注册表可见却永不消费，
+        // 健康面却报 UP（假健康，与 starter 指示器的判据不一致）。消费循环健康必须一并纳入。
+        boolean consumeLoopsHealthy = listenerContainer.isConsumeLoopsHealthy();
         int consumerCount = listenerContainer.getConsumers().size();
-        if (running) {
+        if (running && consumeLoopsHealthy) {
             builder.up();
         } else {
             builder.down();
         }
         builder.withDetail(StreamMQBinderConstants.HEALTH_DETAIL_LC_RUNNING, running);
+        builder.withDetail("consumeLoopsHealthy", consumeLoopsHealthy);
+        if (!consumeLoopsHealthy) {
+            builder.withDetail("consumeLoopFailures", listenerContainer.getConsumeLoopFailures());
+        }
         builder.withDetail(StreamMQBinderConstants.HEALTH_DETAIL_LC_CONSUMER_COUNT, consumerCount);
     }
 }

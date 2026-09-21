@@ -225,8 +225,6 @@ class CoreRedisIntegrationIT extends StreamMQTestBase {
                                     return 4;
                                 case "consumerName":
                                     return "";
-                                case "retryStreamMaxLen":
-                                    return 0;
                                 case "suspendCurrentQueueTimeMillis":
                                     return 1000L;
                                 default:

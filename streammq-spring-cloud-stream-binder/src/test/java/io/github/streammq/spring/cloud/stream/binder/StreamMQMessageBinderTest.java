@@ -316,6 +316,9 @@ class StreamMQMessageBinderTest {
     @DisplayName("StreamMQBinderHealthIndicator 容器运行中报告 UP")
     void healthIndicator_containerRunning_shouldReportUp() {
         when(listenerContainer.isRunning()).thenReturn(true);
+        // 消费循环健康必须显式为 true：Mockito 对 boolean 的默认值是 false，而"容器跑着但循环启动失败"
+        // 属于假健康，指示器有意判为 DOWN（不再只看 isRunning()）。
+        when(listenerContainer.isConsumeLoopsHealthy()).thenReturn(true);
         when(listenerContainer.getConsumers()).thenReturn(Collections.emptyList());
 
         StreamMQBinderHealthIndicator indicator =
@@ -325,6 +328,25 @@ class StreamMQMessageBinderTest {
         assertThat(health.getStatus()).isEqualTo(org.springframework.boot.actuate.health.Status.UP);
         assertThat(health.getDetails()).containsKey("listenerContainer.running");
         assertThat(health.getDetails()).containsKey("listenerContainer.consumerCount");
+    }
+
+    @Test
+    @DisplayName("StreamMQBinderHealthIndicator 容器运行但消费循环启动失败时报告 DOWN（不得假健康）")
+    void healthIndicator_consumeLoopUnhealthy_shouldReportDown() {
+        when(listenerContainer.isRunning()).thenReturn(true);
+        when(listenerContainer.isConsumeLoopsHealthy()).thenReturn(false);
+        when(listenerContainer.getConsumeLoopFailures())
+                .thenReturn(java.util.Map.of("t:g", "Redis auth failed"));
+        when(listenerContainer.getConsumers()).thenReturn(Collections.emptyList());
+
+        StreamMQBinderHealthIndicator indicator =
+                new StreamMQBinderHealthIndicator(listenerContainer);
+        org.springframework.boot.actuate.health.Health health = indicator.health();
+
+        assertThat(health.getStatus())
+                .as("容器的消费者在注册表可见但永不消费，健康面必须 DOWN")
+                .isEqualTo(org.springframework.boot.actuate.health.Status.DOWN);
+        assertThat(health.getDetails()).containsKey("consumeLoopFailures");
     }
 
     @Test

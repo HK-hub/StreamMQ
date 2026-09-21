@@ -877,5 +877,87 @@ public class StreamMQProperties {
                             + ", got: "
                             + producer.retryTimes);
         }
+        // ---- 以下为 0.1.2 补齐的校验：这些键此前完全未校验，非法值被静默接受，直到运行期才暴露 ----
+        if (retry.streamMaxLen < 0) {
+            // 注：retry Stream 在 0.1.2 起不做有损裁剪（流内条目是消息唯一副本），非 0 值会由
+            // RetryScheduler 启动期输出显式 WARN 声明失效；此处仍拒绝负值（负值无意义且会让 MAXLEN 语义变形）。
+            throw new StreamMQClientException(
+                    "streammq.retry.stream-max-len must be >= 0, got: " + retry.streamMaxLen);
+        }
+        if (dlq.alertThreshold < 1) {
+            throw new StreamMQClientException(
+                    "streammq.dlq.alert-threshold must be >= 1, got: " + dlq.alertThreshold);
+        }
+        if (dlq.retryBackoffMultiplier < 1.0d) {
+            // < 1.0 会让退避延迟在实际计算中坍缩（甚至小于瞬时值），与"退避"语义相反
+            throw new StreamMQClientException(
+                    "streammq.dlq.retry-backoff-multiplier must be >= 1.0 (1.0 = fixed delay), got:"
+                            + " "
+                            + dlq.retryBackoffMultiplier);
+        }
+        if (dlq.retryMaxDelayMs <= 0) {
+            throw new StreamMQClientException(
+                    "streammq.dlq.retry-max-delay-ms must be > 0, got: " + dlq.retryMaxDelayMs);
+        }
+        if (dlq.retryMaxDelayMs < dlq.dlqRetryDelayMs) {
+            throw new StreamMQClientException(
+                    "streammq.dlq.retry-max-delay-ms ("
+                            + dlq.retryMaxDelayMs
+                            + ") must be >= streammq.dlq.dlq-retry-delay-ms ("
+                            + dlq.dlqRetryDelayMs
+                            + "), otherwise the configured retry delay can never be reached.");
+        }
+        // 二级死信前缀会直接拼进 Redis Key（streammq:{ns}:{prefix}:{group}），必须与 namespace/topic/group
+        // 同一命名校验入口；含 ':'/'*'/'{'/'}' 会破坏 Key 结构或（Cluster 下）把 Key 家族钉到同一 slot。
+        requireValidConfigName("streammq.dlq.secondary-dlq-key-prefix", dlq.secondaryDlqKeyPrefix);
+        requireValidConfigGroup("streammq.producer.group", producer.group);
+        requireValidConfigGroup("streammq.transaction.default-group", transaction.defaultGroup);
+        // trace.storage 由 @ConditionalOnProperty(havingValue="redis") 做**大小写敏感**的字面量匹配，
+        // 拼写/大小写写错会让整套追踪静默不装配（用户以为"配了但没数据"）。此处做白名单 fail-fast。
+        String storage = trace.storage == null ? "" : trace.storage.trim();
+        boolean storageRecognised =
+                storage.isEmpty()
+                        || storage.equals(
+                                io.github.streammq.core.enums.TraceStorageType.NONE.getCode())
+                        || storage.equals(
+                                io.github.streammq.core.enums.TraceStorageType.REDIS.getCode());
+        if (!storageRecognised) {
+            throw new StreamMQClientException(
+                    "streammq.trace.storage must be one of ['"
+                            + io.github.streammq.core.enums.TraceStorageType.NONE.getCode()
+                            + "', '"
+                            + io.github.streammq.core.enums.TraceStorageType.REDIS.getCode()
+                            + "'] (case-sensitive), got: '"
+                            + trace.storage
+                            + "'. An unrecognised value silently disables storage-level tracing.");
+        }
+        if (trace.enabled
+                && !io.github.streammq.core.enums.TraceStorageType.REDIS
+                        .getCode()
+                        .equals(storage)) {
+            LOG.warn(
+                    "streammq.trace.enabled=true but streammq.trace.storage='{}' is not 'redis':"
+                            + " no Redis-backed TraceCollector / StreamMQTraceService will be"
+                            + " assembled (a user-provided TraceCollector bean still applies).",
+                    storage);
+        }
+    }
+
+    /** 校验直接拼进 Redis Key 的配置名（与 topic/group/namespace 同一入口），失败转换为配置异常。 */
+    private static void requireValidConfigName(String key, String value) {
+        try {
+            io.github.streammq.core.util.StringUtils.requireValidName(value, key);
+        } catch (IllegalArgumentException | NullPointerException ex) {
+            throw new StreamMQClientException(key + " is invalid: " + ex.getMessage(), ex);
+        }
+    }
+
+    /** 校验消费者组名（额外拒绝保留前缀 {@code __}），失败转换为配置异常。 */
+    private static void requireValidConfigGroup(String key, String value) {
+        try {
+            io.github.streammq.core.util.StringUtils.requireValidGroup(value);
+        } catch (IllegalArgumentException | NullPointerException ex) {
+            throw new StreamMQClientException(key + " is invalid: " + ex.getMessage(), ex);
+        }
     }
 }

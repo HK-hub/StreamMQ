@@ -58,7 +58,62 @@ import org.springframework.context.annotation.Bean;
         havingValue = CloudK8sProperties.PROP_VALUE_TRUE,
         matchIfMissing = false)
 @EnableConfigurationProperties(CloudK8sProperties.class)
-public class CloudK8sAutoConfiguration {
+public class CloudK8sAutoConfiguration
+        implements org.springframework.beans.factory.InitializingBean {
+
+    private static final org.slf4j.Logger LOG =
+            org.slf4j.LoggerFactory.getLogger(CloudK8sAutoConfiguration.class);
+
+    private final CloudK8sProperties properties;
+
+    private final org.springframework.core.env.Environment environment;
+
+    /**
+     * 构造注入配置属性与环境（用于启动期校验与"配了但不生效"提示）。
+     *
+     * @param properties K8s 增强模块配置
+     * @param environment Spring 环境（读取 {@code operator.enabled} 这类由条件注解消费的键）
+     */
+    public CloudK8sAutoConfiguration(
+            CloudK8sProperties properties, org.springframework.core.env.Environment environment) {
+        this.properties = properties;
+        this.environment = environment;
+    }
+
+    /**
+     * 启动期校验配置并提示"配了但不生效"的组合。
+     *
+     * <p>{@link CloudK8sProperties#validate()} 把 {@code hpa-sync-interval-seconds=0} 这类此前会抛
+     * <b>无配置键信息</b>异常、以及会被静默忽略的非法间隔统一为可定位的 fail-fast。
+     *
+     * <p>另：{@code config-refresh-enabled=true} 而 {@code operator.enabled=false} 时， {@code
+     * ConfigMapConfigRefresher} 位于 Operator 子配置内、不会被注册 —— 用户按包文档"关掉 Operator 只用热更新"
+     * 会得到"配了但什么都没发生"。这里显式 WARN，绝不静默。
+     */
+    @Override
+    public void afterPropertiesSet() {
+        properties.validate();
+        if (properties.isConfigRefreshEnabled() && !isOperatorEnabled()) {
+            LOG.warn(
+                    "streammq.cloud.k8s.config-refresh-enabled=true has NO effect while"
+                        + " streammq.cloud.k8s.operator.enabled=false: the ConfigMap watcher lives"
+                        + " in the operator configuration. Set operator.enabled=true, or remove"
+                        + " config-refresh-enabled.");
+        }
+    }
+
+    /**
+     * 读取 {@code streammq.cloud.k8s.operator.enabled}（由 {@link
+     * org.springframework.boot.autoconfigure.condition.ConditionalOnProperty} 消费，不是 {@link
+     * CloudK8sProperties} 的字段），默认 true。
+     *
+     * <p>用宽松解析（{@code Boolean.parseBoolean} 语义）而非类型转换：非法取值不得让启动失败——
+     * 条件注解本身会对无法识别的值按"不匹配"处理，这里只用于告警判定。
+     */
+    private boolean isOperatorEnabled() {
+        String raw = environment.getProperty("streammq.cloud.k8s.operator.enabled");
+        return raw == null || !"false".equalsIgnoreCase(raw.trim());
+    }
 
     /**
      * 健康探针与优雅关闭（轻量能力，不依赖 fabric8）。
@@ -94,9 +149,21 @@ public class CloudK8sAutoConfiguration {
                 ObjectProvider<StreamMQListenerContainer> containerProvider) {
             return new StreamMQHealthController(containerProvider);
         }
+    }
+
+    /**
+     * 优雅关闭：容器关闭时暂停拉取、等待 in-flight 消息完成、停止容器。
+     *
+     * <p><b>为什么必须是独立的嵌套配置类：</b>此前本 Bean 与健康探针同处 {@code @ConditionalOnClass(HealthIndicator.class)}
+     * 的 {@code HealthConfiguration} 内—— 而 {@code spring-boot-starter-actuator} 在本模块是 {@code
+     * provided}，未引入 Actuator 的应用 <b>不会</b>注册优雅关闭处理器（{@code pause → 等在途 → stop} 整条链路静默失效），K8s
+     * 滚动发布/驱逐时 在途消息被中断、重复投递概率升高，且没有任何提示。优雅关闭与 Actuator 毫无关系，条件必须解耦。
+     */
+    @ConditionalOnClass(StreamMQListenerContainer.class)
+    static class GracefulShutdownConfiguration {
 
         /**
-         * 优雅关闭处理器：容器关闭时暂停拉取、等待 in-flight 消息完成、停止容器。
+         * 优雅关闭处理器。
          *
          * <p>实现 {@link org.springframework.context.SmartLifecycle}（phase = {@code Integer.MAX_VALUE
          * - 150}），由 Spring 在停止阶段先行回调（早于 starter 的容器生命周期 phase=MAX_VALUE-200）， 保证 pause 有效；{@link
@@ -135,9 +202,11 @@ public class CloudK8sAutoConfiguration {
         /**
          * HPA 自动扩缩器。
          *
-         * <p>{@code @ConditionalOnMissingBean}：{@link HpaAutoScaler} 自身带 {@code @Component}， 若用户把
-         * {@code io.github.streammq.cloud.k8s} 包纳入组件扫描，朴素 {@code @Bean} 会让容器里出现 <b>两个</b>
-         * scaler（各自启动一个调度线程），与 {@code hpaMetricsProvider} 的消歧口径也不一致。
+         * <p>本方法（自动装配）是 {@link HpaAutoScaler} 的<b>唯一装配真源</b>：该类自身的 {@code @Component}
+         * 已移除。此前两者并存时，若用户把 {@code io.github.streammq.cloud.k8s} 包纳入组件扫描，
+         * 组件扫描会先注册一个<b>未经属性注入</b>的实例（全部参数回落硬编码默认值，用户配置静默失效）， 且不受 {@code
+         * streammq.cloud.k8s.enabled=false} 约束也会启动调度线程。 {@code @ConditionalOnMissingBean}
+         * 保留，用于让用户自定义 Bean 覆盖。
          */
         @Bean
         @ConditionalOnMissingBean(HpaAutoScaler.class)

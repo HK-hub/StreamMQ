@@ -12,6 +12,7 @@ import io.github.streammq.core.enums.ConsumeFromWhere;
 import io.github.streammq.core.enums.ConsumeMode;
 import io.github.streammq.core.enums.SelectorType;
 import io.github.streammq.core.filter.ConsumerFilter;
+import io.github.streammq.core.policy.DlqConfigOverride;
 import io.github.streammq.core.policy.DlqFailureStrategy;
 import io.github.streammq.core.policy.RebalanceStrategy;
 import io.github.streammq.core.policy.RetryPolicy;
@@ -36,8 +37,10 @@ import org.slf4j.LoggerFactory;
  * IllegalArgumentException}（{@code maxReconsumeTimes}/{@code shardCount}/{@code
  * consumeTimeoutMillis}/{@code orderlyConsumeTimeoutMillis}/{@code pullBatchSize}/{@code
  * pullBlockTimeoutMillis}/{@code pullIntervalMillis}/{@code suspendCurrentQueueTimeMillis}/{@code
- * streamMaxLen}）。 这里不再有任何"夹取"字段：静默把非法值改成合法值会让配置错误一路带到线上（例如 {@code shardCount = -1} 被夹成 0
- * 会得到一个零分片的顺序消费者）。
+ * streamMaxLen}）。 静默把非法值改成合法值会让配置错误一路带到线上（例如 {@code shardCount = -1} 被夹成 0 会得到一个零分片的顺序消费者）。
+ *
+ * <p><b>唯一的例外是 {@link #getConsumeThreads()}</b>：该属性是"并发循环数"的便捷旋钮，历史取值可能来自已废弃的 {@code
+ * consumeThreadMin}/{@code consumeThreadMax}，故解析后夹取到 {@code [1, 64]} 以保持向后兼容；其余数值参数一律 fail-fast。
  *
  * @param <T> body 类型
  * @author StreamMQ Contributors
@@ -64,7 +67,7 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
     private final ConsumeMode consumeMode;
     private final int maxReconsumeTimes;
 
-    /** 顺序消费分片数（夹取下界 0，非负；与 {@link ListenerConfig} 的「&lt;1 抛异常」策略不同） */
+    /** 顺序消费分片数（必须 {@code >= 0}，{@code 0} = 未分片）；与 {@link ListenerConfig} 同为 fail-fast。 */
     private final int shardCount;
 
     private final long consumeTimeoutMillis;
@@ -93,6 +96,9 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
     private final boolean dlqMode;
     private final Class<?> targetBodyType;
     private final Class<? extends DlqFailureStrategy> dlqFailureStrategy;
+
+    /** per-consumer DLQ 数值配置覆盖（{@code @StreamMQDlqConsumer} 属性）；null = 全部跟随全局配置。 */
+    @Getter private final DlqConfigOverride dlqConfigOverride;
 
     @SuppressWarnings("unchecked")
     private final Class<? extends ConsumerFilter>[] consumerFilter;
@@ -148,6 +154,11 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         this.dlqMode = b.dlqMode;
         this.targetBodyType = b.targetBodyType;
         this.dlqFailureStrategy = b.dlqFailureStrategy;
+        this.dlqConfigOverride = b.dlqConfigOverride;
+        // 构造期即回填：Builder.converterInstance(...) 此前只写了 Builder 字段、构造器从未读取，
+        // 公开 Builder 链上该 setter 会被静默丢弃（getConverterInstance() 恒为 null）。
+        // 内部路径经 setConverterInstance(...) 回填，掩盖了该缺陷。
+        this.converterInstance = b.converterInstance;
         // 防御性拷贝：Builder.consumerFilter(arr) 之后调用方若仍持有 arr，可在注册完成后改写内容，
         // 违反「容器注册后视为不可变」的契约（同 shardLocks 的处理）。
         this.consumerFilter = Objects.isNull(b.consumerFilter) ? null : b.consumerFilter.clone();
@@ -253,6 +264,7 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
         private boolean dlqMode;
         private Class<?> targetBodyType;
         private Class<? extends DlqFailureStrategy> dlqFailureStrategy;
+        private DlqConfigOverride dlqConfigOverride;
         private Class<? extends ConsumerFilter>[] consumerFilter;
         private SelectorType selectorType;
         private String namespace;
@@ -391,6 +403,18 @@ public class DefaultListenerRegistration<T> implements ListenerRegistration<T> {
 
         public Builder<T> dlqFailureStrategy(Class<? extends DlqFailureStrategy> v) {
             this.dlqFailureStrategy = v;
+            return this;
+        }
+
+        /**
+         * 设置 per-consumer DLQ 数值配置覆盖（未声明的字段为 {@code null}，表示跟随全局配置）。
+         *
+         * @param v 覆盖对象；{@code null} 表示无覆盖
+         * @return this
+         * @since 0.1.2
+         */
+        public Builder<T> dlqConfigOverride(DlqConfigOverride v) {
+            this.dlqConfigOverride = v;
             return this;
         }
 

@@ -485,11 +485,25 @@ public class StreamMQKeys {
                 + shardId;
     }
 
-    /** PEL 认领互斥锁 Key：{@code streammq:{ns}:pelclaim-lock:{topic}:{group}}。 */
-    public static String pelClaimLock(String namespace, String topic, String group) {
+    /**
+     * PEL 认领互斥锁 Key：{@code streammq:{ns}:pelclaim-lock:{kind}:{topic}:{group}}。
+     *
+     * <p>Key 中必须包含认领目标种类（{@code TOPIC} / {@code RETRY} / {@code DLQ}）：同一业务 {@code (topic, group)}
+     * 会同时注册 TOPIC 与 RETRY 两类扫描目标，若二者共用同一把锁，多实例下 一方扫 TOPIC 时另一方扫 RETRY 目标会 {@code tryLock}
+     * 失败并整轮跳过，使重试流 PEL 恢复在高 实例数/大 PEL 场景下被反复饿死（仅延迟恢复，不丢消息，但恢复时效劣化）。
+     *
+     * @param namespace 命名空间
+     * @param kind 认领目标种类（如 {@code TOPIC} / {@code RETRY} / {@code DLQ}）
+     * @param topic 主题
+     * @param group 消费者组
+     * @return 锁 Key
+     */
+    public static String pelClaimLock(String namespace, String kind, String topic, String group) {
         return prefix(namespace)
                 + SEP
                 + TYPE_PELCLAIM_LOCK
+                + SEP
+                + requireNonEmpty(kind, "kind")
                 + SEP
                 + requireNonEmpty(topic, "topic")
                 + SEP

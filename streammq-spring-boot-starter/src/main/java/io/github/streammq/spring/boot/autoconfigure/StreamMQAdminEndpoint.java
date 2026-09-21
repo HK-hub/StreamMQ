@@ -649,7 +649,9 @@ public class StreamMQAdminEndpoint {
             LOG.info("Topic registered: topic={}, created={}", topic, added);
         } catch (RuntimeException ex) {
             result.put("success", false);
-            result.put("error", ex.getMessage());
+            // 与其余写操作同一脱敏口径：响应只含「操作名 + 异常类型 + 关联 ID」，
+            // 完整信息（含 Redis 版本 / Key 名 / NOGROUP / ACL 文本）只进日志。
+            result.put("error", describeFailure("createTopic", ex));
             failureRetryLimiter.recordFailure(limitKey);
             LOG.warn("Create topic failed: topic={}: {}", topic, ex.getMessage());
         }
@@ -1026,9 +1028,12 @@ public class StreamMQAdminEndpoint {
         result.put("success", false);
         result.put("rateLimited", true);
         result.put("retryAfterMs", remaining);
+        // 管理 API 的响应体面向机器可读（其余文案全英文）；可操作的剩余时长已由 retryAfterMs 给出。
         result.put(
                 "error",
-                "该操作此前失败，处于冷却期（剩余 " + String.format("%.1f", remaining / 1000.0) + "s），请稍后重试");
+                "Operation temporarily rejected: the previous attempt failed, cooling down for "
+                        + String.format("%.1f", remaining / 1000.0)
+                        + "s. Retry after the 'retryAfterMs' delay.");
         LOG.debug(
                 "Admin write operation rate-limited: key={}, retryAfterMs={}", limitKey, remaining);
         return true;

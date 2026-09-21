@@ -68,7 +68,32 @@ import org.springframework.context.annotation.Bean;
         havingValue = StreamMQDiagnosticsDefaults.PROP_VALUE_TRUE,
         matchIfMissing = false)
 @EnableConfigurationProperties(StreamMQDiagnosticsProperties.class)
-public class StreamMQDiagnosticsAutoConfiguration {
+public class StreamMQDiagnosticsAutoConfiguration
+        implements org.springframework.beans.factory.InitializingBean {
+
+    private final StreamMQDiagnosticsProperties properties;
+
+    /**
+     * 构造注入诊断属性（用于启动期校验）。
+     *
+     * @param properties 诊断配置属性
+     */
+    public StreamMQDiagnosticsAutoConfiguration(StreamMQDiagnosticsProperties properties) {
+        this.properties = properties;
+    }
+
+    /**
+     * 启动期校验诊断配置（阈值倒挂 / 零窗口 / 负值一律 fail-fast）。
+     *
+     * <p>此前这些键零校验：{@code backlog-warning-threshold > backlog-critical-threshold} 会让 {@code /health}
+     * 常态返回 DOWN，{@code recent-window-ms = 0} 会产出 {@code Infinity} 速率。
+     *
+     * @throws IllegalArgumentException 配置非法
+     */
+    @Override
+    public void afterPropertiesSet() {
+        properties.validate();
+    }
 
     /**
      * 装配消息画像服务。
@@ -100,6 +125,10 @@ public class StreamMQDiagnosticsAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(SlowConsumeAnalyzer.class)
+    // 必须同时具备 TraceService 与 ListenerContainer Bean：两者的注入都是硬依赖，
+    // 缺少任一 Bean 时若仍装配本方法，上下文会以 UnsatisfiedDependencyException 启动失败——
+    // 而文档承诺的是"缺前置即不装配、优雅降级"。类级 @ConditionalOnClass 只检查**类路径**，挡不住这种情况。
+    @ConditionalOnBean({StreamMQTraceService.class, StreamMQListenerContainer.class})
     public SlowConsumeAnalyzer slowConsumeAnalyzer(
             StreamMQTraceService traceService,
             StreamMQListenerContainer listenerContainer,
@@ -119,6 +148,7 @@ public class StreamMQDiagnosticsAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(BacklogAnalyzer.class)
+    @ConditionalOnBean(StreamMQTraceService.class)
     public BacklogAnalyzer backlogAnalyzer(
             StreamMQTraceService traceService,
             StreamMQDiagnosticsProperties properties,
@@ -135,6 +165,7 @@ public class StreamMQDiagnosticsAutoConfiguration {
      */
     @Bean
     @ConditionalOnMissingBean(DlqAnalyzer.class)
+    @ConditionalOnBean(StreamMQTraceService.class)
     public DlqAnalyzer dlqAnalyzer(
             StreamMQTraceService traceService, StreamMQDiagnosticsProperties properties) {
         return new DlqAnalyzer(traceService, properties);
@@ -202,7 +233,9 @@ public class StreamMQDiagnosticsAutoConfiguration {
      * @return 诊断端点实例
      */
     @Bean
-    @ConditionalOnWebApplication
+    // 端点使用 Spring MVC 注解（@RequestMapping/@GetMapping），必须限定 SERVLET 应用：
+    // WebFlux 下 Bean 会被创建但没有 handler adapter，端点静默 404（与 CloudK8sAutoConfiguration 口径一致）。
+    @ConditionalOnWebApplication(type = ConditionalOnWebApplication.Type.SERVLET)
     @ConditionalOnBean({StreamMQDiagnosticsService.class, MessageProfileService.class})
     public StreamMQDiagnosticsEndpoint streamMQDiagnosticsEndpoint(
             StreamMQDiagnosticsService diagnosticsService,

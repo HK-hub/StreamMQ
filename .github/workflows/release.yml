@@ -385,6 +385,10 @@ jobs:
     runs-on: ubuntu-latest
     # F-11：显式超时预算
     timeout-minutes: 45
+    # 最小权限：本 job 只构建/测试，不需要 workflow 级的 contents: write
+    # （写权限仅 publish job 的 Create GitHub Release 步骤需要）。
+    permissions:
+      contents: read
     services:
       redis:
         image: redis:7.2

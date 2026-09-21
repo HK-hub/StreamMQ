@@ -44,6 +44,12 @@ public class StreamMQHealthIndicator implements HealthIndicator {
     /** 健康详情 key：运行标志 */
     private static final String DETAIL_RUNNING = "running";
 
+    /** 健康详情 key：消费循环是否全部健康 */
+    private static final String DETAIL_CONSUME_LOOPS_HEALTHY = "consumeLoopsHealthy";
+
+    /** 健康详情 key：启动失败的消费循环（loopKey → 原因） */
+    private static final String DETAIL_CONSUME_LOOP_FAILURES = "consumeLoopFailures";
+
     private final ObjectProvider<StreamMQListenerContainer> containerProvider;
 
     /**
@@ -66,11 +72,18 @@ public class StreamMQHealthIndicator implements HealthIndicator {
                     .build();
         }
         boolean running = container.isRunning();
+        // 只判 isRunning() 会漏掉"容器在跑但消费循环启动失败/全部退出"——那些消费者在注册表里可见
+        // 却永不消费（假健康，与 starter/binder 的判据口径不一致）。必须一并纳入消费循环健康。
+        boolean consumeLoopsHealthy = container.isConsumeLoopsHealthy();
         int activeConsumers = container.getConsumers().size();
         Map<String, Object> details = new LinkedHashMap<>();
         details.put(DETAIL_ACTIVE_CONSUMERS, activeConsumers);
         details.put(DETAIL_RUNNING, running);
-        if (running) {
+        details.put(DETAIL_CONSUME_LOOPS_HEALTHY, consumeLoopsHealthy);
+        if (!consumeLoopsHealthy) {
+            details.put(DETAIL_CONSUME_LOOP_FAILURES, container.getConsumeLoopFailures());
+        }
+        if (running && consumeLoopsHealthy) {
             return Health.up().withDetails(details).build();
         }
         return Health.down().withDetails(details).build();

@@ -96,7 +96,7 @@ class BacklogAnalyzerTest {
     @Test
     @DisplayName("BacklogProbe 优先于追踪窗口估算")
     void shouldPreferRealBacklogFromProbe() {
-        BacklogProbe probe = (topic, group) -> new BacklogProbe.Result(0L, 50_000L);
+        BacklogProbe probe = (topic, group) -> new BacklogProbe.Result(0L, 50_000L, 1);
         BacklogAnalyzer analyzerWithProbe =
                 new BacklogAnalyzer(traceService, new StreamMQDiagnosticsProperties(), probe);
 

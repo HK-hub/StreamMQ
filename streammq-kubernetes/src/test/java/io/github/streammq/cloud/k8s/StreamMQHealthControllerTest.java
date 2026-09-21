@@ -50,6 +50,7 @@ class StreamMQHealthControllerTest {
     @DisplayName("readiness - 容器运行中时返回 ready=true")
     void readiness_whenRunning_returnsReadyTrue() throws Exception {
         when(container.isRunning()).thenReturn(true);
+        when(container.isConsumeLoopsHealthy()).thenReturn(true);
         when(container.getConsumers()).thenReturn(Collections.emptyList());
         mockMvc.perform(get("/streammq/health/readiness"))
                 .andExpect(status().isOk())
@@ -72,6 +73,7 @@ class StreamMQHealthControllerTest {
     @DisplayName("readiness - 返回正确的消费者数量")
     void readiness_returnsCorrectConsumerCount() throws Exception {
         when(container.isRunning()).thenReturn(true);
+        when(container.isConsumeLoopsHealthy()).thenReturn(true);
         when(container.getConsumers())
                 .thenReturn(
                         List.of(
