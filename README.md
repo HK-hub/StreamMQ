@@ -34,6 +34,7 @@ StreamMQ 0.1.2 hard-depends on **JDK 21+** (enforced in `pom.xml` via `maven-enf
 - [Comparison](#comparison)
 - [Benchmarks](#benchmarks--methodology-disclosure)
 - [Quick Start](#quick-start)
+- [Deployment](#deployment)
 - [Core Features](#core-features)
 - [Broadcast Consumption — Operational Notes](#broadcast-consumption--operational-notes)
 - [Troubleshooting: a consumer that never consumes](#troubleshooting-a-consumer-that-never-consumes)
@@ -75,8 +76,13 @@ Serializers, converters, filters, interceptors, retry policies, rebalance strate
 
 ### Production-ready
 
-- ≥780 unit tests (from `mvn test`)
-- ≥80 integration tests (from `mvn verify`, executed when Redis is available; CI uses Docker service to guarantee execution)
+- **1,482 tests** measured on a full local gate run (`mvn clean verify -Djacoco.check.skip=false`), split into
+  **1,185 unit** (surefire) + **297 integration** (failsafe) tests, with **0 failures / 0 errors / 0 skipped**
+- CI enforces the integration side as a tripwire rather than a total: per module `streammq-redisson ≥ 100`,
+  `streammq-spring-boot-starter ≥ 30`, `streammq-test ≥ 40`, `streammq-samples/* ≥ 16`, global `≥ 230`, and a
+  skip rate `≤ 20%` — so "Redis silently unavailable" cannot pass as green. Integration tests need a local Redis
+  (`localhost:6379`); the Cluster ITs additionally need a 3-master cluster on `127.0.0.1:7000-7002` (or
+  `-Dstreammq.it.cluster.nodes=...`) and otherwise **skip loudly** with startup instructions instead of failing.
 
 ---
 
@@ -395,6 +401,35 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 ```
 
 That's it! Start the app, send a message, the consumer will pick it up and process it.
+
+---
+
+## Deployment
+
+StreamMQ 0.1.x is designed for these Redis topologies:
+
+| Topology | Supported | Notes |
+|---|---|---|
+| Single instance | ✅ | Default; everything in this README applies |
+| Master-replica | ✅ | Reads/writes go to the master via Redisson |
+| Sentinel | ✅ | Provide Redisson's native config through `spring.redis.redisson.config` |
+| Redis Cluster | ❌ in 0.1.x | See below — **fails fast, never silently degrades** |
+
+**Redis Cluster is not supported in 0.1.x** because the data plane depends on cross-key atomicity
+(multi-key Lua for PEL claim and transaction commit, `REDIS_WRITE_ATOMIC` batches for delayed/retry/DLQ
+scheduling). StreamMQ key families deliberately carry **no `{...}` hash tag**, so a multi-key request is either
+rejected with `CROSSSLOT` or split per node with the atomicity silently lost. Rather than let that happen:
+
+- the producer and listener container run a **one-time topology check at startup** and log an actionable `WARN`
+  when a cluster is detected (`RedisClusterCompatibility.warnIfCluster`);
+- every cross-key atomic path (delayed enqueue/transfer, retry & DLQ scheduling/transfer, transaction
+  prepare/commit, cross-stream PEL claim) **throws an actionable `StreamMQException` before writing the first
+  key** (`RedisClusterCompatibility.requireCrossKeyAtomicity`). Producing and basic consume/ACK keep working;
+  scheduling state already stored in the cluster is never dropped or half-written.
+
+Details, the measured failure matrix and the raw-cluster evidence: [`docs/REPORT.md`](docs/REPORT.md)
+("Redis Cluster 实测") and `CHANGELOG.md` ("事务 key 结构与 Redis Cluster（hash tag）定型声明").
+Cluster support requires a hash-tag key redesign and is tracked for a later release.
 
 ---
 

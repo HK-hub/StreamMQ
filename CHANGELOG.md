@@ -588,6 +588,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **消费口径提升的可信度补强**：同一基准在旧补货口径下仅 2,383 / 2,018 ops/s（补货端封顶），
   新口径 12,572 / 7,521 ops/s（5.3× / 3.7×），`supplyTight=false` 为机器可读的结论证据。
 
+**R6 复核补充（第二遍独立审计，全部为存量缺陷的残余副本；详见 `docs/REPORT.md` 附录 A）**
+
+> 以下条目含**可观察的行为变化**。0.1.2 为首个 Central 发布版本，均不构成兼容性负担。
+
+- **发送重试的拦截器/指标语义收敛为终态**（行为变化）：重试循环中的**中间失败不再触发**
+  `ProducerInterceptor.onException`、也不计失败指标；`afterSend` / `onException` 恰好在终态调用一次
+  （成功 → `afterSend(success)`；不可重试 → `onException`；重试耗尽 → `afterSend(failedResult)`）。
+  修复前，追踪侧会把"第 1 次失败、第 2 次成功"的生产者 Span 提前以 ERROR 结束（导出的链路永远是失败），
+  指标会把一次逻辑发送记成 N 次失败。自定义拦截器若依赖"每次尝试都收到回调"，请改用日志/自有埋点。
+- **`syncSendBatch(List, long)` 补上"同 Topic"校验**（行为变化）：javadoc 早已声明该前提与
+  `IllegalArgumentException`，实现此前未校验（混合 topic 会静默逐条投递）。现按契约 fail-fast。
+- **`ProducerConfig.namespace` 纳入校验**（行为变化）：与消费侧 `ListenerConfig` 同一入口
+  （`StringUtils.requireValidNamespace`），非法字符不再静默拼进 Redis Key。
+- **`DefaultListenerRegistration` 的数值参数校验统一为 fail-fast**（行为变化）：`shardCount` /
+  `streamMaxLen` 不再静默夹取——`shardCount = -1` 此前会变成 0（零分片顺序消费者，不可用且无提示），
+  现在直接抛 `IllegalArgumentException`。
+- **`CompressionCodec` 约定并统一异常类型**：压缩/解压失败一律抛 `SerializationException`
+  （Gzip/LZ4 此前抛其父类 `StreamMQException`，使消费侧按 `SerializationException` 识别"毒丸消息"的分支漏判，
+  损坏载荷会被当业务异常反复重试而不是进 DLQ）。因是子类，对既有捕获方向后兼容。
+- **`asyncSend(..., SendCallback)` 对 `callback` 做 fail-fast**：传 null 时不再把 NPE 吞成完成线程上的一行 WARN
+  （调用方此前既拿不到结果也拿不到异常）。
+- **管理端点 4 处错误响应脱敏**：`ackPending` / `triggerRebalance` / `createTopic` / `deleteTopic` 统一改走
+  `describeFailure`（响应只含操作名 + 异常类型 + 关联 ID），不再回吐 Redis 版本、完整 Key 名与 `NOGROUP`/ACL 文本。
+- **诊断/可观测性修正**：`/streammq/diagnostics/health` 整块 5s 缓存（此前每次 ≈2N 次 Redis 往返）；
+  `/actuator/streammq` 的 overview 使用 3s 快照（直接访问 `/groups` 仍实时）；
+  `SlowConsumeReport` 删除伪造的 `threadPoolActive`/`threadPoolMax`（实为消费者实例数）改为单一
+  `consumerInstances`；`StreamMQTopologyService.getTopicTraces` 增加 500 条结果上限、
+  链路耗时改为按时间戳极值（原先"首尾相减"依赖查询顺序，可算出 0 或负数）；
+  OTel `Scope` 只在创建线程关闭（此前淘汰/清空可能跨线程关闭，破坏无关线程的 current context）。
+- **PEL 认领的目的键自检下沉到 DLQ 分支**：DLQ 键被非 stream 占用时不再阻断整轮扫描（同流重投照常进行），
+  需要写 DLQ 的条目跳过并留在 PEL，绝不丢消息。
+- **kubernetes**：`envDrift` 判定改为「变量名 → 值」集合语义并在写入时合并（此前 `List.equals` 顺序敏感，
+  webhook/sidecar 注入的变量会让调和永久判定漂移、每次 reconcile 都 patch 且抹掉注入变量）；
+  `HpaAutoScaler` 补 `@ConditionalOnMissingBean`（防组件扫描场景下双实例双调度线程）。
+- **文档/物料**：README 双语新增 `## Deployment` / `## 部署形态`（拓扑支持矩阵 + Cluster 快速失败行为 +
+  实测证据链接，守卫异常文案引用的章节此前并不存在）；测试规模口径更新为实测（1482 = 1185 单元 + 297 集成，
+  并写明 CI tripwire 下限）；`CONTRIBUTING` 覆盖率门禁补列 `streammq-test`、japicmp 说明改为"当前无内建排除"；
+  `NOTICE` 版本对齐（Spring 6.2.x / Netty 4.1.138.Final）并补 `commons-compress`；演示脚本升级到 Spring Boot
+  3.5.16、演示指南补 `mvn install` 前置与正确的管理端点 URL；样例 tracing 改用 `${opentelemetry.version}`；
+  workflow 注释归属更正；**18 个文件的 `@since 1.1.0`** 校正为 0.1.2。
+
 ## [0.1.1] - 2026-08-29 — 内部迭代版本（未发布到 Maven Central）
 
 ### Changed

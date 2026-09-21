@@ -53,6 +53,7 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 - [与同类产品对比](#与同类产品对比)
 - [性能基准测试](#性能基准测试)
 - [快速开始](#快速开始)
+- [部署形态](#部署形态)
 - [核心特性](#核心特性)
 - [广播消费的运维注意事项](#广播消费的运维注意事项)
 - [消费者不消费时的排查路径](#消费者不消费时的排查路径)
@@ -94,7 +95,13 @@ StreamMQ 0.1.2 硬性依赖 **JDK 21+**（在 `pom.xml` 中由 `maven-enforcer-p
 
 ### 质量与发布姿态
 
-单元测试 ≥ 780 个（由 `mvn test` 实际产生，surefire 报告可逐文件复现）， 集成测试 ≥ 80 个（由 `mvn verify` 在 Redis 可用时执行，CI 集成 tripwire 保证数量下限）—— surefire/failsafe 报告可逐文件复现。 覆盖核心消息能力、事务流程、延时投递、顺序消费、DLQ 处理、PEL 认领、广播消费等场景。
+本地全量门禁（`mvn clean verify -Djacoco.check.skip=false`）实测 **1482 个用例**：单元 1185（surefire）+ 集成 297（failsafe），
+**0 失败 / 0 错误 / 0 跳过**；surefire/failsafe 报告可逐文件复现。覆盖核心消息能力、事务流程、延时投递、顺序消费、
+DLQ 处理、PEL 认领、广播消费、Redis Cluster 兼容性等场景。
+CI 对集成测试采用 **tripwire 下限**（按模块：`streammq-redisson ≥ 100`、`streammq-spring-boot-starter ≥ 30`、
+`streammq-test ≥ 40`、`streammq-samples/* ≥ 16`、全局 `≥ 230`，且跳过率 `≤ 20%`），避免"Redis 静默不可用却全绿"。
+集成测试需本地 Redis（`localhost:6379`）；Cluster 用例另需 `127.0.0.1:7000-7002` 的 3 主集群
+（或 `-Dstreammq.it.cluster.nodes=...`），否则会**显式 skip 并打印集群启动指引**，而不是失败。
 
 > **版本姿态（诚实声明）**：0.1.x 为**功能预览版**——核心能力、测试体系、文档齐全。
 > 端到端消费吞吐 JMH 基准框架已就绪（见「性能基线」章节），具体数字需在你的目标硬件与 Redis 实例上实测。
@@ -466,6 +473,33 @@ public class OrderConsumer implements StreamMessageConcurrentlyConsumer<String> 
 ```
 
 就这样！启动应用，发送一条消息，消费者会自动接收并处理。
+
+---
+
+## 部署形态
+
+StreamMQ 0.1.x 支持的 Redis 拓扑：
+
+| 拓扑 | 是否支持 | 说明 |
+|---|---|---|
+| 单实例 | ✅ | 默认目标形态，本 README 全部内容适用 |
+| 主从 | ✅ | 读写经 Redisson 落到主节点 |
+| 哨兵（Sentinel） | ✅ | 通过 `spring.redis.redisson.config` 提供 Redisson 原生配置 |
+| Redis Cluster | ❌（0.1.x） | 见下——**显式快速失败，绝不静默降级** |
+
+**0.1.x 不支持 Redis Cluster**：数据面依赖跨 key 原子性（PEL 认领与事务提交的多 key Lua；延时/重试/DLQ 调度的
+`REDIS_WRITE_ATOMIC` 批），而 StreamMQ 的 key 家族**刻意不带 `{...}` hash tag**，因此多 key 请求要么被服务端以
+`CROSSSLOT` 拒绝，要么被按节点拆分、原子性被静默丢弃。为了避免后者：
+
+- 生产者与监听容器在**启动时做一次拓扑探测**，识别到集群即输出一条可操作的 `WARN`
+  （`RedisClusterCompatibility.warnIfCluster`）；
+- 所有跨 key 原子路径（延时登记/转投、重试与 DLQ 调度/转投、事务登记/提交、跨流 PEL 认领）在**写入第一个 key
+  之前**抛出可操作的 `StreamMQException`（`RedisClusterCompatibility.requireCrossKeyAtomicity`）。普通发送与基础
+  消费/ACK 仍可用；集群上已存在的调度状态不会被丢弃或半写。
+
+完整失败矩阵、实测口径与原始证据见 [`docs/REPORT.md`](docs/REPORT.md)（"Redis Cluster 实测"）与
+`CHANGELOG.md`（"事务 key 结构与 Redis Cluster（hash tag）定型声明"）。集群支持需要 hash-tag 键设计改造，
+列入后续版本。
 
 ---
 
